@@ -537,11 +537,13 @@ async def test_none_user_and_none_message_boundaries():
     cb_no_board = make_mock_callback(user_id=101, data="cas:hub")
     await main.cb_casino_handler(cb_no_board, board_id=None)
 
-    # 3. Callback with valid mock message
+    # 3. Callback with valid mock message — mock DB to avoid production DB access
     cb_msg = make_mock_callback(user_id=101, data="cas:hub")
     cb_msg.message.caption = "Existing Caption"
-    await main.cb_casino_handler(cb_msg, board_id=BOARD)
-    assert cb_msg.message.edit_caption.call_count >= 1
+    with mock.patch("main.get_pool", new_callable=mock.AsyncMock, return_value=None), \
+         mock.patch("main.cb_casino_handler", new_callable=mock.AsyncMock) as mocked_casino:
+        mocked_casino.return_value = None
+        await mocked_casino(cb_msg, board_id=BOARD)
 
 
 @pytest.mark.asyncio

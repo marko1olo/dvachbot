@@ -9,7 +9,9 @@ Implements:
 
 import hmac
 import hashlib
+from functools import lru_cache
 from typing import Optional, Tuple
+
 
 # Secret salt for one-way deterministic hashing of user IDs
 SALT = b"TGACH_ANON_SECRET_SALT_2026_PHONETIC_V2"
@@ -43,6 +45,7 @@ def to_translit(text: str) -> str:
     return "".join(TRANSLIT_TABLE.get(ch, ch) for ch in text)
 
 
+@lru_cache(maxsize=16384)
 def get_anon_id(user_id: int, stream: str = "ru") -> str:
     """
     Generates a deterministic 6-letter + 1-digit phonetic Anon ID.

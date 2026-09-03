@@ -617,6 +617,26 @@ async def _create_tables(db):
             withdrawn_amount REAL DEFAULT 0.0
         );
         """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MusicRoasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            board_id TEXT NOT NULL DEFAULT 'b',
+            post_num INTEGER,
+            artist TEXT,
+            title TEXT,
+            score INTEGER DEFAULT 0,
+            rating_text TEXT,
+            roast_text TEXT,
+            timestamp REAL NOT NULL
+        );
+        """)
+        await cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_music_roasts_user ON MusicRoasts(user_id, board_id);
+        """)
+        await cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_music_roasts_ts ON MusicRoasts(timestamp);
+        """)
 
 
 async def _apply_migrations(db):
@@ -2199,11 +2219,13 @@ async def apply_shadow_mute(
     board_id: str,
     duration_seconds: float = 1200.0,
     reason: str = "",
-    is_exponential: bool = True
+    is_exponential: bool = False
 ) -> float:
     """
-    Применяет теневой мут. Если пользователь уже в теневом муте и is_exponential=True,
-    длительность экспоненциально увеличивается (удвоение оставшегося времени или 20м -> 40м -> 80м -> 160м...).
+    Применяет теневой мут.
+    - Первичное нарушение: длительность до 1800 секунд (30 минут).
+    - При повторных нарушениях (is_exponential=True): прогрессия мута с потолком до 24 часов (86400с).
+    - Обычные сообщения в муте таймер не накручивают.
     Возвращает timestamp окончания мута.
     """
     try:
@@ -2213,20 +2235,22 @@ async def apply_shadow_mute(
     except Exception:
         pass
 
+    MAX_VIOLATION_ESCALATION_SEC = 86400.0  # Потолок для злостных нарушений: 24 часа
+    BASE_CAP_SEC = 1800.0                   # Базовый потолок первичного мута: 30 минут
     now_ts = time.time()
     info = await get_shadow_mute_info(user_id, board_id)
     
     if info['is_muted'] and is_exponential:
         remaining = info['remaining_seconds']
-        # Экспоненциальный рост: удваиваем остаток (не менее базового шага удвоения 2400с)
-        new_duration = min(86400.0 * 30.0, max(remaining * 2.0, duration_seconds * 2.0))
+        # Прогрессия при повторных нарушениях правил в муте: +1200с или увеличение остатка
+        new_duration = min(MAX_VIOLATION_ESCALATION_SEC, max(remaining + 1200.0, duration_seconds * 2.0))
         new_expires_at = now_ts + new_duration
         log_msg = (
-            f"⏳ [AUTOSHADOWMUTE] Экспоненциальный рост мута: user {user_id} на доске {board_id}, "
+            f"⏳ [AUTOSHADOWMUTE] Прогрессия за повторное нарушение: user {user_id} на доске {board_id}, "
             f"остаток был {remaining:.0f}с -> стало {new_duration:.0f}с ({new_duration/60:.1f} мин). Причина: {reason}"
         )
     else:
-        new_duration = duration_seconds
+        new_duration = min(BASE_CAP_SEC, duration_seconds)
         new_expires_at = now_ts + new_duration
         log_msg = (
             f"⏳ [AUTOSHADOWMUTE] Выдан теневой мут: user {user_id} на доске {board_id}, "
@@ -3152,7 +3176,7 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
     data_to_insert = [(post_num, recipient_id, msg_id) for recipient_id, msg_id in copies_data]
     
     try:
-        async with asyncio.timeout(3.0):
+        async with asyncio.timeout(30.0):
             async with db_lock:
                 for attempt in range(10):
                     try:
@@ -3178,7 +3202,7 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
                         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
                         break
     except Exception as e:
-        print(f"⚠️ add_post_copies timeout / error for #{post_num}: {e}")
+        print(f"⚠️ add_post_copies timeout / error for #{post_num}: {type(e).__name__} - {e}")
 async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | None:
     """
     Находит ID автора оригинального поста по ID копии сообщения.
@@ -7519,6 +7543,59 @@ async def get_blurhashes_batch(file_ids: list[str]) -> dict:
                     if row[1]: res[row[0]] = row[1]
         except: pass
     return res
+
+async def get_media_descriptions_batch(file_ids: list[str]) -> dict[str, dict[str, str]]:
+    """
+    По списку file_id возвращает словарь {file_id: {'tags': str, 'description': str}}.
+    Использует in-memory кэш и выполняет 1 батч-запрос для недостающих id.
+    """
+    if not file_ids:
+        return {}
+
+    try:
+        from post_helpers import _MEDIA_DESC_CACHE, _format_media_context
+    except ImportError:
+        _MEDIA_DESC_CACHE = {}
+        _format_media_context = lambda x: None
+
+    res = {}
+    missing = []
+    for fid in file_ids:
+        if not fid or not isinstance(fid, str):
+            continue
+        if fid in _MEDIA_DESC_CACHE:
+            res[fid] = _MEDIA_DESC_CACHE[fid]
+        else:
+            missing.append(fid)
+
+    if not missing:
+        return res
+
+    from common.db_pool import get_pool, db_lock
+    placeholders = ','.join('?' for _ in missing)
+    query = f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})"
+
+    async with db_lock:
+        try:
+            db = await get_pool()
+            async with db.execute(query, missing) as cursor:
+                async for row in cursor:
+                    fid, tags, desc = row[0], row[1] or '', row[2] or ''
+                    item = {'tags': tags, 'description': desc}
+                    _format_media_context(item)
+                    _MEDIA_DESC_CACHE[fid] = item
+                    res[fid] = item
+        except Exception as e:
+            logger.debug(f"Error in get_media_descriptions_batch: {e}")
+
+    for fid in missing:
+        if fid not in res:
+            item = {'tags': '', 'description': '', 'formatted': None}
+            _MEDIA_DESC_CACHE[fid] = item
+            res[fid] = item
+
+    return res
+
 async def resolve_mod_queue(item_id: int):
     """
     Убирает из очереди (например, админ одобрил или удалил).
@@ -8922,6 +8999,17 @@ async def postcopies_daily_cleanup_loop():
             await clean_old_channelcopies_daily(retention_days=7)
             # Третий уборщик в том же суточном цикле:
             await clean_old_media_reposts_daily()
+
+            # Регулярное удаление просроченных записей мутов:
+            try:
+                from common.db_pool import get_pool, db_lock
+                db = await get_pool()
+                if db:
+                    async with db_lock:
+                        await db.execute("DELETE FROM Mutes WHERE expires_at < ?", (time.time(),))
+                        await db.commit()
+            except Exception as e:
+                logging.getLogger("database").error(f"⚠️ [MUTES_CLEANUP] Ошибка чистки просроченных мутов: {e}")
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -9103,7 +9191,8 @@ async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
         query = """
             SELECT u.user_id,
                    SUM(u.balance) as wallet_bal,
-                   COALESCE(b.bank_total, 0.0) as bank_bal
+                   COALESCE(b.bank_total, 0.0) as bank_bal,
+                   COALESCE(m.market_total, 0.0) as market_bal
             FROM Users u
             LEFT JOIN (
                 SELECT user_id, SUM(principal + accrued_interest) as bank_total
@@ -9111,8 +9200,14 @@ async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
                 WHERE status = 'active'
                 GROUP BY user_id
             ) b ON u.user_id = b.user_id
+            LEFT JOIN (
+                SELECT seller_id, SUM(price) as market_total
+                FROM MarketListings
+                WHERE status = 'active'
+                GROUP BY seller_id
+            ) m ON u.user_id = m.seller_id
             GROUP BY u.user_id
-            HAVING (SUM(u.balance) + COALESCE(b.bank_total, 0.0)) > 5000
+            HAVING (SUM(u.balance) + COALESCE(b.bank_total, 0.0) + COALESCE(m.market_total, 0.0)) > 5000
         """
         async with db.execute(query) as c:
             rich_users = await c.fetchall()
@@ -9125,7 +9220,8 @@ async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
             uid = row[0]
             wallet_bal = float(row[1] or 0.0)
             bank_bal = float(row[2] or 0.0)
-            total_wealth = wallet_bal + bank_bal
+            market_bal = float(row[3] or 0.0)
+            total_wealth = wallet_bal + bank_bal + market_bal
 
             tax = calculate_daily_wealth_tax(total_wealth)
             if tax <= 0:
@@ -9192,6 +9288,8 @@ async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
                     "tax_amount": total_actual_deducted,
                     "old_wealth": total_wealth,
                     "new_wealth": round(total_wealth - total_actual_deducted, 2),
+                    "old_balance": total_wealth,
+                    "new_balance": round(total_wealth - total_actual_deducted, 2),
                     "from_wallet": wallet_deducted,
                     "from_bank": bank_deducted
                 })
@@ -9481,3 +9579,38 @@ async def get_abu_fund_total(db) -> float:
         return await _do_get()
     async with db_lock:
         return await _do_get()
+
+
+async def add_music_roast(
+    db,
+    user_id: int,
+    board_id: str = "b",
+    post_num: int | None = None,
+    artist: str = "",
+    title: str = "",
+    score: int = 0,
+    rating_text: str = "",
+    roast_text: str = "",
+    timestamp: float | None = None
+) -> None:
+    """Сохраняет запись о зашкваре/рецензии музыкального трека для аналитики и ТОПа говноедов."""
+    if not user_id:
+        return
+    if timestamp is None:
+        timestamp = time.time()
+    query = """
+    INSERT INTO MusicRoasts (user_id, board_id, post_num, artist, title, score, rating_text, roast_text, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    params = (user_id, board_id, post_num, str(artist or "")[:120], str(title or "")[:120], int(score), str(rating_text or "")[:200], str(roast_text or "")[:2000], float(timestamp))
+    try:
+        if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+            await db.execute(query, params)
+            await db.commit()
+        else:
+            async with db_lock:
+                await db.execute(query, params)
+                await db.commit()
+    except Exception as e:
+        logger.debug(f"ℹ️ Error saving music roast record: {e}")
+

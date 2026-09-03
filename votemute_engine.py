@@ -48,8 +48,44 @@ votemute_router = Router(name="votemute_router")
 
 
 def generate_votemute_key(target_id: int, post_num: int) -> str:
-    """Generates unique voting key for a target user and post."""
+    """Internal memory key for dedup — uses IDs, never exposed to Telegram."""
     return f"vm_{target_id}_{post_num}"
+
+
+def get_votemute_callback_token(target_id: int, post_num: int) -> str:
+    """
+    Safe opaque token for InlineKeyboardButton callback_data.
+    Uses existing anon_id hash (e.g. 'Шолтер5') — deterministic, no raw ID exposed,
+    survives bot restarts since get_anon_id is keyed on a fixed secret salt.
+    Format: '<anon_tag>_<post_num>'
+    """
+    return f"{get_anon_id(target_id)}_{post_num}"
+
+
+def resolve_votemute_token(token: str) -> Optional[Tuple[int, int]]:
+    """
+    Resolves callback token '<anon_tag>_<post_num>' back to (target_id, post_num)
+    by scanning active_votemutes for a matching entry.
+    Returns None if not found or session expired.
+    """
+    # Token format: '<anon_tag>_<post_num>'  e.g. 'Шолтер5_12345'
+    try:
+        # Split from right once to get post_num
+        last_sep = token.rfind("_")
+        if last_sep == -1:
+            return None
+        anon_tag = token[:last_sep]
+        post_num = int(token[last_sep + 1:])
+    except (ValueError, IndexError):
+        return None
+
+    for vm in active_votemutes.values():
+        t_id = vm.get("target_id")
+        p_num = vm.get("post_num")
+        if p_num == post_num and t_id and get_anon_id(t_id) == anon_tag:
+            return t_id, post_num
+    return None
+
 
 
 def clean_expired_votemutes():
@@ -69,14 +105,15 @@ def get_votemute_status(target_id: int, post_num: int) -> Optional[Dict[str, Any
     return active_votemutes.get(vm_key)
 
 
-def get_votemute_keyboard(vm_key: str, votes_count: int, is_executed: bool = False) -> InlineKeyboardMarkup:
-    """Builds inline keyboard for active or completed votemute."""
+def get_votemute_keyboard(target_id: int, post_num: int, votes_count: int, is_executed: bool = False) -> InlineKeyboardMarkup:
+    """Builds inline keyboard for active or completed votemute. callback_data uses opaque token only."""
+    token = get_votemute_callback_token(target_id, post_num)
     if is_executed or votes_count >= VOTES_REQUIRED:
         return InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🔒 ЗАМУЧЕН НАРОДОМ (30 мин)",
-                    callback_data=f"vm_info:{vm_key}"
+                    callback_data=f"vm_info:{token}"
                 )
             ]
         ])
@@ -84,7 +121,7 @@ def get_votemute_keyboard(vm_key: str, votes_count: int, is_executed: bool = Fal
         [
             InlineKeyboardButton(
                 text=f"⚖️ Замутить шиза [{votes_count}/{VOTES_REQUIRED}]",
-                callback_data=f"vm_vote:{vm_key}"
+                callback_data=f"vm_vote:{token}"
             )
         ]
     ])
@@ -426,7 +463,6 @@ async def cmd_votemute(message: types.Message, board_id: Optional[str] = None):
         bot=message.bot
     )
 
-    vm_key = generate_votemute_key(target_id, post_num)
     card_text = get_votemute_card_text(
         post_num=post_num,
         target_id=target_id,
@@ -434,7 +470,7 @@ async def cmd_votemute(message: types.Message, board_id: Optional[str] = None):
         created_ts=time.time(),
         is_executed=is_executed
     )
-    keyboard = get_votemute_keyboard(vm_key, current_votes, is_executed)
+    keyboard = get_votemute_keyboard(target_id, post_num, current_votes, is_executed)
 
     await message.answer(card_text, reply_markup=keyboard, parse_mode="HTML")
 
@@ -448,22 +484,20 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
         board_id = "b"
 
     voter_id = callback.from_user.id
-    vm_key = callback.data.split(":", 1)[1]
+    token = callback.data.split(":", 1)[1]
 
+    # Resolve opaque token -> (target_id, post_num)
+    ids = resolve_votemute_token(token)
+    if not ids:
+        await callback.answer("⏳ Срок действия этого голосования истек.", show_alert=True)
+        return
+    target_id, post_num = ids
+
+    # Get board_id from in-memory state if available
+    vm_key = generate_votemute_key(target_id, post_num)
     async with votemute_lock:
         vm = active_votemutes.get(vm_key)
-        if not vm:
-            # Try parse from key: vm_<target_id>_<post_num>
-            try:
-                _, t_id_str, p_num_str = vm_key.split("_")
-                target_id = int(t_id_str)
-                post_num = int(p_num_str)
-            except Exception:
-                await callback.answer("⏳ Срок действия этого голосования истек.", show_alert=True)
-                return
-        else:
-            target_id = vm["target_id"]
-            post_num = vm["post_num"]
+        if vm:
             board_id = vm.get("board_id", board_id)
 
     ok, msg, current_votes, is_executed = await start_or_add_vote(
@@ -483,7 +517,7 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
         executed = vm_data.get("executed", is_executed)
 
     new_text = get_votemute_card_text(post_num, target_id, current_votes, created_ts, executed)
-    new_kb = get_votemute_keyboard(vm_key, current_votes, executed)
+    new_kb = get_votemute_keyboard(target_id, post_num, current_votes, executed)
 
     try:
         await callback.message.edit_text(new_text, reply_markup=new_kb, parse_mode="HTML")

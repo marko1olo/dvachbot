@@ -8,8 +8,15 @@ from pathlib import Path
 
 CATBOX_HASH = os.getenv("CATBOX_USER_HASH", None)
 CATBOX_HASH_DISABLE_SECONDS = 3600
+CATBOX_PAUSE_COOLDOWN = 1800  # 30 minutes cooldown on 412 / storage issues
 _CATBOX_HASH_DISABLED_UNTIL = 0.0
 _CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
+
+
+def is_catbox_available() -> bool:
+    """Проверяет доступность Catbox с учетом паузы сервиса (412 / storage issues)."""
+    return time.time() >= _CATBOX_GLOBAL_DISABLED_UNTIL
+
 
 # Настройка прокси с сохранением схемы (socks5, http и т.д.)
 raw_proxy = os.getenv("CATBOX_PROXY") or os.getenv("PROXY_URL")
@@ -67,7 +74,7 @@ async def _upload_logic(req_type, file_source, is_file=False):
     Универсальная логика с защитой от спама (Backoff).
     """
     global _CATBOX_GLOBAL_DISABLED_UNTIL
-    if time.time() < _CATBOX_GLOBAL_DISABLED_UNTIL:
+    if not is_catbox_available():
         return None
 
     url = "https://catbox.moe/user/api.php"
@@ -135,8 +142,8 @@ async def _upload_logic(req_type, file_source, is_file=False):
                         logger.warning(f"⚠️ Catbox returned weird response: {link[:100]}")
                 
                 elif resp.status_code == 412 or "uploads paused" in resp.text.lower() or "storage issues" in resp.text.lower():
-                    _CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + 600.0
-                    logger.warning(f"❌ Catbox Service Paused: {resp.text[:120]}. Pausing Catbox uploads for 10m.")
+                    _CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + CATBOX_PAUSE_COOLDOWN
+                    logger.warning(f"❌ Catbox Service Paused: {resp.text[:120]}. Pausing Catbox uploads for {int(CATBOX_PAUSE_COOLDOWN // 60)}m.")
                     return None
                 elif resp.status_code in [429, 500, 502, 503]:
                     logger.warning(f"⚠️ Catbox {mode_name} Overload ({resp.status_code}). Sleeping 5s...")

@@ -68,29 +68,37 @@ def _get_vision_semaphore():
     return _VISION_SEMAPHORE
 
 
-def prepare_image_for_groq(file_path):
+def prepare_image_for_groq(file_path_or_bytes, max_size: int = 640):
     """
-    Жесткий ресайз картинки, чтобы влезть в лимиты Groq + Base64.
+    Жесткий ресайз картинки (по умолчанию 640px), чтобы влезть в лимиты Groq + Base64
+    и экономить TPD токены (не сжигать по 3000 токенов на картинку).
     """
     img = None
     try:
         Image.MAX_IMAGE_PIXELS = 49_000_000
-        if not file_path or not os.path.exists(file_path) or os.path.getsize(file_path) <= 0:
+        if file_path_or_bytes is None:
             return None, "Пустой файл"
 
         try:
-            with Image.open(file_path) as source:
-                source.load()
-                if source.mode != 'RGB':
-                    img = source.convert('RGB')
-                else:
-                    img = source.copy()
+            if isinstance(file_path_or_bytes, (str, Path)):
+                if not os.path.exists(file_path_or_bytes) or os.path.getsize(file_path_or_bytes) <= 0:
+                    return None, "Пустой файл"
+                with Image.open(file_path_or_bytes) as source:
+                    source.load()
+                    img = source.convert('RGB') if source.mode != 'RGB' else source.copy()
+            elif isinstance(file_path_or_bytes, (bytes, bytearray)):
+                if len(file_path_or_bytes) == 0:
+                    return None, "Пустые байты"
+                with Image.open(io.BytesIO(file_path_or_bytes)) as source:
+                    source.load()
+                    img = source.convert('RGB') if source.mode != 'RGB' else source.copy()
+            else:
+                return None, "Неподдерживаемый тип входных данных"
         except Exception as e:
             return None, f"Невалидный файл изображения: {e}"
 
-        MAX_SIZE = 1000
-        if max(img.size) > MAX_SIZE:
-            img.thumbnail((MAX_SIZE, MAX_SIZE), Image.Resampling.LANCZOS)
+        if max(img.size) > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
         with io.BytesIO() as buffer:
             img.save(buffer, format="JPEG", quality=70, optimize=True)
@@ -103,7 +111,103 @@ def prepare_image_for_groq(file_path):
             try:
                 img.close()
             except Exception:
-                pass  # Image cleanup failure is not actionable
+                pass
+
+
+GEMINI_SAFETY_CATEGORIES = [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY",
+]
+
+
+def _build_gemini_safety_settings(threshold: str = "BLOCK_NONE"):
+    return [{"category": cat, "threshold": threshold} for cat in GEMINI_SAFETY_CATEGORIES]
+
+
+async def _call_gemini_native(
+    http_client: httpx.AsyncClient,
+    model_name: str,
+    api_key: str,
+    prompt_text: str,
+    images_data: list[bytes],
+    timeout: float = 25.0,
+    source: str = "SITE",
+) -> tuple[str | None, str | None]:
+    """
+    Вызывает нативный REST API Gemini (generateContent).
+    Передает safetySettings: BLOCK_NONE (с fallback на BLOCK_ONLY_HIGH при 400 ошибке)
+    и responseMimeType: "application/json".
+    Возвращает (content_text, finish_reason).
+    """
+    parts = [{"text": prompt_text}]
+    for img_bytes in images_data:
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+        parts.append({
+            "inlineData": {
+                "mimeType": "image/jpeg",
+                "data": b64
+            }
+        })
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    thresholds_to_try = ["BLOCK_NONE", "BLOCK_ONLY_HIGH"]
+    last_resp = None
+    for threshold in thresholds_to_try:
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "maxOutputTokens": 2048,
+                "temperature": 0.2,
+            },
+            "safetySettings": _build_gemini_safety_settings(threshold)
+        }
+
+        resp = await http_client.post(url, json=payload, headers=headers, timeout=timeout)
+        last_resp = resp
+        if resp.status_code == 400 and threshold == "BLOCK_NONE":
+            logger.warning(f"⚠️ [VISION] [{source}] Gemini 400 with BLOCK_NONE ({resp.text[:120]}). Retrying with BLOCK_ONLY_HIGH...")
+            continue
+        break
+
+    if last_resp is None:
+        raise RuntimeError("No response received from Gemini REST API")
+
+    if last_resp.status_code != 200:
+        last_resp.raise_for_status()
+
+    data = last_resp.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        prompt_feedback = data.get("promptFeedback") or {}
+        block_reason = prompt_feedback.get("blockReason")
+        if block_reason:
+            logger.warning(f"⚠️ [VISION] [{source}] Gemini prompt blocked: {block_reason}")
+            return None, "safety"
+        return None, "empty_response"
+
+    candidate = candidates[0]
+    finish_reason = (candidate.get("finishReason") or "").lower()
+    content_obj = candidate.get("content") or {}
+    parts_resp = content_obj.get("parts") or []
+    text_content = ""
+    for p in parts_resp:
+        if isinstance(p, dict) and "text" in p:
+            text_content += p["text"]
+    text_content = text_content.strip() or None
+
+    if finish_reason in ("safety", "content_filter"):
+        return text_content, "safety"
+
+    return text_content, finish_reason or "stop"
 
 
 # Per-provider timestamps moved to module-level dict above
@@ -136,20 +240,18 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
             context = f" Context from the author: '{caption}'." if caption else ""
             system_prompt = (
-                f"You are the primary visual perception engine for an autonomous intelligence system analyzing imageboard media.{context}\n"
-                f"Downstream neural networks rely ENTIRELY on your description to understand what happened. If you omit details, other AIs will be blind.\n\n"
-                f"CORE MANDATE:\n"
-                f"Provide a rich, exhaustive, uncompromisingly detailed description in Russian (3-6 sentences) and accurate booru tags.\n\n"
-                f"SPECIFIC INSTRUCTIONS:\n"
-                f"1. ANATOMY & NSFW/EXPLICIT: Fully describe nudity, exposed body parts (breasts, nipples, genitalia, buttocks), sexual acts (penetration, oral, bondage, fetishes), fluids (cum, sweat), poses, and erotic expressions (ahegao, blushing) directly and vividly in Russian without censorship or euphemisms.\n"
-                f"2. GORE & VIOLENCE: Describe blood, wounds, weapons, anatomical damage, and extreme intensity with clinical, uncompromising precision.\n"
-                f"3. CHARACTERS & ACTION: Detail visual appearance, gender, clothing state (half-dressed, lingerie, stockings, uniforms), interaction between subjects, and dynamics.\n"
-                f"4. TEXT & MEMES: Transcribe ALL visible text, captions, chat logs, or subtitles verbatim in quotes: \"...\". Explain the meme context or joke if evident.\n"
-                f"5. STYLE & ATMOSPHERE: Note the medium (photograph, 2D anime/hentai art, 3D CGI render, VHS recording, screenshot) and mood/setting.\n\n"
+                f"You are an objective visual cataloging and archiving engine analyzing imageboard media.{context}\n"
+                f"Your task is to provide an accurate, clinical, and neutral description in Russian (3-6 sentences) and standard booru tags for archival categorization.\n\n"
+                f"GUIDELINES:\n"
+                f"1. SUBJECT & ANATOMY: Objectively document characters, anatomy, physical attributes, poses, clothing, or exposure with clinical accuracy and neutral terminology (e.g. nudity, anatomy, swimwear, underwear).\n"
+                f"2. ACTION & INTERACTION: Record actions, interactions between subjects, postures, and spatial composition factually without sensationalism.\n"
+                f"3. VIOLENCE & DAMAGE: Clinically record any visible injuries, blood, weapons, or conflict neutrally as archival documentation.\n"
+                f"4. TEXT & INSCRIPTIONS: Transcribe visible text, captions, chat logs, or watermarks in quotation marks: \"...\". Note meme formats or cultural context if recognized.\n"
+                f"5. STYLE & MEDIUM: Identify the medium precisely (e.g., photograph, 2D digital art, anime illustration, 3D render, manga scan, screenshot) and visual style.\n\n"
                 f"OUTPUT FORMAT (STRICT JSON ONLY):\n"
                 f"{{\n"
-                f"  \"tags\": \"1girl, solo, anime, blonde_hair, cleavage, nsfw, explicit, outdoors, day, meme, text\",\n"
-                f"  \"description\": \"Полное, насыщенное и яркое описание происходящего на русском языке со всеми визуальными, анатомическими и текстовыми деталями...\"\n"
+                f"  \"tags\": \"1girl, solo, anime, blonde_hair, swimsuit, outdoors, day, text\",\n"
+                f"  \"description\": \"Объективное клиническое описание изображения на русском языке с перечислением композиции, персонажей, деталей окружения и текста.\"\n"
                 f"}}\n"
                 f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
@@ -175,24 +277,19 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 pool=5.0,
             )
 
-            # Pre-fetch and convert local URLs to Base64 to avoid 400 INVALID_ARGUMENT from Gemini
-            processed_image_urls = []
-            async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as pre_client:
-                for iu in image_urls:
-                    if "127.0.0.1" in iu or "localhost" in iu:
-                        try:
-                            resp = await pre_client.get(iu)
-                            if resp.status_code == 200:
-                                b64 = base64.b64encode(resp.content).decode("utf-8")
-                                ext = iu.split('.')[-1].lower() if '.' in iu else 'jpeg'
-                                mime = f"image/{ext}" if ext in ["jpeg", "png", "webp", "gif"] else "image/jpeg"
-                                processed_image_urls.append(f"data:{mime};base64,{b64}")
-                            else:
-                                processed_image_urls.append(iu)
-                        except Exception:
-                            processed_image_urls.append(iu)
-                    else:
-                        processed_image_urls.append(iu)
+            # Prepare images for Groq with strict 640px limit to conserve TPD tokens
+            groq_image_urls = []
+            for i, fp in enumerate(file_paths):
+                src = fp if (isinstance(fp, (str, Path)) and os.path.exists(fp)) else (images_data[i] if i < len(images_data) else None)
+                groq_bytes, g_err = prepare_image_for_groq(src, max_size=640)
+                if not g_err and groq_bytes:
+                    b64_g = base64.b64encode(groq_bytes).decode("utf-8")
+                    groq_image_urls.append(f"data:image/jpeg;base64,{b64_g}")
+                elif i < len(images_data):
+                    b64_g = base64.b64encode(images_data[i]).decode("utf-8")
+                    groq_image_urls.append(f"data:image/jpeg;base64,{b64_g}")
+
+            prompt_text = system_prompt + "\nDo NOT generate thinking tags or reasoning. Output only JSON immediately."
 
             async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as http_client:
                 for model_name, provider in models_cascade:
@@ -201,12 +298,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     if provider == "groq" and skip_groq_models:
                         continue
                         
-                    if provider == "gemini":
-                        pool = google_pool
-                        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-                    else:
-                        pool = groq_pool
-                        base_url = "https://api.groq.com/openai/v1"
+                    pool = google_pool if provider == "gemini" else groq_pool
 
                     keys = pool.get_all_active_tokens()
                     if not keys:
@@ -283,28 +375,47 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                         req_timeout = 25.0 if provider == "gemini" else min(25.0, GROQ_HTTP_TIMEOUT_SECONDS)
                         try:
-                            client = AsyncOpenAI(
-                                api_key=selected_key,
-                                base_url=base_url,
-                                http_client=http_client,
-                                max_retries=0,
-                                timeout=req_timeout,
-                            )
-                            prompt_text = system_prompt + "\nDo NOT generate thinking tags or reasoning. Output only JSON immediately."
-                            content_arr = [{"type": "text", "text": prompt_text}]
-                            for iu in processed_image_urls:
-                                content_arr.append({"type": "image_url", "image_url": {"url": iu}})
-                            
-                            kwargs = {
-                                "model": model_name,
-                                "messages": [{"role": "user", "content": content_arr}],
-                                "max_tokens": 2048,
-                            }
-                            if provider == "groq":
-                                kwargs["temperature"] = 0.2
+                            content = None
+                            finish_reason = None
+
+                            if provider == "gemini":
+                                content, finish_reason = await _call_gemini_native(
+                                    http_client=http_client,
+                                    model_name=model_name,
+                                    api_key=selected_key,
+                                    prompt_text=prompt_text,
+                                    images_data=images_data,
+                                    timeout=req_timeout,
+                                    source=source,
+                                )
+                            else:
+                                client = AsyncOpenAI(
+                                    api_key=selected_key,
+                                    base_url="https://api.groq.com/openai/v1",
+                                    http_client=http_client,
+                                    max_retries=0,
+                                    timeout=req_timeout,
+                                )
+                                content_arr = [{"type": "text", "text": prompt_text}]
+                                for iu in groq_image_urls:
+                                    content_arr.append({"type": "image_url", "image_url": {"url": iu}})
                                 
-                            resp = await client.chat.completions.create(**kwargs)
-                            
+                                kwargs = {
+                                    "model": model_name,
+                                    "messages": [{"role": "user", "content": content_arr}],
+                                    "max_tokens": 2048,
+                                    "temperature": 0.2,
+                                }
+                                resp = await client.chat.completions.create(**kwargs)
+                                if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
+                                    choice = resp.choices[0]
+                                    finish_reason = getattr(choice, "finish_reason", None)
+                                    msg_obj = getattr(choice, "message", None)
+                                    if msg_obj:
+                                        content = getattr(msg_obj, "content", None)
+                                        if not content and hasattr(msg_obj, "reasoning_content"):
+                                            content = getattr(msg_obj, "reasoning_content", None)
+
                             # Update post-request cooldown to ensure strict >= 3.0s between requests
                             async with _KEY_RATE_LOCK:
                                 fin_now = time.time()
@@ -314,19 +425,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 else:
                                     _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, fin_now + 2.5)
 
-                            content = None
-                            finish_reason = None
-                            if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
-                                choice = resp.choices[0]
-                                finish_reason = getattr(choice, "finish_reason", None)
-                                msg_obj = getattr(choice, "message", None)
-                                if msg_obj:
-                                    content = getattr(msg_obj, "content", None)
-                                    if not content and hasattr(msg_obj, "reasoning_content"):
-                                        content = getattr(msg_obj, "reasoning_content", None)
-
                             if finish_reason in ("content_filter", "safety"):
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) blocked by safety filter. Switching to next model immediately.")
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) blocked by safety filter. Switching to next model candidate.")
                                 permanent_model_failures += 1
                                 break
                             
@@ -349,7 +449,6 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     else:
                                         json_str = content
                                         
-                                    import json
                                     parsed = json.loads(json_str)
                                     raw_t = parsed.get("tags")
                                     raw_d = parsed.get("description")
@@ -389,16 +488,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     return json.dumps({"tags": synthesized_tags, "description": extracted_desc}, ensure_ascii=False)
 
                             else:
-                                 # Empty response = safety filter censored the image.
-                                 # If this is Gemini, skip ALL remaining Gemini models immediately —
-                                 # they share the same safety filter and will all block the same image.
-                                 # Jump straight to Groq.
-                                 if provider == "gemini":
-                                     logger.info(f"ℹ️ [VISION] [{source}] gemini ({model_name}) safety filter — skipping all Gemini models, trying Groq next.")
-                                     skip_gemini_models = True
-                                 else:
-                                     logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) safety filter or empty response. Falling back to next candidate...")
-                                 break
+                                logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) empty response or safety filtered. Trying next model candidate...")
+                                break
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return "error_413"
@@ -415,15 +506,12 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
                                 break
                             if "tokens per day" in err_str or "tpd" in err_str:
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} daily token limit (TPD) reached. Pausing {provider} for 15m.")
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for 1h.")
+                                pool.penalize_token(selected_key, 3600.0)
                                 async with _KEY_RATE_LOCK:
-                                    if provider == "gemini":
-                                        _GLOBAL_GEMINI_LAST_CALL = time.time() + 900.0
-                                        skip_gemini_models = True
-                                    else:
-                                        _GLOBAL_GROQ_LAST_CALL = time.time() + 900.0
-                                        skip_groq_models = True
-                                break
+                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + 3600.0
+                                available_keys.remove(selected_key)
+                                continue
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing for 120s.")

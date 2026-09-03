@@ -11,12 +11,14 @@ import sqlite3
 import datetime
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
+from collections import OrderedDict
 from PIL import Image, ImageDraw, ImageFont
 
 from stats_generator import connect_stats_db
 from common.anon_identity import get_anon_id, generate_anon_name
 
-LEADERBOARD_CACHE: Dict[str, Tuple[float, io.BytesIO, str]] = {}
+MAX_LEADERBOARD_CACHE_SIZE = 30
+LEADERBOARD_CACHE: OrderedDict[str, Tuple[float, io.BytesIO, str]] = OrderedDict()
 CACHE_TTL = 60.0  # 60 seconds cache per (board_id, mode)
 
 
@@ -126,6 +128,43 @@ def fetch_leaderboard_data(board_id: str, mode: str = "balance", caller_id: int 
                 cv_row = cursor.fetchone()
                 caller_value = cv_row[0] if cv_row else 0
 
+        elif mode in ("music", "tracks", "говноеды", "говноед"):
+            mode = "music"
+            mode_title = "ТОП ГОВНОЕДОВ (МУЗЫКА)"
+            unit = "зашкваров"
+
+            cursor.execute(
+                """SELECT m.user_id, COUNT(*) as cnt, MAX(u.custom_prefix) as prefix
+                   FROM MusicRoasts m
+                   LEFT JOIN Users u ON m.user_id = u.user_id AND m.board_id = u.board_id
+                   WHERE m.board_id = ? AND m.user_id > 0
+                   GROUP BY m.user_id
+                   ORDER BY cnt DESC LIMIT 10""",
+                (board_id,)
+            )
+            rows = cursor.fetchall()
+
+            cursor.execute("SELECT COUNT(*) FROM MusicRoasts WHERE board_id = ?", (board_id,))
+            tot_row = cursor.fetchone()
+            total_metric = tot_row[0] if tot_row and tot_row[0] else 0
+
+            if caller_id > 0:
+                cursor.execute(
+                    """SELECT COUNT(*) + 1 FROM (
+                           SELECT user_id, COUNT(*) as cnt FROM MusicRoasts
+                           WHERE board_id = ? AND user_id > 0
+                           GROUP BY user_id
+                           HAVING cnt > (SELECT COUNT(*) FROM MusicRoasts WHERE board_id = ? AND user_id = ?)
+                       )""",
+                    (board_id, board_id, caller_id)
+                )
+                cr_row = cursor.fetchone()
+                caller_rank = cr_row[0] if cr_row else 0
+
+                cursor.execute("SELECT COUNT(*) FROM MusicRoasts WHERE board_id = ? AND user_id = ?", (board_id, caller_id))
+                cv_row = cursor.fetchone()
+                caller_value = cv_row[0] if cv_row else 0
+
         else: # balance (default)
             mode = "balance"
             mode_title = "ТОП БОГАЧЕЙ"
@@ -214,6 +253,15 @@ def draw_leaderboard_card(data: LeaderboardData) -> io.BytesIO:
         card_stroke = (35, 50, 80)
         badge_bg = (12, 35, 48)
         badge_border = (20, 160, 200)
+    elif data.mode == "music":
+        bg_top = (28, 16, 12)
+        bg_bot = (16, 10, 8)
+        accent_color = (255, 90, 30)       # Toxic Flame Orange
+        accent_glow = (255, 90, 30, 35)
+        card_fill = (38, 22, 16)
+        card_stroke = (75, 42, 28)
+        badge_bg = (48, 24, 12)
+        badge_border = (210, 85, 20)
     else: # reactions
         bg_top = (22, 14, 26)
         bg_bot = (14, 8, 18)
@@ -405,8 +453,9 @@ def draw_leaderboard_card(data: LeaderboardData) -> io.BytesIO:
 
 def format_leaderboard_text(data: LeaderboardData) -> str:
     medals = ["🥇", "🥈", "🥉"]
+    header_icon = "💩" if data.mode == "music" else "🏆"
     lines = [
-        f"🏆 <b>{data.mode_title} /{data.board_id}/</b>",
+        f"{header_icon} <b>{data.mode_title} /{data.board_id}/</b>",
         f"<code>{'—'*28}</code>"
     ]
 
@@ -427,19 +476,44 @@ def format_leaderboard_text(data: LeaderboardData) -> str:
 
 def generate_leaderboard_payload(board_id: str, mode: str = "balance", caller_id: int = 0) -> Tuple[io.BytesIO, str]:
     """
-    Returns (photo_buffer, html_caption) with 60s in-memory caching.
+    Returns (photo_buffer, html_caption) with 60s in-memory caching and bounded LRU cache (maxsize=30).
     """
     cache_key = f"{board_id}_{mode}_{caller_id}"
     now = time.time()
 
     cached = LEADERBOARD_CACHE.get(cache_key)
-    if cached and (now - cached[0] < CACHE_TTL):
-        buf = io.BytesIO(cached[1].getvalue())
-        return buf, cached[2]
+    if cached:
+        if now - cached[0] < CACHE_TTL:
+            LEADERBOARD_CACHE.move_to_end(cache_key)
+            buf = io.BytesIO(cached[1].getvalue())
+            return buf, cached[2]
+        else:
+            old_val = LEADERBOARD_CACHE.pop(cache_key, None)
+            if old_val and old_val[1]:
+                try:
+                    old_val[1].close()
+                except Exception:
+                    pass
 
     data = fetch_leaderboard_data(board_id=board_id, mode=mode, caller_id=caller_id)
     buf = draw_leaderboard_card(data)
     text = format_leaderboard_text(data)
+
+    if cache_key in LEADERBOARD_CACHE:
+        old_val = LEADERBOARD_CACHE.pop(cache_key, None)
+        if old_val and old_val[1]:
+            try:
+                old_val[1].close()
+            except Exception:
+                pass
+
+    while len(LEADERBOARD_CACHE) >= MAX_LEADERBOARD_CACHE_SIZE:
+        _, old_val = LEADERBOARD_CACHE.popitem(last=False)
+        if old_val and old_val[1]:
+            try:
+                old_val[1].close()
+            except Exception:
+                pass
 
     LEADERBOARD_CACHE[cache_key] = (now, buf, text)
     return io.BytesIO(buf.getvalue()), text

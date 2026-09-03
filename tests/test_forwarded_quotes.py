@@ -193,11 +193,17 @@ class TestForwardedQuoteIntegration(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch("handlers.message_router.is_admin", return_value=False), \
+             patch("handlers.message_router.get_pool", new_callable=AsyncMock), \
              patch("handlers.message_router.check_spam", return_value=True), \
+             patch("handlers.message_router._get_user_active_items", new_callable=AsyncMock, return_value={}), \
+             patch("common.database.is_shadow_muted", new_callable=AsyncMock, return_value=False), \
              patch("handlers.message_router.is_spam_filtered", return_value=False), \
+             patch("handlers.message_router.resolve_archive_or_inline_reply", new_callable=AsyncMock, side_effect=lambda t: (None, t)), \
+             patch("handlers.message_router.build_quick_quote_info", new_callable=AsyncMock, return_value=None), \
+             patch("common.database.register_media_repost", new_callable=AsyncMock, return_value=1), \
              patch("handlers.message_router.add_or_activate_user", new_callable=AsyncMock), \
              patch("handlers.message_router.process_new_post", new_callable=AsyncMock) as mock_pnp:
-            
+
             mock_pnp.return_value = 505516
             await handle_message(msg, board_id="b", stream="ru")
 
@@ -248,11 +254,17 @@ class TestForwardedQuoteIntegration(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch("handlers.message_router.is_admin", return_value=False), \
+             patch("handlers.message_router.get_pool", new_callable=AsyncMock), \
              patch("handlers.message_router.check_spam", return_value=True), \
+             patch("handlers.message_router._get_user_active_items", new_callable=AsyncMock, return_value={}), \
+             patch("common.database.is_shadow_muted", new_callable=AsyncMock, return_value=False), \
              patch("handlers.message_router.is_spam_filtered", return_value=False), \
+             patch("handlers.message_router.resolve_archive_or_inline_reply", new_callable=AsyncMock, side_effect=lambda t: (None, t)), \
+             patch("handlers.message_router.build_quick_quote_info", new_callable=AsyncMock, return_value=None), \
+             patch("common.database.register_media_repost", new_callable=AsyncMock, return_value=1), \
              patch("handlers.message_router.add_or_activate_user", new_callable=AsyncMock), \
              patch("handlers.message_router.process_new_post", new_callable=AsyncMock) as mock_pnp:
-            
+
             mock_pnp.return_value = 505517
             await handle_message(msg, board_id="b", stream="ru")
 

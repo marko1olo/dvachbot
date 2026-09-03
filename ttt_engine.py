@@ -122,6 +122,7 @@ class TicTacToeGame:
     finish_reason: Optional[str] = None  # "win", "draw", "timeout", "surrender", "cancelled"
     turn_start_time: float = 0.0
     created_at: float = field(default_factory=time.time)
+    finished_at: float = 0.0
     winning_line: Optional[Tuple[int, int, int]] = None
     timeout_task: Optional[asyncio.Task] = None
     bot_instance: Optional[Bot] = None
@@ -200,17 +201,27 @@ def get_adaptive_bet_presets(balance: int, current_bet: int = 100) -> List[int]:
     return sorted(list(set(affordable[i] for i in indices)))
 
 
-def get_ttt_lobby_keyboard(bet: int, balance: int = 1000) -> InlineKeyboardMarkup:
+def get_ttt_lobby_keyboard(bet: int, balance: int = 1000, target_user_id: int = 0) -> InlineKeyboardMarkup:
     """Lobby for configuring bet before launching challenge."""
     bet = max(MIN_TTT_BET, min(MAX_TTT_BET, bet))
     presets = get_adaptive_bet_presets(balance, bet)
+    t_tag = f":{target_user_id}" if target_user_id else ":0"
     preset_row = [
-        InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"ttt:lobby:{p}")
+        InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"ttt:lobby:{p}{t_tag}")
         for p in presets
     ]
+    half_bet = max(MIN_TTT_BET, bet // 2)
+    double_bet = min(MAX_TTT_BET, min(int(balance), bet * 2)) if balance >= bet * 2 else bet
+    max_bet = max(MIN_TTT_BET, min(MAX_TTT_BET, int(balance)))
+    ctrl_row = [
+        InlineKeyboardButton(text="/2", callback_data=f"ttt:lobby:{half_bet}{t_tag}"),
+        InlineKeyboardButton(text="x2", callback_data=f"ttt:lobby:{double_bet}{t_tag}"),
+        InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"ttt:lobby:{max_bet}{t_tag}"),
+    ]
     buttons = [
-        [InlineKeyboardButton(text=f"⚔️ Бросить вызов ({format_bet_amount(bet)})", callback_data=f"ttt:create:{bet}")],
+        [InlineKeyboardButton(text=f"⚔️ Бросить вызов ({format_bet_amount(bet)})", callback_data=f"ttt:create:{bet}{t_tag}")],
         preset_row,
+        ctrl_row,
         [
             InlineKeyboardButton(text="🎲 Дуэли (/duel)", callback_data="cas:menu:duel"),
             InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub"),
@@ -397,6 +408,28 @@ async def publish_ttt_board_announcement(
         logger.warning(f"⚠️ Failed to publish TTT announcement to board feed: {e}")
 
 
+async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> bool:
+    """
+    Safely sends a private notification DM to a user on Telegram with full error suppression.
+    Catches TelegramForbiddenError, TelegramBadRequest, and generic exceptions cleanly.
+    """
+    if not bot or not user_id:
+        return False
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        logger.debug(f"Direct notification suppressed for user {user_id}: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Direct notification failed for user {user_id}: {e}")
+        return False
+
+
 # ============================================================================
 # TIMEOUT WATCHDOG (60 Seconds Turn Timer)
 # ============================================================================
@@ -437,6 +470,7 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
             winner_id = game.opponent_id if loser_id == game.challenger_id else game.challenger_id
             
             game.status = "finished"
+            game.finished_at = time.time()
             game.winner_id = winner_id
             game.finish_reason = "timeout"
             
@@ -487,6 +521,18 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
             f"<i>{punchline}</i>"
         )
         if game.bot_instance:
+            win_notify_text = (
+                f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game_id}!</b>\n\n"
+                f"Соперник пропустил таймер хода (60 сек).\n"
+                f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> (банк {game.pot:,} ₪ за вычетом рейка {rake:,} ₪ в Казну Абу) зачислен на баланс!"
+            )
+            lose_notify_text = (
+                f"⏱️ <b>ТАЙМАУТ В КРЕСТИКАХ-НОЛИКАХ #{game_id}</b>\n\n"
+                f"Ты не сделал ход за 60 секунд (техническое поражение).\n"
+                f"💸 Списано: <b>-{game.bet:,} ₪</b>."
+            )
+            asyncio.create_task(send_pvp_direct_notification(game.bot_instance, winner_id, win_notify_text))
+            asyncio.create_task(send_pvp_direct_notification(game.bot_instance, loser_id, lose_notify_text))
             await publish_ttt_board_announcement(game.bot_instance, game.board_id, announcement)
 
     except asyncio.CancelledError:
@@ -669,6 +715,7 @@ async def process_ttt_move(
         if win_result:
             winning_sym, combo = win_result
             game.status = "finished"
+            game.finished_at = time.time()
             game.winner_id = user_id
             game.winning_line = combo
             game.finish_reason = "win"
@@ -685,6 +732,7 @@ async def process_ttt_move(
         elif game.is_full():
             # Draw
             game.status = "finished"
+            game.finished_at = time.time()
             game.finish_reason = "draw"
             if game.timeout_task and not game.timeout_task.done():
                 game.timeout_task.cancel()
@@ -733,7 +781,21 @@ async def process_ttt_move(
             f"💰 Занос: <code>+{net_win:,} ₪</code> <i>(Рейк Абу: {rake:,} ₪)</i>\n\n"
             f"<i>{punchline}</i>"
         )
-        await publish_ttt_board_announcement(bot, game.board_id, announcement)
+        bot_to_use = bot or game.bot_instance
+        if bot_to_use:
+            win_notify_text = (
+                f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}!</b>\n\n"
+                f"Ты собрал выигрышную линию!\n"
+                f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> (банк {game.pot:,} ₪ за вычетом рейка {rake:,} ₪ в Казну Абу) зачислен на баланс!"
+            )
+            lose_notify_text = (
+                f"💀 <b>ПОРАЖЕНИЕ В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}</b>\n\n"
+                f"Соперник собрал выигрышную линию.\n"
+                f"💸 Списано: <b>-{game.bet:,} ₪</b>."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.winner_id, win_notify_text))
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, loser_id, lose_notify_text))
+            await publish_ttt_board_announcement(bot_to_use, game.board_id, announcement)
 
     elif is_draw:
         fee = max(1, int(game.bet * ABU_DRAW_FEE_PERCENT))
@@ -756,7 +818,16 @@ async def process_ttt_move(
             f"Ставки возвращены владельцам (минус 2% налог Абу: по {fee:,} ₪).\n\n"
             f"<i>{punchline}</i>"
         )
-        await publish_ttt_board_announcement(bot, game.board_id, announcement)
+        bot_to_use = bot or game.bot_instance
+        if bot_to_use:
+            draw_notify_text = (
+                f"🤝 <b>НИЧЬЯ В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}</b>\n\n"
+                f"Все 9 клеток заняты, ничья!\n"
+                f"💰 Твоя ставка возвращена: <b>+{refund:,} ₪</b> (за вычетом 2% в Казну Абу)."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, draw_notify_text))
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.opponent_id, draw_notify_text))
+            await publish_ttt_board_announcement(bot_to_use, game.board_id, announcement)
 
     return True, "OK", game
 
@@ -780,6 +851,7 @@ async def surrender_ttt_game(
         winner_id = game.opponent_id if loser_id == game.challenger_id else game.challenger_id
         
         game.status = "finished"
+        game.finished_at = time.time()
         game.winner_id = winner_id
         game.finish_reason = "surrender"
         if game.timeout_task and not game.timeout_task.done():
@@ -810,7 +882,21 @@ async def surrender_ttt_game(
         f"🏆 <b>Анон [{winner_anon}]</b> забирает куш <code>+{net_win:,} ₪</code> без боя!\n\n"
         f"<i>{punchline}</i>"
     )
-    await publish_ttt_board_announcement(bot, game.board_id, announcement)
+    bot_to_use = bot or game.bot_instance
+    if bot_to_use:
+        win_notify_text = (
+            f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game_id}!</b>\n\n"
+            f"Соперник сдался без боя!\n"
+            f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> зачислен на баланс!"
+        )
+        lose_notify_text = (
+            f"🏳️ <b>КАПИТУЛЯЦИЯ В КРЕСТИКАХ-НОЛИКАХ #{game_id}</b>\n\n"
+            f"Ты сдался.\n"
+            f"💸 Списано: <b>-{game.bet:,} ₪</b>."
+        )
+        asyncio.create_task(send_pvp_direct_notification(bot_to_use, winner_id, win_notify_text))
+        asyncio.create_task(send_pvp_direct_notification(bot_to_use, loser_id, lose_notify_text))
+        await publish_ttt_board_announcement(bot_to_use, game.board_id, announcement)
 
     return True, "OK", game
 
@@ -907,9 +993,14 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
 
     # Target user via Reply (if any)
     target_user_id = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        if not message.reply_to_message.from_user.is_bot:
-            target_user_id = message.reply_to_message.from_user.id
+    if message.reply_to_message:
+        try:
+            from common.bot_helpers import get_author_id_by_reply
+            target_user_id = await get_author_id_by_reply(message)
+        except Exception:
+            target_user_id = message.reply_to_message.from_user.id if (message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot) else None
+        if target_user_id == user_id or target_user_id == 0:
+            target_user_id = None
 
     # Parse Bet or Open Lobby
     if not args or not args[0].isdigit():
@@ -986,17 +1077,21 @@ async def cb_ttt_lobby_change_bet(callback: CallbackQuery):
     user_id = callback.from_user.id
     parts = callback.data.split(":")
     bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
+    target_user_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() and int(parts[3]) > 0 else 0
     
     db = await get_pool()
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
     
-    kb = get_ttt_lobby_keyboard(bet, balance=int(balance))
+    bet = max(MIN_TTT_BET, min(MAX_TTT_BET, min(int(balance), bet) if balance >= MIN_TTT_BET else MIN_TTT_BET))
+    kb = get_ttt_lobby_keyboard(bet, balance=int(balance), target_user_id=target_user_id)
+    target_str = f"🎯 <b>Цель:</b> Анон <code>[ID:{target_user_id}]</code>\n" if target_user_id else ""
     caption = (
         f"❌⭕ <b>КРЕСТИКИ-НОЛИКИ НА ШЕКЕЛИ (PvP)</b>\n\n"
         f"💳 Твой баланс: <code>{int(balance):,} ₪</code>\n"
-        f"💰 Выбранная ставка: <code>{bet:,} ₪</code>\n\n"
-        f"Выбери размер ставки и создай открытый вызов на доску:"
+        f"💰 Выбранная ставка: <code>{bet:,} ₪</code>\n"
+        f"{target_str}\n"
+        f"Выбери размер ставки и создай вызов на доску:"
     )
     try:
         await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
@@ -1013,6 +1108,7 @@ async def cb_ttt_create(callback: CallbackQuery, board_id: Optional[str] = None)
     user_id = callback.from_user.id
     parts = callback.data.split(":")
     bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
+    target_user_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() and int(parts[3]) > 0 else None
 
     ok, err, game = await create_ttt_challenge(
         bot=callback.bot,
@@ -1020,6 +1116,7 @@ async def cb_ttt_create(callback: CallbackQuery, board_id: Optional[str] = None)
         board_id=board_id,
         challenger_id=user_id,
         bet=bet,
+        target_user_id=target_user_id,
     )
     if not ok or not game:
         await callback.answer(err, show_alert=True)
@@ -1164,8 +1261,14 @@ async def ttt_watchdog_step(bot=None):
     expired_pending = []
     async with ttt_lock:
         for gid, game in list(active_ttt_games.items()):
+            if game.status == "finished":
+                fin_ts = getattr(game, 'finished_at', 0.0) or game.created_at
+                if now - fin_ts > 60:
+                    active_ttt_games.pop(gid, None)
+                continue
             if game.status == "waiting" and (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
                 game.status = "finished"
+                game.finished_at = now
                 game.finish_reason = "cancelled"
                 user_active_ttt_session.pop(game.challenger_id, None)
                 expired_pending.append(gid)
@@ -1175,6 +1278,14 @@ async def ttt_watchdog_step(bot=None):
         if not game:
             continue
         bot_to_use = bot or game.bot_instance
+        if bot_to_use and game.challenger_id:
+            exp_dm_text = (
+                f"⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК</b>\n\n"
+                f"Ни один анон не принял твой вызов на <b>{game.bet:,} ₪</b> за 2 минуты.\n"
+                f"Вызов аннулирован, ставка не списывалась."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, exp_dm_text))
+
         if bot_to_use and game.chat_id and game.msg_id:
             try:
                 await bot_to_use.edit_message_text(

@@ -5,8 +5,13 @@ import time
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
+import pytest
 import casino_engine
 import drop_engine
+
+@pytest.mark.asyncio
+async def test_casino_and_drop_concurrency():
+    await run_tests()
 
 async def run_tests():
     print("=== STARTING CASINO & MONEY DROP TEST SUITE ===")

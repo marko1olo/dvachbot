@@ -61,16 +61,15 @@ class TestBatchReplies(unittest.IsolatedAsyncioTestCase):
         }
 
         chunk = await main.get_board_chunk('b', hours=1)
-        
-        # Verify formats:
-        # Anon1: First post text
-        # Анон #7890 (ответ на №100): Reply text
-        # Анон #1111 (ответ на №100): Another reply
+        from common.anon_identity import get_anon_id
+        aid1 = get_anon_id(67890, stream='ru')
+        aid2 = get_anon_id(11111, stream='ru')
         self.assertIn("Anon1: First post text", chunk)
-        self.assertIn("Анон #7890 (Ответ на #100): Reply text", chunk)
-        self.assertIn("Анон #1111 (Ответ на #100): Another reply", chunk)
+        self.assertIn(f"Анон [{aid1}] (Ответ на #100): Reply text", chunk)
+        self.assertIn(f"Анон [{aid2}] (Ответ на #100): Another reply", chunk)
 
     async def test_get_board_chunk_includes_replies_en(self):
+        from common.anon_identity import get_anon_id
         # Post on English board 'int'
         main.messages_storage[200] = {
             'author_id': 99999,
@@ -94,8 +93,10 @@ class TestBatchReplies(unittest.IsolatedAsyncioTestCase):
         }
 
         chunk = await main.get_board_chunk('int', hours=1)
+        aid_en = get_anon_id(88888, stream='en')
         self.assertIn("AnonInt: Hello world", chunk)
-        self.assertIn("Anon #8888 (reply to #200): Reply hello", chunk)
+        self.assertIn(f"Anon [{aid_en}] (reply to #200): Reply hello", chunk)
+
 
 if __name__ == '__main__':
     unittest.main()

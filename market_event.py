@@ -239,17 +239,16 @@ async def market_event_generator():
                             'content': content,
                             'timestamp': time.time()
                         }
-                    if recipients:
-                        await enqueue_board_message(board_id, {
-                            'recipients': recipients,
-                            'board_id': board_id,
-                            'post_num': post_num,
-                            'author_id': -1,
-                            'author_name': 'Black Market',
-                            'content': content,
-                            'reply_to': None,
-                            'is_op': False
-                        })
+                    await enqueue_board_message(board_id, {
+                        'recipients': recipients or set(),
+                        'board_id': board_id,
+                        'post_num': post_num,
+                        'author_id': -1,
+                        'author_name': 'Black Market',
+                        'content': content,
+                        'reply_to': None,
+                        'is_op': False
+                    })
 
             runtime_logger.info(f"Market event generated: {event_text}")
             await asyncio.sleep(120)

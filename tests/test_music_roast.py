@@ -200,112 +200,132 @@ class TestMusicSTTAndAudioHandling:
     """Validates audio download, Whisper STT, Gemini Audio fallback, and edge cases."""
 
     @pytest.mark.asyncio
+    @patch("ai_manager._safe_send_roast", new_callable=AsyncMock)
+    @patch("ai_manager._safe_send_voice_roast", new_callable=AsyncMock)
     @patch("ai_manager.httpx.AsyncClient")
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
-    async def test_stt_whisper_groq_success(self, mock_summarize, mock_httpx_cls):
-        """Successful Whisper STT returns transcript and passes it to roast."""
+    async def test_stt_whisper_groq_success(
+        self, mock_summarize, mock_httpx_cls, mock_send_voice, mock_send_roast
+    ):
+        """1-Step Gemini Multimodal: roast built from ТРАНСКРИПЦИЯ+ВЕРДИКТ+ШКАЛА."""
         mock_bot = AsyncMock()
         mock_file_info = MagicMock(file_path="music/track.mp3")
         mock_bot.get_file.return_value = mock_file_info
         mock_bot.download_file.return_value = io.BytesIO(b"ID3_MOCK_AUDIO_BYTES")
 
-        # Mock Groq Whisper HTTP response
+        # Mock 1-Step Gemini Multimodal Response
         mock_http_client = AsyncMock()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"text": "Пока горит огонь в моей груди, я буду петь"}
-        mock_http_client.post.return_value = mock_resp
-        mock_httpx_cls.return_value.__aenter__.return_value = mock_http_client
-
-        mock_summarize.return_value = (
-            "Очередной депрессивный мамкин рэпчик. "
-            "Слушать это трезвым физически больно.\n\n"
-            "Шкала говноедства: 1/10 💩 (Кал высшей пробы)"
-        )
-
-        mock_msg = MagicMock()
-        mock_msg.audio = MagicMock()
-        mock_msg.document = None
-        mock_msg.audio.performer = "Miyagi"
-        mock_msg.audio.title = "Captain"
-        mock_msg.audio.duration = 180
-        mock_msg.audio.file_size = 5_000_000
-        mock_msg.audio.file_id = "audio_123"
-        mock_msg.audio.file_name = "track.mp3"
-        mock_msg.reply = AsyncMock()
-
-        await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
-
-        # Verify Groq transcription was queried
-        mock_http_client.post.assert_called_once()
-        post_url = mock_http_client.post.call_args[0][0]
-        assert "api.groq.com" in post_url
-
-        # Verify reply was sent with formatted HTML
-        mock_msg.reply.assert_called_once()
-        reply_text = mock_msg.reply.call_args[0][0]
-        assert "Miyagi — Captain" in reply_text
-        assert "Пока горит огонь" in reply_text
-        assert "Шкала говноедства:" in reply_text
-
-    @pytest.mark.asyncio
-    @patch("ai_manager.httpx.AsyncClient")
-    @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
-    async def test_stt_whisper_failure_gemini_audio_fallback(self, mock_summarize, mock_httpx_cls):
-        """Whisper failure (429/timeout) falls back to Gemini Multimodal Audio STT."""
-        mock_bot = AsyncMock()
-        mock_bot.get_file.return_value = MagicMock(file_path="music/track.mp3")
-        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_AUDIO_BYTES")
-
-        # Mock Groq failure (429), followed by Gemini success (200)
-        mock_http_client = AsyncMock()
-        mock_resp_groq = MagicMock(status_code=429)
         mock_resp_gemini = MagicMock()
         mock_resp_gemini.status_code = 200
         mock_resp_gemini.json.return_value = {
             "candidates": [{
                 "content": {
-                    "parts": [{"text": "Текст песни расшифрован через Gemini Multimodal"}]
+                    "parts": [{
+                        "text": (
+                            "ТРАНСКРИПЦИЯ: Пока горит огонь в моей груди, я буду петь\n"
+                            "ВЕРДИКТ: Унылый кальянный рэп для сопливых школьников.\n"
+                            "ШКАЛА: 8/10"
+                        )
+                    }]
                 }
             }]
         }
-
-        async def post_handler(url, *args, **kwargs):
-            if "googleapis.com" in str(url) or "generativelanguage" in str(url):
-                return mock_resp_gemini
-            return mock_resp_groq
-
-        mock_http_client.post.side_effect = post_handler
+        mock_http_client.post.return_value = mock_resp_gemini
         mock_httpx_cls.return_value.__aenter__.return_value = mock_http_client
 
-        mock_summarize.return_value = (
-            "Бессвязный графоманский высер.\n\n"
-            "Шкала говноедства: 0/10 💩"
+        mock_msg = MagicMock()
+        mock_msg.from_user = MagicMock(id=12345, is_bot=False)
+        mock_msg.is_system_message = False
+        mock_msg.caption = None
+        mock_msg.audio = MagicMock(
+            performer="Miyagi", title="Captain",
+            duration=180, file_size=5_000_000, file_id="miyagi_01",
+            file_name="track.mp3"
         )
+        mock_msg.document = None
+
+        with patch("common.token_pool.google_pool.get_all_active_tokens", return_value=["test-google-key"]):
+            await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
+
+        # Verify Gemini Multimodal was called
+        assert mock_http_client.post.call_count >= 1
+        post_url = mock_http_client.post.call_args_list[0][0][0]
+        assert "generativelanguage.googleapis.com" in post_url
+
+        # Verify roast was sent with formatted HTML
+        mock_send_roast.assert_called_once()
+        roast_text = mock_send_roast.call_args[0][1]
+        assert "Miyagi" in roast_text
+        assert "Captain" in roast_text
+        assert "8/10" in roast_text
+        assert "Унылый кальянный рэп" in roast_text
+
+    @pytest.mark.asyncio
+    @patch("ai_manager._safe_send_roast", new_callable=AsyncMock)
+    @patch("ai_manager._safe_send_voice_roast", new_callable=AsyncMock)
+    @patch("ai_manager.httpx.AsyncClient")
+    @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
+    async def test_stt_whisper_failure_gemini_audio_fallback(
+        self, mock_summarize, mock_httpx_cls, mock_send_voice, mock_send_roast
+    ):
+        """Gemini Multimodal 1-step handles direct audio critique."""
+        mock_bot = AsyncMock()
+        mock_bot.get_file.return_value = MagicMock(file_path="music/track.mp3")
+        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_AUDIO_BYTES")
+
+        # Mock Gemini 1-Step success (200)
+        mock_http_client = AsyncMock()
+        mock_resp_gemini = MagicMock()
+        mock_resp_gemini.status_code = 200
+        mock_resp_gemini.json.return_value = {
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "text": (
+                            "ТРАНСКРИПЦИЯ: Gimme the loot, gimme the loot\n"
+                            "ВЕРДИКТ: Бессвязный графоманский высер под чужой бит.\n"
+                            "ШКАЛА: 0/10"
+                        )
+                    }]
+                }
+            }]
+        }
+        mock_http_client.post.return_value = mock_resp_gemini
+        mock_httpx_cls.return_value.__aenter__.return_value = mock_http_client
 
         mock_msg = MagicMock()
+        mock_msg.from_user = MagicMock(id=22222, is_bot=False)
+        mock_msg.is_system_message = False
+        mock_msg.caption = None
         mock_msg.audio = MagicMock(
             performer="Big Baby Tape", title="Gimme The Loot",
             duration=120, file_size=4_000_000, file_id="bbt_01",
             file_name="bbt.mp3"
         )
         mock_msg.document = None
-        mock_msg.reply = AsyncMock()
 
         with patch("common.token_pool.google_pool.get_all_active_tokens", return_value=["test-google-key"]):
             await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
 
-        # Verify fallback occurred
-        assert mock_http_client.post.call_count >= 2
-        mock_msg.reply.assert_called_once()
-        reply_text = mock_msg.reply.call_args[0][0]
-        assert "Gemini Multimodal" in reply_text
+        # Verify Gemini was called
+        assert mock_http_client.post.call_count >= 1
+        post_url = mock_http_client.post.call_args_list[0][0][0]
+        assert "generativelanguage.googleapis.com" in post_url
+        mock_send_roast.assert_called_once()
+        roast_text = mock_send_roast.call_args[0][1]
+        assert "Big Baby Tape" in roast_text
+        assert "Gimme The Loot" in roast_text
+        assert "0/10" in roast_text
 
     @pytest.mark.asyncio
+    @patch("ai_manager._safe_send_roast", new_callable=AsyncMock)
+    @patch("ai_manager._safe_send_voice_roast", new_callable=AsyncMock)
     @patch("ai_manager.httpx.AsyncClient")
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
-    async def test_stt_instrumental_or_empty_transcript(self, mock_summarize, mock_httpx_cls):
-        """Empty STT / silence sets lyrics sample to '[Инструментальный трек / неразборчивый вокал]'."""
+    async def test_stt_instrumental_or_empty_transcript(
+        self, mock_summarize, mock_httpx_cls, mock_send_voice, mock_send_roast
+    ):
+        """Instrumental audio track: Gemini returns [Инструментал], roast is sent via _safe_send_roast."""
         mock_bot = AsyncMock()
         mock_bot.get_file.return_value = MagicMock(file_path="music/techno.mp3")
         mock_bot.download_file.return_value = io.BytesIO(b"TECHNO_BEATS")
@@ -313,30 +333,41 @@ class TestMusicSTTAndAudioHandling:
         mock_http_client = AsyncMock()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"text": "[Тишина]"}
+        mock_resp.json.return_value = {
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "text": (
+                            "ТРАНСКРИПЦИЯ: [Инструментал/Без слов]\n"
+                            "ВЕРДИКТ: Пердеж из FL Studio без вокала и смысла.\n"
+                            "ШКАЛА: 2/10"
+                        )
+                    }]
+                }
+            }]
+        }
         mock_http_client.post.return_value = mock_resp
         mock_httpx_cls.return_value.__aenter__.return_value = mock_http_client
 
-        mock_summarize.return_value = (
-            "Пердеж из FL Studio без вокала.\n\n"
-            "Шкала говноедства: 2/10 💩"
-        )
-
         mock_msg = MagicMock()
+        mock_msg.from_user = MagicMock(id=99999, is_bot=False)
         mock_msg.audio = MagicMock(
             performer="Deadmau5", title="Strobe",
             duration=600, file_size=15_000_000, file_id="deadmau5_strobe",
             file_name="strobe.mp3"
         )
         mock_msg.document = None
-        mock_msg.reply = AsyncMock()
+        mock_msg.is_system_message = False
+        mock_msg.caption = None
 
-        await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
+        with patch("common.token_pool.google_pool.get_all_active_tokens", return_value=["test-google-key"]):
+            await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
 
-        mock_msg.reply.assert_called_once()
-        reply_text = mock_msg.reply.call_args[0][0]
-        assert "[Инструментальный трек / неразборчивый вокал]" in reply_text
-        assert "Deadmau5 — Strobe" in reply_text
+        mock_send_roast.assert_called_once()
+        roast_call_text = mock_send_roast.call_args[0][1]
+        assert "Deadmau5" in roast_call_text
+        assert "Strobe" in roast_call_text
+        assert "Пердеж из FL Studio" in roast_call_text
 
     @pytest.mark.asyncio
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
@@ -366,8 +397,9 @@ class TestMusicSTTAndAudioHandling:
 
         mock_msg.reply.assert_called_once()
         reply_text = mock_msg.reply.call_args[0][0]
-        assert escape_html("[Файл >20MB — семпл не скачан]") in reply_text or "[Файл &gt;20MB — семпл не скачан]" in reply_text
         assert "Pink Floyd — Echoes" in reply_text
+        assert "[Файл >20MB — семпл не скачан]" in mock_summarize.call_args[0][1]
+
 
 
 # ============================================================================
@@ -383,7 +415,7 @@ class TestMusicRoastPromptAndFormatting:
 
         # Tone and persona requirements
         assert "двач" in prompt_lower or "/b/" in prompt_lower or "критик" in prompt_lower
-        assert "шкала говноедства" in prompt_lower or "вердикт" in prompt_lower
+        assert "оценка" in prompt_lower or "вердикт" in prompt_lower or "шкала" in prompt_lower
 
         # Disclaimers and fluff forbidden
         forbidden = [
@@ -425,15 +457,13 @@ class TestMusicRoastPromptAndFormatting:
         rating = "3/10 💩 (Для скуфов)"
 
         formatted = (
-            f"🎵 <b>Трек:</b> {escape_html(artist)} — {escape_html(title)} (<i>{dur_str}</i>)\n"
-            f"📝 <b>Текст / Семпл:</b> <i>«{escape_html(lyrics_sample)}»</i>\n\n"
+            f"🎵 <b>Трек:</b> {escape_html(artist)} — {escape_html(title)} (<i>{dur_str}</i>)\n\n"
             f"🔥 <b>Вердикт /b/ музкритика:</b>\n"
             f"{escape_html(roast_text)}\n\n"
             f"💩 <b>Шкала говноедства:</b> {escape_html(rating)}"
         )
 
         assert "🎵 <b>Трек:</b>" in formatted
-        assert "📝 <b>Текст / Семпл:</b>" in formatted
         assert "🔥 <b>Вердикт /b/ музкритика:</b>" in formatted
         assert "💩 <b>Шкала говноедства:</b>" in formatted
         assert f"{artist} — {title}" in formatted
@@ -520,10 +550,15 @@ class TestHandleMusicRoastAsyncExecution:
             assert "Instasamka — За деньги да" in reply_text
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    @patch("ai_manager._safe_send_roast", new_callable=AsyncMock)
+    @patch("ai_manager._safe_send_voice_roast", new_callable=AsyncMock)
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
     @patch("ai_manager.httpx.AsyncClient")
-    async def test_handle_music_roast_document_flac_flow(self, mock_httpx_cls, mock_summarize):
-        """Full execution flow for FLAC Document message."""
+    async def test_handle_music_roast_document_flac_flow(
+        self, mock_httpx_cls, mock_summarize, mock_send_voice, mock_send_roast
+    ):
+        """Full execution flow for FLAC Document message - Gemini 1-step multimodal."""
         mock_bot = AsyncMock()
         mock_bot.get_file.return_value = MagicMock(file_path="music/track.flac")
         mock_bot.download_file.return_value = io.BytesIO(b"FLAC_RAW")
@@ -531,32 +566,43 @@ class TestHandleMusicRoastAsyncExecution:
         mock_http = AsyncMock()
         mock_http.post.return_value = MagicMock(
             status_code=200,
-            json=lambda: {"text": "I tried so hard and got so far"}
+            json=lambda: {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "text": (
+                                "ТРАНСКРИПЦИЯ: I tried so hard and got so far\n"
+                                "ВЕРДИКТ: Классика 2000-х для страдающих подростков.\n"
+                                "ШКАЛА: 4/10"
+                            )
+                        }]
+                    }
+                }]
+            }
         )
         mock_httpx_cls.return_value.__aenter__.return_value = mock_http
 
-        mock_summarize.return_value = (
-            "Классика 2000-х для страдающих подростков.\n\n"
-            "Шкала говноедства: 4/10 💩 (Ностальгический кал)"
-        )
-
         mock_msg = MagicMock()
+        mock_msg.from_user = MagicMock(id=11111, is_bot=False)
         mock_msg.audio = None
+        mock_msg.is_system_message = False
+        mock_msg.caption = None
         mock_msg.document = MagicMock(
             file_name="Linkin Park - In the End.flac",
             mime_type="audio/flac",
             file_size=18_000_000,
             file_id="flac_lp_01"
         )
-        mock_msg.reply = AsyncMock()
 
-        await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru", post_num=None)
+        with patch("common.token_pool.google_pool.get_all_active_tokens", return_value=["test-google-key"]):
+            await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru", post_num=None)
 
-        # No board context → direct reply is sent (no deduplication bypass)
-        mock_msg.reply.assert_called_once()
-        reply_text = mock_msg.reply.call_args[0][0]
-        assert "Linkin Park — In the End" in reply_text
-        assert "I tried so hard" in reply_text
+        # Gemini roast was sent via _safe_send_roast
+        mock_send_roast.assert_called_once()
+        roast_text = mock_send_roast.call_args[0][1]
+        assert "Linkin Park" in roast_text
+        assert "In the End" in roast_text
+        assert "Классика 2000-х" in roast_text
 
     @pytest.mark.asyncio
     async def test_handle_music_roast_non_music_ignored(self):

@@ -1530,16 +1530,24 @@ async def _roast_album_tracks_sequentially(bot, audio_msgs, board_id, stream, po
 async def process_complete_media_group(media_group_key: str, group: dict, bot_instance: Bot):
     if not group or not group.get('media'):
         return
-    main.sent_media_groups.append(media_group_key)
+    if hasattr(main, 'sent_media_groups') and getattr(main, 'sent_media_groups') is not None:
+        try:
+            main.sent_media_groups.append(media_group_key)
+        except Exception:
+            pass
     sent_media_groups.append(media_group_key)  # shared_state deque — read by message_router for dedup
     user_id = group['author_id']
     board_id = group['board_id']
     stream = group.get('stream', 'ru')
     b_data = board_data[board_id]
-    is_shadow_muted = (user_id in b_data['shadow_mutes'] and 
-                       b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from bot_helpers import is_admin
+    is_shadow_muted = (not is_admin(user_id, board_id) and 
+                       ((user_id in b_data.get('shadow_mutes', {}) and 
+                         b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
+                        await check_db_shadow_muted(user_id, board_id)))
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
-    if user_settings.get('shadow_media'):
+    if not is_admin(user_id, board_id) and user_settings.get('shadow_media'):
         is_shadow_muted = True
     all_media = group.get('media',[])
     CHUNK_SIZE = 10

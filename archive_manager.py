@@ -437,9 +437,10 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
                     if "can't parse entities" in b_err_str or "find end tag" in b_err_str:
                         common_args["parse_mode"] = None
                         common_args["caption"] = clean_html_tags(caption)
-                        sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
                     else:
-                        raise
+                        logger.warning(f"⚠️ Single media buffer send failed for channel {channel_id}: {be}. Falling back to text delivery...")
+                        msg = await _send_single_text_fallback()
+                        return msg, []
                 except TelegramRetryAfter:
                     raise
                 except Exception as ex:

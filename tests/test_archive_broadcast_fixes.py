@@ -570,3 +570,126 @@ async def test_post_thread_notification_to_channel_fallback():
 
         assert bot1.send_message.called
         assert bot2.send_message.called
+
+
+# =========================================================================
+# 5. R3 & R4 System Broadcast & Money Drop State Machine Tests
+# =========================================================================
+
+@pytest.mark.asyncio
+async def test_pvp_and_system_announcements_have_archive_allowed():
+    """Verify that dice duels and russian roulette announcements have is_system_message and archive_allowed."""
+    import dice_duel_engine
+    import russian_roulette_pvp
+    mock_bot = _make_mock_bot(1)
+
+    with patch('post_processor.process_new_post', new_callable=AsyncMock) as mock_post:
+        await dice_duel_engine.broadcast_dice_announcement(mock_bot, 'b', "🎲 Duel finished!")
+        assert mock_post.called
+        params = mock_post.call_args[0][0]
+        assert params.content.get('is_system_message') is True
+        assert params.content.get('archive_allowed') is True
+
+    with patch('post_processor.process_new_post', new_callable=AsyncMock) as mock_post:
+        await russian_roulette_pvp.broadcast_game_announcement(mock_bot, 'b', "💀 Russian Roulette finished!")
+        assert mock_post.called
+        params = mock_post.call_args[0][0]
+        assert params.content.get('is_system_message') is True
+        assert params.content.get('archive_allowed') is True
+
+
+@pytest.mark.asyncio
+async def test_money_drop_mid_broadcast_stops_sending():
+    """Verify that _broadcast_money_drop immediately stops sending when drop is claimed mid-broadcast."""
+    import main
+    import drop_engine
+
+    mock_bot = _make_mock_bot(1)
+    drop_id = "test_mid_claim"
+    rec = drop_engine.DropRecord(
+        drop_id=drop_id,
+        donor_id=111,
+        donor_name="Donor",
+        board_id="b",
+        amount=500,
+        created_at=time.time(),
+        expires_at=time.time() + 600,
+        status="active"
+    )
+    drop_engine.active_drops[drop_id] = rec
+
+    # Simulate 5 active users
+    users = [10, 20, 30, 40, 50]
+    with patch.object(main, 'board_data', {'b': {'users': {'active': users, 'banned': set()}}}):
+        call_count = 0
+
+        async def send_msg_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                # Mid-broadcast claim occurs!
+                rec.status = "claimed"
+                rec.claimed_by = 20
+            return _make_mock_message(message_id=100 + call_count)
+
+        mock_bot.send_message.side_effect = send_msg_side_effect
+        mock_bot.send_photo.side_effect = send_msg_side_effect
+
+        await main._broadcast_money_drop(
+            bot=mock_bot,
+            board_id="b",
+            drop_id=drop_id,
+            exclude_chat_id=111,
+            photo_payload=None,
+            caption="Money drop!",
+            kb=MagicMock()
+        )
+
+        # After user 2, rec.status became "claimed", so loop stopped before users 30, 40, 50!
+        assert call_count == 2
+        assert len(drop_engine.get_drop_messages(drop_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_money_drop_retry_after_resilience():
+    """Verify that _broadcast_money_drop and _update_all_drop_messages handle TelegramRetryAfter gracefully."""
+    import main
+    import drop_engine
+    from aiogram.exceptions import TelegramRetryAfter
+
+    mock_bot = _make_mock_bot(1)
+    drop_id = "test_retry_after"
+    rec = drop_engine.DropRecord(
+        drop_id=drop_id,
+        donor_id=111,
+        donor_name="Donor",
+        board_id="b",
+        amount=500,
+        created_at=time.time(),
+        expires_at=time.time() + 600,
+        status="active"
+    )
+    drop_engine.active_drops[drop_id] = rec
+
+    # 1. Test broadcast with retry_after
+    retry_err = TelegramRetryAfter(method=MagicMock(), message="Flood control", retry_after=0.01)
+    mock_bot.send_message.side_effect = [retry_err, _make_mock_message(message_id=999)]
+
+    with patch.object(main, 'board_data', {'b': {'users': {'active': [222], 'banned': set()}}}):
+        await main._broadcast_money_drop(
+            bot=mock_bot,
+            board_id="b",
+            drop_id=drop_id,
+            exclude_chat_id=111,
+            photo_payload=None,
+            caption="Money drop!",
+            kb=MagicMock()
+        )
+        assert mock_bot.send_message.call_count == 2
+        assert (222, 999) in drop_engine.get_drop_messages(drop_id)
+
+    # 2. Test update with retry_after
+    mock_bot.edit_message_caption.side_effect = [retry_err, _make_mock_message(message_id=999)]
+    await main._update_all_drop_messages(mock_bot, drop_id, "New text")
+    assert mock_bot.edit_message_caption.call_count == 2
+

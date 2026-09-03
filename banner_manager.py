@@ -144,13 +144,15 @@ def _init_banners():
     global _BANNER_CACHE, _CATEGORIZED_BANNERS, _CATEGORY_DECKS
     
     # Load cache from disk
+    _BANNER_CACHE.clear()
     if CACHE_FILE.exists():
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                _BANNER_CACHE = json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                _BANNER_CACHE.update(loaded)
         except Exception as e:
             logger.warning(f"[banner_manager] Failed to load cache file: {e}")
-            _BANNER_CACHE = {}
 
     # Scan banners directory
     if not BANNERS_DIR.exists():
@@ -159,10 +161,9 @@ def _init_banners():
     all_files = [f.name for f in BANNERS_DIR.iterdir() if f.is_file() and f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')]
     all_files.sort()
 
-    _CATEGORIZED_BANNERS = {
-        "all": all_files.copy(),
-        "start": all_files.copy()
-    }
+    _CATEGORIZED_BANNERS.clear()
+    _CATEGORIZED_BANNERS["all"] = all_files.copy()
+    _CATEGORIZED_BANNERS["start"] = all_files.copy()
     for cat in CATEGORY_PATTERNS:
         _CATEGORIZED_BANNERS[cat] = []
 
@@ -197,6 +198,7 @@ def _init_banners():
                         _CATEGORIZED_BANNERS[cat].append(fname)
 
     # Ensure no empty categories and populate initial shuffle decks
+    _CATEGORY_DECKS.clear()
     for cat in _CATEGORIZED_BANNERS:
         if not _CATEGORIZED_BANNERS[cat]:
             _CATEGORIZED_BANNERS[cat] = all_files.copy()
@@ -241,7 +243,7 @@ def get_banner_file(
     if not pool:
         return "", ""
 
-    if banner_name and banner_name in _CATEGORIZED_BANNERS["all"]:
+    if banner_name:
         chosen_file = banner_name
     else:
         # Shuffle Bag: Pop from non-repeating deck

@@ -19,6 +19,7 @@ from typing import Dict, Optional, Tuple, Any, List
 from aiogram import types, F, Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 import shared_state
 from common.db_pool import get_pool, db_lock
@@ -163,22 +164,59 @@ def get_dice_finished_keyboard(game_id: str, bet: int) -> InlineKeyboardMarkup:
     ])
 
 
-def get_dice_lobby_keyboard(balance: int = 1000, current_bet: int = 100) -> InlineKeyboardMarkup:
+def format_dice_bet_amount(amount: int) -> str:
+    if amount >= 1_000_000:
+        if amount % 1_000_000 == 0:
+            return f"{amount // 1_000_000}M ₪"
+        return f"{amount / 1_000_000:.1f}M ₪"
+    elif amount >= 1000:
+        if amount % 1000 == 0:
+            return f"{amount // 1000}k ₪"
+        return f"{amount / 1000:.1f}k ₪"
+    return f"{amount} ₪"
+
+
+def get_adaptive_dice_bet_presets(balance: int, current_bet: int = 100) -> List[int]:
+    """Generates affordable bet presets based on player's current balance."""
+    ALL_PRESETS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000]
+    eff_bal = max(0, int(balance))
+    if eff_bal < MIN_DICE_BET:
+        return [MIN_DICE_BET]
+    affordable = [p for p in ALL_PRESETS if p <= eff_bal and p <= MAX_DICE_BET]
+    if not affordable:
+        return [max(MIN_DICE_BET, min(eff_bal, MAX_DICE_BET))]
+    if len(affordable) <= 5:
+        return affordable
+    indices = [0, len(affordable) // 4, len(affordable) // 2, (len(affordable) * 3) // 4, len(affordable) - 1]
+    return sorted(list(set(affordable[i] for i in indices)))
+
+
+def get_dice_lobby_keyboard(balance: int = 1000, current_bet: int = 100, target_id: int = 0) -> InlineKeyboardMarkup:
     """Interactive quick lobby keyboard for /casino or /duel menu."""
-    presets = [50, 250, 1000, 5000, 25000]
+    current_bet = max(MIN_DICE_BET, min(MAX_DICE_BET, current_bet))
+    presets = get_adaptive_dice_bet_presets(balance, current_bet)
+    t_tag = f":{target_id}" if target_id else ":0"
     preset_row = [
-        InlineKeyboardButton(text=f"{p} ₪", callback_data=f"dice_lobby_bet:{p}")
-        for p in presets if p <= max(50, balance)
+        InlineKeyboardButton(text=format_dice_bet_amount(p), callback_data=f"dice_lobby_bet:{p}{t_tag}")
+        for p in presets
     ]
-    if not preset_row:
-        preset_row = [InlineKeyboardButton(text="50 ₪", callback_data="dice_lobby_bet:50")]
+
+    half_bet = max(MIN_DICE_BET, current_bet // 2)
+    double_bet = min(MAX_DICE_BET, min(int(balance), current_bet * 2)) if balance >= current_bet * 2 else current_bet
+    max_bet = max(MIN_DICE_BET, min(MAX_DICE_BET, int(balance)))
+    ctrl_row = [
+        InlineKeyboardButton(text="/2", callback_data=f"dice_lobby_bet:{half_bet}{t_tag}"),
+        InlineKeyboardButton(text="x2", callback_data=f"dice_lobby_bet:{double_bet}{t_tag}"),
+        InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"dice_lobby_bet:{max_bet}{t_tag}"),
+    ]
 
     buttons = [
         [
-            InlineKeyboardButton(text=f"🎲 Создать дуэль 2d6 ({current_bet:,} ₪)", callback_data=f"dice_create_fast:2d6:{current_bet}"),
-            InlineKeyboardButton(text=f"🔥 Дуэль 3d6 ({current_bet:,} ₪)", callback_data=f"dice_create_fast:3d6:{current_bet}")
+            InlineKeyboardButton(text=f"🎲 Дуэль 2d6 ({format_dice_bet_amount(current_bet)})", callback_data=f"dice_create_fast:2d6:{current_bet}{t_tag}"),
+            InlineKeyboardButton(text=f"🔥 Дуэль 3d6 ({format_dice_bet_amount(current_bet)})", callback_data=f"dice_create_fast:3d6:{current_bet}{t_tag}")
         ],
         preset_row,
+        ctrl_row,
         [
             InlineKeyboardButton(text="⚔️ Меню Дуэлей (/duel)", callback_data="menu_duel"),
             InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")
@@ -201,7 +239,7 @@ async def broadcast_dice_announcement(bot, board_id: str, text: str):
             bot_instance=bot,
             board_id=board_id,
             user_id=0,
-            content={'type': 'text', 'text': text},
+            content={'type': 'text', 'text': text, 'is_system_message': True, 'archive_allowed': True},
             reply_to_post=None,
             is_shadow_muted=False,
             stream='ru'
@@ -209,6 +247,27 @@ async def broadcast_dice_announcement(bot, board_id: str, text: str):
         await process_new_post(params)
     except Exception as e:
         shared_state.runtime_logger.warning(f"Failed to broadcast dice duel post: {e}")
+
+
+async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> bool:
+    """
+    Safely sends a private notification DM to a user on Telegram with full error suppression.
+    """
+    if not bot or not user_id:
+        return False
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        shared_state.runtime_logger.debug(f"Direct notification suppressed for user {user_id}: {e}")
+        return False
+    except Exception as e:
+        shared_state.runtime_logger.warning(f"Direct notification failed for user {user_id}: {e}")
+        return False
 
 
 # -----------------------------------------------------------------------------
@@ -341,7 +400,8 @@ async def accept_dice_challenge(
 
 async def cancel_dice_challenge(
     game_id: str,
-    user_id: int
+    user_id: int,
+    bot: Any = None
 ) -> Tuple[bool, str]:
     """Cancels a pending challenge before it is accepted."""
     async with dice_engine_lock:
@@ -350,14 +410,27 @@ async def cancel_dice_challenge(
             return False, "❌ Вызов не найден."
         if game["state"] != "pending":
             return False, "❌ Нельзя отменить уже начавшуюся дуэль!"
-        if game["player_1"] != user_id:
-            return False, "❌ Только создатель вызова может его отменить."
+        if user_id != game["player_1"] and (not game.get("target_id") or user_id != game.get("target_id")):
+            return False, "❌ Только участники вызова могут его отменить."
 
+        p1 = game["player_1"]
         game["state"] = "cancelled"
         game["finished"] = True
-        user_active_dice_game.pop(user_id, None)
+        game["finished_ts"] = time.time()
+        user_active_dice_game.pop(game["player_1"], None)
+        if game.get("target_id"):
+            user_active_dice_game.pop(game["target_id"], None)
 
-    return True, "🗑 Вызов успешно отменен."
+    if user_id == p1:
+        return True, "🗑 Вызов успешно отменен."
+    else:
+        if bot and p1:
+            dec_dm = (
+                f"⚔️ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ОТКЛОНЕН</b>\n\n"
+                f"Анон [ID:{get_anon_id(user_id)}] отклонил твой вызов на кости."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot, p1, dec_dm))
+        return True, f"❌ Вызов на дуэль отклонен Аноном [ID:{get_anon_id(user_id)}]."
 
 
 # -----------------------------------------------------------------------------
@@ -372,15 +445,20 @@ async def execute_player_roll(
     Executes a dice roll for the active player with animated suspense,
     advances the turn or resolves the game if both rolled.
     """
+    current_round = None
+    resolve_round = False
+
     async with dice_engine_lock:
         game = active_dice_games.get(game_id)
         if not game:
             return False, "❌ Партия не найдена.", {}
-        if game["state"] != "playing" or game["finished"]:
+        if game.get("finished"):
             return False, "❌ Игра уже завершена.", game
+        if game["state"] not in ("playing", "rolling"):
+            return False, "❌ Игра не готова к броску.", game
         if user_id not in (game["player_1"], game["player_2"]):
             return False, "❌ Ты не участвуешь в этой дуэли!", game
-        if user_id != game["current_turn"]:
+        if user_id != game.get("current_turn"):
             return False, "⏳ Сейчас ход твоего соперника! Жди броска.", game
 
         current_round = game["round"]
@@ -399,12 +477,19 @@ async def execute_player_roll(
 
         if not (p1_done and p2_done):
             # Advance turn to the second player
+            game["state"] = "playing"
             game["current_turn"] = other_player
             game["turn_deadline_ts"] = time.time() + DICE_TURN_TIMEOUT_SEC
             return True, "✅ Бросок зафиксирован! Ход переходит к сопернику.", game
 
-    # If both players have completed the current round, resolve or overtime
-    return await _evaluate_and_finish_round(game_id, current_round, bot)
+        # If both players have completed the current round, transition state to resolving
+        game["state"] = "resolving"
+        resolve_round = True
+
+    if resolve_round:
+        return await _evaluate_and_finish_round(game_id, current_round, bot)
+
+    return True, "✅ Бросок зафиксирован!", game
 
 
 async def _evaluate_and_finish_round(
@@ -416,33 +501,44 @@ async def _evaluate_and_finish_round(
     Compares roll scores for the current round. Triggers sudden death overtime if tied,
     or finalizes the game with payouts.
     """
-    game = active_dice_games[game_id]
-    p1 = game["player_1"]
-    p2 = game["player_2"]
-    r1 = game["p1_rolls"][round_num]
-    r2 = game["p2_rolls"][round_num]
+    async with dice_engine_lock:
+        game = active_dice_games.get(game_id)
+        if not game:
+            return False, "❌ Игра не найдена.", {}
+        if game.get("finished"):
+            return False, "❌ Игра уже завершена.", game
 
-    score1, combo1, flavor1 = evaluate_roll_combo(r1)
-    score2, combo2, flavor2 = evaluate_roll_combo(r2)
+        p1 = game["player_1"]
+        p2 = game["player_2"]
+        r1 = game["p1_rolls"].get(round_num)
+        r2 = game["p2_rolls"].get(round_num)
 
-    # Tie Breaker / Overtime check
-    if score1 == score2:
-        if round_num < 3:
-            async with dice_engine_lock:
+        if not r1 or not r2:
+            return False, "❌ Ошибка раунда: не все броски совершены.", game
+
+        score1, combo1, flavor1 = evaluate_roll_combo(r1)
+        score2, combo2, flavor2 = evaluate_roll_combo(r2)
+
+        # Tie Breaker / Overtime check
+        if score1 == score2:
+            if round_num < 3:
                 game["round"] += 1
                 next_round = game["round"]
                 game["current_turn"] = p1 if secrets.randbelow(2) == 0 else p2
                 game["turn_deadline_ts"] = time.time() + DICE_TURN_TIMEOUT_SEC
-
-            return True, f"⚖️ <b>НИЧЬЯ В РАУНДЕ {round_num} ({score1}:{score2})!</b> Назначается овертайм (Раунд {next_round})!", game
+                game["state"] = "playing"
+                return True, f"⚖️ <b>НИЧЬЯ В РАУНДЕ {round_num} ({score1}:{score2})!</b> Назначается овертайм (Раунд {next_round})!", game
+            else:
+                # Absolute max rounds tie -> Refund minus nominal tie rake
+                winner_id = None
+                loser_id = None
+                finish_reason = "draw"
         else:
-            # Absolute max rounds tie -> Refund minus nominal tie rake
-            return await _finish_dice_game(game_id, None, None, "draw", bot)
+            winner_id = p1 if score1 > score2 else p2
+            loser_id = p2 if score1 > score2 else p1
+            finish_reason = "win"
 
-    winner_id = p1 if score1 > score2 else p2
-    loser_id = p2 if score1 > score2 else p1
-
-    return await _finish_dice_game(game_id, winner_id, loser_id, "win", bot)
+    return await _finish_dice_game(game_id, winner_id, loser_id, finish_reason, bot)
 
 
 async def _finish_dice_game(
@@ -454,19 +550,26 @@ async def _finish_dice_game(
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """
     Finalizes dice duel, distributes winnings/refunds, pays Abu fund rake,
-    and publishes the board announcement post.
+    sends direct user notifications, and publishes the board announcement post.
     """
     async with dice_engine_lock:
-        game = active_dice_games[game_id]
+        game = active_dice_games.get(game_id)
+        if not game:
+            return False, "❌ Игра не найдена.", {}
+        if game.get("finished"):
+            return False, "❌ Игра уже завершена.", game
+
         game["finished"] = True
         game["state"] = "finished"
+        game["finished_ts"] = time.time()
         bet = game["bet"]
         board_id = game["board_id"]
         p1 = game["player_1"]
         p2 = game["player_2"]
 
         user_active_dice_game.pop(p1, None)
-        user_active_dice_game.pop(p2, None)
+        if p2:
+            user_active_dice_game.pop(p2, None)
 
     db = await get_pool()
 
@@ -475,13 +578,24 @@ async def _finish_dice_game(
         refund_amt = bet - rake
         async with db_lock:
             await add_user_global_balance(db, p1, board_id, refund_amt)
-            await add_user_global_balance(db, p2, board_id, refund_amt)
+            if p2:
+                await add_user_global_balance(db, p2, board_id, refund_amt)
             await add_to_abu_fund(db, rake * 2)
             await record_user_transaction(db, p1, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
-            await record_user_transaction(db, p2, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
+            if p2:
+                await record_user_transaction(db, p2, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
 
         game["outcome"] = "draw"
         game["payout"] = refund_amt
+
+        draw_notify_text = (
+            f"🤝 <b>НИЧЬЯ В ДАЙС-ДУЭЛИ #{game_id}</b>\n\n"
+            f"💰 Твоя ставка возвращена: <b>+{refund_amt:,} ₪</b> (за вычетом 2% в Казну Абу)."
+        )
+        if bot:
+            asyncio.create_task(send_pvp_direct_notification(bot, p1, draw_notify_text))
+            if p2:
+                asyncio.create_task(send_pvp_direct_notification(bot, p2, draw_notify_text))
         
         p1_anon_ann = get_anon_id(p1) if p1 else "???"
         p2_anon_ann = get_anon_id(p2) if p2 else "???"
@@ -501,9 +615,10 @@ async def _finish_dice_game(
         win_payout = total_pot - rake
 
         async with db_lock:
-            await add_user_global_balance(db, winner_id, board_id, win_payout)
+            if winner_id:
+                await add_user_global_balance(db, winner_id, board_id, win_payout)
+                await record_user_transaction(db, winner_id, win_payout, 'dice_duel', f'Выигрыш в Дайс-Дуэль #{game_id}')
             await add_to_abu_fund(db, rake)
-            await record_user_transaction(db, winner_id, win_payout, 'dice_duel', f'Выигрыш в Дайс-Дуэль #{game_id}')
 
         game["outcome"] = "win"
         game["winner"] = winner_id
@@ -519,6 +634,27 @@ async def _finish_dice_game(
         
         winner_anon = get_anon_id(winner_id) if winner_id else "???"
         loser_anon = get_anon_id(loser_id) if loser_id else "???"
+
+        if bot:
+            if winner_id:
+                win_notify_text = (
+                    f"👑 <b>ПОБЕДА В ДАЙС-ДУЭЛИ #{game_id}!</b>\n\n"
+                    f"💰 Твой чистый выигрыш: <b>+{win_payout:,} ₪</b> зачислен на баланс!"
+                )
+                asyncio.create_task(send_pvp_direct_notification(bot, winner_id, win_notify_text))
+            if loser_id:
+                if reason == "timeout":
+                    lose_reason_str = "Таймаут броска (45 сек)"
+                elif reason == "surrender":
+                    lose_reason_str = "Капитуляция"
+                else:
+                    lose_reason_str = "Меньшая сумма очков на костях"
+                lose_notify_text = (
+                    f"💀 <b>ПОРАЖЕНИЕ В ДАЙС-ДУЭЛИ #{game_id}</b>\n\n"
+                    f"Причина: {lose_reason_str}.\n"
+                    f"💸 Списано: <b>-{bet:,} ₪</b>."
+                )
+                asyncio.create_task(send_pvp_direct_notification(bot, loser_id, lose_notify_text))
 
         if reason == "timeout":
             announcement = (
@@ -634,9 +770,14 @@ async def dice_watchdog_step(bot=None):
 
     async with dice_engine_lock:
         for gid, game in list(active_dice_games.items()):
-            if game.get("finished"):
+            if game.get("finished") or game.get("state") in ("finished", "expired", "cancelled"):
+                fin_ts = game.get("finished_ts")
+                if fin_ts is None:
+                    game["finished_ts"] = now
+                elif now - fin_ts > 60:
+                    active_dice_games.pop(gid, None)
                 continue
-            if game["state"] == "playing":
+            if game["state"] in ("playing", "rolling"):
                 if now > game["turn_deadline_ts"]:
                     expired_games.append(gid)
                 else:
@@ -650,8 +791,11 @@ async def dice_watchdog_step(bot=None):
                     # Expire unaccepted challenge
                     game["finished"] = True
                     game["state"] = "expired"
+                    game["finished_ts"] = now
                     ch_id = game["player_1"]
                     user_active_dice_game.pop(ch_id, None)
+                    if game.get("target_id"):
+                        user_active_dice_game.pop(game["target_id"], None)
                     expired_pending.append(gid)
                 else:
                     # Live countdown update for pending challenges every 15 seconds
@@ -662,20 +806,24 @@ async def dice_watchdog_step(bot=None):
 
     # 1. Live countdown updates (playing + pending)
     for gid in live_tick_games:
-        game = active_dice_games.get(gid)
-        if not game or game.get("finished"):
-            continue
-        if bot and game.get("chat_id") and game.get("msg_id"):
+        async with dice_engine_lock:
+            game = active_dice_games.get(gid)
+            if not game or game.get("finished"):
+                continue
+            chat_id = game.get("chat_id")
+            msg_id = game.get("msg_id")
+            if game["state"] == "playing":
+                turn_user = game.get("current_turn")
+                kb = get_dice_roll_keyboard(gid, turn_user)
+            else:
+                kb = get_dice_challenge_keyboard(gid)
+            updated_text = format_dice_game_message(game)
+
+        if bot and chat_id and msg_id:
             try:
-                if game["state"] == "playing":
-                    turn_user = game.get("current_turn")
-                    kb = get_dice_roll_keyboard(gid, turn_user)
-                else:
-                    kb = get_dice_challenge_keyboard(gid)
-                updated_text = format_dice_game_message(game)
                 await bot.edit_message_text(
-                    chat_id=game["chat_id"],
-                    message_id=game["msg_id"],
+                    chat_id=chat_id,
+                    message_id=msg_id,
                     text=updated_text,
                     reply_markup=kb,
                     parse_mode="HTML"
@@ -685,20 +833,22 @@ async def dice_watchdog_step(bot=None):
 
     # 2. Expired turn games (timeout forfeit)
     for gid in expired_games:
-        game = active_dice_games.get(gid)
-        if not game or game.get("finished"):
-            continue
-        loser_id = game.get("current_turn")
-        winner_id = game["player_2"] if loser_id == game["player_1"] else game["player_1"]
+        async with dice_engine_lock:
+            game = active_dice_games.get(gid)
+            if not game or game.get("finished"):
+                continue
+            loser_id = game.get("current_turn")
+            winner_id = game["player_2"] if loser_id == game["player_1"] else game["player_1"]
+
         ok, msg, fin_game = await _finish_dice_game(gid, winner_id, loser_id, "timeout", bot)
 
-        if bot and game.get("chat_id") and game.get("msg_id"):
+        if ok and bot and fin_game and fin_game.get("chat_id") and fin_game.get("msg_id"):
             try:
                 updated_text = format_dice_game_message(fin_game)
                 kb = get_dice_finished_keyboard(gid, fin_game["bet"])
                 await bot.edit_message_text(
-                    chat_id=game["chat_id"],
-                    message_id=game["msg_id"],
+                    chat_id=fin_game["chat_id"],
+                    message_id=fin_game["msg_id"],
                     text=updated_text,
                     reply_markup=kb,
                     parse_mode="HTML"
@@ -708,14 +858,28 @@ async def dice_watchdog_step(bot=None):
 
     # 3. Expired pending challenges
     for gid in expired_pending:
-        game = active_dice_games.get(gid)
-        if not game:
-            continue
-        if bot and game.get("chat_id") and game.get("msg_id"):
+        async with dice_engine_lock:
+            game = active_dice_games.get(gid)
+            if not game:
+                continue
+            chat_id = game.get("chat_id")
+            msg_id = game.get("msg_id")
+            p1 = game.get("player_1")
+            bet = game.get("bet", 0)
+
+        if bot and p1:
+            exp_dm_text = (
+                f"⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК</b>\n\n"
+                f"Ни один анон не принял твой вызов на кости (<b>{bet:,} ₪</b>) за 2 минуты.\n"
+                f"Вызов аннулирован, ставка не списывалась."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot, p1, exp_dm_text))
+
+        if bot and chat_id and msg_id:
             try:
                 await bot.edit_message_text(
-                    chat_id=game["chat_id"],
-                    message_id=game["msg_id"],
+                    chat_id=chat_id,
+                    message_id=msg_id,
                     text=(
                         "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
                         "Ни один анон не принял вызов на кости за 2 минуты.\n"
@@ -754,7 +918,7 @@ def register_dice_duel_handlers(dp: Any):
     """
     global cmd_dice_duel_entry, cmd_dice_duel
 
-    @dp.message(Command("dice_duel", "diceduel", "дайс_дуэль", "кости_дуэль", "дайсдуэль", "костидуэль", "dices", "дайс", "дайсы", ignore_case=True, ignore_mention=True))
+    @dp.message(Command("dice", "dice_duel", "diceduel", "дайс_дуэль", "кости_дуэль", "дайсдуэль", "костидуэль", "dices", "дайс", "дайсы", "кости", ignore_case=True, ignore_mention=True))
     async def cmd_dice_duel_entry(message: Message, board_id: str | None = None, stream: str = 'ru'):
         if not board_id:
             board_id = getattr(message.chat, 'id', 'b')
@@ -778,9 +942,13 @@ def register_dice_duel_handlers(dp: Any):
         bet_amount = None
         target_user_id = None
 
-        if message.reply_to_message and message.reply_to_message.from_user:
-            target_user_id = message.reply_to_message.from_user.id
-            if target_user_id == user_id:
+        if message.reply_to_message:
+            try:
+                from common.bot_helpers import get_author_id_by_reply
+                target_user_id = await get_author_id_by_reply(message)
+            except Exception:
+                target_user_id = message.reply_to_message.from_user.id if (message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot) else None
+            if target_user_id == user_id or target_user_id == 0:
                 target_user_id = None
 
         db = await get_pool()
@@ -796,10 +964,14 @@ def register_dice_duel_handlers(dp: Any):
 
         if bet_amount is None:
             # Show interactive lobby menu
-            lobby_kb = get_dice_lobby_keyboard(balance=int(user_bal), current_bet=100)
+            default_bet = 100 if user_bal >= 100 else (50 if user_bal >= 50 else MIN_DICE_BET)
+            lobby_kb = get_dice_lobby_keyboard(balance=int(user_bal), current_bet=default_bet, target_id=target_user_id or 0)
+            target_str = f"🎯 <b>Цель:</b> Анон <code>[ID:{target_user_id}]</code>\n" if target_user_id else ""
             await message.answer(
                 f"🎲 <b>PvP КОСТИ / ДАЙС-ДУЭЛЬ НА ШЕКЕЛИ</b>\n\n"
-                f"💰 <b>Твой баланс:</b> <code>{int(user_bal):,} ₪</code>\n\n"
+                f"💰 <b>Твой баланс:</b> <code>{int(user_bal):,} ₪</code>\n"
+                f"💰 <b>Ставка:</b> <code>{default_bet:,} ₪</code>\n"
+                f"{target_str}\n"
                 f"Правила честной игры:\n"
                 f"• Бросаем 2d6 (или 3d6) на честном генераторе с визуалом костей (⚀ ⚁ ⚂ ⚃ ⚄ ⚅).\n"
                 f"• Побеждает тот, у кого сумма очков выше. При ничьей — переброс!\n"
@@ -825,33 +997,39 @@ def register_dice_duel_handlers(dp: Any):
             await message.answer(err_or_msg, parse_mode="HTML")
             return
 
-        game = active_dice_games[game_id]
-        msg_text = format_dice_game_message(game)
-        kb = get_dice_challenge_keyboard(game_id)
+        async with dice_engine_lock:
+            game = active_dice_games.get(game_id)
+            if not game:
+                return
+            msg_text = format_dice_game_message(game)
+            kb = get_dice_challenge_keyboard(game_id)
 
         sent_msg = await message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
-        game["msg_id"] = sent_msg.message_id
-        game["chat_id"] = sent_msg.chat.id
+        async with dice_engine_lock:
+            if game_id in active_dice_games:
+                active_dice_games[game_id]["msg_id"] = sent_msg.message_id
+                active_dice_games[game_id]["chat_id"] = sent_msg.chat.id
 
     async def handle_dice_accept_command(message: Message, board_id: str):
         user_id = message.from_user.id
         found_gid = None
 
         # If replying to a challenge message
-        if message.reply_to_message:
-            reply_mid = message.reply_to_message.message_id
-            for gid, g in active_dice_games.items():
-                if g.get("msg_id") == reply_mid and g.get("state") == "pending":
-                    found_gid = gid
-                    break
-
-        if not found_gid:
-            # Find any open pending challenge for this board
-            for gid, g in active_dice_games.items():
-                if g.get("board_id") == board_id and g.get("state") == "pending":
-                    if g.get("player_1") != user_id and (not g.get("target_id") or g.get("target_id") == user_id):
+        async with dice_engine_lock:
+            if message.reply_to_message:
+                reply_mid = message.reply_to_message.message_id
+                for gid, g in active_dice_games.items():
+                    if g.get("msg_id") == reply_mid and g.get("state") == "pending":
                         found_gid = gid
                         break
+
+            if not found_gid:
+                # Find any open pending challenge for this board
+                for gid, g in active_dice_games.items():
+                    if g.get("board_id") == board_id and g.get("state") == "pending":
+                        if g.get("player_1") != user_id and (not g.get("target_id") or g.get("target_id") == user_id):
+                            found_gid = gid
+                            break
 
         if not found_gid:
             await message.answer("❌ Нет активных вызовов на кости для принятия!", parse_mode="HTML")
@@ -919,16 +1097,17 @@ def register_dice_duel_handlers(dp: Any):
         game_id = callback.data.split(":", 1)[1]
         user_id = callback.from_user.id
 
-        game = active_dice_games.get(game_id)
-        if not game:
-            await callback.answer("❌ Игра уже неактивна.", show_alert=True)
-            return
+        async with dice_engine_lock:
+            game = active_dice_games.get(game_id)
+            if not game:
+                await callback.answer("❌ Игра уже неактивна.", show_alert=True)
+                return
 
-        if user_id != game["player_1"] and user_id != game.get("target_id"):
-            await callback.answer("❌ Ты не можешь отменить чужой вызов!", show_alert=True)
-            return
+            if user_id != game["player_1"] and (not game.get("target_id") or user_id != game.get("target_id")):
+                await callback.answer("❌ Ты не можешь отменить чужой вызов!", show_alert=True)
+                return
 
-        ok, msg = await cancel_dice_challenge(game_id, game["player_1"])
+        ok, msg = await cancel_dice_challenge(game_id, user_id, bot=callback.bot)
         await callback.answer(msg)
         try:
             await callback.message.edit_text(f"🗑 <b>Вызов на кости отменен.</b>", parse_mode="HTML")
@@ -940,13 +1119,31 @@ def register_dice_duel_handlers(dp: Any):
         game_id = callback.data.split(":", 1)[1]
         user_id = callback.from_user.id
 
-        game = active_dice_games.get(game_id)
-        if not game:
-            await callback.answer("❌ Игра не найдена.", show_alert=True)
-            return
-        if user_id != game.get("current_turn"):
-            await callback.answer("⏳ Сейчас не твой ход!", show_alert=True)
-            return
+        async with dice_engine_lock:
+            game = active_dice_games.get(game_id)
+            if not game:
+                await callback.answer("❌ Игра не найдена.", show_alert=True)
+                return
+            if game.get("finished"):
+                await callback.answer("❌ Игра уже завершена.", show_alert=True)
+                return
+            if game.get("state") != "playing":
+                if game.get("state") == "rolling":
+                    await callback.answer("⏳ Кости уже бросаются...", show_alert=False)
+                elif game.get("state") == "resolving":
+                    await callback.answer("⏳ Раунд завершается...", show_alert=False)
+                else:
+                    await callback.answer("❌ Сейчас нельзя бросить кости.", show_alert=True)
+                return
+            if user_id not in (game["player_1"], game["player_2"]):
+                await callback.answer("❌ Ты не участвуешь в этой дуэли!", show_alert=True)
+                return
+            if user_id != game.get("current_turn"):
+                await callback.answer("⏳ Сейчас не твой ход!", show_alert=True)
+                return
+
+            # Atomically lock this roll by transitioning to rolling
+            game["state"] = "rolling"
 
         # Visual roll animation frames
         anim_frames = ["🎲 <i>Трясем стакан с костями...</i>", "🌀 <i>Кости крутятся на сукне...</i>"]
@@ -984,16 +1181,21 @@ def register_dice_duel_handlers(dp: Any):
         game_id = callback.data.split(":", 1)[1]
         user_id = callback.from_user.id
 
-        game = active_dice_games.get(game_id)
-        if not game or game.get("finished"):
+        async with dice_engine_lock:
+            game = active_dice_games.get(game_id)
+            if not game or game.get("finished"):
+                await callback.answer("❌ Игра уже завершена.", show_alert=True)
+                return
+            if user_id not in (game["player_1"], game["player_2"]):
+                await callback.answer("❌ Ты не игрок этой партии.", show_alert=True)
+                return
+
+            winner_id = game["player_2"] if user_id == game["player_1"] else game["player_1"]
+
+        ok, msg, res_game = await _finish_dice_game(game_id, winner_id, user_id, "surrender", callback.bot)
+        if not ok:
             await callback.answer("❌ Игра уже завершена.", show_alert=True)
             return
-        if user_id not in (game["player_1"], game["player_2"]):
-            await callback.answer("❌ Ты не игрок этой партии.", show_alert=True)
-            return
-
-        winner_id = game["player_2"] if user_id == game["player_1"] else game["player_1"]
-        ok, msg, res_game = await _finish_dice_game(game_id, winner_id, user_id, "surrender", callback.bot)
 
         await callback.answer("🏳️ Ты сдался.")
         final_content = format_dice_game_message(res_game)
@@ -1003,13 +1205,92 @@ def register_dice_duel_handlers(dp: Any):
         except Exception:
             pass
 
+    @dp.callback_query(F.data.startswith("dice_rematch:"))
+    async def cb_dice_rematch(callback: CallbackQuery):
+        game_id = callback.data.split(":", 1)[1]
+        user_id = callback.from_user.id
+
+        async with dice_engine_lock:
+            old_game = active_dice_games.get(game_id)
+            if not old_game:
+                await callback.answer("❌ Данные прошлой дуэли не найдены.", show_alert=True)
+                return
+
+            if user_id not in (old_game["player_1"], old_game.get("player_2")):
+                await callback.answer("❌ Ты не участвовал в этой дуэли!", show_alert=True)
+                return
+
+            bet = old_game["bet"]
+            num_dice = old_game.get("num_dice", 2)
+            board_id = old_game["board_id"]
+            other_player = old_game["player_2"] if user_id == old_game["player_1"] else old_game["player_1"]
+
+        ok, err_or_msg, new_game_id = await create_dice_challenge(
+            board_id=board_id,
+            challenger_id=user_id,
+            bet=bet,
+            target_id=other_player,
+            num_dice=num_dice
+        )
+        if not ok:
+            await callback.answer(err_or_msg, show_alert=True)
+            return
+
+        await callback.answer("⚔️ Вызов на реванш создан!")
+        async with dice_engine_lock:
+            new_game = active_dice_games.get(new_game_id)
+            if not new_game:
+                return
+            msg_text = format_dice_game_message(new_game)
+            kb = get_dice_challenge_keyboard(new_game_id)
+
+        try:
+            sent_msg = await callback.message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
+            async with dice_engine_lock:
+                if new_game_id in active_dice_games:
+                    active_dice_games[new_game_id]["msg_id"] = sent_msg.message_id
+                    active_dice_games[new_game_id]["chat_id"] = sent_msg.chat.id
+        except Exception:
+            pass
+
+    @dp.callback_query(F.data.startswith("dice_lobby_bet:"))
+    async def cb_dice_lobby_bet(callback: CallbackQuery):
+        # Format: dice_lobby_bet:<bet>:<target_id>
+        parts = callback.data.split(":")
+        bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+        target_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() and int(parts[2]) > 0 else 0
+        user_id = callback.from_user.id
+
+        db = await get_pool()
+        async with db_lock:
+            user_bal = await get_user_global_balance(db, user_id)
+
+        bet = max(MIN_DICE_BET, min(MAX_DICE_BET, min(int(user_bal), bet) if user_bal >= MIN_DICE_BET else MIN_DICE_BET))
+        lobby_kb = get_dice_lobby_keyboard(balance=int(user_bal), current_bet=bet, target_id=target_id)
+        target_str = f"🎯 <b>Цель:</b> Анон <code>[ID:{target_id}]</code>\n" if target_id else ""
+        try:
+            await callback.message.edit_text(
+                f"🎲 <b>PvP КОСТИ / ДАЙС-ДУЭЛЬ НА ШЕКЕЛИ</b>\n\n"
+                f"💳 <b>Твой баланс:</b> <code>{int(user_bal):,} ₪</code>\n"
+                f"💰 <b>Ставка:</b> <code>{bet:,} ₪</code>\n"
+                f"{target_str}\n"
+                f"Выбери ставку и режим броска:",
+                reply_markup=lobby_kb,
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        try: await callback.answer()
+        except Exception: pass
+
     @dp.callback_query(F.data.startswith("dice_create_fast:"))
     async def cb_dice_create_fast(callback: CallbackQuery):
-        # Format: dice_create_fast:<mode>:<bet>
+        # Format: dice_create_fast:<mode>:<bet>:<target_id>
         parts = callback.data.split(":")
         mode_str = parts[1] if len(parts) > 1 else "2d6"
         num_dice = 3 if mode_str == "3d6" else 2
         bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
+        target_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() and int(parts[3]) > 0 else None
         user_id = callback.from_user.id
         board_id = getattr(callback.message.chat, 'id', 'b')
         board_id = str(board_id)
@@ -1018,6 +1299,7 @@ def register_dice_duel_handlers(dp: Any):
             board_id=board_id,
             challenger_id=user_id,
             bet=bet,
+            target_id=target_id,
             num_dice=num_dice
         )
         if not ok:
@@ -1025,10 +1307,21 @@ def register_dice_duel_handlers(dp: Any):
             return
 
         await callback.answer("✅ Вызов создан!")
-        game = active_dice_games[game_id]
-        msg_text = format_dice_game_message(game)
-        kb = get_dice_challenge_keyboard(game_id)
-        await callback.message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
+        async with dice_engine_lock:
+            game = active_dice_games.get(game_id)
+            if not game:
+                return
+            msg_text = format_dice_game_message(game)
+            kb = get_dice_challenge_keyboard(game_id)
+
+        try:
+            sent_msg = await callback.message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
+            async with dice_engine_lock:
+                if game_id in active_dice_games:
+                    active_dice_games[game_id]["msg_id"] = sent_msg.message_id
+                    active_dice_games[game_id]["chat_id"] = sent_msg.chat.id
+        except Exception:
+            pass
 
 # Auto-register handlers into module-level router
 register_dice_duel_handlers(router)

@@ -1,93 +1,109 @@
-# TEST_READY — DvachBot Economy Extensions Test Suite
+# TEST_READY — dvachbot Ecosystem Overhaul (Requirements R1 - R5)
 
-## Executive Summary
-The comprehensive, requirement-driven, opaque-box, unit, and end-to-end integration test suite for DvachBot Economy Extensions (Milestone 1: P2P Flea Market & Milestone 2: Bank of Abu Safe Storage) is fully implemented, verified, and passing at **100% green pass rate (49/49 passed)**.
+## Overview
+Comprehensive, opaque-box E2E test suite covering all 5 core requirements across 4 systematic tiers: Feature Coverage (Tier 1), Boundary & Corner Cases (Tier 2), Cross-Feature Interactions (Tier 3), and Real-World Imageboard Workloads & Multi-User Simulations (Tier 4).
 
----
-
-## Test Execution Command
+## Test Execution Summary
+Command:
 ```bash
-pytest tests/test_p2p_market_engine.py tests/test_bank_of_abu_engine.py tests/test_econ_menus_and_navigation.py -v
+.\venv\Scripts\python.exe -m pytest tests/test_e2e_ecosystem_overhaul.py -v
 ```
 
----
-
-## Test Suite Results
-
-| Test Module | Coverage Scope | Total Tests | Passed | Failed | Status |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| `tests/test_p2p_market_engine.py` | P2P Market Engine (Tiers 1–4) | 23 | 23 | 0 | ✅ PASSED |
-| `tests/test_bank_of_abu_engine.py` | Bank of Abu Safe Storage (Tiers 1–4) | 19 | 19 | 0 | ✅ PASSED |
-| `tests/test_econ_menus_and_navigation.py` | Menus, Trade Hub, Help, Wallet & Compilation | 7 | 7 | 0 | ✅ PASSED |
-| **TOTAL** | **Full Economy Extensions Test Suite** | **49** | **49** | **0** | **✅ 100% PASS** |
+**Results:**
+- Total Collected: **48 test cases**
+- Total Passed: **48 passed (100%)**
+- Total Failed: **0**
+- Execution Duration: **~15.1s**
 
 ---
 
-## Detailed Coverage Matrix
+## Systematic Tier Breakdown
 
-### 1. P2P Flea Market Engine (`tests/test_p2p_market_engine.py`)
-- **Tier 1 (Feature / Happy Path)**:
-  - `test_market_create_listing_wardrobe_locks_item`: Listing owned clothing/hat items locks them in escrow and updates `Users.active_items`.
-  - `test_market_create_listing_weapons`: Listing weapons removes weapon from inventory and registers market lot.
-  - `test_market_create_listing_pharma`: Listing pills/pharma escrows items and generates active lot.
-  - `test_market_create_listing_lootbox`: Listing lootboxes locks lootbox inventory into market listing.
-  - `test_market_instant_buy_seller_payout_and_abu_fee`: Instant buy deducts buyer balance, deducts exact 5% Abu fee, credits seller payout, and updates Abu Yacht Fund.
-  - `test_market_instant_buy_transfers_item_to_buyer`: Buyer instantly receives purchased item in `Users.active_items`.
-  - `test_market_cancel_listing_restores_item_to_seller`: Cancelling active lot restores item to seller's `Users.active_items` and marks lot `cancelled`.
-- **Tier 2 (Boundary Value Analysis & Negative Cases)**:
-  - `test_market_minimum_price_boundaries`: Minimum price of 1 ₪ and 10 ₪ succeeds; prices $\le 0$ or non-numeric fail with user-friendly error.
-  - `test_market_buy_with_zero_balance_fails`: Buyer with 0 shekels cannot purchase lot.
-  - `test_market_buy_with_insufficient_balance_fails`: Buyer with balance lower than lot price is rejected without side-effects.
-  - `test_market_buy_with_exact_balance_succeeds`: Buyer with exact price balance successfully buys lot, balance becomes 0.
-  - `test_market_buyer_cannot_buy_own_lot`: Sellers are strictly forbidden from purchasing their own lots.
-  - `test_market_relisting_cancelled_item_succeeds`: Cancelled items can be listed again with new price.
-  - `test_market_double_buy_prevention`: Atomic double-buy race condition prevention (second buyer fails, balance untouched).
-- **Tier 3 (Pairwise Combinatorial & Cross-Feature)**:
-  - `test_market_multiple_listings_per_user`: Sellers can hold multiple concurrent active listings across categories.
-  - `test_market_listing_equipped_wardrobe_auto_unequips`: Listing an actively equipped hat/body automatically un-equips the slot while leaving other slots intact.
-  - `test_market_listing_permanent_vs_expiring_items`: Permanent item flag (`_is_permanent`) is preserved across trades; expiring item durations are preserved.
-  - `test_market_catalog_pagination`: Catalog pagination accurately computes `total_pages`, `total_count`, page slicing, and handles out-of-bounds page queries.
-  - `test_market_catalog_sorting`: Catalog sorting verified for `price_asc`, `price_desc`, and `newest` (timestamp DESC).
-  - `test_market_catalog_category_filtering`: Category filtering for `clothing`, `weapon`, `pharma`, `lootbox`.
-- **Tier 4 (Workload & Real-World E2E Journey)**:
-  - `test_market_full_lifecycle_workflow`: Complete lifecycle (List $\to$ Browse $\to$ Buy $\to$ Seller Payout $\to$ Buyer Inventory $\to$ Equip).
-  - `test_market_seller_notification_success`: PM notification delivered to seller with item name, gross price, and net payout.
-  - `test_market_seller_notification_telegram_forbidden_suppressed`: PM delivery error handling (`TelegramForbiddenError` when seller blocked bot) is gracefully caught and does not break transaction.
+### Tier 1: Feature Coverage (28 Tests)
+Comprehensive feature tests ensuring core business logic adheres to requirements R1 through R5.
 
----
+#### Domain R1: Anti-Flood & Seamless Ghost-Post Media Delivery (6 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_r1_burst_flood_limit_and_mute_duration` | Verifies `BURST_FLOOD_LIMIT = 8` (4s window) allows 8 messages; 9th triggers `FLOOD_BASE_MUTE_SEC = 300.0s`. | ✅ PASS |
+| `test_r1_rate_and_minute_flood_limits` | Verifies `RATE_FLOOD_LIMIT = 15` (15s) and `MINUTE_FLOOD_LIMIT = 30` (60s) trigger properly. | ✅ PASS |
+| `test_r1_no_silent_drop_check_spam_delivers_ghost` | Verifies messages rejected by flood/spam filters trigger `process_shadow_reject` without silent drop. | ✅ PASS |
+| `test_r1_all_media_types_ghost_post_delivery` | Verifies ghost delivery across photos, albums, videos, voice notes, video notes, audio, stickers, docs. | ✅ PASS |
+| `test_r1_fake_post_num_monotonicity` | Verifies generated fake post numbers increment monotonically and exceed real board counter. | ✅ PASS |
+| `test_r1_db_shadowmute_sync_and_persistence` | Verifies shadow mute persistence and sync across SQLite and RAM. | ✅ PASS |
 
-### 2. Bank of Abu Safe Storage Engine (`tests/test_bank_of_abu_engine.py`)
-- **Tier 1 (Feature / Happy Path)**:
-  - `test_bank_deposit_creation_sych_tier`: Deposit into Sych Flexible Safe (0.5% daily, 0 lockup).
-  - `test_bank_deposit_creation_skuf_tier`: Deposit into Skuf 3-Day Term (2.5% daily, 72h lockup).
-  - `test_bank_deposit_creation_mmm_abu_tier`: Deposit into MMM Abu High-Yield Pyramid (6.0% daily, 24h lockup).
-  - `test_bank_deposit_safe_isolation_from_global_balance`: Bank deposits are strictly isolated from `get_user_global_balance` (Wallet).
-  - `test_bank_robbery_insulation`: 100% Robbery and street attack (`/rob`) protection for funds kept in Bank of Abu.
-  - `test_bank_continuous_per_second_interest_accrual`: Dynamic, continuous per-second compound interest calculation verified mathematically for fractional days, 12h, 24h, and 72h.
-- **Tier 2 (Boundary Value Analysis & Negative Cases)**:
-  - `test_bank_deposit_zero_or_negative_amount_fails`: Depositing $\le 0$ shekels fails, wallet balance unchanged.
-  - `test_bank_deposit_more_than_wallet_balance_fails`: Depositing more than available wallet balance fails.
-  - `test_bank_withdraw_non_existent_deposit_fails`: Withdrawing invalid deposit ID returns error.
-  - `test_bank_withdraw_foreign_user_deposit_fails`: User B cannot withdraw User A's deposit.
-  - `test_bank_withdraw_zero_elapsed_seconds`: Immediate withdrawal calculates 0 interest and applies standard tariff fee.
-  - `test_bank_double_withdrawal_prevention`: Closed deposits cannot be withdrawn a second time.
-- **Tier 3 (Lockup Enforcement, Early Penalties & Pyramid Risk)**:
-  - `test_bank_tier_sych_yield_and_withdrawal_fee`: 0.5% daily yield, 1% withdrawal fee deducted and credited to Abu Fund.
-  - `test_bank_tier_skuf_mature_withdrawal_zero_penalty`: Mature withdrawal after 72h pays 100% principal + full 7.5% interest with 0% penalty.
-  - `test_bank_tier_skuf_premature_withdrawal_penalty`: Early withdrawal ($< 72$h) forfeits 100% interest and deducts 3% principal penalty into Abu Fund.
-  - `test_bank_tier_mmm_abu_mature_withdrawal_normal`: Mature withdrawal with random roll $\ge 0.03$ pays full principal + 6.0%/day interest.
-  - `test_bank_tier_mmm_abu_default_risk_triggers_50_percent_loss`: 3% default/OBEP raid risk triggers 50% confiscation into Abu Fund.
-- **Tier 4 (Workload & Real-World E2E Journey)**:
-  - `test_bank_user_portfolio_summary`: Portfolio aggregation via `get_user_bank_summary` returning total principal, active accrued interest, and active deposits breakdown.
-  - `test_bank_safe_wealth_accumulation_during_street_attacks`: E2E journey (Deposit $\to$ Street Attacks with 0 wallet balance $\to$ 72h maturity $\to$ Full withdrawal to wallet).
+#### Domain R2: Cyberchad Spontaneous Interventions & Direct Reply Roasting (5 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_r2_spontaneous_intervention_3600s_cooldown` | Enforces strict minimum cooldown >= 3600.0s per board on spontaneous interventions. | ✅ PASS |
+| `test_r2_spontaneous_strictly_voice_delivery` | Verifies spontaneous interventions send strictly voice messages (`type: voice`, `voice_bytes` present, no text body). | ✅ PASS |
+| `test_r2_direct_reply_to_cyberchad_triggers_roast` | Verifies direct reply referencing Cyberchad (`author_id == 0` or `is_ai_roast: True`) triggers voice roast reply. | ✅ PASS |
+| `test_r2_direct_reply_cooldown_decoupling` | Verifies direct reply roasts trigger even if spontaneous board cooldown is currently active. | ✅ PASS |
+| `test_r2_fight_context_assembly_and_anon_formatting` | Verifies thread fight context builds `[Анон ...]` tags and post references for prompt synthesis. | ✅ PASS |
+
+#### Domain R3: Dynamic PvP Duel & Game Lobbies (5 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_r3_dynamic_stake_keyboard_bet_presets` | Verifies `get_rr_lobby_keyboard` and `get_dice_lobby_keyboard` adapt bet presets to player balance. | ✅ PASS |
+| `test_r3_stake_modifier_buttons_half_double_allin` | Verifies `/2`, `x2`, and `💰 ВА-БАНК` buttons compute correct stake targets for player balance. | ✅ PASS |
+| `test_r3_direct_command_stake_parsing` | Verifies direct commands `/duel 250`, `/dice 500`, `/ttt 1000`, `/rr 300` parse exact integer amounts. | ✅ PASS |
+| `test_r3_challenge_broadcast_only_after_confirmation` | Verifies challenge is published only after user clicks confirmation, not when lobby is opened. | ✅ PASS |
+| `test_r3_balance_validation_and_insufficient_funds_rejection` | Verifies challenge creation checks user global balance and rejects if `balance < bet`. | ✅ PASS |
+
+#### Domain R4: AI Item Counter-Reactions & Backfires (7 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_r4_shoot_on_ai_ricochet_15m_mute` | Verifies `/shoot` on AI targets triggers 15m (900s) mute and logs combat transaction. | ✅ PASS |
+| `test_r4_rob_on_ai_fines_500_to_abu_fund` | Verifies `/rob` on AI fines the attacker 500 ₪ into Abu Fund and logs robbery transaction. | ✅ PASS |
+| `test_r4_shit_on_ai_1h_self_debuff` | Verifies `/shit` on AI applies 1-hour (3600s) `shit_until` debuff in `_ACTIVE_AUTHOR_ATTACKS`. | ✅ PASS |
+| `test_r4_vomit_on_ai_1h_self_debuff` | Verifies `/vomit` on AI applies 1-hour (3600s) `vomit_until` debuff in `_ACTIVE_AUTHOR_ATTACKS`. | ✅ PASS |
+| `test_r4_pepperspray_on_ai_30m_blindness` | Verifies `/pepperspray` on AI applies 30-minute (1800s) `peppersprayed_until` blindness. | ✅ PASS |
+| `test_r4_partyvan_on_ai_2h_arrest_mute` | Verifies `/partyvan` on AI arrests the false reporter for 2 hours (7200s). | ✅ PASS |
+| `test_r4_dossier_and_bribe_on_ai` | Verifies `/dossier` returns Alpha-Tier gigachad stats, and `/bribe` returns burned shekels message. | ✅ PASS |
+
+#### Domain R5: DB Sentiment & Moderation Forensics (5 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_r5_sentiment_aggregation_from_posts` | Verifies sentiment analysis query over posts table and sparkline generation. | ✅ PASS |
+| `test_r5_moderation_mutes_and_bans_forensics` | Verifies forensic querying of `Mutes` and reason logging. | ✅ PASS |
+| `test_r5_ai_roast_and_intervention_forensics` | Verifies forensics queries on AI-generated posts (`author_id = 0`, `is_ai_roast = 1`). | ✅ PASS |
+| `test_r5_pvp_economy_transactions_forensics` | Verifies forensics ledger queries for PvP duels, fees, and Abu Fund growth. | ✅ PASS |
+| `test_r5_database_schema_integrity_and_indices` | Verifies DB table definitions, indices, triggers, and foreign keys enabled. | ✅ PASS |
 
 ---
 
-### 3. Menus, Navigation, Help & Syntax Safety (`tests/test_econ_menus_and_navigation.py`)
-- `test_shop_hub_contains_p2p_market_button_or_router`: Verification of Trade Hub (`/shop`, `_build_main_shop_hub`) or market engine router readiness.
-- `test_shop_hub_contains_bank_button_or_router`: Verification of Trade Hub Bank of Abu button or bank engine router readiness.
-- `test_help_hub_economy_page_mentions_market_and_bank`: Verification of `/help` economy page documenting `/market`, `/sell`, `/bank`, `/deposit`, `/withdraw`.
-- `test_help_text_all_pages_valid_html`: HTML syntax and tag balance validation across all help documentation pages.
-- `test_wallet_message_shows_dual_balance_if_bank_present`: Dual balance display validation (Liquid Wallet vs Bank Safe).
-- `test_router_registration_order_in_main`: Verification of router mounting order in `main.py` ensuring economy routers precede fallback routers.
-- `test_python_py_compile_all_core_files`: Full `py_compile` syntax verification on all core engine files.
+### Tier 2: Boundary & Corner Cases (10 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_t2_burst_flood_exact_boundary_8_vs_9` | 8 msgs in 3.9s -> clean; 9th msg in 4.0s -> flood detected (`mute = 300s`). | ✅ PASS |
+| `test_t2_rate_flood_exact_boundary_15_vs_16` | 15 msgs in 14.5s -> clean; 16th msg in 14.9s -> rate flood detected. | ✅ PASS |
+| `test_t2_minute_flood_exact_boundary_30_vs_31` | 30 msgs in 58s -> clean; 31st msg in 59s -> minute flood detected. | ✅ PASS |
+| `test_t2_spontaneous_cooldown_boundary_3599_vs_3601` | 3599.9s since last intervention -> blocked; 3601s -> allowed. | ✅ PASS |
+| `test_t2_pvp_zero_balance_stake_selector` | User with 0 or negative balance gets minimal fallback preset (50 ₪) without divide-by-zero. | ✅ PASS |
+| `test_t2_pvp_ultra_wealthy_max_balance_cap` | User with 100,000,000 ₪ balance is properly clamped to MAX_RR_BET / MAX_DICE_BET. | ✅ PASS |
+| `test_t2_direct_command_invalid_and_negative_amounts` | Direct commands `/duel -50`, `/duel abc` fall back to interactive lobby safely. | ✅ PASS |
+| `test_t2_rob_ai_attacker_zero_balance_safeguard` | Attacker with 0 ₪ tries to rob Cyberchad -> fine is 0 ₪ without negative wallet overflow. | ✅ PASS |
+| `test_t2_cyberchad_empty_thread_context` | Empty/whitespace texts handle gracefully without throwing exceptions. | ✅ PASS |
+| `test_t2_bayan_reset_after_1_hour` | Bayan counter escalation resets to base 1200s after 3600s without infractions. | ✅ PASS |
+
+---
+
+### Tier 3: Cross-Feature Combinations (6 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_t3_ghost_muted_user_in_pvp_lobby` | Shadow-muted user creates and opens PvP duel lobby without leaking shadowmute status. | ✅ PASS |
+| `test_t3_replying_to_cyberchad_during_flood_window` | Shadow-muted user replies to Cyberchad; ghost post delivered and voice roast triggered. | ✅ PASS |
+| `test_t3_stacking_ai_backfires_shoot_after_pepperspray` | Attacker under pepperspray blindness attacks Cyberchad with `/shoot`; both penalties are active. | ✅ PASS |
+| `test_t3_pvp_duel_during_rapid_post_stream` | Dueling users exchanging rapid posts do not get falsely muted if under the 8 msg burst limit. | ✅ PASS |
+| `test_t3_ai_counter_action_abu_fund_and_bank_audit` | Robbing Cyberchad deducts 500 ₪, deposits to Abu Fund, and updates transaction ledger. | ✅ PASS |
+| `test_t3_simultaneous_spontaneous_chad_and_money_drop` | Board with active drop and Cyberchad voice post co-exist without state collision. | ✅ PASS |
+
+---
+
+### Tier 4: Real-World Imageboard Workloads & Simulations (4 Tests)
+| Test Case | Description | Result |
+|---|---|---|
+| `test_t4_full_imageboard_multi_user_brawl_scenario` | End-to-end multi-user brawl: flames, spontaneous voice roast, direct reply roast, `/shoot` & `/rob` backfires, and `/duel` execution. | ✅ PASS |
+| `test_t4_high_throughput_mixed_media_stream` | 10 users sending mixed media streams with zero silent drops, isolating true flooders from clean posters. | ✅ PASS |
+| `test_t4_economy_lifecycle_and_abu_fund_accumulation` | Full economic cycle with duels, robbery penalties, money drops, and Abu Fund verification. | ✅ PASS |
+| `test_t4_forensic_deep_audit_after_chaos_session` | Forensics analytics, sentiment aggregation, and sparkline generation after chaotic session. | ✅ PASS |

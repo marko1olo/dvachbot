@@ -421,8 +421,9 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 # ==========================================
 # ПОЛУЧЕНИЕ ЗАДАЧ
 # ==========================================
-async def get_tasks(db, exclude_fids: set | list | None = None) -> list[dict]:
+async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | None = None) -> list[dict]:
     tasks = []
+    max_batch = limit if limit is not None else BATCH_SIZE
     exclude_list = list(exclude_fids) if exclude_fids else []
     
     # 1. Из реестра (все необработанные файлы без ограничения по времени)
@@ -465,63 +466,129 @@ async def get_tasks(db, exclude_fids: set | list | None = None) -> list[dict]:
         tasks = []
 
     # 2. Поиск пропущенных файлов (Gaps) в последних 250 постах (включая видео, фото, стикеры и альбомы)
-    if len(tasks) < BATCH_SIZE:
+    if len(tasks) < max_batch:
         query_gaps_files = """
-            SELECT DISTINCT 
-                json_extract(j.value, '$.original_file_id') as fid, 
-                json_extract(j.value, '$.type') as ftype,
-                json_extract(j.value, '$.thumbnail_file_id') as thumb_id,
-                COALESCE(json_extract(j.value, '$.file_name'), json_extract(j.value, '$.filename')) as fname,
-                json_extract(j.value, '$.mime_type') as fmime
-            FROM Posts p, json_each(p.content, '$.files') j
-            WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
+            WITH raw_files AS (
+                SELECT 
+                    COALESCE(json_extract(j.value, '$.original_file_id'), json_extract(j.value, '$.file_id'), json_extract(j.value, '$.media')) as fid,
+                    COALESCE(json_extract(j.value, '$.type'), 'photo') as ftype,
+                    COALESCE(json_extract(j.value, '$.thumbnail_file_id'), json_extract(j.value, '$.thumb_id')) as thumb_id,
+                    COALESCE(json_extract(j.value, '$.file_name'), json_extract(j.value, '$.filename')) as fname,
+                    json_extract(j.value, '$.mime_type') as fmime
+                FROM (
+                    SELECT content, post_num FROM Posts 
+                    WHERE post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
+                      AND json_valid(content)
+                      AND json_type(content, '$.files') IS NOT NULL
+                ) p, json_each(p.content, '$.files') j
+            )
+            SELECT DISTINCT fid, ftype, thumb_id, fname, fmime
+            FROM raw_files
+            WHERE fid IS NOT NULL
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
-              AND fid IS NOT NULL
+              AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
+            LIMIT 20
+        """
+        query_gaps_media = """
+            WITH raw_media AS (
+                SELECT 
+                    COALESCE(json_extract(j.value, '$.original_file_id'), json_extract(j.value, '$.file_id'), json_extract(j.value, '$.media')) as fid,
+                    COALESCE(json_extract(j.value, '$.type'), 'photo') as ftype,
+                    COALESCE(json_extract(j.value, '$.thumbnail_file_id'), json_extract(j.value, '$.thumb_id')) as thumb_id,
+                    COALESCE(json_extract(j.value, '$.file_name'), json_extract(j.value, '$.filename')) as fname,
+                    json_extract(j.value, '$.mime_type') as fmime
+                FROM (
+                    SELECT content, post_num FROM Posts 
+                    WHERE post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
+                      AND json_valid(content)
+                      AND json_type(content, '$.media') IS NOT NULL
+                ) p, json_each(p.content, '$.media') j
+            )
+            SELECT DISTINCT fid, ftype, thumb_id, fname, fmime
+            FROM raw_media
+            WHERE fid IS NOT NULL
+              AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
             LIMIT 20
         """
         query_gaps_single = """
-            SELECT DISTINCT 
-                json_extract(p.content, '$.file_id') as fid, 
-                json_extract(p.content, '$.type') as ftype,
-                NULL as thumb_id,
-                COALESCE(json_extract(p.content, '$.file_name'), json_extract(p.content, '$.filename')) as fname,
-                json_extract(p.content, '$.mime_type') as fmime
-            FROM Posts p
-            WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
+            WITH raw_single AS (
+                SELECT 
+                    COALESCE(
+                        CASE WHEN json_type(p.content, '$.file_id') IN ('text', 'integer') THEN json_extract(p.content, '$.file_id') END,
+                        CASE WHEN json_type(p.content, '$.original_file_id') IN ('text', 'integer') THEN json_extract(p.content, '$.original_file_id') END,
+                        CASE WHEN json_type(p.content, '$.media') IN ('text', 'integer') THEN json_extract(p.content, '$.media') END
+                    ) as fid,
+                    COALESCE(json_extract(p.content, '$.type'), 'photo') as ftype,
+                    COALESCE(json_extract(p.content, '$.thumbnail_file_id'), json_extract(p.content, '$.thumb_id')) as thumb_id,
+                    COALESCE(json_extract(p.content, '$.file_name'), json_extract(p.content, '$.filename')) as fname,
+                    json_extract(p.content, '$.mime_type') as fmime
+                FROM Posts p
+                WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
+                  AND json_valid(p.content)
+                  AND json_type(p.content, '$.files') IS NULL
+                  AND json_type(p.content, '$.media') IS NULL
+            )
+            SELECT DISTINCT fid, ftype, thumb_id, fname, fmime
+            FROM raw_single
+            WHERE fid IS NOT NULL
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
-              AND fid IS NOT NULL
               AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
             LIMIT 20
         """
         async def _fetch_gaps():
             gap_tasks = []
-            async with db.execute(query_gaps_files) as cursor:
-                async for row in cursor:
-                    if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks):
-                        gap_tasks.append(
-                            {
-                                "fid": row[0],
-                                "type": row[1] or "photo",
-                                "thumb_id": row[2],
-                                "fname": row[3],
-                                "fmime": row[4],
-                                "bot_id": None,
-                            }
-                        )
-            async with db.execute(query_gaps_single) as cursor:
-                async for row in cursor:
-                    if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks) and not any(g["fid"] == row[0] for g in gap_tasks):
-                        gap_tasks.append(
-                            {
-                                "fid": row[0],
-                                "type": row[1] or "photo",
-                                "thumb_id": row[2],
-                                "fname": row[3],
-                                "fmime": row[4],
-                                "bot_id": None,
-                            }
-                        )
+            try:
+                async with db.execute(query_gaps_files) as cursor:
+                    async for row in cursor:
+                        if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks):
+                            gap_tasks.append(
+                                {
+                                    "fid": row[0],
+                                    "type": row[1] or "photo",
+                                    "thumb_id": row[2],
+                                    "fname": row[3],
+                                    "fmime": row[4],
+                                    "bot_id": None,
+                                }
+                            )
+            except Exception as eg:
+                logger.debug(f"Gaps files query note: {eg}")
+
+            try:
+                async with db.execute(query_gaps_media) as cursor:
+                    async for row in cursor:
+                        if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks) and not any(g["fid"] == row[0] for g in gap_tasks):
+                            gap_tasks.append(
+                                {
+                                    "fid": row[0],
+                                    "type": row[1] or "photo",
+                                    "thumb_id": row[2],
+                                    "fname": row[3],
+                                    "fmime": row[4],
+                                    "bot_id": None,
+                                }
+                            )
+            except Exception as eg:
+                logger.debug(f"Gaps media query note: {eg}")
+
+            try:
+                async with db.execute(query_gaps_single) as cursor:
+                    async for row in cursor:
+                        if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks) and not any(g["fid"] == row[0] for g in gap_tasks):
+                            gap_tasks.append(
+                                {
+                                    "fid": row[0],
+                                    "type": row[1] or "photo",
+                                    "thumb_id": row[2],
+                                    "fname": row[3],
+                                    "fmime": row[4],
+                                    "bot_id": None,
+                                }
+                            )
+            except Exception as eg:
+                logger.debug(f"Gaps single query note: {eg}")
+
             return gap_tasks
 
         try:
@@ -530,7 +597,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None) -> list[dict]:
         except Exception as e:
             logger.error(f"Gaps query error: {e}", exc_info=True)
 
-    tasks = tasks[:BATCH_SIZE]
+    tasks = tasks[:max_batch]
 
     # 3. Populate bot_id for the tasks
     if tasks:
@@ -929,20 +996,27 @@ async def tagging_loop():
                     async def _save_audio_doc():
                         async with db_transaction(db):
                             async with db.execute(
-                                "SELECT sha256 FROM FileRegistry WHERE file_id=?",
+                                "UPDATE FileRegistry SET tags='audio', file_type='audio' WHERE file_id=?",
                                 (file_id,),
                             ) as cursor:
-                                row = await cursor.fetchone()
-                            if row:
-                                await db.execute(
-                                    "UPDATE FileRegistry SET tags='audio', file_type='audio' WHERE file_id=?",
-                                    (file_id,),
-                                )
-                            else:
-                                await db.execute(
-                                    "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, 'audio', 'audio', ?)",
-                                    (sha_audio, file_id, thumb_id, time.time()),
-                                )
+                                updated_rows = cursor.rowcount
+                            if updated_rows == 0:
+                                async with db.execute(
+                                    "SELECT file_id FROM FileRegistry WHERE sha256 = ?",
+                                    (sha_audio,),
+                                ) as cursor:
+                                    existing_sha_row = await cursor.fetchone()
+                                if existing_sha_row:
+                                    sec_sha = f"{sha_audio}_{file_id}"
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, 'audio', 'audio', ?)",
+                                        (sec_sha, file_id, thumb_id, time.time()),
+                                    )
+                                else:
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, 'audio', 'audio', ?)",
+                                        (sha_audio, file_id, thumb_id, time.time()),
+                                    )
 
                     await execute_with_retry(_save_audio_doc, max_retries=5, base_delay=0.1)
                     if file_id in TEMP_FAILED_FILES:
@@ -1005,24 +1079,39 @@ async def tagging_loop():
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async def _save_bad_file():
                         async with db_transaction(db):
-                            await db.execute(
+                            async with db.execute(
                                 "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
                                 (file_id,),
-                            )
-                            await db.execute(
-                                "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
-                                (sha_fail, file_id, time.time()),
-                            )
+                            ) as cursor:
+                                updated_rows = cursor.rowcount
+                            if updated_rows == 0:
+                                async with db.execute(
+                                    "SELECT file_id FROM FileRegistry WHERE sha256 = ?",
+                                    (sha_fail,),
+                                ) as cursor:
+                                    existing_sha_row = await cursor.fetchone()
+                                if existing_sha_row:
+                                    sec_sha = f"{sha_fail}_{file_id}"
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'error', ?)",
+                                        (sec_sha, file_id, thumb_id, file_type, time.time()),
+                                    )
+                                else:
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'error', ?)",
+                                        (sha_fail, file_id, thumb_id, file_type, time.time()),
+                                    )
 
                     await execute_with_retry(_save_bad_file, max_retries=5, base_delay=0.1)
                     continue
 
                 sha, phash, b_hash, resized_bytes = res
                 tags = None
+                description = None
                 async def _check_existing_tags():
                     async with db.execute(
-                        "SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1",
-                        (sha,),
+                        "SELECT tags, description FROM FileRegistry WHERE (sha256 = ? OR sha256 LIKE ?) AND tags IS NOT NULL AND tags != '' LIMIT 1",
+                        (sha, f"{sha}_%"),
                     ) as cursor:
                         return await cursor.fetchone()
 
@@ -1030,6 +1119,8 @@ async def tagging_loop():
                     row = await execute_with_retry(_check_existing_tags, max_retries=3, base_delay=0.1)
                     if row:
                         tags = row[0]
+                        if row[1]:
+                            description = row[1]
                         logger.info(f"♻️ Skip Neuro: Tags found for SHA {sha[:8]}")
                 except Exception as e:
                     logger.error(
@@ -1038,7 +1129,6 @@ async def tagging_loop():
                     )
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
-                description = None
                 if tags is None:
                     ai_response = await get_neuro_tags(resized_bytes)
                     if ai_response in ("error_413", "error_too_large"):
@@ -1064,14 +1154,24 @@ async def tagging_loop():
                 if tags is None and ai_response in (None, "error_api_exhausted"):
                     entry = TEMP_FAILED_FILES.get(file_id)
                     fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
-                    if fail_cnt >= 3:
+                    if ai_response == "error_api_exhausted":
+                        cooldown_secs = 45
+                        logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt} for {file_id[:15]}). Pausing tagger for {cooldown_secs}s. Leaving tags as None to retry later.")
+                        TEMP_FAILED_FILES[file_id] = {
+                            "until": time.time() + 300,
+                            "cnt": fail_cnt,
+                        }
+                        tags = None
+                        await asyncio.sleep(cooldown_secs)
+                        continue
+                    elif fail_cnt >= 3:
                         logger.warning(f"⚠️ [TAGGER] AI tagging failed {fail_cnt} times for {file_id[:15]}. Saving visual hashes and marking as 'no_tags'.")
                         tags = "no_tags"
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     else:
-                        cooldown_secs = 45 if ai_response == "error_api_exhausted" else 10
-                        logger.warning(f"⏸️ [TAGGER] API exhausted or internal error (attempt {fail_cnt}/3 for {file_id[:15]}). Pausing tagger for {cooldown_secs}s cooldown before next file. Skipping DB update to retry later.")
+                        cooldown_secs = 10
+                        logger.warning(f"⏸️ [TAGGER] Internal error (attempt {fail_cnt}/3 for {file_id[:15]}). Pausing tagger for {cooldown_secs}s cooldown before next file. Skipping DB update to retry later.")
                         TEMP_FAILED_FILES[file_id] = {
                             "until": time.time() + 300,
                             "cnt": fail_cnt,
@@ -1098,28 +1198,66 @@ async def tagging_loop():
                             updated_rows = cursor.rowcount
 
                         if updated_rows == 0:
-                            await db.execute(
-                                """
-                                INSERT INTO FileRegistry 
-                                (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags, description)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ON CONFLICT(sha256) DO UPDATE SET
-                                    tags = excluded.tags,
-                                    description = COALESCE(excluded.description, FileRegistry.description),
-                                    phash = excluded.phash
-                            """,
-                                (
-                                    sha,
-                                    phash,
-                                    file_id,
-                                    None,
-                                    file_type,
-                                    time.time(),
-                                    b_hash,
-                                    tags,
-                                    description,
-                                ),
-                            )
+                            async with db.execute(
+                                "SELECT file_id FROM FileRegistry WHERE sha256 = ?",
+                                (sha,),
+                            ) as cursor:
+                                existing_sha_row = await cursor.fetchone()
+
+                            if existing_sha_row:
+                                # Update existing primary record
+                                await db.execute(
+                                    """
+                                    UPDATE FileRegistry 
+                                    SET tags = ?, description = COALESCE(?, description), phash = ?, blurhash = ?
+                                    WHERE sha256 = ?
+                                    """,
+                                    (tags, description, phash, b_hash, sha),
+                                )
+                                # Permanently index the secondary file_id
+                                sec_sha = f"{sha}_{file_id}"
+                                await db.execute(
+                                    """
+                                    INSERT OR REPLACE INTO FileRegistry 
+                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags, description)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    """,
+                                    (
+                                        sec_sha,
+                                        phash,
+                                        file_id,
+                                        thumb_id,
+                                        file_type,
+                                        time.time(),
+                                        b_hash,
+                                        tags,
+                                        description,
+                                    ),
+                                )
+                            else:
+                                await db.execute(
+                                    """
+                                    INSERT INTO FileRegistry 
+                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags, description)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    ON CONFLICT(sha256) DO UPDATE SET
+                                        tags = excluded.tags,
+                                        description = COALESCE(excluded.description, FileRegistry.description),
+                                        phash = excluded.phash,
+                                        blurhash = excluded.blurhash
+                                    """,
+                                    (
+                                        sha,
+                                        phash,
+                                        file_id,
+                                        thumb_id,
+                                        file_type,
+                                        time.time(),
+                                        b_hash,
+                                        tags,
+                                        description,
+                                    ),
+                                )
 
                 try:
                     await execute_with_retry(_save_tags_registry, max_retries=5, base_delay=0.1)
@@ -1157,14 +1295,20 @@ async def tagging_loop():
                     logger.warning(f"🛡️ Triggered DEEP CHECK for {file_id}")
                     spawn_task(run_deep_check(resized_bytes, file_id))
 
-                if not tags:
+                if not tags and ai_response != "error_api_exhausted":
                     entry = TEMP_FAILED_FILES.get(file_id)
                     fail_cnt = (entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1
                     if fail_cnt >= 5:
                         logger.warning(f"⛔ [TAGGER] No tags 5 times for {file_id[:15]}. Marking as 'error_no_tags'.")
                         async def _save_no_tags():
                             async with db_transaction(db):
-                                await db.execute("UPDATE FileRegistry SET tags='error_no_tags' WHERE file_id=?", (file_id,))
+                                async with db.execute("UPDATE FileRegistry SET tags='error_no_tags' WHERE file_id=?", (file_id,)) as cursor:
+                                    if cursor.rowcount == 0:
+                                        dummy_sha = f"notags_{file_id}"
+                                        await db.execute(
+                                            "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'error_no_tags', ?)",
+                                            (dummy_sha, file_id, thumb_id, file_type, time.time()),
+                                        )
 
                         try:
                             await execute_with_retry(_save_no_tags, max_retries=5, base_delay=0.1)
@@ -1183,7 +1327,13 @@ async def tagging_loop():
                     logger.warning(f"⛔ [TAGGER] Crit fail 3 times for {file_id[:15]}. Marking as 'error'.")
                     async def _save_crit_fail():
                         async with db_transaction(db):
-                            await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                            async with db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,)) as cursor:
+                                if cursor.rowcount == 0:
+                                    dummy_sha = f"error_{file_id}"
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'error', ?)",
+                                        (dummy_sha, file_id, thumb_id, file_type, time.time()),
+                                    )
 
                     try:
                         await execute_with_retry(_save_crit_fail, max_retries=5, base_delay=0.1)

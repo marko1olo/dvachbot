@@ -121,7 +121,7 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dur, 0)
 
     async def test_exponential_shadowmute_escalation_on_repeated_bayan(self):
-        """Repeatedly triggering bayan mute escalates duration exponentially: 1200 -> 2400 -> 4800 -> 9600."""
+        """Repeatedly triggering bayan mute escalates up to 30 min (1800s) cap: 1200 -> 1800 -> 1800."""
         base_time = 1000000.0
         text = "Баян для проверки экспоненциального роста мута"
         
@@ -133,38 +133,32 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dur1, 1200)
         self.assertEqual(get_bayan_escalation_level(self.user_id), 1)
         
-        # 2nd strike in mute: 2400s (40m)
+        # 2nd strike in mute: 1800s (30m cap)
         check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 20.0)
         check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 25.0)
         is_mute, dur2 = check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 30.0)
         self.assertTrue(is_mute)
-        self.assertEqual(dur2, 2400)
+        self.assertEqual(dur2, 1800)
         self.assertEqual(get_bayan_escalation_level(self.user_id), 2)
         
-        # 3rd strike: 4800s (80m)
+        # 3rd strike: 1800s (30m cap)
         check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 40.0)
         check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 45.0)
         is_mute, dur3 = check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 50.0)
         self.assertTrue(is_mute)
-        self.assertEqual(dur3, 4800)
+        self.assertEqual(dur3, 1800)
         self.assertEqual(get_bayan_escalation_level(self.user_id), 3)
 
-        # 4th strike: 9600s (160m)
-        check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 60.0)
-        check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 65.0)
-        is_mute, dur4 = check_bayan(self.user_id, content=text, msg_type="text", board_id=self.board_id, now_ts=base_time + 70.0)
-        self.assertTrue(is_mute)
-        self.assertEqual(dur4, 9600)
-
-    async def test_handle_shadow_mute_continuation_doubles_timer(self):
-        """Posting while shadow-muted doubles the remaining duration."""
+    async def test_handle_shadow_mute_continuation_preserves_timer(self):
+        """Posting while shadow-muted keeps the existing expiration without doubling."""
         now = time.time()
-        shared_state.board_data[self.board_id]['shadow_mutes'][self.user_id] = datetime.fromtimestamp(now + 1000.0, UTC)
+        initial_exp = now + 1000.0
+        shared_state.board_data[self.board_id]['shadow_mutes'][self.user_id] = datetime.fromtimestamp(initial_exp, UTC)
         
         with patch('common.database.update_shadow_mute', new=AsyncMock()):
-            extended, new_exp = await handle_shadow_mute_continuation(self.user_id, self.board_id, reason="Тест")
+            extended, cur_exp = await handle_shadow_mute_continuation(self.user_id, self.board_id, reason="Тест")
             self.assertTrue(extended)
-            self.assertGreaterEqual(new_exp, now + 2000.0)
+            self.assertAlmostEqual(cur_exp, initial_exp, delta=1.0)
 
     async def test_bayan_detection_fuzzy_text(self):
         """Fuzzy text similarity >= 85% must be detected as a duplicate."""
@@ -188,20 +182,28 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Медиа-баян", reason)
 
     async def test_flood_detection_burst_and_minute(self):
-        """Burst flood (> 4 in 4s) and Minute flood (> 20 in 60s) must trigger."""
+        """Burst flood (> 8 in 4s) and Minute flood (> 30 in 60s) must trigger."""
         now = 1000000.0
         
-        for i in range(4):
-            is_fl, _ = check_flood(self.user_id, self.board_id, now_ts=now + i * 0.4)
+        for i in range(8):
+            is_fl, _ = check_flood(self.user_id, self.board_id, now_ts=now + i * 0.3)
             self.assertFalse(is_fl)
         
-        is_fl, reason = check_flood(self.user_id, self.board_id, now_ts=now + 1.8)
+        is_fl, reason = check_flood(self.user_id, self.board_id, now_ts=now + 2.6)
         self.assertTrue(is_fl)
         self.assertIn("Burst флуд", reason)
 
     async def test_cross_board_spam_detection(self):
-        """Posting same message across boards within 60s triggers cross-board spam."""
-        now = 1000000.0
+        """Posting same long message across boards within 60s triggers cross-board spam; short messages are ignored."""
+        # 1. Short messages (< 15 chars or single word) must NEVER trigger cross-board spam
+        cross_board_spam_tracker.clear()
+        for short_msg in ["тест", "test", "привет", "123", "👍👍👍", "ок"]:
+            self.assertTrue(_check_cross_board_spam(self.user_id, "b", short_msg, "text", "text"))
+            self.assertTrue(_check_cross_board_spam(self.user_id, "po", short_msg, "text", "text"))
+            self.assertTrue(_check_cross_board_spam(self.user_id, "vg", short_msg, "text", "text"))
+
+        # 2. Long identical messages (> 15 chars) across boards trigger cross-board spam on 3rd board
+        cross_board_spam_tracker.clear()
         content = "Спам сообщение для рассылки по всем доскам"
         
         res1 = _check_cross_board_spam(self.user_id, "b", content, "text", "text")
@@ -280,6 +282,7 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(info['is_muted'])
             self.assertGreater(info['remaining_seconds'], 1100.0)
             
-            # Re-apply with exponential scaling -> doubles remaining time (1200 * 2 -> 2400)
-            exp2 = await apply_shadow_mute(self.user_id, self.board_id, duration_seconds=1200.0, is_exponential=True)
-            self.assertGreaterEqual(exp2, now + 2390.0)
+            # Re-apply respects 1800s hard cap
+            exp2 = await apply_shadow_mute(self.user_id, self.board_id, duration_seconds=5000.0, is_exponential=False)
+            self.assertLessEqual(exp2, now + 1801.0)
+            self.assertGreaterEqual(exp2, now + 1795.0)

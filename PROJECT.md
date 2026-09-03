@@ -1,57 +1,78 @@
-# Project: DvachBot Economy Extensions — P2P Market & Bank of Abu
+# Project: dvachbot Ecosystem Overhaul
 
 ## Architecture
-DvachBot is an async aiogram 3.x Telegram bot architecture with:
-- `main.py`: Core dispatcher `dp`, router mounting, lifecycle, `/rob` PVP mechanics, shop hub, wallet hub, help menus.
-- `common/database.py`: SQLite migrations and database access under `db_transaction` and `db_lock` (`aiosqlite`).
-- `market_engine.py`: P2P Flea Market engine with item escrow, catalog browsing (Weapons, Wardrobe, Pharma, Lootboxes), price sorting, instant purchase, 5% Abu fee, lot cancellation, and seller PM notifications.
-- `bank_engine.py`: Bank of Abu / Safe engine with robbery insulation, 3 tiers (Sych 0.5% flex, Skuf 2.5% 3-day lockup, MMM Abu 6.0% 24h risk), continuous per-second interest calculation, deposit/withdraw presets.
-- `help_text.py` & `common/bot_helpers.py`: Help menus and interactive navigation buttons.
+- **Language & Runtime**: Python 3.11+, asyncio, aiogram / telegram-bot framework.
+- **Database**: SQLite (`dvach_bot.db`) with aiosqlite / sqlite3 schema for posts, users, mutes, reports, transactions, stats.
+- **Components**:
+  - `common/spam_filter.py`: Anti-flood sliding window rate limiters, shadowmute timers, bayan detectors.
+  - `handlers/message_router.py`: Ingress routing, shadow-reject processing, fake post generation for all media types.
+  - `ai_manager.py` & `cyberchad_tts.py`: Cyberchad voice synthesis (Edge-TTS + DSP presets), spontaneous intervention engine (3600s cooldown), direct reply voice roast generator.
+  - `pvp/`, `russian_roulette_pvp.py`, `dice_duel_engine.py`, `ttt_game.py`: PvP game lobbies, dynamic stake selector keyboards, broadcast confirmation flow.
+  - `common/bot_helpers.py` (`handle_cyberchad_counter_action`): Counter-reaction and backfire logic for AI target attacks (/shoot, /rob, /shit, /vomit, /pepperspray, /partyvan, /dossier, /bribe).
+  - `stats_v2.py`, `stats_generator.py`: Sentiment analysis, moderation forensics, player metrics.
 
 ## Feature Inventory
-| # | Feature | Description | Milestone | Source | Status |
-|---|---------|-------------|-----------|--------|--------|
-| 1 | Database Schema & Tables | `MarketListings` & `BankDeposits` tables, indexes, and atomic helpers in `common/database.py` | M1 | ORIGINAL_REQUEST §1, §2 | PLANNED |
-| 2 | P2P Market Engine & Escrow | Item locking, escrow, listing creation, cancel/return, instant buy, 5% Abu fee deduction | M1 | ORIGINAL_REQUEST §1 | PLANNED |
-| 3 | Bank of Abu Engine & Math | Real-time continuous interest math, 3 tiers (0.5%, 2.5%, 6.0%), early penalty, 3% pyramid default | M1 | ORIGINAL_REQUEST §2 | PLANNED |
-| 4 | Market Telegram Handlers & UI | `/market`, `/bazar`, `/sell`, interactive catalog, categories, price sort, pagination | M2 | ORIGINAL_REQUEST §1 | PLANNED |
-| 5 | Bank Telegram Handlers & UI | `/bank`, `/deposit`, `/withdraw`, balance overview (wallet vs safe), presets, refresh | M2 | ORIGINAL_REQUEST §2 | PLANNED |
-| 6 | Seller PM Notifications | Direct Telegram PM to seller on purchase with error suppression for blocked bots | M2 | ORIGINAL_REQUEST §1 | PLANNED |
-| 7 | Robbery Safe Insulation | Verify Bank safe deposits are excluded from `get_user_global_balance` and immune to `/rob` | M2 | ORIGINAL_REQUEST §2 | PLANNED |
-| 8 | Trade Hub (`/shop`) Integration | Add `[🛒 Барахолка P2P]` and `[🏦 Банк Абу]` buttons in `_build_main_shop_hub` | M3 | ORIGINAL_REQUEST §3 | PLANNED |
-| 9 | Help Menu & Docs Integration | Add `/market` and `/bank` docs to `help_text.py`, `get_help_keyboard`, quick command list | M3 | ORIGINAL_REQUEST §3 | PLANNED |
-| 10| Wallet & Profile Display | Show dual balance (Wallet vs Bank Safe) in `/wallet`, add quick action buttons | M3 | ORIGINAL_REQUEST §3 | PLANNED |
-| 11| Authentic 2ch Humor & Styling | Cynical/toxic imageboard tone across all market/bank dialogues and error states | M3 | ORIGINAL_REQUEST §3 | PLANNED |
-| 12| E2E Test Suite & py_compile | 100% green tests in `tests/test_p2p_market_engine.py`, `tests/test_bank_of_abu_engine.py`, etc. | M4 | ORIGINAL_REQUEST §4 | PLANNED |
+| # | Feature | Description | Milestone | Source |
+|---|---|---|---|---|
+| F1.1 | Anti-Flood Limits | BURST=8, RATE=15, MINUTE=30, base shadowmute=300s | M1 | ORIGINAL_REQUEST §R1 |
+| F1.2 | No Silent Drops | check_spam and repeat checks always deliver ghost posts via process_shadow_reject | M1 | ORIGINAL_REQUEST §R1 |
+| F1.3 | All-Media Ghost Delivery | Seamless ghost delivery with fake post numbers for photos, albums, videos, voice notes, video notes, audio, stickers, docs | M1 | ORIGINAL_REQUEST §R1 |
+| F1.4 | DB Shadowmute Sync | Ensure handle_audio/voice/video_note & media groups check DB mutes | M1 | survey_explorer_1 |
+| F2.1 | Spontaneous Cooldown | Minimum cooldown >= 3600.0s per board for spontaneous Cyberchad interventions | M2 | ORIGINAL_REQUEST §R2 |
+| F2.2 | Strictly Voice Messages | Spontaneous interventions deliver voice messages only (no text body) | M2 | ORIGINAL_REQUEST §R2 |
+| F2.3 | Direct Reply Roasting | Direct replies/mentions to Cyberchad trigger contextual voice roast replies | M2 | ORIGINAL_REQUEST §R2 |
+| F2.4 | Cooldown Decoupling | Direct reply roasts decoupled from spontaneous 3600s board cooldown | M2 | survey_explorer_2 |
+| F3.1 | Dynamic Stake Selector | Interactive lobby adapting buttons to balance (50, 100, 250... /2, x2, ВА-БАНК) for /duel, /dice, /ttt, /rr | M3 | ORIGINAL_REQUEST §R3 |
+| F3.2 | Direct Amount Commands | Support /duel <amt>, /dice <amt>, /ttt <amt>, /rr <amt> | M3 | ORIGINAL_REQUEST §R3 |
+| F3.3 | Challenge Confirmation | Challenges broadcast only after explicit player confirmation | M3 | ORIGINAL_REQUEST §R3 |
+| F3.4 | Command Routing Fixes | Route /dice to dice duel lobby and /rr to russian roulette lobby | M3 | survey_explorer_3 |
+| F4.1 | /shoot Backfire | 15m ricochet mute on AI attack | M4 | ORIGINAL_REQUEST §R4 |
+| F4.2 | /rob Backfire | 500 ₪ fine to Abu Fund on AI attack | M4 | ORIGINAL_REQUEST §R4 |
+| F4.3 | /shit & /vomit Backfire | 1 hour self-debuff on AI attack | M4 | ORIGINAL_REQUEST §R4 |
+| F4.4 | /pepperspray Backfire | 30 minutes blindness on AI attack | M4 | ORIGINAL_REQUEST §R4 |
+| F4.5 | /partyvan Backfire | 2 hours arrest on false report against AI | M4 | ORIGINAL_REQUEST §R4 |
+| F4.6 | /dossier Alpha Stats | Alpha-Tier gigachad stats returned for AI | M4 | ORIGINAL_REQUEST §R4 |
+| F4.7 | AI Action Routing | Correct wiring of cmd_dossier and cmd_curse/cmd_vomit for target_id == 0 | M4 | survey_explorer_3 |
+| F5.1 | Sentiment Forensics | DB inspection of messages, sentiment queries, player sentiment on AI & economy | M5 | ORIGINAL_REQUEST §R5 |
+| F5.2 | Moderation Forensics | Inspect reports, mutes, transactions, and moderation audit logs in dvach_bot.db | M5 | ORIGINAL_REQUEST §R5 |
+| F6.1 | E2E & Unit Test Pass | 100% passing automated test suite (95+ tests green in pytest) | M6 | ORIGINAL_REQUEST §AC |
+| F6.2 | Adversarial Hardening | Tier 5 white-box coverage hardening + Forensic Audit verification | M6 | Project Pattern |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
-|---|------|-------|-------------|--------|
-| 1 | M1: Database Schema & Core Engines | `common/database.py`, `market_engine.py`, `bank_engine.py` (logic, math, escrow, transactions) | none | PLANNED |
-| 2 | M2: Telegram Routers, Handlers & Notifications | Mount `market_router` & `bank_router` in `main.py`, unshadow `/market`, `/sell`, `/bank`, PM alerts | M1 | PLANNED |
-| 3 | M3: Navigation, Shop Hub, Help & Wallet UI | Connect `/shop`, `/help`, `/wallet`, authentic 2ch flavor text and error dialogues | M1, M2 | PLANNED |
-| 4 | M4: E2E Verification & Forensic Integrity | Full unit/integration tests, concurrency checks, `py_compile`, forensic audit | M1, M2, M3 | PLANNED |
+|---|---|---|---|---|
+| M0 | E2E Testing Track | Test harness & multi-tier test suite publishing TEST_READY.md | none | IN_PROGRESS |
+| M1 | Anti-Flood & Ghost-Post Delivery | F1.1, F1.2, F1.3, F1.4 | none | IN_PROGRESS |
+| M2 | Cyberchad Voice & Roasting | F2.1, F2.2, F2.3, F2.4 | none | IN_PROGRESS |
+| M3 | Dynamic PvP Lobby & Staking | F3.1, F3.2, F3.3, F3.4 | none | IN_PROGRESS |
+| M4 | AI Counter-Reactions | F4.1, F4.2, F4.3, F4.4, F4.5, F4.6, F4.7 | none | IN_PROGRESS |
+| M5 | DB Sentiment & Forensics | F5.1, F5.2 | none | IN_PROGRESS |
+| M6 | Final Integration & Audit | F6.1, F6.2 (100% E2E green, Tier 5 hardening, Auditor pass) | M0, M1, M2, M3, M4, M5 | PLANNED |
 
 ## Interface Contracts
-### `market_engine.py` ↔ `common/database.py`
-- `create_market_listing(db, seller_id, seller_board_id, item_type, item_id, item_data, price)` -> `dict` (listing record).
-- `cancel_market_listing(db, lot_id, user_id)` -> `(success: bool, item: dict, error_msg: str)`.
-- `buy_market_listing(db, lot_id, buyer_id, buyer_board_id)` -> `(success: bool, seller_id: int, price: int, payout: int, fee: int, item: dict, error_msg: str)`.
-- `get_market_catalog(db, category=None, sort_order="price_asc", page=1, per_page=5)` -> `(items: list, total_pages: int, total_count: int)`.
-- `get_user_listings(db, user_id)` -> `list[dict]`.
+### spam_filter ↔ message_router
+- `check_spam(user_id, text, board)` -> `(is_spam: bool, reason: str, mute_duration: float)`
+- `process_shadow_reject(bot, message, board, reason)` -> delivers fake post to author in PM without board broadcast.
 
-### `bank_engine.py` ↔ `common/database.py`
-- `create_bank_deposit(db, user_id, board_id, tier_id, amount)` -> `(success: bool, deposit: dict, error_msg: str)`.
-- `calculate_deposit_state(deposit, current_ts)` -> `(accrued_interest: float, total_value: float, is_locked: bool, remaining_lock_sec: float)`.
-- `withdraw_bank_deposit(db, deposit_id, user_id, board_id, force_early=False)` -> `(success: bool, payout: int, principal: int, interest: int, penalty: int, is_pyramid_default: bool, error_msg: str)`.
-- `get_user_bank_summary(db, user_id)` -> `(total_principal: float, total_accrued: float, deposits: list[dict])`.
+### ai_manager ↔ broadcaster
+- `generate_cyberchad_voice(text, preset)` -> `bytes` (Opus audio)
+- `trigger_spontaneous_intervention(board)` -> sends voice-only message with cooldown >= 3600s.
+- `handle_direct_cyberchad_reply(message, reply_to_post)` -> generates personalized contextual voice roast.
+
+### pvp_lobby ↔ games
+- `get_dynamic_stake_keyboard(game_type, balance, current_stake)` -> InlineKeyboardMarkup with dynamic denominations, /2, x2, ALL-IN, Confirm.
+- `confirm_and_broadcast_challenge(game_type, user_id, stake)` -> validates balance and publishes to chat.
+
+### common/bot_helpers ↔ handlers
+- `handle_cyberchad_counter_action(action, user_id, chat_id, bot)` -> applies specific backfire penalty and sends thematic reply.
 
 ## Code Layout
-- `common/database.py`: Table migrations for `MarketListings`, `BankDeposits`, indices, and transactional helpers.
-- `market_engine.py`: Market catalog, escrow logic, purchase handling, listing cancellation, market router & handlers.
-- `bank_engine.py`: Bank tiers config, dynamic continuous interest formula, deposit/withdrawal mechanics, bank router & handlers.
-- `main.py`: Router inclusion (`dp.include_router(market_router)`, `dp.include_router(bank_router)`), `/shop` buttons, `/wallet` display, `/rob` validation.
-- `help_text.py` & `common/bot_helpers.py`: Help menus and keyboard buttons.
-- `tests/test_p2p_market_engine.py`: Unit & integration tests for P2P Market.
-- `tests/test_bank_of_abu_engine.py`: Unit & integration tests for Bank of Abu.
-- `tests/test_econ_menus_and_navigation.py`: Tests for menus, navigation, help, wallet, and routing.
+- `common/spam_filter.py`: Anti-flood constants and rate-limiting algorithm
+- `handlers/message_router.py`: Message routing and shadow-reject delivery
+- `ai_manager.py`: Cyberchad triggers, cooldowns, voice roast prompt and context builder
+- `cyberchad_tts.py`: Voice synthesis engine
+- `russian_roulette_pvp.py`: Russian roulette commands and lobby
+- `dice_duel_engine.py`: Dice duel commands and lobby
+- `common/bot_helpers.py`: AI counter-reaction handler
+- `stats_v2.py`: Database sentiment and forensics analytics
+- `tests/`: Automated pytest suites

@@ -1,6 +1,8 @@
 from common.anon_identity import get_anon_id
 import asyncio
 import time
+import re
+from functools import lru_cache
 from aiogram import Bot
 from shared_state import *
 try:
@@ -21,6 +23,9 @@ try:
     import ujson as json
 except ImportError:
     import json
+
+ROAST_COOLDOWN = 300  # 5 minutes cooldown for auto-roast
+
 def _normalize_quote_file_type(raw_type: str | None) -> str:
     if not raw_type: return 'file'
     kind = str(raw_type).lower().strip()
@@ -344,9 +349,101 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             'post_num': pnum,
             'board_id': board_id
         })
-def _format_post_text(content: dict, msg_type: str) -> str | None:
+_MEDIA_DESC_CACHE: dict[str, dict] = {}
+
+RE_HTML_TAGS = re.compile(r'<[^>]+>')
+RE_MULTI_NEWLINES = re.compile(r'\n{2,}')
+
+_MEDIA_ERROR_TAGS = frozenset({
+    'error', 'download_failed', 'dead', 'no_tags', 'format_unsupported',
+    'error_no_tags', 'error_too_large', 'unknown', 'none', 'null'
+})
+
+@lru_cache(maxsize=16384)
+def _get_cached_anon_name(author_id: int, stream_lang: str) -> str:
+    aid = get_anon_id(author_id, stream=stream_lang)
+    if stream_lang == 'en':
+        return f"Anon [{aid}]"
+    elif stream_lang == 'jp':
+        return f"名無し [{aid}]"
+    return f"Анон [{aid}]"
+
+def _format_media_context(media_meta: dict | None) -> str | None:
+    if not media_meta or not isinstance(media_meta, dict):
+        return None
+
+    if 'formatted' in media_meta:
+        return media_meta['formatted']
+
+    raw_desc = media_meta.get('description')
+    raw_tags = media_meta.get('tags')
+
+    # Sanitize description
+    desc = ""
+    if raw_desc and isinstance(raw_desc, str):
+        d_clean = raw_desc.strip()
+        d_lower = d_clean.lower()
+        if (d_lower not in _MEDIA_ERROR_TAGS
+                and not d_lower.startswith('error')
+                and 'download_failed' not in d_lower):
+            desc = d_clean
+
+    # Sanitize tags
+    clean_tags_list = []
+    if raw_tags:
+        if isinstance(raw_tags, str):
+            tag_items = [t.strip() for t in raw_tags.split(',') if t.strip()]
+        elif isinstance(raw_tags, (list, tuple, set)):
+            tag_items = [str(t).strip() for t in raw_tags if str(t).strip()]
+        else:
+            tag_items = []
+
+        for t in tag_items:
+            t_lower = t.lower()
+            if t_lower in _MEDIA_ERROR_TAGS or t_lower.startswith('error') or 'download_failed' in t_lower:
+                continue
+            clean_tags_list.append(t)
+
+    tags_str = ", ".join(clean_tags_list)
+
+    if not desc and not tags_str:
+        media_meta['formatted'] = None
+        return None
+
+    # Truncate descriptions to ~150 chars (`...`) and tags to ~80 chars
+    d_short = desc[:150].rstrip() + ("..." if len(desc) > 150 else "") if desc else ""
+    t_short = tags_str[:80].rstrip() + ("..." if len(tags_str) > 80 else "") if tags_str else ""
+
+    if d_short and t_short:
+        desc_and_tags = f"{d_short}. Теги: {t_short}"
+    elif d_short:
+        desc_and_tags = d_short
+    else:
+        desc_and_tags = t_short
+
+    formatted = f"[Фото: {desc_and_tags}]"
+    media_meta['formatted'] = formatted
+    return formatted
+
+def _format_post_text(content: dict, msg_type: str, media_meta: dict | None = None) -> str | None:
+    if not isinstance(content, dict):
+        return None
+
     text = content.get('text') or content.get('caption') or ""
-    text = re.sub(r'<[^>]+>', '', text).strip()
+    if isinstance(text, str) and text:
+        text = RE_HTML_TAGS.sub('', text).strip() if '<' in text else text.strip()
+    else:
+        text = ""
+
+    if media_meta:
+        media_annotation = media_meta.get('formatted')
+        if media_annotation is None and ('description' in media_meta or 'tags' in media_meta):
+            media_annotation = _format_media_context(media_meta)
+    else:
+        media_annotation = None
+
+    if media_annotation:
+        return f"{media_annotation} {text}" if text else media_annotation
     if text:
         return text
     if msg_type in ('photo', 'video', 'document', 'animation', 'media_group', 'sticker', 'voice', 'video_note'):
@@ -356,39 +453,24 @@ def _format_post_text(content: dict, msg_type: str) -> str | None:
 def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
     name = content.get('username') or content.get('name') or content.get('author_name')
     if not name:
-        if not lang:
-            lang = 'en' if board_id == 'int' else 'ru'
+        stream_lang = lang or ('en' if board_id == 'int' else 'ru')
         author_id = post.get('author_id')
         if author_id and author_id != 0:
-            aid = get_anon_id(author_id, stream=lang)
-            if lang == 'en':
-                name = f"Anon [{aid}]"
-            elif lang == 'jp':
-                name = f"名無し [{aid}]"
-            else:
-                name = f"Анон [{aid}]"
+            name = _get_cached_anon_name(author_id, stream_lang)
         else:
-            if lang == 'en':
-                name = "Anon"
-            elif lang == 'jp':
-                name = "名無し"
-            else:
-                name = "Анон"
+            name = "Anon" if stream_lang == 'en' else ("名無し" if stream_lang == 'jp' else "Анон")
     return name
 
 def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None) -> str:
     reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
-    reply_suffix = ""
-    if reply_to:
-        if not lang:
-            lang = 'en' if board_id == 'int' else 'ru'
-        if lang == 'en':
-            reply_suffix = f" (reply to #{reply_to})"
-        elif lang == 'jp':
-            reply_suffix = f" (>>{reply_to})"
-        else:
-            reply_suffix = f" (Ответ на #{reply_to})"
-    return reply_suffix
+    if not reply_to:
+        return ""
+    stream_lang = lang or ('en' if board_id == 'int' else 'ru')
+    if stream_lang == 'en':
+        return f" (reply to #{reply_to})"
+    elif stream_lang == 'jp':
+        return f" (>>{reply_to})"
+    return f" (Ответ на #{reply_to})"
 
 
 async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
@@ -941,4 +1023,23 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
         return f"{circle}{prefix}レス番 {post_num_formatted}"
     else:
         return f"{circle}{prefix}Пост №{post_num_formatted}"
+
+
+async def get_reply_target(message):
+    """Resolves the author user_id of the message being replied to."""
+    if not message or not getattr(message, 'reply_to_message', None):
+        return None
+    try:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        async with db.execute(
+            "SELECT author_id FROM PostCopies JOIN Posts ON PostCopies.post_num = Posts.post_num WHERE recipient_id = ? AND message_id = ?",
+            (message.chat.id, message.reply_to_message.message_id)
+        ) as c:
+            row = await c.fetchone()
+            if row:
+                return row[0]
+    except Exception:
+        pass
+    return None
 

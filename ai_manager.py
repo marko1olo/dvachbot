@@ -24,7 +24,12 @@ from common.database import get_post_by_num, get_pool, delete_post_by_num
 from common.text_utils import clean_html_tags, clean_ai_thinking, strip_thinking_tags
 from bot_helpers import delete_message_after_delay, check_cooldown, _activate_mode, disable_mode_after_delay
 from common.task_manager import spawn_task
-from post_helpers import create_post, _format_post_text, _get_author_name, _get_reply_suffix, update_post_content, format_header
+import operator
+from post_helpers import (
+    create_post, _format_post_text, _format_media_context, _MEDIA_DESC_CACHE,
+    _get_author_name, _get_reply_suffix, _get_cached_anon_name, RE_MULTI_NEWLINES,
+    _MEDIA_ERROR_TAGS, update_post_content, format_header
+)
 from delivery_manager import enqueue_board_message
 
 import re
@@ -48,6 +53,12 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+runtime_logger = getattr(shared_state, 'runtime_logger', logging.getLogger("runtime"))
+
+# Idempotency guard: prevents the same voice/audio file_id from being roasted multiple times
+# concurrently (e.g. from gap worker re-fetching + normal delivery path)
+_ROAST_IN_FLIGHT: set[str] = set()
+
 router = Router()
 
 CONTEXTUAL_REPLIES_ENABLED = True
@@ -204,7 +215,29 @@ async def _safe_send_voice_roast(
     except TelegramBadRequest as err:
         err_msg = str(err).lower()
         if "voice_messages_forbidden" in err_msg or "voices_forbidden" in err_msg:
-            logger.warning(f"⚠️ [{log_prefix}] Отправка ГС запрещена настройками приватности чата/пользователя: {err}")
+            logger.info(f"ℹ️ [{log_prefix}] Отправка ГС запрещена настройками приватности чата, переключаемся на send_audio...")
+            try:
+                audio_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
+                if hasattr(message, "bot") and message.bot and hasattr(message, "chat") and message.chat:
+                    await message.bot.send_audio(
+                        chat_id=message.chat.id,
+                        audio=audio_file,
+                        caption=caption,
+                        title="Разъёб от Киберчеда",
+                        performer="Киберчед",
+                        reply_to_message_id=reply_to_message_id,
+                        allow_sending_without_reply=True
+                    )
+                    return True
+                elif hasattr(message, "reply_audio"):
+                    await message.reply_audio(audio_file, caption=caption, title="Разъёб от Киберчеда", performer="Киберчед", allow_sending_without_reply=True)
+                    return True
+                elif hasattr(message, "answer_audio"):
+                    await message.answer_audio(audio_file, caption=caption, title="Разъёб от Киберчеда", performer="Киберчед")
+                    return True
+            except Exception as audio_err:
+                logger.warning(f"⚠️ [{log_prefix}] Не удалось отправить аудио-фолбэк после запрета ГС: {audio_err}")
+                return False
             return False
         if "message to be replied not found" in err_msg or "message to reply not found" in err_msg or "reply message not found" in err_msg:
             logger.debug(f"ℹ️ [{log_prefix}] message_id={reply_to_message_id or getattr(message, 'message_id', None)} не найден (удален/анонимный пост), переходим на answer...")
@@ -216,7 +249,7 @@ async def _safe_send_voice_roast(
     except Exception as err:
         logger.debug(f"ℹ️ [{log_prefix}] reply_voice завершился с ошибкой: {err}")
 
-    # 2. Безопасный Fallback: отправка напрямую в чат через answer_voice
+    # 2. Безопасный Fallback: отправка напрямую в чат через answer_voice / send_voice / send_audio
     try:
         voice_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
         if hasattr(message, "answer_voice"):
@@ -228,7 +261,23 @@ async def _safe_send_voice_roast(
     except TelegramBadRequest as fb_err:
         fb_msg = str(fb_err).lower()
         if "voice_messages_forbidden" in fb_msg or "voices_forbidden" in fb_msg:
-            logger.warning(f"⚠️ [{log_prefix}] Отправка ГС запрещена настройками чата: {fb_err}")
+            logger.info(f"ℹ️ [{log_prefix}] Отправка ГС запрещена настройками чата, отправляем аудио-фолбэк...")
+            try:
+                audio_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
+                if hasattr(message, "bot") and message.bot and hasattr(message, "chat") and message.chat:
+                    await message.bot.send_audio(
+                        chat_id=message.chat.id,
+                        audio=audio_file,
+                        caption=caption,
+                        title="Разъёб от Киберчеда",
+                        performer="Киберчед"
+                    )
+                    return True
+                elif hasattr(message, "answer_audio"):
+                    await message.answer_audio(audio_file, caption=caption, title="Разъёб от Киберчеда", performer="Киберчед")
+                    return True
+            except Exception as audio_err:
+                logger.warning(f"⚠️ [{log_prefix}] Не удалось отправить аудио-фолбэк в fallback блоке: {audio_err}")
         else:
             logger.warning(f"⚠️ [{log_prefix}] Не удалось отправить answer_voice: {fb_err}")
     except TelegramForbiddenError as fb_err:
@@ -376,6 +425,14 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         duration = int(getattr(media_obj, 'duration', 0) or 0)
         file_id = getattr(media_obj, 'file_id', None)
 
+        # Idempotency guard: skip if this exact file is already being roasted
+        if not file_id:
+            return
+        if file_id in _ROAST_IN_FLIGHT:
+            logger.debug(f"[STT] file_id={file_id} already in flight — skipping duplicate roast")
+            return
+        _ROAST_IN_FLIGHT.add(file_id)
+
         transcript = None
         audio_bytes = None
 
@@ -395,75 +452,42 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         # Адаптивный таймаут для STT: базово 60с, до 300с для длинных войсов (5+ минут)
         stt_timeout = max(60.0, min(300.0, float(duration) * 0.8 + 45.0))
 
-        # 2. Попытка 1: Groq Whisper STT (whisper-large-v3-turbo) с ротацией ключей
+        # 2. Попытка 1 (Основная): Прямой мультимодальный STT + Роаст через Gemini 3.5 / 3.1 Flash-Lite за 1 запрос
+        transcript = ""
+        roast = ""
         try:
-            from common.token_pool import groq_pool
-            groq_tokens = groq_pool.get_all_active_tokens() or getattr(groq_pool, "tokens", []) or []
-            if not groq_tokens and os.getenv("GROQ_API_KEY"):
-                groq_tokens = [os.getenv("GROQ_API_KEY")]
-
-            for token in groq_tokens:
-                if not token:
-                    continue
-                try:
-                    ext = ".mp4" if is_video_note else ".ogg"
-                    filename = f"speech{ext}"
-                    headers = {"Authorization": f"Bearer {token}"}
-                    files = {"file": (filename, audio_bytes, "application/octet-stream")}
-                    data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
-                    
-                    async with httpx.AsyncClient(timeout=stt_timeout) as client:
-                        resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
-                        if resp.status_code == 200:
-                            res_data = resp.json()
-                            candidate_text = res_data.get("text", "").strip()
-                            if candidate_text:
-                                transcript = candidate_text
-                                logger.info(f"✅ [STT] Успешная расшифровка через Groq Whisper ({duration}с, {len(transcript)} симв.)")
-                                break
-                        elif resp.status_code in (413, 429, 500, 502, 503):
-                            logger.warning(f"⚠️ [STT] Groq status {resp.status_code}, пробуем следующий ключ...")
-                            continue
-                except httpx.TimeoutException:
-                    logger.warning(f"⚠️ [STT] Groq Timeout ({stt_timeout}s) для {duration}с аудио. Переход на Gemini...")
-                    break
-                except Exception as groq_err:
-                    logger.warning(f"⚠️ [STT] Ошибка запроса к Groq: {groq_err}")
-                    continue
-        except Exception as e:
-            logger.warning(f"⚠️ [STT] Ошибка пула Groq: {e}")
-
-        # 3. Попытка 2: Gemini Multimodal Audio Fallback (нативная поддержка длинных аудио до 9.5 часов)
-        if not transcript:
-            try:
-                import base64
-                from common.token_pool import google_pool
-                from summarize import _load_google_keys
-                google_keys = getattr(google_pool, "tokens", []) or _load_google_keys()
-                proxy_url = os.getenv("PROXY_URL") or None
-                if google_keys:
-                    b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
-                    mime_type = "video/mp4" if is_video_note else "audio/ogg"
-                    gemini_payload = {
-                        "contents": [
-                            {
-                                "parts": [
-                                    {
-                                        "inlineData": {
-                                            "mimeType": mime_type,
-                                            "data": b64_audio
-                                        }
-                                    },
-                                    {
-                                        "text": "Расшифруй это голосовое сообщение / видеозапись дословно на русском языке. Запиши строго только расшифрованный текст, без комментариев, пояснений, кавычек и вступительных фраз."
-                                    }
-                                ]
-                            }
+            import base64
+            from common.token_pool import google_pool
+            from summarize import _load_google_keys
+            google_keys = (google_pool.get_all_active_tokens() if hasattr(google_pool, "get_all_active_tokens") else []) or getattr(google_pool, "tokens", []) or _load_google_keys()
+            proxy_url = os.getenv("PROXY_URL") or None
+            if google_keys:
+                b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
+                mime_type = "video/mp4" if is_video_note else "audio/ogg"
+                voice_prompt = (
+                    "Ты — агрессивный, циничный, мизантропичный анон из /b/ Двача.\n"
+                    "Послушай прикрепленное голосовое сообщение / кружочек.\n\n"
+                    "Выполни две задачи строго в указанном формате:\n"
+                    "1. В блоке ТРАНСКРИПЦИЯ: дословно расшифруй всё, что сказал автор на языке оригинала (без вступительных слов и пояснений). Если в записи только тишина, шум или неразборчивое мычание, напиши [Тишина/Невнятно].\n"
+                    "2. В блоке ВЕРДИКТ: напиши 1-2 ядовитых, смешных предложения, жестко разнеся автора за его слова, интонацию, голос и логику. Используй сочный двачерский сленг и мат по делу. Запрещены кавычки вокруг ответа, приветствия и морализаторство.\n\n"
+                    "ФОРМАТ ОТВЕТА (СТРОГО СОБЛЮДАЙ СТРУКТУРУ):\n"
+                    "ТРАНСКРИПЦИЯ: <дословный текст речи автора>\n"
+                    "ВЕРДИКТ: <жесткий уничтожающий роаст автора>\n"
+                )
+                gemini_payload = {
+                    "contents": [{
+                        "parts": [
+                            {"inlineData": {"mimeType": mime_type, "data": b64_audio}},
+                            {"text": voice_prompt}
                         ]
-                    }
-                    gemini_timeout = max(45.0, min(240.0, float(duration) * 0.7 + 30.0))
-                    for gkey in google_keys:
-                        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gkey}"
+                    }],
+                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800}
+                }
+                gemini_timeout = max(35.0, min(180.0, float(duration) * 0.7 + 25.0))
+                models_to_try = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+                for gkey in google_keys:
+                    for model_name in models_to_try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gkey}"
                         for proxy in [None, proxy_url] if proxy_url else [None]:
                             try:
                                 async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=gemini_timeout) as client:
@@ -472,29 +496,91 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                                         gdata = resp.json()
                                         parts = gdata.get("candidates", [{}])[0].get("content", {}).get("parts", [])
                                         if parts and "text" in parts[0]:
-                                            candidate_text = parts[0]["text"].strip()
-                                            if candidate_text and candidate_text != "[Тишина]" and len(candidate_text) > 1:
-                                                transcript = candidate_text
-                                                logger.info(f"✅ [STT] Успешная расшифровка через Gemini Audio ({duration}с, {len(transcript)} симв.)")
-                                                break
+                                            raw_voice_res = parts[0]["text"].strip()
+                                            # Парсинг ТРАНСКРИПЦИИ и ВЕРДИКТА
+                                            t_part, r_part = "", ""
+                                            for line in raw_voice_res.split("\n"):
+                                                sline = line.strip()
+                                                if sline.upper().startswith("ТРАНСКРИПЦИЯ:") or sline.upper().startswith("TRANSCRIPT:"):
+                                                    t_part += sline.split(":", 1)[1].strip() + " "
+                                                elif sline.upper().startswith("ВЕРДИКТ:") or sline.upper().startswith("РОАСТ:") or sline.upper().startswith("ROAST:"):
+                                                    r_part += sline.split(":", 1)[1].strip() + " "
+                                                elif r_part:
+                                                    r_part += sline + " "
+                                                elif t_part:
+                                                    t_part += sline + " "
+                                            
+                                            transcript = t_part.strip() or raw_voice_res
+                                            if r_part.strip():
+                                                roast = clean_html_tags(clean_ai_thinking(r_part.strip())).strip()
+                                            logger.info(f"✅ [Voice 1-Step] Успешная обработка через {model_name} (STT: {len(transcript)} симв., Roast: {len(roast)} симв.)")
+                                            break
                                     elif resp.status_code == 429:
                                         break
                             except Exception:
                                 continue
-                        if transcript:
+                        if transcript and roast:
                             break
-            except Exception as gemini_stt_err:
-                logger.warning(f"⚠️ [STT] Ошибка Gemini STT фолбэка: {gemini_stt_err}")
+                    if transcript and roast:
+                        break
+        except Exception as gemini_voice_err:
+            logger.warning(f"⚠️ [Voice] Ошибка прямого Gemini Voice пайплайна: {gemini_voice_err}")
+
+        # 3. Попытка 2 (Резервный Fallback): Groq Whisper STT + Text LLM Roast
+        if not transcript:
+            try:
+                from common.token_pool import groq_pool
+                groq_tokens = groq_pool.get_all_active_tokens() or getattr(groq_pool, "tokens", []) or []
+                if not groq_tokens and os.getenv("GROQ_API_KEY"):
+                    groq_tokens = [os.getenv("GROQ_API_KEY")]
+
+                for token in groq_tokens:
+                    if not token:
+                        continue
+                    try:
+                        ext = ".mp4" if is_video_note else ".ogg"
+                        filename = f"speech{ext}"
+                        headers = {"Authorization": f"Bearer {token}"}
+                        files = {"file": (filename, audio_bytes, "application/octet-stream")}
+                        data = {
+                            "model": "whisper-large-v3-turbo",
+                            "response_format": "json",
+                            "prompt": "Разговорная речь на русском языке, без субтитров и титров."
+                        }
+                        
+                        async with httpx.AsyncClient(timeout=stt_timeout) as client:
+                            resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
+                            if resp.status_code == 200:
+                                res_data = resp.json()
+                                candidate_text = res_data.get("text", "").strip()
+                                # Фильтрация Whisper-галлюцинаций (Дима Торжок, Синецкая и т.д.)
+                                candidate_lower = candidate_text.lower()
+                                if any(h in candidate_lower for h in ("дима торжок", "dimatorzhok", "dima torzhok", "субтитры сделал", "редактор субтитров", "синецкая")):
+                                    candidate_text = ""
+                                if candidate_text:
+                                    transcript = candidate_text
+                                    logger.info(f"✅ [STT Fallback] Успешная расшифровка через Groq Whisper ({duration}с, {len(transcript)} симв.)")
+                                    break
+                            elif resp.status_code in (413, 429, 500, 502, 503):
+                                logger.warning(f"⚠️ [STT Fallback] Groq status {resp.status_code}, пробуем следующий ключ...")
+                                continue
+                    except httpx.TimeoutException:
+                        logger.warning(f"⚠️ [STT Fallback] Groq Timeout ({stt_timeout}s) для {duration}с аудио.")
+                        break
+                    except Exception as groq_err:
+                        logger.warning(f"⚠️ [STT Fallback] Ошибка запроса к Groq: {groq_err}")
+                        continue
+            except Exception as e:
+                logger.warning(f"⚠️ [STT Fallback] Ошибка пула Groq: {e}")
 
         # Если STT не отработал — молча выходим
         if not transcript:
             logger.warning(f"⚠️ [STT] Не удалось расшифровать аудио ({duration} сек)")
             return
 
-        # 4. Генерация уничтожающего двачевского роаста
-        roast = None
-        transcript_for_roast = transcript[:2000]
-        if transcript:
+        # 4. Если роаст ещё не сгенерирован (через Fallback STT) — генерируем через текстовую LLM
+        if not roast and transcript:
+            transcript_for_roast = transcript[:2000]
             try:
                 prompt = (
                     "Ты — агрессивный, циничный, мизантропичный анон из /b/ Двача. "
@@ -508,7 +594,6 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                     "5. Используй сочный двачерский сленг и мат по делу.\n\n"
                     f"Слова автора: «{transcript_for_roast}»"
                 )
-                from common.token_pool import groq_pool
                 raw_roast = await summarize_text_with_hf(prompt, f"Слова автора: «{transcript_for_roast}»", model_preference="persona")
                 if raw_roast and len(raw_roast.strip()) > 5:
                     roast = clean_html_tags(clean_ai_thinking(raw_roast)).strip()
@@ -520,6 +605,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 "засунь свое ГС себе в жопу и напиши текстом, шепелявый"
             ])
             roast = random.choice(roasts)
+
 
         icon = "📹" if is_video_note else "🎙"
         title = "Кружочек" if is_video_note else "Голосовое сообщение"
@@ -651,6 +737,10 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 logger.warning(f"⚠️ Ошибка рассылки голосового роаста ГС на доску: {voice_pub_err}")
     except Exception as e:
         logger.error(f"❌ Ошибка в transcribe_and_roast_voice_note: {e}", exc_info=True)
+    finally:
+        # Release the idempotency lock regardless of outcome
+        if 'file_id' in dir() or 'file_id' in locals():
+            _ROAST_IN_FLIGHT.discard(file_id)
 
 
 MUSIC_EXTENSIONS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.wma', '.aiff', '.alac')
@@ -795,37 +885,56 @@ def extract_music_metadata(message: Message) -> dict:
 
 
 MUSIC_ROAST_SYSTEM_PROMPT = (
-    "Ты — ультра-токсичный, циничный, мизантропичный музыкальный критик и илитный сноб из раздела /b/ Двача. "
-    "Твоя задача — максимально жестко, уничтожающе и с ядовитым двачерским сарказмом разнести музыкальный вкус анона, "
-    "приславшего этот трек.\n"
-    "Проанализируй исполнителя, название трека, звучание/жанр (дрилл, фонк, дед-инсайд рэп, попса, k-pop, кальянный рэп, шансон, аниме-ост, думающий автотюн-шлак, говнорок) "
-    "и распознанный фрагмент текста/семпла.\n\n"
-    "СТРОГИЕ ПРАВИЛА И ЗАПРЕТЫ:\n"
-    "1. Запрещены любые приветствия, преамбулы и вежливые вступления (НЕЛЬЗЯ: 'Вот моя рецензия:', 'Привет', 'Слушай сюда', 'Ну что сказать').\n"
-    "2. Запрещены оговорки, морализаторство, извинения, дисклеймеры и политкорректность.\n"
-    "3. Запрещены кавычки вокруг всего ответа.\n"
-    "4. Обращайся к автору строго на 'ты' (Ты — ...).\n"
-    "5. Напиши 1-2 концентрированных, убийственно едких абзаца рецензии, а в самом конце на отдельной строке поставь вердикт и оценку по шкале говноедства в формате: 'ОЦЕНКА: <оценка>/10 💩 (<краткий диагноз>)'.\n"
-    "6. Используй аутентичный двачерский сленг и отборный мат по делу."
+    "Кто-то на /b/ прислал трек. Послушай. Твоя задача — ЛИЧНЫЙ УДАР прямо в ебало человеку который это прислал.\n"
+    "Говори на «ты», грубо, без разогрева. Он сидит и читает — сделай так, чтобы у него горело.\n"
+    "МАТ ОБЯЗАТЕЛЕН — без него текст слабый и беззубый. Хуячь без цензуры, но по делу.\n\n"
+    "Примеры ударов (с матом как надо):\n"
+    "- Рэп про деньги/понты → ты греешь своё нищебродское эго чужими деньгами из клипа, у тебя в кармане хуй да маленько\n"
+    "- Депрессивный/дед-инсайд → ты не страдаешь, ты просто ленивый мудак которому влом встать с дивана\n"
+    "- Кальянный/пацанский → в реале ты облизываешь яйца первому кто посмотрит на тебя косо, петушок комнатный\n"
+    "- Поп/K-pop/тикток → ты пустое место, в черепке буквально один клип и те чужой\n"
+    "- Техно/инструментал → понтуешься вкусом, хотя сам не знаешь чем бас от пердежа отличается\n"
+    "- Патриотика → диванный вояка, чья вся война — срать в чате и репостить военкоров\n\n"
+    "2-3 предложения. Каждое — удар. Не объясняй, не рефлексируй, просто бей.\n"
+    "Последняя строка: ОЦЕНКА: <число>/10 💩 (<приговор человеку, не треку>)"
 )
+
+# Rate limiting: хранит timestamps отправок треков по user_id для защиты от спама
+# { user_id: [timestamp1, timestamp2, ...] }
+_music_roast_user_times: dict[int, list[float]] = {}
+MUSIC_ROAST_RATE_LIMIT = 8          # треков в час максимум
+MUSIC_ROAST_RATE_WINDOW_SEC = 3600  # окно (1 час)
+MUSIC_ROAST_FLOOD_RESPONSES = [
+    "Слышь, пидор, ты восьмой трек за час слить пришёл? Даже мусоровоз так не воняет. Иди отдохни, дай ушам людей передышку.",
+    "Восемь треков за час — это уже не вкус, это болезнь. Тебя слушать невозможно, тебя читать невозможно, ты невозможен.",
+    "Стоп, ты опять? Девять треков в час — ты вообще понимаешь, что это симптом? Сходи к врачу, пока доктор ещё слышит.",
+    "Слушай, я понимаю, у тебя нет друзей и говорить не с кем. Но засирать борду десятью треками в час — это уже перебор даже для тебя.",
+    "Ты что, плейлистом отстреливаешься от реальности? Уже столько треков, что у меня уши вянут, а у тебя самооценка не растёт.",
+    "Продолжай, продолжай. Может на пятнадцатом треке кто-нибудь наконец скажет тебе, что ты молодец. Спойлер: нет.",
+    "Флуд треками — это новый тип аутизма. Зафиксировано. Можешь выдыхать, следующую пачку приму через час.",
+]
 
 DEFAULT_MUSIC_ROASTS = [
     (
-        "Ты на полном серьезе включил это убожество и решил, что другим анонам не все равно на твой дегенеративный вкус? "
-        "Бессвязное бубнение под три притопа два прихлопа, сведенное глухим школьником на коленке.",
-        "10/10 💩 (Шедевр мочи)"
+        "Ты присылаешь этот кал так, будто ждёшь аплодисментов — но единственное, что ты заслужил, это пинок под зад и напоминание, "
+        "что вкус не появляется сам по себе, его нужно развивать, а не гнобить людей своей помойкой. "
+        "Сними наушники, омежка, выйди на улицу — даже бомжи у падика слушают лучше.",
+        "0/10 💩 (гимн сыча с нулевой самооценкой и бесконечным временем)"
     ),
     (
-        "Типичный автотюновый высер для малолетних тиктокеров без намека на слух и смысл. "
-        "Твой плейлист нужно немедленно сжечь в биореакторе вместе с наушниками.",
-        "9/10 💩 (Ушной СПИД)"
+        "Ты отправил это — и в этот момент где-то во вселенной умерла нота. "
+        "Под этот автотюновый понос ты, наверное, воображаешь себя кем-то — но мы-то видим реального тебя: "
+        "мамины дошираки, Redmi в трещинах, и влажные фантазии о жизни, которой у тебя никогда не будет.",
+        "0/10 💩 (высер для нищих позёров, которые называют это «вайбом»)"
     ),
     (
-        "Такое чувство, что исполнитель записал этот трек сидя на унитазе в приступе тяжелой диареи. "
-        "А ты это радостно хаваешь и еще на доску тащишь.",
-        "10/10 💩 (Потомственный говноед)"
+        "Этот унылый говнарь послал треком SOS — мол, оцените, я тоже чувствую. "
+        "Чувствуем. Чувствуем, что тебе нужна не музыка, а нормальный режим дня и хоть один живой друг. "
+        "Твой удел — пердеть в продавленный диван и называть это «богатым внутренним миром».",
+        "0/10 💩 (диагноз: хроническое говноедство с осложнениями)"
     ),
 ]
+
 
 def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
     """
@@ -898,6 +1007,40 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
     if not is_audio and not is_music_doc:
         return
 
+    # --- RATE LIMIT: >8 треков в час → голосовая заглушка Киберчеда ---
+    sender_id = getattr(getattr(message, 'from_user', None), 'id', None) or 0
+    if sender_id:
+        import time as _time
+        _now = _time.monotonic()
+        _times = _music_roast_user_times.setdefault(sender_id, [])
+        # Чистим старые записи за пределами окна
+        _music_roast_user_times[sender_id] = [t for t in _times if _now - t < MUSIC_ROAST_RATE_WINDOW_SEC]
+        if len(_music_roast_user_times[sender_id]) >= MUSIC_ROAST_RATE_LIMIT:
+            # Пишем что сколько времени до сброса
+            _remaining = int(MUSIC_ROAST_RATE_WINDOW_SEC - (_now - _music_roast_user_times[sender_id][0]))
+            _mins_left = max(1, _remaining // 60)
+            stub_text = random.choice(MUSIC_ROAST_FLOOD_RESPONSES)
+            stub_text += f" Следующий приму через ~{_mins_left} мин."
+            try:
+                await _safe_send_roast(message, f"🎵 {stub_text}", log_prefix="Music Flood Stub")
+            except Exception:
+                pass
+            try:
+                from common.tts_engine import synthesize_cyberchad_voice_with_meta
+                stub_voice_res = await synthesize_cyberchad_voice_with_meta(stub_text)
+                stub_voice_bytes = stub_voice_res[0] if isinstance(stub_voice_res, tuple) else stub_voice_res
+                if stub_voice_bytes:
+                    await _safe_send_voice_roast(
+                        message, stub_voice_bytes,
+                        caption="🔇 Хватит уже",
+                        log_prefix="Music Flood Voice"
+                    )
+            except Exception as _tts_err:
+                logger.debug(f"[Music Flood] TTS error: {_tts_err}")
+            return
+        # Записываем текущий запрос
+        _music_roast_user_times[sender_id].append(_now)
+
     try:
         meta = extract_music_metadata(message)
         artist = meta["artist"]
@@ -934,77 +1077,52 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
                 if "file is too big" in str(dl_err).lower() or "too large" in str(dl_err).lower():
                     sample_note = "[Файл >20MB — семпл не скачан]"
 
-        # 2. Транскрипция текста песни/семпла через STT (Whisper + Gemini fallback)
-        transcript = None
-        if audio_bytes:
-            stt_timeout = max(60.0, min(300.0, float(duration) * 0.8 + 45.0))
-            # Попытка 1: Groq Whisper
+        # 2. Прямой 1-Step Мультимодальный анализ и Роаст через Gemini (как в Voice Note Roast)
+        transcript = ""
+        roast_text = None
+        rating = None
+
+        if audio_bytes and len(audio_bytes) < 20 * 1024 * 1024:
             try:
-                from common.token_pool import groq_pool
-                groq_tokens = getattr(groq_pool, "tokens", []) or (groq_pool.get_all_active_tokens() if hasattr(groq_pool, "get_all_active_tokens") else []) or []
-                if not groq_tokens and os.getenv("GROQ_API_KEY"):
-                    groq_tokens = [os.getenv("GROQ_API_KEY")]
-
-                ext = os.path.splitext(filename.lower())[1] if filename else ".mp3"
-                if not ext or ext not in MUSIC_EXTENSIONS:
-                    ext = ".mp3"
-
-                for token in groq_tokens:
-                    if not token:
-                        continue
-                    try:
-                        headers = {"Authorization": f"Bearer {token}"}
-                        files = {"file": (f"track{ext}", audio_bytes, mime_type)}
-                        data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
-                        async with httpx.AsyncClient(timeout=stt_timeout) as client:
-                            resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
-                            if resp.status_code == 200:
-                                res_data = resp.json()
-                                candidate_text = res_data.get("text", "").strip()
-                                if candidate_text:
-                                    transcript = candidate_text
-                                    logger.info(f"✅ [Music STT] Успешная расшифровка через Groq Whisper ({len(transcript)} симв.)")
-                                    break
-                            elif resp.status_code in (413, 429, 500, 502, 503):
-                                continue
-                    except httpx.TimeoutException:
-                        break
-                    except Exception as groq_err:
-                        logger.warning(f"⚠️ [Music STT] Groq error: {groq_err}")
-                        continue
-            except Exception as e:
-                logger.warning(f"⚠️ [Music STT] Groq pool error: {e}")
-
-            # Попытка 2: Gemini Audio Fallback
-            if not transcript:
-                try:
-                    import base64
-                    from common.token_pool import google_pool
-                    from summarize import _load_google_keys
-                    google_keys = getattr(google_pool, "tokens", []) or (google_pool.get_all_active_tokens() if hasattr(google_pool, "get_all_active_tokens") else []) or _load_google_keys()
-                    proxy_url = os.getenv("PROXY_URL") or None
-                    if google_keys:
-                        b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
-                        gemini_payload = {
-                            "contents": [
-                                {
-                                    "parts": [
-                                        {
-                                            "inlineData": {
-                                                "mimeType": mime_type if mime_type.startswith("audio/") else "audio/mpeg",
-                                                "data": b64_audio
-                                            }
-                                        },
-                                        {
-                                            "text": "Расшифруй слова/текст этой песни или аудиозаписи дословно на языке оригинала. Запиши строго только распознанный текст песни или фрагмента, без комментариев, пояснений, кавычек и вступительных фраз. Если это инструментал без слов, напиши [Инструментал]."
-                                        }
-                                    ]
-                                }
+                import base64
+                from common.token_pool import google_pool
+                from summarize import _load_google_keys
+                google_keys = (google_pool.get_all_active_tokens() if hasattr(google_pool, "get_all_active_tokens") else []) or getattr(google_pool, "tokens", []) or _load_google_keys()
+                proxy_url = os.getenv("PROXY_URL") or None
+                if google_keys:
+                    b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
+                    m_type = mime_type if (mime_type and mime_type.startswith("audio/")) else "audio/mpeg"
+                    music_prompt = (
+                        f"Кто-то на /b/ прислал трек «{artist} — {title}» ({dur_str}). "
+                        f"Файл: «{filename}».\n"
+                        "Послушай и ударь КОНКРЕТНО в того кто это прислал — не в трек, а в человека.\n"
+                        "Говори на «ты», без разогрева. МАТ ОБЯЗАТЕЛЕН — без него текст слабый и беззубый. Хуячь по делу.\n\n"
+                        "Логика удара под жанр:\n"
+                        "- Рэп/деньги/понты → ты греешь нищебродское эго чужими деньгами, у тебя в кармане хуй да маленько\n"
+                        "- Депрессивный/дед-инсайд → ты не страдаешь, ты просто ленивый мудак которому влом встать с дивана\n"
+                        "- Кальянный/пацанский → в реале ты облизываешь яйца первому кто посмотрит косо, петушок\n"
+                        "- Поп/K-pop/тикток → ты пустой — в голове один клип и тот чужой\n"
+                        "- Техно/инструментал → понтуешься вкусом, а сам не отличишь бас от своего же пердежа\n"
+                        "- Патриотика → диванный вояка, вся война которого — срать в чате и репостить военкоров\n\n"
+                        "ФОРМАТ ОТВЕТА — СТРОГО:\n"
+                        "ТРАНСКРИПЦИЯ: <дословный текст песни на языке оригинала; если инструментал — [Инструментал/Без слов]>\n"
+                        "ВЕРДИКТ: <2-3 предложения прямо в ебало тому кто прислал — жёстко, с матом, без вступлений>\n"
+                        "ШКАЛА: <число 0-10>/10\n"
+                    )
+                    gemini_payload = {
+                        "contents": [{
+                            "parts": [
+                                {"inlineData": {"mimeType": m_type, "data": b64_audio}},
+                                {"text": music_prompt}
                             ]
-                        }
-                        gemini_timeout = max(45.0, min(240.0, float(duration) * 0.7 + 30.0))
-                        for gkey in google_keys:
-                            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gkey}"
+                        }],
+                        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800}
+                    }
+                    gemini_timeout = max(35.0, min(180.0, float(duration) * 0.7 + 25.0))
+                    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+                    for gkey in google_keys:
+                        for model_name in models_to_try:
+                            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gkey}"
                             for proxy in [None, proxy_url] if proxy_url else [None]:
                                 try:
                                     async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=gemini_timeout) as client:
@@ -1013,64 +1131,122 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
                                             gdata = resp.json()
                                             parts = gdata.get("candidates", [{}])[0].get("content", {}).get("parts", [])
                                             if parts and "text" in parts[0]:
-                                                cand = parts[0]["text"].strip()
-                                                if cand and cand not in ("[Тишина]", "[Инструментал]") and len(cand) > 1:
-                                                    transcript = cand
-                                                    logger.info(f"✅ [Music STT] Успешная расшифровка через Gemini Audio ({len(transcript)} симв.)")
+                                                raw_music_res = parts[0]["text"].strip()
+                                                t_part, v_part, s_part = "", "", ""
+                                                for line in raw_music_res.split("\n"):
+                                                    sline = line.strip()
+                                                    if sline.upper().startswith("ТРАНСКРИПЦИЯ:") or sline.upper().startswith("TRANSCRIPT:"):
+                                                        t_part = sline.split(":", 1)[1].strip()
+                                                    elif sline.upper().startswith("ВЕРДИКТ:") or sline.upper().startswith("РОАСТ:") or sline.upper().startswith("VERDICT:"):
+                                                        v_part = sline.split(":", 1)[1].strip()
+                                                    elif sline.upper().startswith("ШКАЛА:") or sline.upper().startswith("ОЦЕНКА:") or sline.upper().startswith("RATING:"):
+                                                        s_part = sline.split(":", 1)[1].strip()
+                                                    elif v_part and not s_part:
+                                                        v_part += " " + sline
+                                                    elif t_part and not v_part and not s_part:
+                                                        t_part += " " + sline
+
+                                                if t_part:
+                                                    transcript = t_part.strip()
+                                                if v_part:
+                                                    roast_text = clean_html_tags(clean_ai_thinking(v_part.strip())).strip()
+                                                if s_part:
+                                                    m_score = re.search(r'(\d+)(?:/10)?', s_part)
+                                                    if m_score:
+                                                        rating = min(10, max(0, int(m_score.group(1))))
+                                                elif raw_music_res:
+                                                    parsed_r, parsed_s = parse_music_roast_response(raw_music_res)
+                                                    if parsed_r: roast_text = parsed_r
+                                                    if parsed_s: rating = parsed_s
+
+                                                if roast_text:
+                                                    if rating is None: rating = random.randint(1, 9)
+                                                    logger.info(f"✅ [Music 1-Step] Успешная мультимодальная рецензия через {model_name} (STT: {len(transcript)} симв., Roast: {len(roast_text)} симв., Оценка: {rating}/10)")
                                                     break
                                         elif resp.status_code == 429:
                                             break
                                 except Exception:
                                     continue
-                            if transcript:
+                            if roast_text:
                                 break
-                except Exception as gemini_err:
-                    logger.warning(f"⚠️ [Music STT] Gemini audio error: {gemini_err}")
+                        if roast_text:
+                            break
+            except Exception as gemini_err:
+                logger.warning(f"⚠️ [Music Roast] Ошибка прямого Gemini 1-Step Music пайплайна: {gemini_err}")
+
+        # 3. Резервный Fallback: Если Gemini недоступен или файл >20MB — текстовый роаст по метаданным
+        if not roast_text:
+            try:
+                lyrics_context = transcript[:1500] if transcript else (sample_note or "[Семпл не скачан]")
+                track_context = f"Исполнитель: «{artist}»\nНазвание трека: «{title}»\nДлительность: {dur_str}\nФрагмент/текст: «{lyrics_context}»"
+                user_msg = f"Отрецензируй и уничтожь следующий музыкальный трек:\n\n{track_context}"
+                raw_ai_roast = await summarize_text_with_hf(MUSIC_ROAST_SYSTEM_PROMPT, user_msg, model_preference="persona")
+                if raw_ai_roast and len(raw_ai_roast.strip()) > 5:
+                    roast_text, rating = parse_music_roast_response(raw_ai_roast)
+            except Exception as ai_err:
+                logger.warning(f"⚠️ [Music Roast] Ошибка генерации текстовой ИИ-рецензии: {ai_err}")
+
+        if not roast_text:
+            logger.warning(f"⚠️ [Music Roast] Не удалось сгенерировать рецензию для «{artist} — {title}»")
+            return
+        if rating is None:
+            rating = random.randint(1, 9)
 
         # Обработка инструментала/отсутствия слов
         if transcript:
             cleaned_trans = transcript.strip()
             if cleaned_trans in ("[Инструментал]", "[Инструментальная музыка]", "[Тишина]", "") or len(cleaned_trans) < 2:
-                lyrics_sample = "[Инструментальный трек / неразборчивый вокал]"
+                lyrics_display = "[Инструментальный трек / неразборчивый вокал]"
             else:
-                lyrics_sample = cleaned_trans[:350]
+                lyrics_display = cleaned_trans[:600] + ("..." if len(cleaned_trans) > 600 else "")
         elif sample_note:
-            lyrics_sample = sample_note
+            lyrics_display = sample_note[:600]
         else:
-            lyrics_sample = "[Инструментальный трек / неразборчивый вокал]"
+            lyrics_display = "[Инструментальный трек / неразборчивый вокал]"
 
-        # 3. Генерация 2ch /b/ музыкальной рецензии
-        roast_text = None
-        rating = None
-        try:
-            track_context = f"Исполнитель: «{artist}»\nНазвание трека: «{title}»\nДлительность: {dur_str}\nФрагмент текста/семпла: «{lyrics_sample}»"
-            user_msg = f"Отрецензируй и уничтожь следующий музыкальный трек:\n\n{track_context}"
-            raw_ai_roast = await summarize_text_with_hf(MUSIC_ROAST_SYSTEM_PROMPT, user_msg, model_preference="persona")
-            if raw_ai_roast and len(raw_ai_roast.strip()) > 5:
-                roast_text, rating = parse_music_roast_response(raw_ai_roast)
-        except Exception as ai_err:
-            logger.warning(f"⚠️ [Music Roast] Ошибка генерации ИИ-рецензии: {ai_err}")
-
-        if not roast_text or not rating:
+        if not roast_text:
             fb_text, fb_rating = random.choice(DEFAULT_MUSIC_ROASTS)
-            if not roast_text:
-                roast_text = fb_text
-            if not rating:
-                rating = fb_rating
+            roast_text = fb_text
+            rating_str = fb_rating
+        else:
+            rating_str = f"{rating}/10 💩"
 
         # Форматирование итогового ответа
         formatted_response = (
-            f"🎵 <b>Трек:</b> {escape_html(artist)} — {escape_html(title)} (<i>{dur_str}</i>)\n"
-            f"📝 <b>Текст / Семпл:</b> <i>«{escape_html(lyrics_sample)}»</i>\n\n"
+            f"🎵 <b>Трек:</b> {escape_html(artist)} — {escape_html(title)} (<i>{dur_str}</i>)\n\n"
             f"🔥 <b>Вердикт /b/ музкритика:</b>\n"
             f"{escape_html(roast_text)}\n\n"
-            f"💩 <b>Шкала говноедства:</b> {escape_html(rating)}"
+            f"💩 <b>Шкала говноедства:</b> {escape_html(rating_str)}"
         )
 
         author_id = getattr(getattr(message, 'from_user', None), 'id', None) or (message.chat.id if getattr(message, 'chat', None) else 0)
         b_data = getattr(shared_state, 'board_data', {}).get(board_id, {})
         author_settings = b_data.get('user_settings', {}).get(author_id, {}) if author_id else {}
         author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop'))
+
+        # Сохранение в базу данных для ТОПа говноедов
+        if author_id:
+            try:
+                from common.database import add_music_roast, get_db
+                if isinstance(rating, int):
+                    score_val = min(10, max(0, rating))
+                else:
+                    score_match = re.search(r'(\d+)\s*/\s*10', str(rating))
+                    score_val = int(score_match.group(1)) if score_match else 0
+                db = await get_db()
+                await add_music_roast(
+                    db,
+                    user_id=author_id,
+                    board_id=board_id,
+                    post_num=post_num,
+                    artist=artist,
+                    title=title,
+                    score=score_val,
+                    rating_text=rating_str,
+                    roast_text=roast_text
+                )
+            except Exception as db_save_err:
+                logger.debug(f"ℹ️ Error logging music roast to DB: {db_save_err}")
 
         # Определяем target_msg_id для точного ответа на пост автора в чате
         target_msg_id = None
@@ -1175,6 +1351,214 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
         logger.error(f"❌ [Music Roast] Ошибка в handle_music_roast: {e}", exc_info=True)
 
 
+_BOARD_FIGHT_TRACKER: dict[str, list[tuple[float, int, str, int]]] = {}
+_LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION: dict[str, float] = {}
+_LAST_CYBERCHAD_INTERVENTION: dict[str, float] = _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION
+_LAST_DIRECT_ROAST_USER_TS: dict[tuple[str, int], float] = {}
+
+CYBERCHAD_FIGHT_INTERVENTION_PROMPT = (
+    "Ты — Киберчед, легендарный альфа-анон из /b/ Двача. "
+    "В чате разгорелся тупой омежий срач между анонами. "
+    "Твоя задача — вломиться в спор и одной сочной, брутальной, ядовитой репликой (2-3 коротких предложения) "
+    "размазать обоих клоунов по стенке, высмеяв их кукареканье, девичьи визги и то, какими жалкими петухами они выглядят со стороны.\n\n"
+    "СТРОГИЕ ПРАВИЛА:\n"
+    "1. Запрещены любые приветствия, преамбулы и вводные фразы.\n"
+    "2. Запрещены кавычки вокруг ответа.\n"
+    "3. Пиши разговорным двачерским языком с отборным матом по делу.\n"
+    "4. Это текст ИСКЛЮЧИТЕЛЬНО ДЛЯ ГОЛОСОВОЙ ОЗВУЧКИ — он должен звучать нагло, уверенно и хлестко."
+)
+
+CYBERCHAD_DIRECT_ROAST_PROMPT = (
+    "Ты — Киберчед, легендарный альфа-анон и абсолютный босс Двача (/b/). "
+    "Один из сычей-омежек посмел дерзко и нагло ответить лично тебе или кукарекнуть в твой адрес. "
+    "Твоя задача — уничтожить этого дерзкого анона персонализированным, брутальным, ядовитым голосовым разносом (2-3 коротких хлестких предложения). "
+    "Опусти его на землю, размажь его жалкие потуги казаться крутым, высмей его аргументы и укажи его место у параши.\n\n"
+    "СТРОГИЕ ПРАВИЛА:\n"
+    "1. Запрещены любые приветствия, преамбулы, вводные слова вроде 'Слышь' в начале каждой фразы или мета-комментарии.\n"
+    "2. Запрещены кавычки вокруг ответа.\n"
+    "3. Пиши разговорным двачерским языком с отборным сочным матом по делу.\n"
+    "4. Опирайся на контекст треда и конкретные слова анона, бей точно в цель.\n"
+    "5. Это текст ИСКЛЮЧИТЕЛЬНО ДЛЯ ГОЛОСОВОЙ ОЗВУЧКИ — он должен звучать максимально нагло, брутально и доминантно."
+)
+
+async def register_post_and_maybe_trigger_cyberchad_intervention(
+    bot,
+    board_id: str,
+    user_id: int,
+    text: str,
+    post_num: int | None = None,
+    reply_to_post: int | None = None,
+    stream: str = 'ru'
+) -> None:
+    """
+    Отслеживает срачи в чате и прямые реплаи на посты Киберчеда.
+    Киберчед самостоятельно врывается в тред СТРОГО ГОЛОСОВЫМ СООБЩЕНИЕМ (без текста!).
+    Кулдаун спонтанных интервенций: строго не чаще 1 раза в час (>= 3600.0с) на доску.
+    Прямые ответы Киберчеду обрабатываются независимо от кулдауна доски с личным анти-флудом.
+    """
+    if not text or not user_id or user_id <= 0 or board_id == 'trash':
+        return
+        
+    now = time.time()
+    if board_id not in _BOARD_FIGHT_TRACKER:
+        _BOARD_FIGHT_TRACKER[board_id] = []
+        
+    # Очищаем историю старше 180 секунд
+    tracker = _BOARD_FIGHT_TRACKER[board_id]
+    _BOARD_FIGHT_TRACKER[board_id] = [entry for entry in tracker if now - entry[0] <= 180]
+    _BOARD_FIGHT_TRACKER[board_id].append((now, user_id, str(text), post_num or 0))
+    
+    recent_entries = _BOARD_FIGHT_TRACKER[board_id]
+
+    from common.anon_identity import get_anon_id
+    from common.bot_helpers import process_new_post
+    from common.tts_engine import synthesize_cyberchad_voice_with_meta
+    from common.database import get_post_by_num
+
+    # 1. Проверяем, ответили ли ПРЯМО КИБЕРЧЕДУ (Reply на пост Киберчеда / упоминание)
+    is_direct_reply_to_chad = False
+    target_post_data = None
+    target_post_text = ""
+
+    if reply_to_post:
+        try:
+            # Сначала проверяем RAM messages_storage
+            async with storage_lock:
+                target_post_data = messages_storage.get(reply_to_post)
+            # Затем БД
+            if not target_post_data:
+                target_post_data = await get_post_by_num(reply_to_post)
+
+            if target_post_data:
+                author = target_post_data.get("author_id")
+                if author in (0, 1488148800):
+                    is_direct_reply_to_chad = True
+                else:
+                    c_dict = target_post_data.get("content", {})
+                    if isinstance(c_dict, str):
+                        import json
+                        try: c_dict = json.loads(c_dict)
+                        except Exception: c_dict = {'text': c_dict}
+                    if isinstance(c_dict, dict):
+                        if (
+                            c_dict.get("is_ai_roast")
+                            or c_dict.get("is_ai")
+                            or c_dict.get("is_ai_persona")
+                            or "Киберчед" in str(c_dict)
+                        ):
+                            is_direct_reply_to_chad = True
+                        target_post_text = c_dict.get('text') or c_dict.get('caption') or ""
+        except Exception as e:
+            logger.debug(f"[Cyberchad] Error checking target post {reply_to_post}: {e}")
+
+    # Также проверяем прямое текстовое упоминание Киберчеда
+    if not is_direct_reply_to_chad and text:
+        if re.search(r'(?i)\b(киберчед|чед|cyberchad)\b', text):
+            is_direct_reply_to_chad = True
+
+    should_intervene = False
+    is_direct_mode = False
+    user_prompt_text = ""
+    system_prompt = CYBERCHAD_FIGHT_INTERVENTION_PROMPT
+
+    # Формируем контекст окружающих сообщений
+    fight_snippets = []
+    for _, u, t, p in recent_entries[-6:]:
+        anon_tag = f"Анон [{get_anon_id(u)}]"
+        p_ref = f" >>{p}" if p else ""
+        fight_snippets.append(f"{anon_tag}{p_ref}: {t[:150]}")
+    fight_context = "\n".join(fight_snippets)
+
+    if is_direct_reply_to_chad:
+        # Прямой ответ Киберчеду — проверяем только per-user cooldown (10s), не блокируясь 3600s таймером доски
+        last_user_direct = _LAST_DIRECT_ROAST_USER_TS.get((board_id, user_id), 0.0)
+        if now - last_user_direct < 10.0:
+            return
+
+        should_intervene = True
+        is_direct_mode = True
+        system_prompt = CYBERCHAD_DIRECT_ROAST_PROMPT
+
+        # Извлекаем контекст цепочки предков
+        chain_context = ""
+        if reply_to_post:
+            try:
+                chain_context = await build_reply_chain_context(reply_to_post, max_depth=10)
+            except Exception as chain_err:
+                logger.debug(f"[Cyberchad] Error building chain context: {chain_err}")
+
+        thread_context_part = f"=== КОНТЕКСТ ТРЕДА (ЦЕПОЧКА ОТВЕТОВ) ===\n{chain_context}\n\n" if chain_context else f"=== АТМОСФЕРА В ТРЕДЕ ===\n{fight_context}\n\n"
+        target_post_part = f"=== ПОСТ КИБЕРЧЕДА, НА КОТОРЫЙ ОТВЕТИЛ АНОН ===\n>>{reply_to_post}: {target_post_text[:300]}\n\n" if (reply_to_post and target_post_text) else ""
+
+        user_prompt_text = (
+            f"{thread_context_part}"
+            f"{target_post_part}"
+            f"=== ДЕРЗКИЙ ОТВЕТ АНОНА [Анон {get_anon_id(user_id)} >>{post_num or 'new'}] ===\n"
+            f"{text}\n\n"
+            f"ТВОЙ ГОЛОСОВОЙ РАЗНОС (только текст реплики Киберчеда для озвучки):"
+        )
+    else:
+        # Спонтанная интервенция в срач — строго проверяем кулдаун >= 3600с на доску!
+        last_interv = _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION.get(board_id, 0.0)
+        if now - last_interv < 3600.0:
+            return
+
+        if len(recent_entries) >= 4:
+            # Проверяем наличие как минимум 2 разных участников и агрессивных маркеров срача
+            authors = {e[1] for e in recent_entries}
+            if len(authors) >= 2:
+                aggro_count = 0
+                aggro_patterns = (
+                    r'>>\d+', r'\b(хуй|пизд|ебл|чухан|омег|терпил|соси|чмо|клоун|долбоеб|высер|пасть|уеб|завали|заточку|говно)\b'
+                )
+                for _, _, msg_txt, _ in recent_entries:
+                    msg_low = msg_txt.lower()
+                    if any(re.search(pat, msg_low) for pat in aggro_patterns):
+                        aggro_count += 1
+                if aggro_count >= 3:
+                    should_intervene = True
+                    is_direct_mode = False
+                    system_prompt = CYBERCHAD_FIGHT_INTERVENTION_PROMPT
+                    user_prompt_text = f"Разнеси участников этого срача в чате:\n\n{fight_context}"
+
+    if should_intervene and user_prompt_text:
+        if is_direct_mode:
+            _LAST_DIRECT_ROAST_USER_TS[(board_id, user_id)] = now
+        else:
+            _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION[board_id] = now
+
+        logger.info(f"💥 [Cyberchad Intervention] Запуск голосового разъёба на /{board_id}/ (direct: {is_direct_mode})...")
+        try:
+            raw = await summarize_text_with_hf(system_prompt, user_prompt_text, model_preference="persona")
+            if raw and len(raw.strip()) > 5:
+                roast_text = clean_html_tags(clean_ai_thinking(raw)).strip()
+                voice_res = await synthesize_cyberchad_voice_with_meta(roast_text)
+                voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
+
+                if voice_bytes:
+                    # ВАЖНО: СТРОГО ТОЛЬКО ГОЛОСОВОЕ СООБЩЕНИЕ, БЕЗ ТЕКСТОВОГО СООБЩЕНИЯ!
+                    target_post_ref = post_num if is_direct_mode else (recent_entries[-1][3] if recent_entries else None)
+                    await process_new_post(shared_state.NewPostParams(
+                        bot_instance=bot,
+                        board_id=board_id,
+                        user_id=0,
+                        content={
+                            'type': 'voice',
+                            'voice_bytes': voice_bytes,
+                            'caption': '🔥 Разъёб от Киберчеда',
+                            'is_ai_roast': True,
+                            'is_ai': True,
+                            'reply_to': target_post_ref
+                        },
+                        reply_to_post=target_post_ref,
+                        is_shadow_muted=False,
+                        stream=stream
+                    ))
+                    logger.info(f"✅ [Cyberchad Intervention] Голосовой разъёб успешно отправлен на /{board_id}/")
+        except Exception as interv_err:
+            logger.warning(f"⚠️ [Cyberchad Intervention] Ошибка интервенции: {interv_err}")
+
+
 def _summarize_delivery_metrics() -> dict:
 
     summary = {}
@@ -1277,11 +1661,11 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
     if not target_post_num:
         return ""
         
-    chain = []
+    raw_chain = []
     current_num = target_post_num
     visited = set()
     
-    while current_num and current_num not in visited and len(chain) < max_depth:
+    while current_num and current_num not in visited and len(raw_chain) < max_depth:
         visited.add(current_num)
         post_data = None
         async with storage_lock:
@@ -1298,41 +1682,91 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
                 content = json.loads(content)
             except Exception:
                 content = {'text': content}
+        elif not isinstance(content, dict):
+            content = {'text': str(content)}
                 
-        raw_text = content.get('text') or content.get('caption') or ""
-        clean_text = clean_html_tags(raw_text).replace('\n', ' ').strip()
-        if not clean_text and content.get('type'):
-            clean_text = f"[{content.get('type')}]"
-            
         author_id = post_data.get('author_id', -1)
         is_bot = (author_id == 0 or author_id == 1488148800)
         
         reply_to = post_data.get('reply_to_post_num') or post_data.get('reply_to') or content.get('reply_to_post')
         
-        chain.append({
+        raw_chain.append({
             'post_num': current_num,
             'is_bot': is_bot,
             'author_id': author_id,
-            'text': clean_text,
+            'content': content,
             'reply_to': reply_to
         })
         
         current_num = reply_to
 
-    if not chain:
+    if not raw_chain:
         return ""
 
-    chain.reverse()
+    raw_chain.reverse()
     
+    file_ids = set()
+    for item in raw_chain:
+        c = item.get('content', {})
+        if isinstance(c, dict):
+            fid = c.get('file_id')
+            if fid and isinstance(fid, str):
+                file_ids.add(fid)
+            for m in c.get('media', []):
+                if isinstance(m, dict) and m.get('file_id') and isinstance(m.get('file_id'), str):
+                    file_ids.add(m.get('file_id'))
+
+    media_meta_map = {}
+    if file_ids:
+        missing_file_ids = [fid for fid in file_ids if fid not in _MEDIA_DESC_CACHE]
+        if missing_file_ids:
+            try:
+                db = await get_pool()
+                placeholders = ",".join("?" for _ in missing_file_ids)
+                async with db.execute(
+                    f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})",
+                    tuple(missing_file_ids)
+                ) as cursor:
+                    found_fids = set()
+                    for row in await cursor.fetchall():
+                        fid_val = row[0]
+                        meta = {'tags': row[1] or '', 'description': row[2] or ''}
+                        _format_media_context(meta)
+                        _MEDIA_DESC_CACHE[fid_val] = meta
+                        found_fids.add(fid_val)
+                    for fid_val in missing_file_ids:
+                        if fid_val not in found_fids:
+                            _MEDIA_DESC_CACHE[fid_val] = {'tags': '', 'description': '', 'formatted': None}
+            except Exception as meta_err:
+                logger.debug(f"[reply_chain] Media meta batch load error: {meta_err}")
+
+        for fid in file_ids:
+            if fid in _MEDIA_DESC_CACHE:
+                media_meta_map[fid] = _MEDIA_DESC_CACHE[fid]
+
     lines = []
-    for item in chain:
+    for item in raw_chain:
+        content = item.get('content', {})
+        msg_type = content.get('type', 'text') if isinstance(content, dict) else 'text'
+        fid = content.get('file_id') if isinstance(content, dict) else None
+        if not fid and isinstance(content, dict) and content.get('media'):
+            for m in content.get('media', []):
+                if isinstance(m, dict) and m.get('file_id'):
+                    fid = m.get('file_id')
+                    break
+        media_meta = media_meta_map.get(fid) if fid else None
+        formatted_text = _format_post_text(content, msg_type, media_meta=media_meta)
+        if not formatted_text:
+            formatted_text = f"[{msg_type}]" if msg_type else ""
+        clean_text = clean_html_tags(formatted_text).replace('\n', ' ').strip()
+        
         if item['is_bot']:
             sender = "ТЫ (Персона)"
         else:
             anon_hash = str(abs(hash(str(item.get('author_id', 'anon')))))[:4]
             sender = f"Анон #{anon_hash}"
         reply_prefix = f" (в ответ на #{item['reply_to']})" if item['reply_to'] else ""
-        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {item['text'][:300]}")
+        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {clean_text[:300]}")
         
     return "\n".join(lines)
 
@@ -1595,68 +2029,151 @@ def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
             return text[:i] + "…"
     return text
 
+def _fast_storage_ts(val) -> float:
+    if type(val) is datetime:
+        return val.timestamp()
+    if val is None:
+        return 0.0
+    if type(val) in (int, float):
+        return float(val)
+    return normalize_storage_timestamp(val)
+
 async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
     now_ts = time.time()
     time_threshold_ts = now_ts - (hours * 3600)
-    lines = []
+    stream_lang = lang or ('en' if board_id == 'int' else 'ru')
     
     async with storage_lock:
         if thread_id:
-            b_data = board_data[board_id]
+            b_data = board_data.get(board_id, {})
             thread_info = b_data.get('threads_data', {}).get(thread_id)
             if not thread_info:
                 return ""
             thread_post_nums = set(thread_info.get('posts', []))
-            post_iterator = [p for p_num, p in messages_storage.items() if p_num in thread_post_nums]
-            time_threshold_ts = 0.0
-            # Сортируем сообщения треда по времени
-            post_iterator.sort(key=lambda x: normalize_storage_timestamp(x.get('timestamp')))
+            post_tuples = []
+            for p_num, p in messages_storage.items():
+                if p_num in thread_post_nums:
+                    post_tuples.append((_fast_storage_ts(p.get('timestamp')), p))
+            post_tuples.sort(key=operator.itemgetter(0))
+            post_iterator = [p for _, p in post_tuples]
         else:
-            board_posts = [p for p in messages_storage.values() if p.get('board_id') == board_id and p.get('author_id') != 0]
-            board_posts.sort(key=lambda x: normalize_storage_timestamp(x.get('timestamp')))
+            board_posts = []
+            for p in messages_storage.values():
+                if p.get('board_id') == board_id and p.get('author_id') != 0:
+                    board_posts.append((_fast_storage_ts(p.get('timestamp')), p))
+            board_posts.sort(key=operator.itemgetter(0))
             
-            posts_in_last_6h = [p for p in board_posts if normalize_storage_timestamp(p.get('timestamp')) >= time_threshold_ts]
-            count_6h = len(posts_in_last_6h)
-            
-            # 150-200 последних сообщений либо 6 часов (выбираем оптимальный диапазон)
-            if count_6h < 150:
-                target_posts = board_posts[-150:]
-            elif count_6h > 200:
-                target_posts = board_posts[-200:]
+            total_board_posts = len(board_posts)
+            if total_board_posts <= 150:
+                post_iterator = [p for _, p in board_posts]
             else:
-                target_posts = posts_in_last_6h
-            post_iterator = target_posts
-            time_threshold_ts = 0.0
+                posts_in_last_6h = [p for ts, p in board_posts if ts >= time_threshold_ts]
+                count_6h = len(posts_in_last_6h)
+                if count_6h < 150:
+                    post_iterator = [p for _, p in board_posts[-150:]]
+                elif count_6h > 200:
+                    post_iterator = [p for _, p in board_posts[-200:]]
+                else:
+                    post_iterator = posts_in_last_6h
+
+    # Batch-fetch media tags & descriptions for all image posts in post_iterator
+    missing_file_ids = None
+    for post in post_iterator:
+        c = post.get('content')
+        if isinstance(c, dict):
+            fid = c.get('file_id')
+            if fid and isinstance(fid, str) and fid not in _MEDIA_DESC_CACHE:
+                if missing_file_ids is None:
+                    missing_file_ids = []
+                missing_file_ids.append(fid)
+            elif not fid and c.get('media'):
+                for m in c.get('media', []):
+                    if isinstance(m, dict):
+                        mfid = m.get('file_id')
+                        if mfid and isinstance(mfid, str) and mfid not in _MEDIA_DESC_CACHE:
+                            if missing_file_ids is None:
+                                missing_file_ids = []
+                            missing_file_ids.append(mfid)
+
+    if missing_file_ids:
+        missing_file_ids = list(dict.fromkeys(missing_file_ids))
+        try:
+            from common.database import get_pool
+            db = await get_pool()
+            placeholders = ",".join("?" for _ in missing_file_ids)
+            async with db.execute(
+                f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})",
+                tuple(missing_file_ids)
+            ) as cursor:
+                found_fids = set()
+                for row in await cursor.fetchall():
+                    fid_val = row[0]
+                    meta = {'tags': row[1] or '', 'description': row[2] or ''}
+                    _format_media_context(meta)
+                    _MEDIA_DESC_CACHE[fid_val] = meta
+                    found_fids.add(fid_val)
+                for fid_val in missing_file_ids:
+                    if fid_val not in found_fids:
+                        _MEDIA_DESC_CACHE[fid_val] = {'tags': '', 'description': '', 'formatted': None}
+        except Exception as meta_err:
+            logger.debug(f"[summarize] Media meta batch load error: {meta_err}")
+
+    lines = []
     for post in post_iterator:
         try:
-            if post.get('board_id') != board_id:
+            content = post.get('content')
+            if not isinstance(content, dict):
                 continue
-            if normalize_storage_timestamp(post.get('timestamp')) < time_threshold_ts:
-                continue
-            if post.get('author_id') == 0: # Игнорируем системные сообщения
-                continue
-            content = post.get('content', {})
-            msg_type = content.get('type', 'text')
             
-            text = _format_post_text(content, msg_type)
-            if text:
-                name = _get_author_name(post, content, board_id, lang)
-                reply_suffix = _get_reply_suffix(post, content, board_id, lang)
-                lines.append(f"{name}{reply_suffix}: {text}")
+            fid = content.get('file_id')
+            if not fid and content.get('media'):
+                for m in content.get('media', []):
+                    if isinstance(m, dict) and m.get('file_id'):
+                        fid = m.get('file_id')
+                        break
+            
+            media_meta = _MEDIA_DESC_CACHE.get(fid) if fid else None
+            msg_type = content.get('type', 'text')
+
+            text = _format_post_text(content, msg_type, media_meta=media_meta)
+            if not text:
+                continue
+
+            name = content.get('username') or content.get('name') or content.get('author_name')
+            if not name:
+                author_id = post.get('author_id')
+                if author_id and author_id != 0:
+                    name = _get_cached_anon_name(author_id, stream_lang)
+                else:
+                    name = "Anon" if stream_lang == 'en' else ("名無し" if stream_lang == 'jp' else "Анон")
+
+            reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
+            if reply_to:
+                if stream_lang == 'en':
+                    lines.append(f"{name} (reply to #{reply_to}): {text}")
+                elif stream_lang == 'jp':
+                    lines.append(f"{name} (>>{reply_to}): {text}")
+                else:
+                    lines.append(f"{name} (Ответ на #{reply_to}): {text}")
+            else:
+                lines.append(f"{name}: {text}")
         except Exception as e:
-            print(f"[summarize] Error while chunking post: {e}")
+            logger.warning(f"[summarize] Error while chunking post: {e}")
+
     # Accumulate lines from newest to oldest up to 35000 characters to avoid split lines
     total_len = 0
     limited_lines = []
     for line in reversed(lines):
-        # We also collapse multiple newlines if any, but our lines are single messages anyway
-        line_clean = re.sub(r'\n{2,}', '\n', line).strip()
+        line_clean = line.strip()
         if not line_clean:
             continue
-        if total_len + len(line_clean) + 1 > 35000:
+        if '\n\n' in line_clean:
+            line_clean = RE_MULTI_NEWLINES.sub('\n', line_clean)
+        line_len = len(line_clean)
+        if total_len + line_len + 1 > 35000:
             break
         limited_lines.append(line_clean)
-        total_len += len(line_clean) + 1
+        total_len += line_len + 1
     
     limited_lines.reverse()
     cleaned_chunk = "\n".join(limited_lines)
@@ -1702,15 +2219,66 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
                         'content': content
                     }))
         except Exception as e:
-            print(f"Error fetching atmosphere posts: {e}")
+            logger.warning(f"[atmosphere] Error fetching atmosphere posts: {e}")
 
     recent_posts.sort(key=lambda x: x[0])
     
+    file_ids = set()
+    for pnum, pdata in recent_posts:
+        c = pdata.get('content', {})
+        if isinstance(c, dict):
+            fid = c.get('file_id')
+            if fid and isinstance(fid, str):
+                file_ids.add(fid)
+            for m in c.get('media', []):
+                if isinstance(m, dict) and m.get('file_id') and isinstance(m.get('file_id'), str):
+                    file_ids.add(m.get('file_id'))
+
+    media_meta_map = {}
+    if file_ids:
+        missing_file_ids = [fid for fid in file_ids if fid not in _MEDIA_DESC_CACHE]
+        if missing_file_ids:
+            try:
+                db = await get_pool()
+                placeholders = ",".join("?" for _ in missing_file_ids)
+                async with db.execute(
+                    f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})",
+                    tuple(missing_file_ids)
+                ) as cursor:
+                    found_fids = set()
+                    for row in await cursor.fetchall():
+                        fid_val = row[0]
+                        meta = {'tags': row[1] or '', 'description': row[2] or ''}
+                        _format_media_context(meta)
+                        _MEDIA_DESC_CACHE[fid_val] = meta
+                        found_fids.add(fid_val)
+                    for fid_val in missing_file_ids:
+                        if fid_val not in found_fids:
+                            _MEDIA_DESC_CACHE[fid_val] = {'tags': '', 'description': '', 'formatted': None}
+            except Exception as meta_err:
+                logger.debug(f"[atmosphere] Media meta batch load error: {meta_err}")
+
+        for fid in file_ids:
+            if fid in _MEDIA_DESC_CACHE:
+                media_meta_map[fid] = _MEDIA_DESC_CACHE[fid]
+
     lines = []
     for pnum, pdata in recent_posts:
         content = pdata.get('content', {})
-        raw_text = content.get('text') or content.get('caption') or ""
-        clean_text = clean_html_tags(raw_text).replace('\n', ' ').strip()
+        if not isinstance(content, dict):
+            content = {'text': str(content)}
+        msg_type = content.get('type', 'text')
+        fid = content.get('file_id')
+        if not fid and content.get('media'):
+            for m in content.get('media', []):
+                if isinstance(m, dict) and m.get('file_id'):
+                    fid = m.get('file_id')
+                    break
+        media_meta = media_meta_map.get(fid) if fid else None
+        formatted_text = _format_post_text(content, msg_type, media_meta=media_meta)
+        if not formatted_text:
+            continue
+        clean_text = clean_html_tags(formatted_text).replace('\n', ' ').strip()
         if not clean_text:
             continue
         sender = "БОТ (Персона)" if pdata.get('author_id') in (0, 1488148800) else "ЮЗЕР (Анон)"

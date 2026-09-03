@@ -10,6 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # -----------------------------------------------------------------------------
@@ -461,19 +462,52 @@ def clear_drop_messages(drop_id: str):
     _drop_messages.pop(drop_id, None)
 
 
+async def record_drop_message_db(db_conn, drop_id: str, chat_id: int, message_id: int):
+    """Регистрирует и сохраняет сообщение о дропе в БД."""
+    register_drop_message(drop_id, chat_id, message_id)
+    if db_conn:
+        try:
+            await db_conn.execute(
+                "INSERT OR IGNORE INTO MoneyDropMessages (drop_id, chat_id, message_id) VALUES (?, ?, ?)",
+                (drop_id, chat_id, message_id)
+            )
+            await db_conn.commit()
+        except Exception:
+            pass
+
+
+async def clear_drop_messages_db(db_conn, drop_id: str):
+    """Очищает зарегистрированные сообщения для drop_id в памяти и БД."""
+    clear_drop_messages(drop_id)
+    if db_conn:
+        try:
+            await db_conn.execute("DELETE FROM MoneyDropMessages WHERE drop_id = ?", (drop_id,))
+            await db_conn.commit()
+        except Exception:
+            pass
+
+
 # -----------------------------------------------------------------------------
 # Drop Creation, Claiming & Persistence
 # -----------------------------------------------------------------------------
 
 async def init_drop_engine(db_conn) -> int:
     """
-    Загружает неистекшие активные дропы из БД при старте бота.
+    Загружает неистекшие активные дропы и копии сообщений из БД при старте бота.
     Если дроп истек во время оффлайна бота, автоматически возвращает шекели донору.
     """
     now = time.time()
     loaded = 0
     from common.database import add_user_global_balance
     try:
+        await db_conn.execute("""
+            CREATE TABLE IF NOT EXISTS MoneyDropMessages (
+                drop_id TEXT,
+                chat_id INTEGER,
+                message_id INTEGER,
+                PRIMARY KEY(drop_id, chat_id, message_id)
+            )
+        """)
         async with db_conn.execute("SELECT drop_id, donor_id, board_id, amount, created_at FROM MoneyDrops WHERE status = 'active'") as c:
             rows = await c.fetchall()
         
@@ -501,6 +535,13 @@ async def init_drop_engine(db_conn) -> int:
                     )
                     await add_user_global_balance(db_conn, donor, board, int(amt))
             await db_conn.commit()
+
+        # Load persisted messages for active drops
+        async with db_conn.execute("SELECT drop_id, chat_id, message_id FROM MoneyDropMessages") as c:
+            msg_rows = await c.fetchall()
+            for d_id, c_id, m_id in msg_rows:
+                if d_id in active_drops:
+                    register_drop_message(d_id, c_id, m_id)
     except Exception:
         pass
     return loaded

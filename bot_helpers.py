@@ -128,9 +128,8 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     settings_updates = {mode: False for mode in all_modes}
     await update_board_settings(board_id, settings_updates)
     await update_post_content(pnum, content)
-    if recipients:
-        from delivery_manager import enqueue_board_message
-        await enqueue_board_message(board_id, {"recipients": recipients, "content": content, "post_num": pnum, "board_id": board_id})
+    from delivery_manager import enqueue_board_message
+    await enqueue_board_message(board_id, {"recipients": recipients or set(), "content": content, "post_num": pnum, "board_id": board_id})
 
 async def delete_message_after_delay(message: types.Message, delay: int):
 
@@ -208,7 +207,8 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     content = {
         'type': 'text',
         'text': text,
-        'is_system_message': True
+        'is_system_message': True,
+        'archive_allowed': True
     }
     post_num = await create_post(
         board_id=board_id,
@@ -390,7 +390,8 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     content = {
         'type': 'text',
         'text': text,
-        'is_system_message': True
+        'is_system_message': True,
+        'archive_allowed': True
     }
     post_num = await create_post(
         board_id=board_id,

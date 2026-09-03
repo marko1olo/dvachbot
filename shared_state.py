@@ -94,6 +94,29 @@ _persona_processed_posts: set[int] = set()
 last_persona_dialogue_user_ts = _last_persona_dialogue_user_ts
 last_persona_board_ts = _last_persona_board_ts
 _active_duels = {}
+
+
+def make_duel_token(challenger_id: int) -> str:
+    """
+    Returns opaque token for duel button callback_data.
+    Uses anon_id (e.g. 'Шолтер5') — one-way hash, no raw ID exposed,
+    deterministic across restarts.
+    """
+    from common.anon_identity import get_anon_id
+    return get_anon_id(challenger_id)
+
+
+def resolve_duel_token(token: str) -> "int | None":
+    """
+    Resolves an anon_id token back to challenger user_id by scanning _active_duels.
+    Returns None if no active duel matches.
+    """
+    from common.anon_identity import get_anon_id
+    for ch_id in list(_active_duels.keys()):
+        if get_anon_id(ch_id) == token or str(ch_id) == str(token):
+            return ch_id
+    return None
+
 last_messages = deque(maxlen=200)
 reaction_ratelimit = defaultdict(float)
 current_deliveries = {}
@@ -181,6 +204,74 @@ def set_combat_cooldown(user_id: int, cooldown_seconds: int = 180):
     actual_cooldown = calculate_escalating_combat_cooldown(user_id, cooldown_seconds)
     _GLOBAL_COMBAT_COOLDOWNS[user_id] = time.time() + actual_cooldown
 
+_GLOBAL_WORK_COOLDOWNS: Dict[int, Dict[str, int]] = defaultdict(dict)
+
+def get_user_work_cooldowns(user_id: int) -> dict:
+    return dict(_GLOBAL_WORK_COOLDOWNS[user_id])
+
+def set_user_work_cooldown(user_id: int, job_id: str, timestamp: int):
+    _GLOBAL_WORK_COOLDOWNS[user_id][job_id] = max(_GLOBAL_WORK_COOLDOWNS[user_id].get(job_id, 0), int(timestamp))
+
+def sync_user_work_cooldowns(user_id: int, cooldowns: dict):
+    if not isinstance(cooldowns, dict):
+        return
+    for j, ts in cooldowns.items():
+        if isinstance(ts, (int, float)):
+            _GLOBAL_WORK_COOLDOWNS[user_id][j] = max(_GLOBAL_WORK_COOLDOWNS[user_id].get(j, 0), int(ts))
+
+_USER_PARTYVAN_COOLDOWNS: Dict[int, float] = {}
+_BOARD_PARTYVAN_COOLDOWNS: Dict[str, float] = {}
+_VICTIM_PARTYVAN_IMMUNITY: Dict[int, float] = {}  # user_id -> expires_at timestamp
+
+# --- Алиасы с «абсолютным» интерфейсом (принимают expires_at timestamp) ---
+# main.py вызывает set_partyvan_user_cooldown(user_id, current_time + 3600)
+
+def get_partyvan_user_cooldown(user_id: int) -> float:
+    """Возвращает абсолютный timestamp окончания куладуна (0.0 если нет)."""
+    return _USER_PARTYVAN_COOLDOWNS.get(user_id, 0.0)
+
+def set_partyvan_user_cooldown(user_id: int, expires_at: float):
+    """Устанавливает куладун пативэна для юзера (expires_at — абсолютный timestamp)."""
+    _USER_PARTYVAN_COOLDOWNS[user_id] = expires_at
+
+def get_partyvan_board_cooldown(board_id: str) -> float:
+    """Возвращает абсолютный timestamp окончания куладуна доски (0.0 если нет)."""
+    return _BOARD_PARTYVAN_COOLDOWNS.get(board_id, 0.0)
+
+def set_partyvan_board_cooldown(board_id: str, expires_at: float):
+    """Устанавливает куладун пативэна для доски (expires_at — абсолютный timestamp)."""
+    _BOARD_PARTYVAN_COOLDOWNS[board_id] = expires_at
+
+def get_partyvan_victim_immunity(user_id: int) -> float:
+    """Возвращает абсолютный timestamp иммунитета жертвы (0.0 если нет)."""
+    return _VICTIM_PARTYVAN_IMMUNITY.get(user_id, 0.0)
+
+def set_partyvan_victim_immunity(user_id: int, expires_at: float):
+    """Выставляет иммунитет от пативэна для жертвы на 2ч после освобождения."""
+    _VICTIM_PARTYVAN_IMMUNITY[user_id] = expires_at
+
+# --- Legacy-функции с delta-интерфейсом (оставляем для обратной совместимости) ---
+def get_user_partyvan_cooldown_remaining(user_id: int) -> int:
+    now = time.time()
+    last = _USER_PARTYVAN_COOLDOWNS.get(user_id, 0.0)
+    if now < last:
+        return int(last - now)
+    return 0
+
+def set_user_partyvan_cooldown(user_id: int, cooldown_seconds: int = 3600):
+    _USER_PARTYVAN_COOLDOWNS[user_id] = time.time() + cooldown_seconds
+
+def get_board_partyvan_cooldown_remaining(board_id: str) -> int:
+    now = time.time()
+    last = _BOARD_PARTYVAN_COOLDOWNS.get(board_id, 0.0)
+    if now < last:
+        return int(last - now)
+    return 0
+
+def set_board_partyvan_cooldown(board_id: str, cooldown_seconds: int = 1800):
+    _BOARD_PARTYVAN_COOLDOWNS[board_id] = time.time() + cooldown_seconds
+
+
 def count_active_attacker_effects(item_type: str, attacker_id: int) -> int:
     """
     Возвращает количество одновременно активных жертв от данного атакующего для item_type.
@@ -208,7 +299,12 @@ SHOP_DAILY_LIMITS = {
     "knife": 10,
     "shit": 20,
     "laxative": 6,
-    "schizopill": 6
+    "schizopill": 6,
+    # Лутбоксы: лимит для сдерживания ботоводов (62k транзакций за 12ч = неприемлемо)
+    "lootbox_trash": 100,
+    "trash_lootbox": 100,
+    "lootbox_gold": 40,
+    "gold_safe": 40,
 }
 
 def get_user_daily_shop_buys(user_id: int, item: str) -> int:
@@ -572,6 +668,7 @@ _PASSPORT_DATA = {
     }
 }
 OP_COMMAND_COOLDOWN = 60 # 1 минута кулдауна для команд модерации ОПа в треде
+ROAST_COOLDOWN = 300 # 5 минут кулдауна для авто-прожарки и /roast
 
 ANIME_CMD_COOLDOWN = 25 # 25 секунд
 
@@ -651,6 +748,14 @@ _DUEL_TIMEOUT = 120       # секунд на принятие
 # Explicitly export helpers so 'from shared_state import *' picks them up.
 __all__ = [
     '_GLOBAL_COMBAT_COOLDOWNS',
+    '_GLOBAL_WORK_COOLDOWNS',
+    'get_user_work_cooldowns',
+    'set_user_work_cooldown',
+    'sync_user_work_cooldowns',
+    'get_user_partyvan_cooldown_remaining',
+    'set_user_partyvan_cooldown',
+    'get_board_partyvan_cooldown_remaining',
+    'set_board_partyvan_cooldown',
     '_ACTIVE_AUTHOR_ATTACKS',
     '_TARGET_LAST_ATTACKED_TS',
     '_ATTACKER_SERIES_HISTORY',
@@ -781,6 +886,9 @@ __all__ = [
     'ShadowRejectContext',
     'NewPostParams',
     'STOP_WORDS',
-    '_DUEL_TIMEOUT'
+    '_DUEL_TIMEOUT',
+    'make_duel_token',
+    'resolve_duel_token',
+    'ROAST_COOLDOWN'
 ]
 

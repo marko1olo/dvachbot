@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+# scripts/ moved here after refactor
+_scripts_dir = str(Path(__file__).resolve().parents[1] / 'scripts')
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
 from unittest.mock import patch, mock_open
 
 from status_check import get_last_errors

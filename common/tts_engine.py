@@ -44,7 +44,7 @@ CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
         name="Cyberchad Classic",
         description="Классический басовитый низкий голос Киберчеда",
         voice="ru-RU-DmitryNeural",
-        rate="+0%",
+        rate="+20%",
         pitch="-5Hz",
         ffmpeg_filter="asetrate=24000*0.90,atempo=1.11,bass=g=8:f=100,aresample=48000",
         weight=25,
@@ -55,7 +55,7 @@ CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
         name="Heavy Bass Boss",
         description="Экстремальный суб-бас босса качалки",
         voice="ru-RU-DmitryNeural",
-        rate="-5%",
+        rate="+15%",
         pitch="-10Hz",
         ffmpeg_filter="asetrate=24000*0.82,atempo=1.22,bass=g=13:f=80,treble=g=-2:f=3000,aresample=48000",
         weight=20,
@@ -66,7 +66,7 @@ CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
         name="Cybernetic Borg",
         description="Киборг с металлическим эхо-резонатором",
         voice="ru-RU-DmitryNeural",
-        rate="+5%",
+        rate="+25%",
         pitch="-5Hz",
         ffmpeg_filter="asetrate=24000*0.92,atempo=1.08,aecho=0.8:0.7:12:0.6,bass=g=7:f=110,aresample=48000",
         weight=15,
@@ -77,7 +77,7 @@ CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
         name="Toxic Megaphone",
         description="Перегруженная рация / токсичный мегафон",
         voice="ru-RU-DmitryNeural",
-        rate="+10%",
+        rate="+30%",
         pitch="+0Hz",
         ffmpeg_filter="highpass=f=350,lowpass=f=3400,volume=2.2,bass=g=6:f=200,aresample=48000",
         weight=10,
@@ -99,21 +99,10 @@ CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
         name="Cyberchad Overdrive",
         description="Овердрайв с плотной компрессией и сатурацией",
         voice="ru-RU-DmitryNeural",
-        rate="+5%",
+        rate="+25%",
         pitch="-5Hz",
         ffmpeg_filter="volume=2.2,compand=0|0:1|1:-60/-60|-20/-10|0/-3:6:0:-90:0.2,bass=g=10:f=100,treble=g=4:f=3500,aresample=48000",
-        weight=10,
-        caption_title="🔥 Разъёб от Киберчеда"
-    ),
-    "valkyrie": CyberchadPreset(
-        key="valkyrie",
-        name="Android Valkyrie",
-        description="Зловещий голос карающей нейросети / кибер-валькирии",
-        voice="ru-RU-SvetlanaNeural",
-        rate="+5%",
-        pitch="-15Hz",
-        ffmpeg_filter="asetrate=24000*0.88,atempo=1.13,aecho=0.8:0.6:16:0.45,bass=g=7:f=130,treble=g=2:f=3000,aresample=48000",
-        weight=8,
+        weight=15,
         caption_title="🔥 Разъёб от Киберчеда"
     ),
     "infernal": CyberchadPreset(
@@ -121,13 +110,51 @@ CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
         name="Infernal Titan",
         description="Глубокий демонический голос бездны",
         voice="ru-RU-DmitryNeural",
-        rate="-10%",
+        rate="+10%",
         pitch="-20Hz",
         ffmpeg_filter="asetrate=24000*0.80,atempo=1.25,bass=g=15:f=75,treble=g=-3:f=3000,aresample=48000",
         weight=10,
         caption_title="🔥 Разъёб от Киберчеда"
     ),
+    "drill_sergeant": CyberchadPreset(
+        key="drill_sergeant",
+        name="Drill Sergeant",
+        description="Командный голос армейского инструктора",
+        voice="ru-RU-DmitryNeural",
+        rate="+28%",
+        pitch="-6Hz",
+        ffmpeg_filter="highpass=f=85,equalizer=f=2800:width_type=q:w=1.2:g=3.5,aresample=48000",
+        weight=12,
+        caption_title="🔥 Разъёб от Киберчеда"
+    ),
+    "bunker": CyberchadPreset(
+        key="bunker",
+        name="Bunker PA",
+        description="Громкая связь подземного бункера",
+        voice="ru-RU-DmitryNeural",
+        rate="+20%",
+        pitch="-8Hz",
+        ffmpeg_filter="highpass=f=80,aecho=0.8:0.4:40:0.25,aresample=48000",
+        weight=10,
+        caption_title="🔥 Разъёб от Киберчеда"
+    ),
+    "studio_radio": CyberchadPreset(
+        key="studio_radio",
+        name="Studio Broadcaster",
+        description="Чистый студийный FM-диктор",
+        voice="ru-RU-DmitryNeural",
+        rate="+24%",
+        pitch="-5Hz",
+        ffmpeg_filter="highpass=f=100,lowpass=f=7500,equalizer=f=2500:width_type=q:w=1.5:g=3,aresample=48000",
+        weight=10,
+        caption_title="🔥 Разъёб от Киберчеда"
+    ),
 }
+
+
+
+
+
 
 # Backward compatibility constants
 DEFAULT_VOICE = "ru-RU-DmitryNeural"
@@ -187,7 +214,7 @@ async def synthesize_cyberchad_voice_with_meta(
     voice: Optional[str] = None,
     preset: Optional[str | CyberchadPreset] = None,
     apply_dsp: bool = True,
-    timeout: float = 15.0
+    timeout: float = 25.0
 ) -> Tuple[Optional[bytes], CyberchadPreset]:
     """
     Synthesizes speech from text using Edge-TTS with DSP modulation,
@@ -212,18 +239,34 @@ async def synthesize_cyberchad_voice_with_meta(
     final_ogg = os.path.join(tmp_dir, "cyberchad_voice.ogg")
 
     try:
-        # Step 1: Cloud Neural TTS via edge-tts
+        # Step 1: Cloud Neural TTS via edge-tts (with 2-attempt retry loop)
+        edge_success = False
         try:
             import edge_tts
-            communicate = edge_tts.Communicate(
-                clean_text,
-                active_voice,
-                rate=active_preset.rate,
-                pitch=active_preset.pitch
-            )
-            await asyncio.wait_for(communicate.save(raw_mp3), timeout=timeout)
+            for attempt in range(1, 3):
+                try:
+                    communicate = edge_tts.Communicate(
+                        clean_text,
+                        active_voice,
+                        rate=active_preset.rate,
+                        pitch=active_preset.pitch,
+                        connect_timeout=7,
+                        receive_timeout=20
+                    )
+                    attempt_timeout = min(timeout, 12.0 if attempt == 1 else timeout)
+                    await asyncio.wait_for(communicate.save(raw_mp3), timeout=attempt_timeout)
+                    if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 0:
+                        edge_success = True
+                        break
+                except (asyncio.TimeoutError, TimeoutError, Exception) as attempt_err:
+                    if attempt == 1:
+                        logger.info(f"🔄 [TTS] Edge-TTS attempt 1 timed out ({attempt_err}), retrying with fresh connection...")
+                        await asyncio.sleep(0.4)
+                    else:
+                        raise attempt_err
         except Exception as edge_err:
-            logger.warning(f"⚠️ [TTS] edge-tts error ({edge_err}), falling back to gTTS...")
+            err_desc = f"{type(edge_err).__name__}: {edge_err}" if str(edge_err).strip() else type(edge_err).__name__
+            logger.warning(f"⚠️ [TTS] edge-tts error ({err_desc}), falling back to gTTS...")
             try:
                 from gtts import gTTS
                 loop = asyncio.get_running_loop()

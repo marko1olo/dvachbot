@@ -247,7 +247,6 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
         
     target_id = None
     try:
-        from post_helpers import get_reply_target
         target_id = await get_reply_target(message)
     except Exception:
         pass

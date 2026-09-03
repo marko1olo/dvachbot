@@ -46,7 +46,12 @@ from common.bot_helpers import process_new_post
 from common.bot_helpers import accept_duel_logic, decline_duel_logic
 
 RE_ARCHIVE_LINK = re.compile(
-    r'^(?:https?://)?(?:t(?:elegram)?\.me/(?:tgchan_archive|tgach_archive|c/\d+|[\w_]+)/|tgach\.top/[a-z0-9]+/res/\d+(?:\.html)?#(?:post-)?|tgach\.top/[a-z0-9]+/res/|(?:>>|&gt;&gt;|#|№|Post\s*#?))\s*(\d+)',
+    r'^\s*(?:https?://)?(?:'
+    r't(?:elegram)?\.me/(?:tgchan_archive|tgach_archive|c/\d+)/(\d+)/?(?:\?[^\s]*)?(?:#[^\s]*)?|'
+    r'tgach\.top/[a-z0-9]+/res/\d+(?:\.html)?(?:\?[^\s#]*)?#(?:post-)?(\d+)|'
+    r'tgach\.top/[a-z0-9]+/res/(\d+)(?:\.html)?/?(?:\?[^\s]*)?(?:#[^\s]*)?|'
+    r'(?:>>|&gt;&gt;|#|№|Post\s*#?)\s*(\d+)'
+    r')',
     re.IGNORECASE
 )
 
@@ -63,7 +68,10 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
     if not match:
         return None, text
     
-    raw_id = int(match.group(1))
+    raw_id_str = match.group(1) or match.group(2) or match.group(3) or match.group(4)
+    if not raw_id_str:
+        return None, text
+    raw_id = int(raw_id_str)
     resolved_post_num = None
     
     try:
@@ -86,7 +94,7 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
                     if row:
                         resolved_post_num = row[0]
     except Exception as e:
-        print(f"⚠️ Ошибка при разрешении archive link: {e}")
+        logger.warning(f"⚠️ Ошибка при разрешении archive link: {e}")
         return None, text
                     
     if resolved_post_num:
@@ -103,7 +111,7 @@ from text_assets import (
     EARNING_NOTIFICATIONS, PENALTY_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
 )
-from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note, handle_music_roast, is_music_document
+from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note, handle_music_roast, is_music_document, register_post_and_maybe_trigger_cyberchad_intervention
 import __main__ as main
 
 # Some functions like `spawn_task` and `execute_delayed_edit` are in main.py, 
@@ -471,7 +479,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
 
     if not is_admin(user_id, board_id):
         if message.content_type in ['photo', 'video', 'document']:
-            b_data['single_photo_counter'][user_id]
+            b_data.setdefault('single_photo_counter', {}).setdefault(user_id, 0)
             if not message.media_group_id:
                 b_data['single_photo_counter'][user_id] += 1
                 current_count = b_data['single_photo_counter'][user_id]
@@ -487,6 +495,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             else:
                 b_data['single_photo_counter'][user_id] = 0
         elif message.content_type == 'text':
+            b_data.setdefault('single_photo_counter', {})
             b_data['single_photo_counter'][user_id] = 0
     try:
         if message.content_type == 'dice':
@@ -525,7 +534,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     await message.delete()
                 except TelegramBadRequest: pass
                 return
-            mute_until = b_data['mutes'].get(user_id)
+            mute_until = b_data.get('mutes', {}).get(user_id)
             if mute_until and mute_until > datetime.now(UTC):
                 try:
                     await message.delete()
@@ -554,7 +563,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                         pass
                 return
             elif mute_until:
-                b_data['mutes'].pop(user_id, None)
+                b_data.setdefault('mutes', {}).pop(user_id, None)
             
         cursed_text_override = None
         if not is_admin(user_id, board_id) and (message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice'])):
@@ -593,24 +602,22 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 cursed_text_override = f"👽 [ШИЗО-ТАБЛЕТКА]\n{rewritten}"
 
                 
-        b_data['last_activity'][user_id] = datetime.now(UTC)
-        if user_id not in b_data['users']['active']:
-            b_data['users']['active'].add(user_id)
+        b_data.setdefault('last_activity', {})[user_id] = datetime.now(UTC)
+        users_map = b_data.setdefault('users', {'active': set(), 'banned': set()})
+        if user_id not in users_map.setdefault('active', set()):
+            users_map['active'].add(user_id)
             b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
             try:
                 await asyncio.wait_for(add_or_activate_user(user_id, board_id), timeout=3.0)
                 print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
             except Exception as e:
                 print(f"⚠️ [{board_id}] Ошибка добавления пользователя {user_id}: {e}")
-        if board_id != 'trash' and not await check_spam(user_id, message, board_id):
-            try:
-                await message.delete()
-            except TelegramBadRequest: pass
-            msg_type = message.content_type
-            if msg_type in ['photo', 'video', 'document'] and message.caption:
-                msg_type = 'text'
-            await apply_penalty(message.bot, user_id, msg_type, board_id)
-            return
+        if board_id != 'trash':
+            if not await check_spam(user_id, message, board_id):
+                msg_type = message.content_type
+                if msg_type in ['photo', 'video', 'document'] and message.caption:
+                    msg_type = 'text'
+                await apply_penalty(message.bot, user_id, msg_type, board_id)
             
         import troll_phrases
         if random.random() < 0.0075:
@@ -716,6 +723,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     stream=stream
                 ))
                 if post_num:
+                    if text_chunk and board_id != 'trash' and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
+                        spawn_task(register_post_and_maybe_trigger_cyberchad_intervention(
+                            message.bot, board_id, user_id, text_chunk,
+                            post_num=post_num, reply_to_post=post_num_to_reply, stream=stream
+                        ))
                     should_reply = False
                     if is_reply_to_bot:
                         now_t = time.time()
@@ -922,6 +934,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
             elif message.content_type == 'document' and is_music_document(message.document) and board_id != 'trash':
                 spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
+            text_for_intervention = text_for_corpus or message.text or message.caption or (f"[{message.content_type}]" if reply_to_post else "")
+            if text_for_intervention and board_id != 'trash':
+                spawn_task(register_post_and_maybe_trigger_cyberchad_intervention(message.bot, board_id, user_id, text_for_intervention, post_num=post_num, reply_to_post=reply_to_post, stream=stream))
             should_reply = False
             def extract_msg_media_file_id(msg):
                 if not msg: return None
@@ -987,10 +1002,6 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     )
     from common.database import is_shadow_muted
 
-    # If user is already shadow-muted and continues sending messages
-    if await is_shadow_muted(user_id, board_id):
-        await handle_shadow_mute_continuation(user_id, board_id, reason="Постинг в шедоумуте")
-        return True  # Let handle_message route to process_shadow_reject!
 
     f_id, f_uid = None, None
     file_obj = getattr(msg, raw_content_type, None)
@@ -1000,6 +1011,31 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         f_id = getattr(file_obj, 'file_id', None)
         f_uid = getattr(file_obj, 'file_unique_id', None)
 
+    msg_date_ts = msg.date.timestamp() if getattr(msg, 'date', None) else time.time()
+
+    # If user is already shadow-muted:
+    if await is_shadow_muted(user_id, board_id):
+        # Проверяем, совершает ли замученный пользователь НАРУШЕНИЕ ПРАВИЛ (флуд, спам, баян, скам-ссылки)
+        from common.spam_filter import check_flood, check_link_or_ad_spam, _check_cross_board_spam, is_bayan
+        now_check = msg_date_ts
+        is_fl, fl_reason = check_flood(user_id, board_id, now_ts=now_check, record_history=False)
+        text_str = content if isinstance(content, str) else ""
+        is_link, link_reason = check_link_or_ad_spam(user_id, board_id, text_str, now_ts=now_check)
+        payload = text_str or f_uid or f_id or ""
+        is_cb = not _check_cross_board_spam(user_id, board_id, payload, msg_type, raw_content_type, now_ts=now_check, record_history=False)
+        is_by, by_reason = is_bayan(user_id, board_id, content=text_str or None, msg_type=msg_type or raw_content_type, file_unique_id=f_uid, file_id=f_id, now_ts=now_check)
+
+        if is_fl or is_link or is_cb or is_by:
+            # Нарушающая комбинация в муте -> прогрессия мута!
+            viol_reason = fl_reason or link_reason or ("Кросс-борд спам" if is_cb else by_reason)
+            from common.database import apply_shadow_mute
+            await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=f"Нарушение в муте: {viol_reason}", is_exponential=True)
+        else:
+            # Обычное сообщение в муте -> таймер не трогаем, прогрессия не начисляется
+            await handle_shadow_mute_continuation(user_id, board_id, reason="Обычный постинг в муте (без штрафа)")
+
+        return True  # Let handle_message route to process_shadow_reject!
+
     # 1. Comprehensive auto-shadowmute evaluation (Flood, Link/Ad spam, Cross-board, 3+ Bayans in 3 min)
     should_mute, mute_reason, mute_exp = await evaluate_message_for_autoshadowmute(
         user_id=user_id,
@@ -1008,7 +1044,8 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         msg_type=msg_type or raw_content_type,
         raw_content_type=raw_content_type,
         file_unique_id=f_uid,
-        file_id=f_id
+        file_id=f_id,
+        now_ts=msg_date_ts
     )
     if should_mute:
         # User is placed into silent shadow-mute in DB and RAM.
@@ -1017,22 +1054,24 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         return True
 
     # 2. Legacy / rate limit analysis
-    result, level = await analyze_message_for_spam(user_id, board_id, content, msg_type, raw_content_type)
+    result, level = await analyze_message_for_spam(user_id, board_id, content, msg_type, raw_content_type, skip_bayan=True)
     if result == SpamResult.GLOBAL_BAN_REQUIRED:
-        msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id}. Выдан перманентный SHADOWMUTE везде кроме /b/."
+        msg_str = f"🚨 [GLOBAL] РЕЙД-БОТ / СПАМЕР ОБНАРУЖЕН: user {user_id}. Выдан глобальный теневой мут на 7 дней везде кроме /b/."
         print(msg_str)
         from common.database import update_shadow_mute, log_global_event
         spawn_task(log_global_event('bot', msg_str))
-        expires_dt = datetime.now(UTC) + timedelta(days=365)
+        expires_dt = datetime.now(UTC) + timedelta(days=7)
         for b in BOARD_CONFIG.keys():
             if b != 'b':
                 board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
                 spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
-        return False
+        return True  # Route to process_shadow_reject!
     elif result in (SpamResult.BAYAN_MUTE, SpamResult.SHADOW_MUTE_REQUIRED):
         return True  # Route to process_shadow_reject!
     elif result == SpamResult.BAN_REQUIRED:
-        return False
+        from common.database import apply_shadow_mute
+        await apply_shadow_mute(user_id, board_id, duration_seconds=300.0, reason=f"Рейт-лимит спама {msg_type}", is_exponential=False)
+        return True  # Route to process_shadow_reject!
 
     rules = SPAM_RULES.get(msg_type)
     if not rules:
@@ -1044,7 +1083,9 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
 
     b_data = board_data[board_id]
     if not _check_repeats(user_id, b_data, (content, msg_type), rules, violations):
-        return False
+        from common.database import apply_shadow_mute
+        await apply_shadow_mute(user_id, board_id, duration_seconds=300.0, reason=f"Спам повторами {msg_type}", is_exponential=False)
+        return True  # Route to process_shadow_reject!
 
     return True
 
@@ -1061,7 +1102,7 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
             }.get(msg_type, 'спам / частый постинг')
             reason = f"Автошедоумут за {violation_type}"
             
-        await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=reason, is_exponential=True)
+        await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=reason, is_exponential=False)
 
 async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
 
@@ -1210,10 +1251,11 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         return
     b_data = board_data[board_id]
     if not is_admin(user_id, board_id):
-        if user_id in b_data['users']['banned'] or \
-           (b_data['mutes'].get(user_id) and b_data['mutes'][user_id] > datetime.now(UTC)):
+        mutes = b_data.get('mutes', {})
+        if user_id in b_data.get('users', {}).get('banned', set()) or \
+           (mutes.get(user_id) and mutes[user_id] > datetime.now(UTC)):
             return
-    b_data['last_activity'][user_id] = datetime.now(UTC)
+    b_data.setdefault('last_activity', {})[user_id] = datetime.now(UTC)
     
     is_leader = False
     async with media_group_creation_lock:
@@ -1233,17 +1275,24 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         
     if is_leader:
         try:
-            fake_text_message = types.Message(
-                message_id=message.message_id, date=message.date, chat=message.chat,
-                from_user=message.from_user, content_type='text', text=f"media_group_{media_group_id}"
-            )
+            # Проверяем только flood для медиагруппы — НЕ используем fake 'text' тип,
+            # чтобы медиагруппы не засчитывались в rate-limit текстовых сообщений.
+            # Это устраняло ложные автомуты при активной дискуссии + медиагруппах.
             if not is_admin(user_id, board_id):
-                if not await check_spam(user_id, fake_text_message, board_id):
+                from common.spam_filter import check_flood, evaluate_message_for_autoshadowmute
+                msg_date_ts = message.date.timestamp() if getattr(message, 'date', None) else time.time()
+                # Flood-only check для медиагруппы
+                is_flood, flood_reason = check_flood(user_id, board_id, now_ts=msg_date_ts)
+                if is_flood:
+                    from common.database import apply_shadow_mute
+                    await apply_shadow_mute(user_id, board_id, duration_seconds=300.0,
+                                            reason=f"Флуд медиагруппами: {flood_reason}", is_exponential=False)
                     current_media_groups.pop(media_group_key, None)
-                    await apply_penalty(message.bot, user_id, 'text', board_id)
+                    await apply_penalty(message.bot, user_id, 'media_group', board_id)
                     if 'init_event' in group:
                         group['init_event'].set()
                     return
+
             reply_to_post = None
             if message.reply_to_message:
                 async with storage_lock:

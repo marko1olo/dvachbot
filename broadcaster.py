@@ -1327,8 +1327,14 @@ class MessageBroadcaster:
                 elif "voice_messages_forbidden" in err_low:
                     self.stats['errors'] += 1
                     return None
-                elif "wrong remote file identifier" in err_low or "unserialize" in err_low or "wrong padding" in err_low or "invalid file_id" in err_low or "wrong file identifier" in err_low:
-                    main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Auto-downloading media buffer for cross-bot delivery to user {uid}: {e}")
+                elif any(bad_id_str in err_low for bad_id_str in [
+                    "wrong remote file identifier", "unserialize", "wrong padding",
+                    "invalid file_id", "wrong file identifier", "media_file_invalid",
+                    "media_empty", "file_parts_invalid", "media_type_invalid",
+                    "file_id_invalid", "wrong type of the web page content",
+                    "failed to get http url content", "can't use file of type"
+                ]):
+                    main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID/MEDIA_INVALID] Auto-downloading media buffer for user {uid}: {e}")
                     try:
                         from archive_manager import _download_media_bytes
                         fid = current_content.get("file_id") or current_content.get("image_url")
@@ -1336,36 +1342,71 @@ class MessageBroadcaster:
                             fb, _ = await _download_media_bytes(fid)
                             if fb:
                                 current_content["image_bytes"] = fb
-                                ct = str(current_content.get("type") or "").split('.')[-1].lower()
-                                ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else "dat")
-                                file_source = BufferedInputFile(fb, filename=f"media.{ext}")
-                                send_method = getattr(self.bot_instance, f"send_{ct}")
-                                if len(full_text) <= 1024:
-                                    common_kwargs['caption'] = full_text
-                                    common_kwargs['parse_mode'] = "HTML"
-                                    common_kwargs[ct] = file_source
-                                    res = await send_method(**common_kwargs)
-                                    self.stats['success'] += 1
-                                    return res
-                                else:
-                                    common_kwargs[ct] = file_source
-                                    media_msg = await send_method(**common_kwargs)
-                                    text_parts = split_text(full_text, 4096)
-                                    for part in text_parts:
-                                        await self.bot_instance.send_message(
-                                            chat_id=uid, text=part, parse_mode="HTML",
-                                            reply_to_message_id=media_msg.message_id,
-                                            disable_notification=is_sage,
-                                            link_preview_options=LinkPreviewOptions(is_disabled=True),
-                                            request_timeout=request_timeout,
-                                        )
-                                    self.stats['success'] += 1
-                                    return media_msg
+                        fb = current_content.get("image_bytes")
+                        if fb:
+                            ct = str(current_content.get("type") or "").split('.')[-1].lower()
+                            ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else "dat")
+                            file_source = BufferedInputFile(fb, filename=f"media.{ext}")
+                            send_method = getattr(self.bot_instance, f"send_{ct}")
+                            if len(full_text) <= 1024:
+                                common_kwargs['caption'] = full_text
+                                common_kwargs['parse_mode'] = "HTML"
+                                res = await send_method(**common_kwargs)
+                                self.stats['success'] += 1
+                                # Кэшируем новый валидный file_id для оставшихся получателей в рассылке
+                                try:
+                                    if getattr(res, 'photo', None):
+                                        current_content['file_id'] = res.photo[-1].file_id
+                                    elif getattr(res, 'video', None):
+                                        current_content['file_id'] = res.video.file_id
+                                    elif getattr(res, 'animation', None):
+                                        current_content['file_id'] = res.animation.file_id
+                                    elif getattr(res, 'document', None):
+                                        current_content['file_id'] = res.document.file_id
+                                    elif getattr(res, 'audio', None):
+                                        current_content['file_id'] = res.audio.file_id
+                                    elif getattr(res, 'voice', None):
+                                        current_content['file_id'] = res.voice.file_id
+                                except Exception:
+                                    pass
+                                return res
+                            else:
+                                common_kwargs[ct] = file_source
+                                media_msg = await send_method(**common_kwargs)
+                                try:
+                                    if getattr(media_msg, 'photo', None):
+                                        current_content['file_id'] = media_msg.photo[-1].file_id
+                                    elif getattr(media_msg, 'video', None):
+                                        current_content['file_id'] = media_msg.video.file_id
+                                    elif getattr(media_msg, 'animation', None):
+                                        current_content['file_id'] = media_msg.animation.file_id
+                                    elif getattr(media_msg, 'document', None):
+                                        current_content['file_id'] = media_msg.document.file_id
+                                    elif getattr(media_msg, 'audio', None):
+                                        current_content['file_id'] = media_msg.audio.file_id
+                                    elif getattr(media_msg, 'voice', None):
+                                        current_content['file_id'] = media_msg.voice.file_id
+                                except Exception:
+                                    pass
+                                text_parts = split_text(full_text, 4096)
+                                for part in text_parts:
+                                    await self.bot_instance.send_message(
+                                        chat_id=uid, text=part, parse_mode="HTML",
+                                        reply_to_message_id=media_msg.message_id,
+                                        disable_notification=is_sage,
+                                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                        request_timeout=request_timeout,
+                                    )
+                                self.stats['success'] += 1
+                                return media_msg
                     except Exception as dl_err:
                         main.runtime_logger.warning(f"⚠️ Buffer download fallback failed: {dl_err}")
                     return await _send_plain_media_fallback("bad_file_id")
                 else:
-                    print(f"⚠️ BadRequest отправки user {uid}: {e}")
+                    main.runtime_logger.warning(f"⚠️ BadRequest отправки user {uid}: {e}. Attempting plain fallback...")
+                    fb_res = await _send_plain_media_fallback("bad_request")
+                    if fb_res:
+                        return fb_res
                     self.stats['errors'] += 1
                     return None
             except TelegramForbiddenError:

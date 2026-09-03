@@ -41,12 +41,20 @@ from common.spam_filter import analyze_message_for_spam, SpamResult, check_image
 from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type, _site_public_url, _site_file_source
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
-from post_helpers import apply_shadow_autoreplace, _format_header_inner, format_header
+import operator
+from post_helpers import (
+    apply_shadow_autoreplace, _format_header_inner, format_header,
+    _format_post_text, _format_media_context, _MEDIA_DESC_CACHE,
+    _get_cached_anon_name, RE_MULTI_NEWLINES, _MEDIA_ERROR_TAGS
+)
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 
 import shared_state
 from shared_state import *
-from shared_state import _persona_processed_posts, _last_persona_dialogue_user_ts, _last_persona_board_ts
+from shared_state import (
+    _persona_processed_posts, _last_persona_dialogue_user_ts, _last_persona_board_ts,
+    make_duel_token, resolve_duel_token
+)
 from casino_engine import check_casino_raid_trigger
 from broadcaster import MessageBroadcaster, send_message_to_users, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
 from utils import split_text
@@ -76,7 +84,8 @@ import sys
 from common.bot_helpers import (
     _get_user_active_items, delete_message_after_delay, process_new_post,
     accept_duel_logic, decline_duel_logic, apply_regular_mute, remove_regular_mute,
-    get_author_id_by_reply, get_post_num_by_reply
+    get_author_id_by_reply, get_post_num_by_reply, classic_duel_lock,
+    send_pvp_direct_notification
 )
 
 from handlers.message_router import check_spam, apply_penalty, process_shadow_reject
@@ -243,7 +252,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
 )
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, InputFile
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, InputFile, FSInputFile
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 # Определяем состояния для машины состояний
@@ -768,7 +777,7 @@ dp = Dispatcher()
 from economy_extension import economy_router, apply_tinfoil_damage
 from stats_hub_router import router as stats_hub_router
 from votemute_engine import votemute_router
-from ttt_engine import router as ttt_router, cmd_ttt
+from ttt_engine import router as ttt_router, cmd_ttt, MIN_TTT_BET, MAX_TTT_BET
 from dice_duel_engine import router as dice_duel_router, cmd_dice_duel_entry as cmd_dice_duel
 from russian_roulette_pvp import router as russian_roulette_pvp_router, cmd_russian_roulette as cmd_duel_rr
 dp.include_router(economy_router)
@@ -2255,115 +2264,174 @@ def _format_post_for_chunk(post: dict, board_id: str, time_threshold: datetime, 
             text = f"[Отправил{file_label}] {text}"
     return text
 
-def _format_post_text(content: dict, msg_type: str) -> str | None:
-    text = content.get('text') or content.get('caption') or ""
-    text = re.sub(r'<[^>]+>', '', text).strip()
-    if text:
-        return text
-    if msg_type in ('photo', 'video', 'document', 'animation', 'media_group', 'sticker', 'voice', 'video_note'):
-        return f"[{msg_type}]"
-    return None
 
 def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
     name = content.get('username') or content.get('name') or content.get('author_name')
     if not name:
-        if not lang:
-            lang = 'en' if board_id == 'int' else 'ru'
+        stream_lang = lang or ('en' if board_id == 'int' else 'ru')
         author_id = post.get('author_id')
         if author_id and author_id != 0:
-            aid = get_anon_id(author_id, stream=lang)
-            if lang == 'en':
-                name = f"Anon [{aid}]"
-            elif lang == 'jp':
-                name = f"名無し [{aid}]"
-            else:
-                name = f"Анон [{aid}]"
+            name = _get_cached_anon_name(author_id, stream_lang)
         else:
-            if lang == 'en':
-                name = "Anon"
-            elif lang == 'jp':
-                name = "名無し"
-            else:
-                name = "Анон"
+            name = "Anon" if stream_lang == 'en' else ("名無し" if stream_lang == 'jp' else "Анон")
     return name
 
 def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None) -> str:
     reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
-    reply_suffix = ""
-    if reply_to:
-        if not lang:
-            lang = 'en' if board_id == 'int' else 'ru'
-        if lang == 'en':
-            reply_suffix = f" (reply to #{reply_to})"
-        elif lang == 'jp':
-            reply_suffix = f" (>>{reply_to})"
-        else:
-            reply_suffix = f" (Ответ на #{reply_to})"
-    return reply_suffix
+    if not reply_to:
+        return ""
+    stream_lang = lang or ('en' if board_id == 'int' else 'ru')
+    if stream_lang == 'en':
+        return f" (reply to #{reply_to})"
+    elif stream_lang == 'jp':
+        return f" (>>{reply_to})"
+    return f" (Ответ на #{reply_to})"
 
+def _fast_storage_ts(val) -> float:
+    if type(val) is datetime:
+        return val.timestamp()
+    if val is None:
+        return 0.0
+    if type(val) in (int, float):
+        return float(val)
+    return normalize_storage_timestamp(val)
 
 async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
     now_ts = time.time()
     time_threshold_ts = now_ts - (hours * 3600)
-    lines = []
+    stream_lang = lang or ('en' if board_id == 'int' else 'ru')
     
     async with storage_lock:
         if thread_id:
-            b_data = board_data[board_id]
-            thread_info = get_thread_info(board_id, thread_id)
+            b_data = board_data.get(board_id, {})
+            thread_info = get_thread_info(board_id, thread_id) if 'get_thread_info' in globals() else b_data.get('threads_data', {}).get(thread_id)
             if not thread_info:
                 return ""
             thread_post_nums = set(thread_info.get('posts', []))
-            post_iterator = [p for p_num, p in messages_storage.items() if p_num in thread_post_nums]
-            time_threshold_ts = 0.0
-            # Сортируем сообщения треда по времени
-            post_iterator.sort(key=lambda x: normalize_storage_timestamp(x.get('timestamp')))
+            post_tuples = []
+            for p_num, p in messages_storage.items():
+                if p_num in thread_post_nums:
+                    post_tuples.append((_fast_storage_ts(p.get('timestamp')), p))
+            post_tuples.sort(key=operator.itemgetter(0))
+            post_iterator = [p for _, p in post_tuples]
         else:
-            board_posts = [p for p in messages_storage.values() if p.get('board_id') == board_id and p.get('author_id') != 0]
-            board_posts.sort(key=lambda x: normalize_storage_timestamp(x.get('timestamp')))
+            board_posts = []
+            for p in messages_storage.values():
+                if p.get('board_id') == board_id and p.get('author_id') != 0:
+                    board_posts.append((_fast_storage_ts(p.get('timestamp')), p))
+            board_posts.sort(key=operator.itemgetter(0))
             
-            posts_in_last_6h = [p for p in board_posts if normalize_storage_timestamp(p.get('timestamp')) >= time_threshold_ts]
-            count_6h = len(posts_in_last_6h)
-            
-            # 150-200 последних сообщений либо 6 часов (выбираем оптимальный диапазон)
-            if count_6h < 150:
-                target_posts = board_posts[-150:]
-            elif count_6h > 200:
-                target_posts = board_posts[-200:]
+            total_board_posts = len(board_posts)
+            if total_board_posts <= 150:
+                post_iterator = [p for _, p in board_posts]
             else:
-                target_posts = posts_in_last_6h
-            post_iterator = target_posts
-            time_threshold_ts = 0.0
+                posts_in_last_6h = [p for ts, p in board_posts if ts >= time_threshold_ts]
+                count_6h = len(posts_in_last_6h)
+                if count_6h < 150:
+                    post_iterator = [p for _, p in board_posts[-150:]]
+                elif count_6h > 200:
+                    post_iterator = [p for _, p in board_posts[-200:]]
+                else:
+                    post_iterator = posts_in_last_6h
+
+    # Batch-fetch media tags & descriptions for all image posts in post_iterator
+    missing_file_ids = None
+    for post in post_iterator:
+        c = post.get('content')
+        if isinstance(c, dict):
+            fid = c.get('file_id')
+            if fid and isinstance(fid, str) and fid not in _MEDIA_DESC_CACHE:
+                if missing_file_ids is None:
+                    missing_file_ids = []
+                missing_file_ids.append(fid)
+            elif not fid and c.get('media'):
+                for m in c.get('media', []):
+                    if isinstance(m, dict):
+                        mfid = m.get('file_id')
+                        if mfid and isinstance(mfid, str) and mfid not in _MEDIA_DESC_CACHE:
+                            if missing_file_ids is None:
+                                missing_file_ids = []
+                            missing_file_ids.append(mfid)
+
+    if missing_file_ids:
+        missing_file_ids = list(dict.fromkeys(missing_file_ids))
+        try:
+            from common.database import get_pool
+            db = await get_pool()
+            placeholders = ",".join("?" for _ in missing_file_ids)
+            async with db.execute(
+                f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})",
+                tuple(missing_file_ids)
+            ) as cursor:
+                found_fids = set()
+                for row in await cursor.fetchall():
+                    fid_val = row[0]
+                    meta = {'tags': row[1] or '', 'description': row[2] or ''}
+                    _format_media_context(meta)
+                    _MEDIA_DESC_CACHE[fid_val] = meta
+                    found_fids.add(fid_val)
+                for fid_val in missing_file_ids:
+                    if fid_val not in found_fids:
+                        _MEDIA_DESC_CACHE[fid_val] = {'tags': '', 'description': '', 'formatted': None}
+        except Exception as meta_err:
+            logger.debug(f"[summarize] Media meta batch load error: {meta_err}")
+
+    lines = []
     for post in post_iterator:
         try:
-            if post.get('board_id') != board_id:
+            content = post.get('content')
+            if not isinstance(content, dict):
                 continue
-            if normalize_storage_timestamp(post.get('timestamp')) < time_threshold_ts:
-                continue
-            if post.get('author_id') == 0: # Игнорируем системные сообщения
-                continue
-            content = post.get('content', {})
-            msg_type = content.get('type', 'text')
             
-            text = _format_post_text(content, msg_type)
-            if text:
-                name = _get_author_name(post, content, board_id, lang)
-                reply_suffix = _get_reply_suffix(post, content, board_id, lang)
-                lines.append(f"{name}{reply_suffix}: {text}")
+            fid = content.get('file_id')
+            if not fid and content.get('media'):
+                for m in content.get('media', []):
+                    if isinstance(m, dict) and m.get('file_id'):
+                        fid = m.get('file_id')
+                        break
+            
+            media_meta = _MEDIA_DESC_CACHE.get(fid) if fid else None
+            msg_type = content.get('type', 'text')
+
+            text = _format_post_text(content, msg_type, media_meta=media_meta)
+            if not text:
+                continue
+
+            name = content.get('username') or content.get('name') or content.get('author_name')
+            if not name:
+                author_id = post.get('author_id')
+                if author_id and author_id != 0:
+                    name = _get_cached_anon_name(author_id, stream_lang)
+                else:
+                    name = "Anon" if stream_lang == 'en' else ("名無し" if stream_lang == 'jp' else "Анон")
+
+            reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
+            if reply_to:
+                if stream_lang == 'en':
+                    lines.append(f"{name} (reply to #{reply_to}): {text}")
+                elif stream_lang == 'jp':
+                    lines.append(f"{name} (>>{reply_to}): {text}")
+                else:
+                    lines.append(f"{name} (Ответ на #{reply_to}): {text}")
+            else:
+                lines.append(f"{name}: {text}")
         except Exception as e:
             logger.warning(f"[summarize] Error while chunking post: {e}")
+
     # Accumulate lines from newest to oldest up to 35000 characters to avoid split lines
     total_len = 0
     limited_lines = []
     for line in reversed(lines):
-        # We also collapse multiple newlines if any, but our lines are single messages anyway
-        line_clean = re.sub(r'\n{2,}', '\n', line).strip()
+        line_clean = line.strip()
         if not line_clean:
             continue
-        if total_len + len(line_clean) + 1 > 35000:
+        if '\n\n' in line_clean:
+            line_clean = RE_MULTI_NEWLINES.sub('\n', line_clean)
+        line_len = len(line_clean)
+        if total_len + line_len + 1 > 35000:
             break
         limited_lines.append(line_clean)
-        total_len += len(line_clean) + 1
+        total_len += line_len + 1
     
     limited_lines.reverse()
     cleaned_chunk = "\n".join(limited_lines)
@@ -2858,7 +2926,8 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     content = {
         'type': 'text',
         'text': text,
-        'is_system_message': True
+        'is_system_message': True,
+        'archive_allowed': True
     }
     post_num = await create_post(
         board_id=board_id,
@@ -4053,7 +4122,7 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         f"💊 <b>АПТЕКА, ЗАЩИТА И КОРРУПЦИЯ</b>\n"
         f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
         f"1. 💊 <b>Аминазин</b> — <i>{p_pills} ₪</i> (Моментально смывает говно, понос и шизу)\n"
-        f"2. 🔰 <b>Зеркальный Щит (6ч)</b> — <i>{p_shield} ₪</i> (Отражает выстрел Мут-Гана в стрелка!)\n"
+        f"2. 🪞 <b>Зеркало заднего вида (6ч)</b> — <i>{p_shield} ₪</i> (Отражает любые PvP-атаки и дебаффы прямо в нападающего!)\n"
         f"3. 📜 <b>Взятка (Индульгенция)</b> — <i>{p_bribe} ₪</i> (Моментально снимает мут)\n"
         f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от грабежа и говна)\n"
         f"5. 🎖️ <b>Ксива полковника</b> — <i>{p_ksiva} ₪</i> (100% спасение от облавы пативана)\n"
@@ -4062,7 +4131,7 @@ def _build_pharma_shop_content(user_id: int, balance: float):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=f"💊 Аминазин ({p_pills}₪)", callback_data="shop_buy_pills"),
-            InlineKeyboardButton(text=f"🔰 Щит ({p_shield}₪)", callback_data="shop_buy_shield")
+            InlineKeyboardButton(text=f"🪞 Зеркало ({p_shield}₪)", callback_data="shop_buy_shield")
         ],
         [
             InlineKeyboardButton(text=f"📜 Взятка ({p_bribe}₪)", callback_data="shop_buy_bribe"),
@@ -4133,6 +4202,197 @@ def _build_color_picker_content(user_id: int, balance: float, active_items: dict
 
     kb_rows.append([InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")])
     return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+# ──────────────────────── BANNER GALLERY ────────────────────────
+BANNERS_PER_PAGE = 10
+
+# User-facing category labels
+_BANNER_CAT_LABELS = {
+    "all": "🎨 Все",
+    "night": "🌙 Ночь",
+    "maid": "🎀 Мейд",
+    "schizo": "🧠 Шизо",
+    "calm": "☕ Ламповые",
+    "cyberpunk": "🌃 Киберпанк",
+    "gothic": "🦇 Готика",
+    "retro": "🕹 Ретро",
+    "anime": "🌸 Аниме",
+    "chill": "🍵 Уют",
+    "shop": "🛒 Магазин",
+    "roulette": "🎰 Рулетка",
+    "duel": "⚔️ Дуэль",
+}
+
+
+async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all"):
+    """Sends a page of banners as a media group + navigation buttons with automatic cache fallback."""
+    from banner_manager import _CATEGORIZED_BANNERS, get_banner_file, BANNERS_DIR, _BANNER_CACHE, save_cache
+
+    pool = _CATEGORIZED_BANNERS.get(category, _CATEGORIZED_BANNERS.get("all", []))
+    if not pool:
+        pool = _CATEGORIZED_BANNERS.get("all", [])
+        category = "all"
+    total = len(pool)
+    if total == 0:
+        await bot.send_message(chat_id, "❌ Баннеры не найдены.")
+        return
+
+    total_pages = (total + BANNERS_PER_PAGE - 1) // BANNERS_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * BANNERS_PER_PAGE
+    end = min(start + BANNERS_PER_PAGE, total)
+    chunk = pool[start:end]
+    bot_id = getattr(bot, "id", None)
+    cat_label = _BANNER_CAT_LABELS.get(category, category)
+
+    def _build_media_list(use_local_files: bool = False):
+        items = []
+        valid_filenames = []
+        for i, fname in enumerate(chunk):
+            photo_payload = None
+            local_path = BANNERS_DIR / fname
+            if not use_local_files:
+                _, photo_payload = get_banner_file(banner_name=fname, bot_id=bot_id)
+            if not photo_payload:
+                if local_path.exists():
+                    photo_payload = FSInputFile(str(local_path))
+                else:
+                    continue
+
+            caption_text = None
+            if i == 0:
+                caption_text = (
+                    f"🖼 <b>Галерея баннеров ТГАЧ</b>  •  {cat_label}\n"
+                    f"📄 <b>{page + 1}</b> / {total_pages}  "
+                    f"({start + 1}–{end} из {total})"
+                )
+
+            items.append(types.InputMediaPhoto(
+                media=photo_payload,
+                caption=caption_text,
+                parse_mode="HTML" if caption_text else None
+            ))
+            valid_filenames.append(fname)
+        return items, valid_filenames
+
+    media, valid_fnames = _build_media_list(use_local_files=False)
+    if not media:
+        media, valid_fnames = _build_media_list(use_local_files=True)
+
+    if not media:
+        await bot.send_message(chat_id, "❌ Не удалось загрузить баннеры для этой категории.")
+        return
+
+    # Row 1: Fast skip + page-by-page navigation
+    nav_row = []
+    if page >= 5:
+        nav_row.append(InlineKeyboardButton(text="⏪ -5", callback_data=f"bn:{category}:{page - 5}"))
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"bn:{category}:{page - 1}"))
+    nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="bn_noop"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"bn:{category}:{page + 1}"))
+    if page + 5 < total_pages:
+        nav_row.append(InlineKeyboardButton(text="+5 ⏩", callback_data=f"bn:{category}:{page + 5}"))
+
+    # Row 2: Category filter buttons
+    cat_keys = list(_BANNER_CAT_LABELS.keys())
+    cat_row_1 = []
+    cat_row_2 = []
+    for i, ck in enumerate(cat_keys):
+        label = _BANNER_CAT_LABELS[ck]
+        if ck == category:
+            label = f"[{label}]"
+        btn = InlineKeyboardButton(text=label, callback_data=f"bn:{ck}:0")
+        if i < 7:
+            cat_row_1.append(btn)
+        else:
+            cat_row_2.append(btn)
+
+    rows = [nav_row]
+    if cat_row_1:
+        rows.append(cat_row_1)
+    if cat_row_2:
+        rows.append(cat_row_2)
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    sent_messages = None
+    try:
+        sent_messages = await bot.send_media_group(chat_id=chat_id, media=media)
+    except Exception as e:
+        logger.warning(f"[banners] Initial media group send failed: {e}. Retrying with local files and resetting bad file_ids...")
+        # Invalidate cached file_ids for this chunk
+        for fn in chunk:
+            if bot_id and f"{bot_id}:{fn}" in _BANNER_CACHE:
+                _BANNER_CACHE.pop(f"{bot_id}:{fn}", None)
+            if fn in _BANNER_CACHE:
+                _BANNER_CACHE.pop(fn, None)
+        save_cache()
+
+        # Re-build using direct FSInputFile
+        fallback_media, valid_fnames = _build_media_list(use_local_files=True)
+        if fallback_media:
+            try:
+                sent_messages = await bot.send_media_group(chat_id=chat_id, media=fallback_media)
+            except Exception as retry_err:
+                logger.error(f"[banners] Fallback media group send also failed: {retry_err}")
+                await bot.send_message(chat_id, f"❌ Ошибка отправки баннеров: {retry_err}")
+                return
+
+    if sent_messages:
+        # Cache new valid file_ids from successfully delivered media group
+        try:
+            for idx, msg in enumerate(sent_messages):
+                if msg.photo and idx < len(valid_fnames):
+                    fn = valid_fnames[idx]
+                    fid = msg.photo[-1].file_id
+                    if bot_id:
+                        _BANNER_CACHE[f"{bot_id}:{fn}"] = fid
+                    _BANNER_CACHE[fn] = fid
+            save_cache()
+        except Exception:
+            pass
+
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"🖼 {cat_label}: <b>{page + 1}</b> / {total_pages}  ({total} шт.)",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+
+
+@dp.message(Command("banners", "баннеры", "gallery", "галерея", ignore_case=True, ignore_mention=True))
+async def cmd_banners(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id:
+        return
+    await _send_banners_page(message.bot, message.chat.id, page=0, category="all")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.startswith("bn:"))
+async def cb_banners_page(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    try:
+        category = parts[1] if len(parts) > 1 else "all"
+        page = int(parts[2]) if len(parts) > 2 else 0
+    except (ValueError, IndexError):
+        category, page = "all", 0
+    await callback.answer()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _send_banners_page(callback.bot, callback.message.chat.id, page=page, category=category)
+
+
+@dp.callback_query(F.data == "bn_noop")
+async def cb_banners_noop(callback: types.CallbackQuery):
+    await callback.answer("⬅️ ▶️ — листать, ⏪ ⏩ — скип на 5 страниц", show_alert=False)
+
 
 
 @dp.message(Command("shop", "store", "магазин", ignore_case=True, ignore_mention=True))
@@ -4914,7 +5174,23 @@ async def cb_prof_inventory(callback: types.CallbackQuery, board_id: str | None)
     await callback.answer()
 
 
-_LOOTBOX_USER_COOLDOWNS: dict[int, float] = {}
+_LOOTBOX_USER_COOLDOWNS: dict[tuple[int, str], float] = {}
+_LOOTBOX_SPAM_VIOLATIONS: dict[int, list[float]] = {}
+
+def _get_lootbox_penalty_multiplier(user_id: int, now_ts: float) -> tuple[float, int]:
+    """
+    Returns (multiplier, recent_violations_count).
+    If violations <= 10: multiplier = 1.0
+    If violations > 10: multiplier gradually scales up to 4.0x (max).
+    """
+    hits = [t for t in _LOOTBOX_SPAM_VIOLATIONS.get(user_id, []) if now_ts - t < 600.0]
+    _LOOTBOX_SPAM_VIOLATIONS[user_id] = hits
+    cnt = len(hits)
+    if cnt <= 10:
+        return 1.0, cnt
+    multiplier = min(4.0, 1.0 + (cnt - 10) * 0.3)
+    return multiplier, cnt
+
 
 LOOTBOX_COOLDOWN_EXCUSES = [
     "⏳ Клешни от коробки убрал! Лудоман ебаный, подожди {seconds}с, пока Абу набивает лутбокс мусором.",
@@ -5008,16 +5284,30 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     item = callback.data.replace("shop_buy_", "")
     db = await get_pool()
 
-    # Rate limiting on lootbox openings (3 seconds anti-bot cooldown)
-    if item in ("lootbox_trash", "lootbox_gold", "trash_lootbox", "gold_safe"):
-        last_open = _LOOTBOX_USER_COOLDOWNS.get(user_id, 0.0)
-        time_since = time.time() - last_open
-        if time_since < 3.0:
-            rem_sec = round(3.0 - time_since, 1)
+    # Rate limiting on lootbox openings — 30s base cooldown for both boxes + adaptive penalty scaling up to 4x (120s)
+    if item in ("lootbox_trash", "trash_lootbox", "lootbox_gold", "gold_safe"):
+        now_ts = time.time()
+        multiplier, violations = _get_lootbox_penalty_multiplier(user_id, now_ts)
+        effective_cd = 30.0 * multiplier  # 30s base cooldown for both
+
+        cd_key = (user_id, "gold" if "gold" in item else "trash")
+        last_open = _LOOTBOX_USER_COOLDOWNS.get(cd_key, 0.0)
+        time_since = now_ts - last_open
+
+        if time_since < effective_cd:
+            # Record violation hit to trigger/advance penalty progression
+            _LOOTBOX_SPAM_VIOLATIONS.setdefault(user_id, []).append(now_ts)
+            new_mult, new_viols = _get_lootbox_penalty_multiplier(user_id, now_ts)
+            new_effective_cd = 30.0 * new_mult
+            rem_sec = round(max(0.1, new_effective_cd - time_since), 1)
+
             excuse = secrets.choice(LOOTBOX_COOLDOWN_EXCUSES).format(seconds=rem_sec)
+            if new_mult > 1.0:
+                excuse += f"\n\n🚨 За спам/автокликер ({new_viols} кликов) твой кулдаун увеличен в {new_mult:.1f}x ({int(new_effective_cd)}с)!"
             await callback.answer(excuse, show_alert=True)
             return
-        _LOOTBOX_USER_COOLDOWNS[user_id] = time.time()
+
+        _LOOTBOX_USER_COOLDOWNS[cd_key] = now_ts
 
     from shared_state import check_shop_purchase_limit, record_shop_purchase
     is_allowed, cur_cnt, max_lim = check_shop_purchase_limit(user_id, item)
@@ -5124,7 +5414,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             new_until = min(base + 6 * 3600, max_cap)
             active_items["reflect_shield_until"] = new_until
             active_items["shield_until"] = new_until
-            msg = "🔰 Зеркальный Щит активирован на 6 часов! Выстрелы Мут-Гана отрикошетят в стрелка."
+            msg = "🪞 Зеркало заднего вида активировано на 6 часов! Любые PvP-атаки (мут-ган, заточка, говно, блевота, перцовка, пативэн) отрикошетят прямо в нападающего."
 
         elif item == "partyvan":
             if active_items.get("partyvan_gun"):
@@ -5563,7 +5853,12 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
+    if target_id == 0:
+        db = await get_pool()
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "shoot", user_id, board_id, db):
+            return
+    if not target_id:
         await message.answer("🚫 Не удалось найти автора поста...")
         return
     if target_id == user_id:
@@ -5740,7 +6035,12 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
+    if target_id == 0:
+        db = await get_pool()
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "pepperspray", user_id, board_id, db):
+            return
+    if not target_id:
         await message.answer("🚫 Не удалось найти автора поста...")
         return
     if target_id == user_id:
@@ -5878,7 +6178,12 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
+    if target_id == 0:
+        db = await get_pool()
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "rob", user_id, board_id, db):
+            return
+    if not target_id:
         await message.answer("⚠️ Не удалось найти цель для ограбления.")
         return
     if target_id == user_id:
@@ -5952,6 +6257,41 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
         await message.answer(stench_text, parse_mode="HTML")
+        return
+
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        # Зеркало заднего вида отражает грабеж обратно в нападающего!
+        t_items["reflect_shield_until"] = 0
+        loss = min(int(u_balance * pct), 1000)
+        async with db_lock:
+            if loss > 0:
+                ok_loss, _ = await deduct_user_global_balance(db, user_id, board_id, loss)
+                if ok_loss:
+                    await add_user_global_balance(db, target_id, board_id, loss)
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
+            )
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (target_id, board_id, json.dumps(t_items))
+            )
+            await db.commit()
+
+        reflect_txt = (
+            f"🪞 <b>ОТРАЖЕНИЕ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\n"
+            f"Жертва выставила Зеркало! Твоя Заточка соскользнула, и ты в панике выронил <b>{loss} ₪</b> прямо в карман жертве!\n"
+            f"<i>(Зеркало жертвы израсходовано)</i>"
+        )
+        target_txt = (
+            f"🪞 <b>ЗЕРКАЛО СРАБОТАЛО!</b>\n"
+            f"Анон попытался ограбить тебя с заточкой! Твое Зеркало отразило нападение: грабитель сам потерял <b>{loss} ₪</b> в твою пользу!"
+        )
+        try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception: pass
+        await message.answer(reflect_txt, parse_mode="HTML")
         return
 
     if t_items.get("pepperspray_gun"):
@@ -6105,7 +6445,11 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     current_time = int(time.time())
 
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0 or target_id == user_id: 
+    if target_id == 0:
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "shit", user_id, board_id, db):
+            return
+    if not target_id or target_id == user_id: 
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
@@ -6129,6 +6473,21 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     dur_h = duration_sec // 3600
     dur_m = (duration_sec % 3600) // 60
     dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        t_items["reflect_shield_until"] = 0
+        active_items["shit_until"] = current_time + duration_sec
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+
+        reply_txt = f"🪞 <b>РИКОШЕТ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\nКусок говна со смачным звуком отскочил от Зеркала жертвы и залепил тебе все ебало!\nТеперь <b>ТЫ</b> обмазан говном на {dur_str}!\n<i>(Зеркало жертвы израсходовано)</i>"
+        target_txt = f"🪞 <b>ЗЕРКАЛО ОТРАЗИЛО АТАКУ!</b>\nАнон попытался кинуть в тебя говном, но Зеркало отбило снаряд обратно в метателя!"
+        try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception: pass
+        await message.answer(reply_txt, parse_mode="HTML")
+        return
     
     if t_items.get("tinfoil_hat", 0) > current_time:
         active_items["shit_until"] = current_time + duration_sec
@@ -6179,7 +6538,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         pass
 
 
-@dp.message(Command("puke", "блевота", "блевать", "blevota", ignore_case=True, ignore_mention=True))
+@dp.message(Command("vomit", "puke", "блевота", "блевать", "blevota", ignore_case=True, ignore_mention=True))
 async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -6196,7 +6555,11 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
     current_time = int(time.time())
 
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0 or target_id == user_id: 
+    if target_id == 0:
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "vomit", user_id, board_id, db):
+            return
+    if not target_id or target_id == user_id: 
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься облевать сам себя.")
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
@@ -6218,6 +6581,21 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
     dur_h = duration_sec // 3600
     dur_m = (duration_sec % 3600) // 60
     dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        t_items["reflect_shield_until"] = 0
+        active_items["vomit_until"] = current_time + duration_sec
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+
+        reply_txt = f"🪞 <b>РИКОШЕТ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\nСтруя блевоты со смачным звуком отскочила от Зеркала жертвы и залила тебя с ног до головы!\nТеперь <b>ТЫ</b> обблёван на {dur_str}!\n<i>(Зеркало жертвы израсходовано)</i>"
+        target_txt = f"🪞 <b>ЗЕРКАЛО ОТРАЗИЛО АТАКУ!</b>\nАнон попытался облевать тебя, но Зеркало отразило брызги прямо в нападающего!"
+        try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception: pass
+        await message.answer(reply_txt, parse_mode="HTML")
+        return
     
     if t_items.get("tinfoil_hat", 0) > current_time:
         active_items["vomit_until"] = current_time + duration_sec
@@ -6482,7 +6860,7 @@ async def cmd_flag_ru(message: types.Message, board_id: str | None, stream: str 
         pass
 
 
-@dp.message(Command("curse", "vomit", "laxative", "понос", "слабительное", ignore_case=True, ignore_mention=True))
+@dp.message(Command("curse", "laxative", "понос", "слабительное", ignore_case=True, ignore_mention=True))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -6744,7 +7122,12 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0 or target_id == user_id: 
+    if target_id == 0:
+        db = await get_pool()
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "partyvan", user_id, board_id, db):
+            return
+    if not target_id or target_id == user_id: 
         await message.answer("⚠️ Не удалось определить цель доноса или ты пытаешься посадить сам себя.")
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
@@ -6760,11 +7143,58 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer("🚔 <b>Вызов отменен:</b> Эта цель УЖЕ откисает в КПЗ!\nРация осталась в твоем рюкзаке.", parse_mode="HTML")
         return
 
+    # --- Пер-юзерный куладун на вызов пативэна: 1 час ---
+    from shared_state import (
+        get_partyvan_user_cooldown, set_partyvan_user_cooldown,
+        get_partyvan_board_cooldown, set_partyvan_board_cooldown,
+        get_partyvan_victim_immunity
+    )
+    user_pv_cd = get_partyvan_user_cooldown(user_id)
+    if user_pv_cd > current_time:
+        cd_left = user_pv_cd - current_time
+        cd_min = cd_left // 60
+        cd_sec = cd_left % 60
+        await message.answer(
+            f"⏳ <b>Пативэн на перезарядке!</b>\n"
+            f"Ты уже вызывал ОМОН. Следующий вызов через <b>{cd_min}м {cd_sec}с</b>.\n"
+            f"<i>(Куладун 1 час между вызовами от одного аккаунта)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # --- Пер-борд куладун: 30 минут между вызовами на одну доску ---
+    board_pv_cd = get_partyvan_board_cooldown(board_id)
+    if board_pv_cd > current_time:
+        cd_left = board_pv_cd - current_time
+        cd_min = cd_left // 60
+        cd_sec = cd_left % 60
+        await message.answer(
+            f"🚔 <b>ОМОН занят!</b>\n"
+            f"Наряд ещё не вернулся на базу. Вызов на эту доску снова доступен через <b>{cd_min}м {cd_sec}с</b>.\n"
+            f"<i>(Куладун 30 минут по доске между вызовами)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # --- Иммунитет жертвы: 2 часа после освобождения ---
+    victim_immunity = get_partyvan_victim_immunity(target_id)
+    if victim_immunity > current_time:
+        cd_left = victim_immunity - current_time
+        cd_min = cd_left // 60
+        await message.answer(
+            f"🛡️ <b>Жертва под защитой!</b>\n"
+            f"Анон недавно вышел из КПЗ и имеет иммунитет ещё <b>{cd_min}м</b>.\n"
+            f"<i>(Иммунитет жертвы 2 часа после освобождения/взятки)</i>",
+            parse_mode="HTML"
+        )
+        return
+
     if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
         return
 
     if await check_target_grief_protection(message, target_id, user_id, board_id):
         return
+
 
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
@@ -6807,6 +7237,34 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer("👟 <b>ТЯГИ БАРХАТНЫЕ СПАСЛИ!</b>\nЖертва на бархатных подкрадулях ловко ускользнула от наряда ОМОНа через дворы (0 арестов)!", parse_mode="HTML")
         return
 
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        active_items["partyvan_gun"] = False
+        t_items["reflect_shield_until"] = 0
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+
+        async with storage_lock:
+            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(hours=12)
+
+        await apply_regular_mute(user_id, board_id, 12 * 3600)
+        register_attacker_effect("partyvan_gun", target_id, user_id, 12 * 3600)
+
+        reply_txt = (
+            "🪞 <b>ОТРАЖЕНИЕ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\n"
+            "Жертва выставила Зеркало! ОМОН приехал по ложному доносу, выломал дверь и <b>упаковал в автозак самого доносчика</b> на 12 часов!\n"
+            "<i>(Зеркало жертвы израсходовано)</i>"
+        )
+        target_txt = (
+            "🪞 <b>ЗЕРКАЛО ОТРАЗИЛО ПАТИВЭН!</b>\n"
+            "Анон попытался вызвать на тебя ОМОН, но Зеркало перенаправило наряд прямо к нему на адрес! Доносчик сам уехал в КПЗ на 12 часов!"
+        )
+        try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception: pass
+        await message.answer(reply_txt, parse_mode="HTML")
+        return
+
     if t_items.get("tinfoil_hat", 0) > current_time:
         active_items["partyvan_gun"] = False
         destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=12.0, burn_chance=0.50)
@@ -6839,8 +7297,82 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     await apply_regular_mute(target_id, board_id, 12 * 3600)
     register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
     register_target_attack(target_id)
+
+    # Выставляем куладуны: 1ч на юзера, 30м на доску
+    set_partyvan_user_cooldown(user_id, current_time + 3600)
+    set_partyvan_board_cooldown(board_id, current_time + 1800)
+
     from common.debuff_phrases import get_partyvan_announcement
     await message.bot.send_message(message.chat.id, get_partyvan_announcement(), reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+
+
+
+@dp.message(Command("bribe", "взятка", "подкуп", "откуп", ignore_case=True, ignore_mention=True))
+async def cmd_bribe(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    """
+    Дать взятку / купить индульгенцию.
+    При ответе на пост Киберчеда (author_id == 0) — Киберчед сжигает шекели.
+    При обычном вызове в муте — досрочно снимает мут за шекели.
+    """
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+        if target_id == 0:
+            from common.bot_helpers import handle_cyberchad_counter_action
+            if await handle_cyberchad_counter_action(message, "bribe", user_id, board_id, db):
+                return
+
+    # Check if user is trying to redeem bribe to clear own mute
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    from votemute_engine import is_user_under_unbribable_mute
+    if is_user_under_unbribable_mute(active_items):
+        await message.answer("🔒 <b>ВЗЯТКА НЕ ПРИНЯТА!</b>\n\n⚖️ На тебя наложен <b>Железный Народный Мут</b> по итогам вотума недоверия. Он не продается за шекели!", parse_mode="HTML")
+        return
+
+    b_data = board_data.get(board_id, {})
+    is_muted = (b_data.get('mutes', {}).get(user_id) and b_data['mutes'][user_id] > datetime.now(UTC)) or \
+               (b_data.get('shadow_mutes', {}).get(user_id) and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+
+    cost = get_current_item_price('bribe')
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+
+    if not is_muted and not message.reply_to_message:
+        await message.answer(
+            f"📜 <b>ИНДУЛЬГЕНЦИЯ / ВЗЯТКА</b>\n\n"
+            f"Стоимость досрочного снятия мута: <b>{cost} ₪</b>.\n"
+            f"Твой баланс: <code>{int(balance):,} ₪</code>.\n\n"
+            f"<i>Ты не находишься в муте. Взятка применяется для досрочного освобождения из КПЗ или в ответ на пост.</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    if balance < cost:
+        await message.answer(f"❌ Недостаточно шекелей на взятку! Нужно <b>{cost} ₪</b>, у тебя <code>{int(balance)} ₪</code>. Напиши /work.", parse_mode="HTML")
+        return
+
+    await deduct_user_global_balance(db, user_id, board_id, cost)
+    async with db_transaction(db):
+        await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+    b_data.get('mutes', {}).pop(user_id, None)
+    b_data.get('shadow_mutes', {}).pop(user_id, None)
+    await record_user_transaction(db, user_id, -cost, 'bribe', 'Покупка индульгенции /bribe')
+    await add_to_abu_fund(db, cost, donor_id=user_id, reason="Взятка /bribe")
+
+    # Иммунитет жертвы: 2 часа после досрочного освобождения из пативэна
+    from shared_state import set_partyvan_victim_immunity
+    set_partyvan_victim_immunity(user_id, int(time.time()) + 7200)
+
+    await message.answer(
+        f"🕊️ <b>ТЫ НА СВОБОДЕ!</b>\n\n"
+        f"📜 Взятка в <b>{cost} ₪</b> передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!\n"
+        f"<i>🛡️ Тебе дан иммунитет от пативэна на 2 часа.</i>",
+        parse_mode="HTML"
+    )
+
 
 
 @dp.message(Command("mega"))
@@ -7690,6 +8222,7 @@ def get_leaderboard_keyboard(board_id: str, current_mode: str) -> InlineKeyboard
     btn_bal = "• 💰 Богачи •" if current_mode == "balance" else "💰 Богачи"
     btn_posts = "• 📝 Шитпостеры •" if current_mode == "posts" else "📝 Шитпостеры"
     btn_rx = "• 🎭 Реакции •" if current_mode == "reactions" else "🎭 Реакции"
+    btn_music = "• 💩 Говноеды •" if current_mode == "music" else "💩 Говноеды"
     
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -7698,8 +8231,11 @@ def get_leaderboard_keyboard(board_id: str, current_mode: str) -> InlineKeyboard
             InlineKeyboardButton(text=btn_rx, callback_data="top_switch_reactions")
         ],
         [
+            InlineKeyboardButton(text=btn_music, callback_data="top_switch_music"),
             InlineKeyboardButton(text="🪪 Мой паспорт", callback_data="prof_card"),
-            InlineKeyboardButton(text="🧾 Выписка", callback_data="prof_ledger"),
+            InlineKeyboardButton(text="🧾 Выписка", callback_data="prof_ledger")
+        ],
+        [
             InlineKeyboardButton(text="🚢 Фонд Абу", callback_data="abu_fund_refresh")
         ]
     ])
@@ -7714,6 +8250,8 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
         mode = "posts"
     elif args and args[0].lower() in ["reactions", "reaction", "rx", "реакции", "карма", "karma"]:
         mode = "reactions"
+    elif args and args[0].lower() in ["music", "track", "tracks", "говноед", "говноеды", "музыка", "трек", "треки"]:
+        mode = "music"
     else:
         mode = "balance"
     
@@ -7783,10 +8321,11 @@ async def cmd_accept_shortcut(message: Message, board_id: str | None):
     reply_msg_id = message.reply_to_message.message_id
     now = time.time()
     found_ch = None
-    for ch_id, duel in list(_active_duels.items()):
-        if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-            found_ch = ch_id
-            break
+    async with classic_duel_lock:
+        for ch_id, duel in list(_active_duels.items()):
+            if (duel.get("msg_id") == reply_msg_id or any(mid == reply_msg_id for cid, mid in duel.get("broadcast_msgs", []))) and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
             
     if found_ch:
         await accept_duel_logic(message, found_ch, board_id)
@@ -7801,10 +8340,11 @@ async def cmd_decline_shortcut(message: Message, board_id: str | None):
     reply_msg_id = message.reply_to_message.message_id
     now = time.time()
     found_ch = None
-    for ch_id, duel in list(_active_duels.items()):
-        if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-            found_ch = ch_id
-            break
+    async with classic_duel_lock:
+        for ch_id, duel in list(_active_duels.items()):
+            if (duel.get("msg_id") == reply_msg_id or any(mid == reply_msg_id for cid, mid in duel.get("broadcast_msgs", []))) and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
             
     if found_ch:
         await decline_duel_logic(message, found_ch)
@@ -7813,27 +8353,29 @@ async def _handle_duel_accept(message: types.Message, board_id: str):
     import time
     now = time.time()
     found_ch = None
+    user_id = message.from_user.id
 
-    # Сначала пробуем найти строго по реплаю на сообщение-вызов
-    if message.reply_to_message:
-        reply_msg_id = message.reply_to_message.message_id
-        for ch_id, duel in list(_active_duels.items()):
-            if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                found_ch = ch_id
-                break
+    async with classic_duel_lock:
+        # Сначала пробуем найти строго по реплаю на сообщение-вызов
+        if message.reply_to_message:
+            reply_msg_id = message.reply_to_message.message_id
+            for ch_id, duel in list(_active_duels.items()):
+                if (duel.get("msg_id") == reply_msg_id or any(mid == reply_msg_id for cid, mid in duel.get("broadcast_msgs", []))) and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = ch_id
+                    break
 
-    # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
-    if not found_ch:
-        for ch_id, duel in list(_active_duels.items()):
-            if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                found_ch = ch_id
-                break
+        # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде (не свой)
+        if not found_ch:
+            for ch_id, duel in list(_active_duels.items()):
+                if ch_id != user_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = ch_id
+                    break
 
     if not found_ch:
         await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
         return
 
-    await accept_duel_logic(message, found_ch, board_id)
+    await accept_duel_logic(message, found_ch, board_id, user_id=user_id)
 
 async def _handle_duel_create(message: types.Message, board_id: str, args: list, stream: str = 'ru'):
     user_id  = message.from_user.id
@@ -7846,62 +8388,163 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         amount = 0
 
     if amount < 50 or amount > 100000:
+        async with db_lock:
+            bal = await get_user_global_balance(db, user_id)
+        default_bet = 100 if bal >= 100 else (50 if bal >= 50 else 50)
+        ALL_PRESETS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]
+        affordable = [p for p in ALL_PRESETS if p <= max(50, int(bal))]
+        if not affordable:
+            affordable = [50]
+        if len(affordable) > 5:
+            indices = [0, len(affordable) // 4, len(affordable) // 2, (len(affordable) * 3) // 4, len(affordable) - 1]
+            affordable = sorted(list(set(affordable[i] for i in indices)))
+
+        half_bet = max(50, default_bet // 2)
+        double_bet = min(100000, min(int(bal), default_bet * 2)) if bal >= default_bet * 2 else default_bet
+        max_bet = max(50, min(100000, int(bal)))
+
+        preset_row = [InlineKeyboardButton(text=f"{p:,} ₪", callback_data=f"duel_lobby_bet:{p}") for p in affordable]
+        ctrl_row = [
+            InlineKeyboardButton(text="/2", callback_data=f"duel_lobby_bet:{half_bet}"),
+            InlineKeyboardButton(text="x2", callback_data=f"duel_lobby_bet:{double_bet}"),
+            InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"duel_lobby_bet:{max_bet}"),
+        ]
+        kb_lobby = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"⚔️ Создать дуэль ({default_bet:,} ₪)", callback_data=f"duel_create_fast:{default_bet}")],
+            preset_row,
+            ctrl_row,
+            [
+                InlineKeyboardButton(text="❌⭕ Крестики-Нолики", callback_data="cas:menu:ttt"),
+                InlineKeyboardButton(text="🎲 Дайс-Дуэль", callback_data="cas:menu:dice"),
+            ],
+            [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")],
+        ])
         await message.answer(
-            "⚔️ <b>Дуэль</b> — вызов другого анона на ставку.\n\n"
-            "Использование: <code>/duel 200</code> — выставить ставку 200 ₪.\n"
-            "Любой анон может ответить: <code>/duel accept</code>\n"
-            "Победитель забирает всю ставку, рандом 50/50.\n"
-            "❌⭕ Интеллектуальная дуэль: <code>/ttt 200</code> — Крестики-Нолики 3x3!\n"
-            "<i>Минимальная ставка: 50 ₪, максимальная: 100 000 ₪</i>",
+            f"⚔️ <b>PvP ДУЭЛЬ 50/50 НА ШЕКЕЛИ</b>\n\n"
+            f"💳 <b>Твой баланс:</b> <code>{int(bal):,} ₪</code>\n"
+            f"💰 <b>Ставка:</b> <code>{default_bet:,} ₪</code>\n\n"
+            f"Правила:\n"
+            f"• Победитель забирает всю ставку, рандом 50/50.\n"
+            f"• Любой анон может принять: <code>/duel accept</code>\n"
+            f"• <i>Минимальная ставка: 50 ₪, максимальная: 100 000 ₪</i>\n\n"
+            f"Выбери ставку кнопками или напиши: <code>/duel 200</code>",
+            reply_markup=kb_lobby,
             parse_mode="HTML"
         )
         return
 
-    # Проверяем кулдаун
     now = time.time()
-    last_call = _duel_cooldowns.get(user_id, 0)
-    if now - last_call < 10:
-        await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
-        return
+    async with classic_duel_lock:
+        # Проверяем кулдаун
+        last_call = _duel_cooldowns.get(user_id, 0)
+        if now - last_call < 10:
+            await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
+            return
 
-    # Проверяем баланс под локом
-    async with db_lock:
-        bal = await get_user_global_balance(db, user_id)
-    if bal < amount:
-        await message.answer(f"❌ Не хватает шекелей. Ставка {amount:,} ₪, у тебя {int(bal):,} ₪.")
-        return
+        # Проверяем баланс под db_lock
+        async with db_lock:
+            bal = await get_user_global_balance(db, user_id)
+        if bal < amount:
+            await message.answer(f"❌ Не хватает шекелей. Ставка {amount:,} ₪, у тебя {int(bal):,} ₪.")
+            return
 
-    # Записываем время последнего вызова
-    _duel_cooldowns[user_id] = now
+        # Записываем время последнего вызова
+        _duel_cooldowns[user_id] = now
 
-    # Удаляем старый вызов этого анона если был
-    if user_id in _active_duels:
-        _active_duels.pop(user_id)
+        # Удаляем старый вызов этого анона если был
+        if user_id in _active_duels:
+            _active_duels.pop(user_id, None)
 
-    kb_duel = InlineKeyboardMarkup(inline_keyboard=[
+    target_id = None
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+        if target_id == user_id or target_id == 0:
+            target_id = None
+
+    duel_token = make_duel_token(user_id)
+    kb_duel_challenge = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="❌ Отменить вызов", callback_data=f"duel_cancel:{user_id}")
+            InlineKeyboardButton(text="⚔️ Принять вызов!", callback_data=f"duel_accept:{duel_token}"),
+            InlineKeyboardButton(text="❌ Отказаться", callback_data=f"duel_decline:{duel_token}"),
+        ]
+    ])
+    kb_duel_own = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="❌ Отменить вызов", callback_data=f"duel_cancel:{duel_token}")
         ]
     ])
 
-    # Отправляем подтверждение создателю вызова
-    sent_msg = await message.answer(
-        f"⚔️ <b>ВЫЗОВ НА ДУЭЛЬ ВЫСТАВЛЕН!</b>\n\n"
-        f"💰 Ставка: <code>{amount:,} ₪</code>\n"
-        f"🎲 Победитель забирает куш (шанс 50/50).\n\n"
-        f"⏳ <i>Вызов активен 2 минуты. Жди, пока другой анон напишет <code>/duel accept</code> или примет бой.</i>",
-        reply_markup=kb_duel,
-        parse_mode="HTML"
-    )
+    if target_id:
+        duel_card_text = (
+            f"⚔️ <b>ПЕРСОНАЛЬНЫЙ ВЫЗОВ НА ДУЭЛЬ!</b>\n\n"
+            f"👤 Вызывающий: <b>Анон [{get_anon_id(user_id)}]</b>\n"
+            f"🎯 Цель: <b>Анон [{get_anon_id(target_id)}]</b>\n"
+            f"💰 Ставка: <code>{amount:,} ₪</code>\n\n"
+            f"⏳ <i>Вызов активен 2 минуты. Принять может только Анон [{get_anon_id(target_id)}]!</i>"
+        )
+    else:
+        duel_card_text = (
+            f"⚔️ <b>ОТКРЫТЫЙ ВЫЗОВ НА ДУЭЛЬ!</b>\n\n"
+            f"👤 Создатель: <b>Анон [{get_anon_id(user_id)}]</b>\n"
+            f"💰 Ставка: <code>{amount:,} ₪</code>\n"
+            f"🎲 Победитель забирает куш (шанс 50/50).\n\n"
+            f"⏳ <i>Вызов активен 2 минуты. Любой анон может нажать кнопку ниже:</i>"
+        )
+
+    # Отправляем карточку создателю (только кнопка отмены)
+    sent_msg = await message.answer(duel_card_text, reply_markup=kb_duel_own, parse_mode="HTML")
 
     # Сохраняем вызов с ID сообщения
-    _active_duels[user_id] = {
-        "board_id": board_id,
-        "amount":   amount,
-        "ts":       now,
-        "msg_id":   sent_msg.message_id,
-        "chat_id":  sent_msg.chat.id,
-    }
+    broadcast_msgs = [(sent_msg.chat.id, sent_msg.message_id)]
+    async with classic_duel_lock:
+        _active_duels[user_id] = {
+            "board_id": board_id,
+            "amount":   amount,
+            "target_id": target_id,
+            "ts":       now,
+            "msg_id":   sent_msg.message_id,
+            "chat_id":  sent_msg.chat.id,
+            "broadcast_msgs": broadcast_msgs,
+        }
+
+    # Если вызов персональный — отправляем персональное ЛС-уведомление конкретно оппоненту
+    if target_id:
+        dm_target_text = (
+            f"⚔️ <b>ТЕБЯ ВЫЗВАЛИ НА ДУЭЛЬ!</b>\n\n"
+            f"Анон <b>[{get_anon_id(user_id)}]</b> бросил тебе персональный вызов на <code>{amount:,} ₪</code>.\n"
+            f"Победитель забирает банк (шанс 50/50).\n\n"
+            f"Нажми кнопку ниже, чтобы принять бой:"
+        )
+        try:
+            bcast = await message.bot.send_message(
+                chat_id=target_id,
+                text=dm_target_text,
+                reply_markup=kb_duel_challenge,
+                parse_mode="HTML"
+            )
+            async with classic_duel_lock:
+                if user_id in _active_duels:
+                    _active_duels[user_id]["broadcast_msgs"].append((target_id, bcast.message_id))
+        except Exception:
+            pass
+    else:
+        # Если вызов открытый — транслируем его всем активным анонам на доске в их ленту
+        active_board_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
+        for uid in active_board_users:
+            if uid == user_id:
+                continue
+            try:
+                bcast = await message.bot.send_message(
+                    chat_id=uid,
+                    text=duel_card_text,
+                    reply_markup=kb_duel_challenge,
+                    parse_mode="HTML"
+                )
+                async with classic_duel_lock:
+                    if user_id in _active_duels:
+                        _active_duels[user_id]["broadcast_msgs"].append((uid, bcast.message_id))
+            except Exception:
+                pass
 
     try: await message.delete()
     except Exception: pass
@@ -7919,11 +8562,11 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
 @dp.callback_query(F.data.startswith("duel_accept:"))
 async def cb_duel_accept(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
-    parts = callback.data.split(":")
-    if len(parts) < 2 or not parts[1].isdigit():
-        await callback.answer("Ошибка данных", show_alert=True)
+    token = callback.data.split(":", 1)[1]
+    challenger_id = resolve_duel_token(token)
+    if challenger_id is None:
+        await callback.answer("⏳ Вызов истёк или недействителен.", show_alert=True)
         return
-    challenger_id = int(parts[1])
     user_id = callback.from_user.id
     if user_id == challenger_id:
         await callback.answer("❌ Ты не можешь принять собственный вызов!", show_alert=True)
@@ -7935,14 +8578,102 @@ async def cb_duel_accept(callback: types.CallbackQuery, board_id: str | None):
 @dp.callback_query(F.data.startswith("duel_decline:") | F.data.startswith("duel_cancel:"))
 async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
-    parts = callback.data.split(":")
-    if len(parts) < 2 or not parts[1].isdigit():
-        await callback.answer("Ошибка данных", show_alert=True)
+    token = callback.data.split(":", 1)[1]
+    challenger_id = resolve_duel_token(token)
+    if challenger_id is None:
+        await callback.answer("⏳ Вызов истёк или недействителен.", show_alert=True)
         return
-    challenger_id = int(parts[1])
     user_id = callback.from_user.id
-    await decline_duel_logic(callback.message, challenger_id, user_id=user_id)
+    res = await decline_duel_logic(callback.message, challenger_id, user_id=user_id)
+    if not res:
+        await callback.answer("⏳ Вызов уже был завершен или отменен.", show_alert=True)
+    else:
+        try: await callback.answer()
+        except Exception: pass
+
+
+@dp.callback_query(F.data.startswith("duel_lobby_bet:"))
+async def cb_duel_lobby_bet(callback: types.CallbackQuery, board_id: str | None):
+    """Updates the selected bet in the classic duel lobby."""
+    if not board_id: return
+    user_id = callback.from_user.id
+    parts = callback.data.split(":")
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+
+    db = await get_pool()
+    async with db_lock:
+        bal = await get_user_global_balance(db, user_id)
+
+    bet = max(50, min(100000, min(int(bal), bet) if bal >= 50 else 50))
+
+    ALL_PRESETS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]
+    affordable = [p for p in ALL_PRESETS if p <= max(50, int(bal))]
+    if not affordable:
+        affordable = [50]
+    if len(affordable) > 5:
+        indices = [0, len(affordable) // 4, len(affordable) // 2, (len(affordable) * 3) // 4, len(affordable) - 1]
+        affordable = sorted(list(set(affordable[i] for i in indices)))
+
+    half_bet = max(50, bet // 2)
+    double_bet = min(100000, min(int(bal), bet * 2)) if bal >= bet * 2 else bet
+    max_bet = max(50, min(100000, int(bal)))
+
+    preset_row = [InlineKeyboardButton(text=f"{p:,} ₪", callback_data=f"duel_lobby_bet:{p}") for p in affordable]
+    ctrl_row = [
+        InlineKeyboardButton(text="/2", callback_data=f"duel_lobby_bet:{half_bet}"),
+        InlineKeyboardButton(text="x2", callback_data=f"duel_lobby_bet:{double_bet}"),
+        InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"duel_lobby_bet:{max_bet}"),
+    ]
+    kb_lobby = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"⚔️ Создать дуэль ({bet:,} ₪)", callback_data=f"duel_create_fast:{bet}")],
+        preset_row,
+        ctrl_row,
+        [
+            InlineKeyboardButton(text="❌⭕ Крестики-Нолики", callback_data="cas:menu:ttt"),
+            InlineKeyboardButton(text="🎲 Дайс-Дуэль", callback_data="cas:menu:dice"),
+        ],
+        [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")],
+    ])
+    try:
+        await callback.message.edit_text(
+            f"⚔️ <b>PvP ДУЭЛЬ 50/50 НА ШЕКЕЛИ</b>\n\n"
+            f"💳 <b>Твой баланс:</b> <code>{int(bal):,} ₪</code>\n"
+            f"💰 <b>Ставка:</b> <code>{bet:,} ₪</code>\n\n"
+            f"Выбери ставку кнопками или напиши: <code>/duel 200</code>",
+            reply_markup=kb_lobby,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
     try: await callback.answer()
+    except Exception: pass
+
+
+@dp.callback_query(F.data.startswith("duel_create_fast:"))
+async def cb_duel_create_fast(callback: types.CallbackQuery, board_id: str | None):
+    """Creates a classic duel challenge from the lobby button."""
+    if not board_id: return
+    user_id = callback.from_user.id
+    parts = callback.data.split(":")
+    amount = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+
+    # Build a minimal fake message to reuse _handle_duel_create
+    class _FakeMsg:
+        from_user = callback.from_user
+        chat = callback.message.chat
+        bot = callback.bot
+        reply_to_message = None
+        text = f"/duel {amount}"
+        caption = None
+
+        async def answer(self, *a, **kw):
+            return await callback.message.answer(*a, **kw)
+        async def delete(self):
+            try: await callback.message.delete()
+            except Exception: pass
+
+    await _handle_duel_create(_FakeMsg(), board_id, [str(amount)], 'ru')
+    try: await callback.answer("⚔️ Вызов создан!")
     except Exception: pass
 
 
@@ -7952,50 +8683,70 @@ async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
 async def classic_duel_watchdog_step(bot: Bot | None = None):
     """Checks for expired classic /duel challenges (120s) and cleans them up with live updates."""
     now = time.time()
-    for ch_id, duel in list(_active_duels.items()):
-        elapsed = now - duel["ts"]
-        if elapsed > _DUEL_TIMEOUT:
-            _active_duels.pop(ch_id, None)
-            if bot and duel.get("chat_id") and duel.get("msg_id"):
+    expired_duels = []
+    updates_to_send = []
+
+    async with classic_duel_lock:
+        for ch_id, duel in list(_active_duels.items()):
+            elapsed = now - duel["ts"]
+            if elapsed > _DUEL_TIMEOUT:
+                _active_duels.pop(ch_id, None)
+                expired_duels.append((ch_id, duel))
+            else:
+                # Dynamic live update of remaining time every 15s — only on challenger's message
+                last_tick = duel.get("last_tick_ts", duel["ts"])
+                if now - last_tick >= 15.0:
+                    duel["last_tick_ts"] = now
+                    rem = max(0, int(_DUEL_TIMEOUT - elapsed))
+                    if rem > 5 and bot and duel.get("chat_id") and duel.get("msg_id"):
+                        updates_to_send.append((duel["chat_id"], duel["msg_id"], ch_id, duel["amount"], rem))
+
+    for ch_id, duel in expired_duels:
+        expired_text = (
+            f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК!</b>\n\n"
+            f"Ни один анон не принял вызов на <code>{duel['amount']:,} ₪</code> за 2 минуты.\n"
+            f"Вызов аннулирован, шекели целы."
+        )
+        if bot and ch_id:
+            exp_dm_text = (
+                f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК</b>\n\n"
+                f"Ни один анон не принял твой вызов на дуэль (<code>{duel.get('amount', 0):,} ₪</code>) за 2 минуты.\n"
+                f"Вызов аннулирован, шекели целы."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text))
+
+        all_msgs = duel.get("broadcast_msgs") or []
+        if not all_msgs and duel.get("chat_id") and duel.get("msg_id"):
+            all_msgs = [(duel["chat_id"], duel["msg_id"])]
+        for cid, mid in all_msgs:
+            if bot:
                 try:
                     await bot.edit_message_text(
-                        chat_id=duel["chat_id"],
-                        message_id=duel["msg_id"],
-                        text=(
-                            f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК!</b>\n\n"
-                            f"Ни один анон не принял вызов на <code>{duel['amount']:,} ₪</code> за 2 минуты.\n"
-                            f"Вызов аннулирован, шекели целы."
-                        ),
-                        reply_markup=None,
-                        parse_mode="HTML"
+                        chat_id=cid, message_id=mid,
+                        text=expired_text, reply_markup=None, parse_mode="HTML"
                     )
                 except Exception:
                     pass
-        else:
-            # Dynamic live update of remaining time every 15s
-            last_tick = duel.get("last_tick_ts", duel["ts"])
-            if now - last_tick >= 15.0:
-                duel["last_tick_ts"] = now
-                rem = max(0, int(_DUEL_TIMEOUT - elapsed))
-                if rem > 5 and bot and duel.get("chat_id") and duel.get("msg_id"):
-                    try:
-                        kb_duel = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="❌ Отменить вызов", callback_data=f"duel_cancel:{ch_id}")]
-                        ])
-                        await bot.edit_message_text(
-                            chat_id=duel["chat_id"],
-                            message_id=duel["msg_id"],
-                            text=(
-                                f"⚔️ <b>ВЫЗОВ НА ДУЭЛЬ ВЫСТАВЛЕН!</b>\n\n"
-                                f"💰 Ставка: <code>{duel['amount']:,} ₪</code>\n"
-                                f"🎲 Победитель забирает куш (шанс 50/50).\n\n"
-                                f"⏳ <i>Вызов активен (осталось {rem} сек). Жди, пока другой анон напишет <code>/duel accept</code> или примет бой.</i>"
-                            ),
-                            reply_markup=kb_duel,
-                            parse_mode="HTML"
-                        )
-                    except Exception:
-                        pass
+
+    for chat_id, msg_id, ch_id, amount, rem in updates_to_send:
+        try:
+            kb_duel = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отменить вызов", callback_data=f"duel_cancel:{make_duel_token(ch_id)}")]
+            ])
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=(
+                    f"⚔️ <b>ВЫЗОВ НА ДУЭЛЬ ВЫСТАВЛЕН!</b>\n\n"
+                    f"💰 Ставка: <code>{amount:,} ₪</code>\n"
+                    f"🎲 Победитель забирает куш (шанс 50/50).\n\n"
+                    f"⏳ <i>Вызов активен (осталось {rem} сек). Нажми кнопку или напиши <code>/duel accept</code>.</i>"
+                ),
+                reply_markup=kb_duel,
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
 
 async def start_classic_duel_watchdog_loop(bot: Bot):
@@ -8051,7 +8802,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     if lang == 'en':
         text = (
             f"💳 <b>TGACH CRYPTO-WALLET</b>\n{'—'*22}\n"
-            f"👤 <b>Account ID:</b> <code>[{get_anon_id(user_id, 'en')}]</code>\n"
+            f"👤 <b>Account ID:</b> <code>[{escape_html(str(get_anon_id(user_id, 'en')))}]</code>\n"
             f"🔋 <b>Status:</b> {'<code>[B] Verified</code>' if is_verified else '<code>[A] Limited</code>'}\n"
             f"💰 <b>Balance:</b> <code>{int(balance):,} ₪ (Shekels)</code>\n"
         )
@@ -8059,7 +8810,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     else:
         text = (
             f"💳 <b>КОШЕЛЕК И БАЛАНС ТГАЧА</b>\n{'—'*22}\n"
-            f"👤 <b>ID Анона:</b> <code>[{get_anon_id(user_id, 'ru')}]</code>\n"
+            f"👤 <b>ID Анона:</b> <code>[{escape_html(str(get_anon_id(user_id, 'ru')))}]</code>\n"
             f"🔋 <b>Уровень:</b> {'<code>[B] Verified</code>' if is_verified else '<code>[A] Limited</code>'}\n"
             f"💰 <b>Баланс:</b> <code>{int(balance):,} ₪ (Шекелей)</code>\n"
         )
@@ -8067,20 +8818,35 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
 
     history_body = f"{'—'*22}\n{history_header}"
 
-    if balance > 0 or is_new_wallet:
-        if is_new_wallet or balance <= 15:
-            history_body += f"🟢 +{int(balance)} ₪ (Emoji Reactions)\n"
-            history_body += f"🟡 {int(balance)} ₪ (Доступно к выводу и тратам)\n"
-        else:
-            bonus = (user_id % 5) + 3
-            history_body += f"🟢 +{bonus} ₪ (Daily / Loyalty)\n"
-            history_body += f"🟢 +{int(balance - bonus)} ₪ (Anon Activity)\n"
-            history_body += f"🟡 {int(balance)} ₪ (Доступно к выводу и тратам)\n"
+    try:
+        from common.database import get_user_recent_transactions
+        recent_txs = await get_user_recent_transactions(db, user_id, limit=4)
+    except Exception:
+        recent_txs = []
+
+    if recent_txs:
+        for tx in recent_txs:
+            amt = tx.get("amount", 0.0)
+            desc = tx.get("description") or tx.get("category") or "Операция"
+            desc_str = str(desc)
+            if len(desc_str) > 28:
+                desc_str = desc_str[:26] + ".."
+            desc_safe = escape_html(desc_str)
+            amt_str = f"{int(amt):,}" if float(amt).is_integer() else f"{amt:+,.1f}"
+            if amt > 0:
+                history_body += f"🟢 +{amt_str} ₪ ({desc_safe})\n"
+            elif amt < 0:
+                history_body += f"🔴 {amt_str} ₪ ({desc_safe})\n"
+            else:
+                history_body += f"⚪️ 0 ₪ ({desc_safe})\n"
+        history_body += f"🟡 <b>{int(balance):,} ₪</b> (Доступно к выводу и тратам)\n"
+    elif balance > 0 or is_new_wallet:
+        history_body += f"🟢 +{int(balance):,} ₪ (Стартовый баланс / Активность)\n"
+        history_body += f"🟡 <b>{int(balance):,} ₪</b> (Доступно к выводу и тратам)\n"
     else:
-        failed_sum = int(last_failed) if last_failed > 0 else random.randint(20, 70)
-        history_body += f"🔴 -{failed_sum} ₪ (Gateway Reject: 115-FZ)\n"
-        history_body += f"🔴 -15 ₪ (Maintenance Fee)\n"
-        history_body += f"⚪️ 0 ₪ (Account Liquidated)\n"
+        if last_failed > 0:
+            history_body += f"🔴 -{int(last_failed):,} ₪ (Gateway Reject: 115-FZ)\n"
+        history_body += "⚪️ 0 ₪ (Баланс пуст)\n"
 
     text += history_body
 
@@ -8326,7 +9092,7 @@ async def _run_delayed_prank(params: DelayedPrankParams):
         masked_data=raw_requisites,
         crypto_info=crypto_info
     )
-    await process_new_post(NewPostParams(bot_instance=params.bot, board_id=params.board_id, user_id=0, content={'type': 'text', 'text': shame_text, 'is_system_message': True}, reply_to_post=None, is_shadow_muted=False))
+    await process_new_post(NewPostParams(bot_instance=params.bot, board_id=params.board_id, user_id=0, content={'type': 'text', 'text': shame_text, 'is_system_message': True, 'archive_allowed': True}, reply_to_post=None, is_shadow_muted=False))
 
 @dp.message(WithdrawalStates.entering_data)
 async def process_withdrawal_data(message: types.Message, state: FSMContext, board_id: str | None):
@@ -9140,6 +9906,10 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
     active_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
     for target_uid in active_users:
         if target_uid != exclude_chat_id:
+            rec = drop_engine.active_drops.get(drop_id)
+            if not rec or rec.status != "active":
+                # Drop was claimed, expired, or cancelled mid-broadcast! Stop broadcasting active buttons immediately.
+                break
             try:
                 if photo_payload:
                     sent = await bot.send_photo(
@@ -9158,6 +9928,30 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
                     )
                 if sent:
                     drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 0.5)
+                rec = drop_engine.active_drops.get(drop_id)
+                if rec and rec.status == "active":
+                    try:
+                        if photo_payload:
+                            sent = await bot.send_photo(
+                                chat_id=target_uid,
+                                photo=photo_payload,
+                                caption=caption,
+                                reply_markup=kb,
+                                parse_mode="HTML"
+                            )
+                        else:
+                            sent = await bot.send_message(
+                                chat_id=target_uid,
+                                text=caption,
+                                reply_markup=kb,
+                                parse_mode="HTML"
+                            )
+                        if sent:
+                            drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                    except Exception:
+                        pass
             except Exception:
                 try:
                     sent = await bot.send_message(
@@ -9168,6 +9962,19 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
                     )
                     if sent:
                         drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                except TelegramRetryAfter as e:
+                    await asyncio.sleep(e.retry_after + 0.5)
+                    try:
+                        sent = await bot.send_message(
+                            chat_id=target_uid,
+                            text=caption,
+                            reply_markup=kb,
+                            parse_mode="HTML"
+                        )
+                        if sent:
+                            drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             await asyncio.sleep(0.04)
@@ -9189,14 +9996,41 @@ async def _update_all_drop_messages(bot, drop_id: str, new_text: str, exclude_ch
                     parse_mode="HTML",
                     reply_markup=None
                 )
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 0.5)
+                try:
+                    await bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        caption=new_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
+                except Exception:
+                    pass
             except Exception:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=new_text,
-                    parse_mode="HTML",
-                    reply_markup=None
-                )
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=new_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
+                except TelegramRetryAfter as e:
+                    await asyncio.sleep(e.retry_after + 0.5)
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=new_text,
+                            parse_mode="HTML",
+                            reply_markup=None
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         except Exception:
             pass
         await asyncio.sleep(0.04)
@@ -9793,7 +10627,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
             f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
             f"{ach_note}"
         )
-        kb = casino_engine.get_casino_hub_keyboard()
+        kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
         from banner_manager import send_banner_message
         await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
         return
@@ -9978,17 +10812,89 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             fake_msg = SafeMessageProxy(callback.message, callback.from_user)
             await cmd_drop(fake_msg, board_id)
         elif game == "ttt":
-            fake_msg = SafeMessageProxy(callback.message, callback.from_user)
-            fake_msg.text = "/ttt 100"
-            await cmd_ttt(fake_msg, board_id)
+            # Open TTT bet lobby instead of hardcoding 100₪
+            async with db_lock:
+                bal = await get_user_global_balance(db, user_id)
+            default_bet = max(MIN_TTT_BET, min(MAX_TTT_BET, 100))
+            from ttt_engine import get_ttt_lobby_keyboard
+            kb = get_ttt_lobby_keyboard(default_bet, balance=int(bal))
+            caption = (
+                f"❌⭕ <b>КРЕСТИКИ-НОЛИКИ НА ШЕКЕЛИ (PvP)</b>\n\n"
+                f"💳 Твой баланс: <code>{int(bal):,} ₪</code>\n"
+                f"💰 Выбранная ставка: <code>{default_bet:,} ₪</code>\n\n"
+                f"Выбери размер ставки и создай вызов на доску:"
+            )
+            try:
+                await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
         elif game == "dice":
-            fake_msg = SafeMessageProxy(callback.message, callback.from_user)
-            fake_msg.text = "/dice_duel 100"
-            await cmd_dice_duel(fake_msg, board_id)
+            # Open dice lobby instead of hardcoding 100₪
+            async with db_lock:
+                bal = await get_user_global_balance(db, user_id)
+            from dice_duel_engine import get_dice_lobby_keyboard
+            kb = get_dice_lobby_keyboard(balance=int(bal), current_bet=100)
+            caption = (
+                f"🎲 <b>ДАЙС-ДУЭЛЬ НА ШЕКЕЛИ (PvP)</b>\n\n"
+                f"💳 Твой баланс: <code>{int(bal):,} ₪</code>\n\n"
+                f"Выбери режим и ставку:"
+            )
+            try:
+                await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
         elif game == "duel_rr":
-            fake_msg = SafeMessageProxy(callback.message, callback.from_user)
-            fake_msg.text = "/duel_rr 100"
-            await cmd_duel_rr(fake_msg, board_id)
+            # Open RR PvP lobby instead of hardcoding 100₪
+            async with db_lock:
+                bal = await get_user_global_balance(db, user_id)
+            from russian_roulette_pvp import get_rr_lobby_keyboard, format_rr_lobby_message
+            kb = get_rr_lobby_keyboard(100, balance=int(bal))
+            caption = format_rr_lobby_message(100, int(bal))
+            try:
+                await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
+        elif game == "duel":
+            # Open classic duel lobby instead of a hardcoded challenge
+            async with db_lock:
+                bal = await get_user_global_balance(db, user_id)
+            default_bet = 100 if bal >= 100 else 50
+            ALL_PRESETS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]
+            affordable = [p for p in ALL_PRESETS if p <= max(50, int(bal))]
+            if not affordable:
+                affordable = [50]
+            if len(affordable) > 5:
+                indices = [0, len(affordable) // 4, len(affordable) // 2, (len(affordable) * 3) // 4, len(affordable) - 1]
+                affordable = sorted(list(set(affordable[i] for i in indices)))
+            half_bet = max(50, default_bet // 2)
+            double_bet = min(100000, min(int(bal), default_bet * 2)) if bal >= default_bet * 2 else default_bet
+            max_bet = max(50, min(100000, int(bal)))
+            preset_row = [InlineKeyboardButton(text=f"{p:,} ₪", callback_data=f"duel_lobby_bet:{p}") for p in affordable]
+            ctrl_row = [
+                InlineKeyboardButton(text="/2", callback_data=f"duel_lobby_bet:{half_bet}"),
+                InlineKeyboardButton(text="x2", callback_data=f"duel_lobby_bet:{double_bet}"),
+                InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"duel_lobby_bet:{max_bet}"),
+            ]
+            kb_lobby = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"⚔️ Создать дуэль ({default_bet:,} ₪)", callback_data=f"duel_create_fast:{default_bet}")],
+                preset_row,
+                ctrl_row,
+                [
+                    InlineKeyboardButton(text="❌⭕ Крестики-Нолики", callback_data="cas:menu:ttt"),
+                    InlineKeyboardButton(text="🎲 Дайс-Дуэль", callback_data="cas:menu:dice"),
+                ],
+                [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")],
+            ])
+            caption = (
+                f"⚔️ <b>PvP ДУЭЛЬ 50/50 НА ШЕКЕЛИ</b>\n\n"
+                f"💳 <b>Твой баланс:</b> <code>{int(bal):,} ₪</code>\n"
+                f"💰 <b>Ставка:</b> <code>{default_bet:,} ₪</code>\n\n"
+                f"Выбери ставку кнопками:"
+            )
+            try:
+                await callback.message.edit_text(caption, reply_markup=kb_lobby, parse_mode="HTML")
+            except Exception:
+                await callback.message.answer(caption, reply_markup=kb_lobby, parse_mode="HTML")
         elif game == "balance":
             async with db_lock:
                 bal = await get_user_global_balance(db, user_id)
@@ -10072,7 +10978,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                     f"💀 <b>Перебор! Ставка {bet} ₪ сгорела в пользу Казны Абу.</b>\n"
                     f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
                 )
-                kb = casino_engine.get_casino_hub_keyboard()
+                kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
                 from banner_manager import send_banner_message
                 await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
                 await callback.answer("Перебор!")
@@ -10124,7 +11030,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                     f"💀 <b>Ставка {bet} ₪ сгорела в пользу Казны Абу.</b>\n"
                     f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
                 )
-                kb = casino_engine.get_casino_hub_keyboard()
+                kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
                 from banner_manager import send_banner_message
                 await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
                 await callback.answer()
@@ -10187,7 +11093,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{payout} ₪</b>\n"
                 f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
             )
-            kb = casino_engine.get_casino_hub_keyboard()
+            kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
             from banner_manager import send_banner_message
             await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
             await callback.answer()
@@ -10207,7 +11113,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 f"Ты сбросил карты и вернул половину ставки (<code>+{refund} ₪</code>).\n"
                 f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
             )
-            kb = casino_engine.get_casino_hub_keyboard()
+            kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
             from banner_manager import send_banner_message
             await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
             await callback.answer()
@@ -10573,8 +11479,8 @@ async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stre
 @dp.message(Command("dossier", "досье", "дело", "case", "личноедело", "пробив", ignore_case=True, ignore_mention=True))
 async def cmd_dossier(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
-    Генерирует платное секретное 'Личное Дело Анона' (стоимость 300 ₪).
-    25% вероятность скрытой ошибки архива (подсовывание данных другого анона или искажение параметров).
+    Генерирует платное секретное 'Личное Дело Анона' (стоимость 750 ₪).
+    40% вероятность скрытой ошибки архива (подсовывание данных другого анона или искажение параметров).
     """
     if not board_id: return
 
@@ -10584,7 +11490,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     caller_id = message.from_user.id
     db = await get_pool()
 
-    DOSSIER_PRICE = 300
+    DOSSIER_PRICE = 750
     async with db_lock:
         caller_bal = await get_user_global_balance(db, caller_id)
         if caller_bal < DOSSIER_PRICE:
@@ -10603,20 +11509,25 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
             return
 
         await record_user_transaction(db, caller_id, -DOSSIER_PRICE, 'dossier', 'Запрос личного дела в картотеке')
-        await add_to_abu_fund(db, int(DOSSIER_PRICE * 0.5), 'Пошлина за архивный пробив')
+        await add_to_abu_fund(db, int(DOSSIER_PRICE * 0.5), donor_id=caller_id, reason='Пошлина за архивный пробив')
 
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     
-    if not target_id or target_id == 0:
+    if target_id == 0:
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "dossier", caller_id, board_id, db):
+            return
+
+    if not target_id:
         target_id = caller_id
 
     import random
     from stats_generator import fetch_user_stats_data, generate_schizo_name
 
-    # 50% вероятность скрытой ошибки архива: подсовывание чужого дела или искажение параметров
-    is_erroneous = (random.random() < 0.50)
+    # 40% вероятность скрытой ошибки архива: подсовывание чужого дела или искажение параметров
+    is_erroneous = random.random() < 0.40
     error_mode = random.choice(["wrong_target", "data_skew"]) if is_erroneous else None
 
     original_target_id = target_id
@@ -10983,11 +11894,62 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
 
     recent_posts.sort(key=lambda x: x[0])
     
+    file_ids = set()
+    for pnum, pdata in recent_posts:
+        c = pdata.get('content', {})
+        if isinstance(c, dict):
+            fid = c.get('file_id')
+            if fid and isinstance(fid, str):
+                file_ids.add(fid)
+            for m in c.get('media', []):
+                if isinstance(m, dict) and m.get('file_id') and isinstance(m.get('file_id'), str):
+                    file_ids.add(m.get('file_id'))
+
+    media_meta_map = {}
+    if file_ids:
+        missing_file_ids = [fid for fid in file_ids if fid not in _MEDIA_DESC_CACHE]
+        if missing_file_ids:
+            try:
+                db = await get_pool()
+                placeholders = ",".join("?" for _ in missing_file_ids)
+                async with db.execute(
+                    f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})",
+                    tuple(missing_file_ids)
+                ) as cursor:
+                    found_fids = set()
+                    for row in await cursor.fetchall():
+                        fid_val = row[0]
+                        meta = {'tags': row[1] or '', 'description': row[2] or ''}
+                        _format_media_context(meta)
+                        _MEDIA_DESC_CACHE[fid_val] = meta
+                        found_fids.add(fid_val)
+                    for fid_val in missing_file_ids:
+                        if fid_val not in found_fids:
+                            _MEDIA_DESC_CACHE[fid_val] = {'tags': '', 'description': '', 'formatted': None}
+            except Exception as meta_err:
+                logger.debug(f"[atmosphere] Media meta batch load error: {meta_err}")
+
+        for fid in file_ids:
+            if fid in _MEDIA_DESC_CACHE:
+                media_meta_map[fid] = _MEDIA_DESC_CACHE[fid]
+
     lines = []
     for pnum, pdata in recent_posts:
         content = pdata.get('content', {})
-        raw_text = content.get('text') or content.get('caption') or ""
-        clean_text = clean_html_tags(raw_text).replace('\n', ' ').strip()
+        if not isinstance(content, dict):
+            content = {'text': str(content)}
+        msg_type = content.get('type', 'text')
+        fid = content.get('file_id')
+        if not fid and content.get('media'):
+            for m in content.get('media', []):
+                if isinstance(m, dict) and m.get('file_id'):
+                    fid = m.get('file_id')
+                    break
+        media_meta = media_meta_map.get(fid) if fid else None
+        formatted_text = _format_post_text(content, msg_type, media_meta=media_meta)
+        if not formatted_text:
+            continue
+        clean_text = clean_html_tags(formatted_text).replace('\n', ' ').strip()
         if not clean_text:
             continue
         sender = "БОТ (Персона)" if pdata.get('author_id') in (0, 1488148800) else "ЮЗЕР (Анон)"
@@ -11003,11 +11965,11 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
     if not target_post_num:
         return ""
         
-    chain = []
+    raw_chain = []
     current_num = target_post_num
     visited = set()
     
-    while current_num and current_num not in visited and len(chain) < max_depth:
+    while current_num and current_num not in visited and len(raw_chain) < max_depth:
         visited.add(current_num)
         post_data = None
         async with storage_lock:
@@ -11024,41 +11986,91 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
                 content = json.loads(content)
             except Exception:
                 content = {'text': content}
+        elif not isinstance(content, dict):
+            content = {'text': str(content)}
                 
-        raw_text = content.get('text') or content.get('caption') or ""
-        clean_text = clean_html_tags(raw_text).replace('\n', ' ').strip()
-        if not clean_text and content.get('type'):
-            clean_text = f"[{content.get('type')}]"
-            
         author_id = post_data.get('author_id', -1)
         is_bot = (author_id == 0 or author_id == 1488148800)
         
         reply_to = post_data.get('reply_to_post_num') or post_data.get('reply_to') or content.get('reply_to_post')
         
-        chain.append({
+        raw_chain.append({
             'post_num': current_num,
             'is_bot': is_bot,
             'author_id': author_id,
-            'text': clean_text,
+            'content': content,
             'reply_to': reply_to
         })
         
         current_num = reply_to
 
-    if not chain:
+    if not raw_chain:
         return ""
 
-    chain.reverse()
+    raw_chain.reverse()
     
+    file_ids = set()
+    for item in raw_chain:
+        c = item.get('content', {})
+        if isinstance(c, dict):
+            fid = c.get('file_id')
+            if fid and isinstance(fid, str):
+                file_ids.add(fid)
+            for m in c.get('media', []):
+                if isinstance(m, dict) and m.get('file_id') and isinstance(m.get('file_id'), str):
+                    file_ids.add(m.get('file_id'))
+
+    media_meta_map = {}
+    if file_ids:
+        missing_file_ids = [fid for fid in file_ids if fid not in _MEDIA_DESC_CACHE]
+        if missing_file_ids:
+            try:
+                db = await get_pool()
+                placeholders = ",".join("?" for _ in missing_file_ids)
+                async with db.execute(
+                    f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})",
+                    tuple(missing_file_ids)
+                ) as cursor:
+                    found_fids = set()
+                    for row in await cursor.fetchall():
+                        fid_val = row[0]
+                        meta = {'tags': row[1] or '', 'description': row[2] or ''}
+                        _format_media_context(meta)
+                        _MEDIA_DESC_CACHE[fid_val] = meta
+                        found_fids.add(fid_val)
+                    for fid_val in missing_file_ids:
+                        if fid_val not in found_fids:
+                            _MEDIA_DESC_CACHE[fid_val] = {'tags': '', 'description': '', 'formatted': None}
+            except Exception as meta_err:
+                logger.debug(f"[reply_chain] Media meta batch load error: {meta_err}")
+
+        for fid in file_ids:
+            if fid in _MEDIA_DESC_CACHE:
+                media_meta_map[fid] = _MEDIA_DESC_CACHE[fid]
+
     lines = []
-    for item in chain:
+    for item in raw_chain:
+        content = item.get('content', {})
+        msg_type = content.get('type', 'text') if isinstance(content, dict) else 'text'
+        fid = content.get('file_id') if isinstance(content, dict) else None
+        if not fid and isinstance(content, dict) and content.get('media'):
+            for m in content.get('media', []):
+                if isinstance(m, dict) and m.get('file_id'):
+                    fid = m.get('file_id')
+                    break
+        media_meta = media_meta_map.get(fid) if fid else None
+        formatted_text = _format_post_text(content, msg_type, media_meta=media_meta)
+        if not formatted_text:
+            formatted_text = f"[{msg_type}]" if msg_type else ""
+        clean_text = clean_html_tags(formatted_text).replace('\n', ' ').strip()
+        
         if item['is_bot']:
             sender = "ТЫ (Персона)"
         else:
             anon_hash = str(abs(hash(str(item.get('author_id', 'anon')))))[:4]
             sender = f"Анон #{anon_hash}"
         reply_prefix = f" (в ответ на #{item['reply_to']})" if item['reply_to'] else ""
-        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {item['text'][:300]}")
+        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {clean_text[:300]}")
         
     return "\n".join(lines)
 
@@ -11768,7 +12780,7 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
             }
         except Exception as e:
             logger.error(f"Error generating auto invite image: {e}", exc_info=True)
-            content = {'type': 'text', 'text': companion_caption, 'is_system_message': True}
+            content = {'type': 'text', 'text': companion_caption, 'is_system_message': True, 'archive_allowed': True}
 
     else:
         # 3. Текстовая мотивация/инвайт
@@ -14265,8 +15277,8 @@ async def cmd_boards(message: types.Message, board_id: str | None, stream: str =
     except (TelegramBadRequest, Exception):
         pass
 
-@dp.message(Command("dice", "roll100", "d100", "кости", ignore_case=True, ignore_mention=True))
-async def cmd_dice(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@dp.message(Command("roll100", "d100", ignore_case=True, ignore_mention=True))
+async def cmd_roll100(message: types.Message, board_id: str | None, stream: str = 'ru'):
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
@@ -14453,17 +15465,16 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
         target_id, amount = int(args[1]), int(args[2])
         async with db_lock:
             db = await get_pool()
-            # 1. Гарантируем, что запись на ТЕКУЩЕЙ доске существует
-            await db.execute("INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)", (target_id, board_id))
-            # 2. Начисляем деньги ТОЛЬКО в эту запись (избегаем умножения)
-            await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (amount, target_id, board_id))
+            await add_user_global_balance(db, target_id, board_id, amount)
+            await record_user_transaction(db, target_id, amount, 'admin_grant', 'Начисление шекелей администрацией')
             await db.commit()
         
-        await message.answer(f"✅ Нарисовано {amount} рублей для юзера {target_id}. Баланс пополнен (корзина /{board_id}/).")
-        try:
-            await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
-        except Exception:
-            pass
+        await message.answer(f"✅ Начислено {amount:,} ₪ для юзера {target_id}. Баланс пополнен (корзина /{board_id}/).")
+        grant_dm_text = (
+            f"🎁 <b>Администрация начислила вам бонус: {amount:,} ₪!</b>\n\n"
+            f"💰 Проверить баланс: /wallet"
+        )
+        asyncio.create_task(send_pvp_direct_notification(message.bot, target_id, grant_dm_text))
     except Exception as e:
         await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
@@ -15829,7 +16840,7 @@ async def _notify_new_thread_public(ctx: NewThreadPublicContext) -> None:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=button_text, url=deeplink_url)]
     ])
-    content_notify = {'type': 'text', 'text': notification_text, 'is_system_message': True}
+    content_notify = {'type': 'text', 'text': notification_text, 'is_system_message': True, 'archive_allowed': True}
     pnum_notify = await create_post(
         board_id=board_id, author_id=0, content=content_notify,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -16603,7 +17614,7 @@ async def thread_lifecycle_manager(bots: dict[str, Bot]):
                                 limit=MAX_POSTS_PER_THREAD,
                                 title=thread_info.get('title', '...')
                             )
-                            content = {'type': 'text', 'text': archive_text, 'is_system_message': True}
+                            content = {'type': 'text', 'text': archive_text, 'is_system_message': True, 'archive_allowed': True}
                             recipients = thread_info.get('subscribers', set())
                             if recipients:
                                 notifications_to_queue.append((board_id, recipients, content, thread_id))
@@ -16617,7 +17628,7 @@ async def thread_lifecycle_manager(bots: dict[str, Bot]):
                         for thread_id, thread_info in oldest_threads:
                             removed_title = thread_info.get('title', '...')
                             removal_text = random.choice(thread_messages[lang]['oldest_thread_removed']).format(title=removed_title)
-                            content = {'type': 'text', 'text': removal_text, 'is_system_message': True}
+                            content = {'type': 'text', 'text': removal_text, 'is_system_message': True, 'archive_allowed': True}
                             main_board_recipients = {uid for uid, u_state in b_data.get('user_state', {}).items() if u_state.get('location', 'main') == 'main'}
                             if main_board_recipients:
                                  notifications_to_queue.append((board_id, main_board_recipients, content, None))
@@ -16948,7 +17959,7 @@ async def auto_memory_cleaner():
     """
     while True:
         try:
-            await asyncio.sleep(3600)  # Запускаем раз в час
+            await asyncio.sleep(900)  # Запускаем раз в 15 минут (900с)
 
             # 1. Очистка stream_cache
             cache_size = len(stream_cache)
@@ -16983,13 +17994,15 @@ async def auto_memory_cleaner():
             except Exception:
                 pass
 
+            # 6. Явная сборка мусора
+            gc_collected = gc.collect()
 
             total_stale = sum(removed.values())
-            if done_tasks or cache_size or total_stale:
+            if done_tasks or cache_size or total_stale or gc_collected:
                 detail = ", ".join(f"{name}={count}" for name, count in
                                    sorted(removed.items(), key=lambda kv: kv[1], reverse=True))
                 print(f"🚮 [Memory Cleaner] Мертвых тасок: {len(done_tasks)}, кэш стримов: {cache_size}, "
-                      f"устаревших записей: {total_stale}"
+                      f"устаревших записей: {total_stale}, GC объектов собрано: {gc_collected}"
                       + (f" ({detail})" if detail else ""))
 
         except asyncio.CancelledError:
@@ -19413,6 +20426,14 @@ async def cb_loli_explain(callback: types.CallbackQuery, board_id: str | None):
             new_bal = await add_user_global_balance(db, user_id, target_board, refund)
             await deduct_from_abu_fund(db, refund, reason=f"Возврат 50% штрафа по объяснительной user={user_id}")
             await record_user_transaction(db, user_id, refund, "police", "Возврат 50% штрафа по объяснительной")
+
+            dm_text = (
+                f"👮‍♂️ <b>ВОЗВРАТ 50% ШТРАФА ПО ОБЪЯСНИТЕЛЬНОЙ</b>\n\n"
+                f"Товарищ майор принял твою объяснительную и вернул половину штрафа!\n"
+                f"💰 Возвращено на баланс: <b>+{refund:,.0f} ₪</b>\n"
+                f"💳 Текущий баланс: <b>{new_bal:,.2f} ₪</b>"
+            )
+            asyncio.create_task(send_pvp_direct_notification(callback.bot, user_id, dm_text))
         else:
             new_bal = await get_user_global_balance(db, user_id)
 
@@ -19478,7 +20499,12 @@ async def cmd_dopros(message: types.Message, board_id: str | None):
     if not target_id and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
         target_id = message.reply_to_message.from_user.id
 
-    if not target_id or target_id == 0:
+    if target_id == 0:
+        db = await get_pool()
+        from common.bot_helpers import handle_cyberchad_counter_action
+        if await handle_cyberchad_counter_action(message, "dossier", user_id, board_id, db):
+            return
+    if not target_id:
         await message.answer("⚠️ Не удалось определить подозреваемого по ответу на сообщение (возможно, это системный пост бота).")
         return
 
@@ -20106,7 +21132,7 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
     header_text_prefix = "### DEANON ###" if lang == 'en' else "### ДЕАНОН ###"
     now_dt = datetime.now(UTC)
     async def create_and_send_deanon_post(thread_id_override=None):
-        content = {"type": "text", "text": deanon_text, "reply_to_post": target_post, "is_system_message": True}
+        content = {"type": "text", "text": deanon_text, "reply_to_post": target_post, "is_system_message": True, "archive_allowed": True}
         pnum = await create_post(
             board_id=board_id,
             author_id=0,
@@ -22209,8 +23235,11 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
     except TelegramBadRequest: pass
     
     # --- ИЗМЕНЕНИЕ: Проверка Shadow Mute + Shadow Media ---
+    from common.database import is_shadow_muted as db_is_shadow_muted
     is_shadow_muted = (user_id in b_data['shadow_mutes'] and 
                        b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+    if not is_shadow_muted and await db_is_shadow_muted(user_id, board_id):
+        is_shadow_muted = True
     
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
     if user_settings.get('shadow_media'):
@@ -22297,7 +23326,10 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
     except TelegramBadRequest: pass
 
     # --- ИЗМЕНЕНИЕ: Проверка Shadow Mute + Shadow Media ---
+    from common.database import is_shadow_muted as db_is_shadow_muted
     is_shadow_muted = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+    if not is_shadow_muted and await db_is_shadow_muted(user_id, board_id):
+        is_shadow_muted = True
     
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
     if user_settings.get('shadow_media'):
@@ -22359,7 +23391,10 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
     except TelegramBadRequest: pass
 
     # --- ИЗМЕНЕНИЕ: Проверка Shadow Mute + Shadow Media ---
+    from common.database import is_shadow_muted as db_is_shadow_muted
     is_shadow_muted = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+    if not is_shadow_muted and await db_is_shadow_muted(user_id, board_id):
+        is_shadow_muted = True
     
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
     # Вот эта проверка добавлена для кружков
@@ -22469,7 +23504,7 @@ async def database_cleanup_task():
             await cleanup_notification_queue(retention_hours=48)
             print("✅ [Maintenance] База данных оптимизирована.")
             
-            # Оптимизация оперативной памяти (RAM): обрезаем кэш постов до 10,000 последних
+            # Оптимизация оперативной памяти (RAM): очистка message_to_post по валидным постам и ограничение размера
             async with storage_lock:
                 if len(messages_storage) > 10000:
                     print(f"🚮 [Maintenance] Очистка RAM-кэша постов (было {len(messages_storage)})...")
@@ -22478,12 +23513,20 @@ async def database_cleanup_task():
                     for pnum in to_delete:
                         messages_storage.pop(pnum, None)
                         post_to_messages.pop(pnum, None)
-                    
-                    valid_nums = set(messages_storage.keys())
-                    for key, pnum in list(message_to_post.items()):
-                        if pnum not in valid_nums:
-                            message_to_post.pop(key, None)
-                    print(f"✅ [Maintenance] RAM-кэш обжат до {len(messages_storage)} постов.")
+
+                valid_nums = set(messages_storage.keys()) | set(post_to_messages.keys())
+                stale_keys = [key for key, pnum in message_to_post.items() if pnum not in valid_nums]
+                for key in stale_keys:
+                    message_to_post.pop(key, None)
+
+                # Ограничение размера message_to_post (не более 250,000 записей)
+                MAX_MESSAGE_TO_POST = 250000
+                if len(message_to_post) > MAX_MESSAGE_TO_POST:
+                    excess = len(message_to_post) - MAX_MESSAGE_TO_POST
+                    keys_to_drop = [k for k, _ in zip(message_to_post, range(excess))]
+                    for k in keys_to_drop:
+                        message_to_post.pop(k, None)
+                print(f"✅ [Maintenance] message_to_post очищен: удалено {len(stale_keys)} устаревших записей, текущий размер: {len(message_to_post)} (постов в RAM: {len(messages_storage)}).")
 
             await asyncio.sleep(21600) 
         except asyncio.CancelledError:
@@ -22509,6 +23552,15 @@ async def postcopies_daily_cleanup_loop():
             else:
                 print("ℹ️ [PostCopies-Cleaner] Все записи PostCopies свежее 14 дней, удаление не требуется.")
             await clean_old_media_reposts_daily()
+            try:
+                from common.db_pool import get_pool, db_lock
+                db = await get_pool()
+                if db:
+                    async with db_lock:
+                        await db.execute("DELETE FROM Mutes WHERE expires_at < ?", (time.time(),))
+                        await db.commit()
+            except Exception as e:
+                print(f"⚠️ [MUTES_CLEANUP] Ошибка чистки просроченных мутов: {e}")
             await asyncio.sleep(86400) # Повторять раз в сутки
         except asyncio.CancelledError:
             print("ℹ️ Задача postcopies_daily_cleanup_loop остановлена.")
@@ -23436,6 +24488,35 @@ async def drop_expiry_loop():
             expired = await drop_engine.expire_unclaimed_drops_step(db_lock, db)
             if expired:
                 runtime_logger.info("💸 [DROP_EXPIRE] Refunded %d unclaimed drops.", len(expired))
+                for rec in expired:
+                    expiry_text = (
+                        f"⏳ <b>ДРОП ШЕКЕЛЕЙ ИСТЕК</b>\n\n"
+                        f"👤 Создатель: <b>{rec.donor_name}</b> (Сумма: <b>{int(rec.amount)} ₪</b>)\n"
+                        f"Никто не успел забрать чек за 10 минут. Шекели возвращены на баланс донора."
+                    )
+                    bot_to_use = (
+                        GLOBAL_BOTS.get(rec.board_id)
+                        or getattr(shared_state, 'GLOBAL_BOTS', {}).get(rec.board_id)
+                        or GLOBAL_BOTS.get('b')
+                        or getattr(shared_state, 'GLOBAL_BOTS', {}).get('b')
+                        or (next(iter(GLOBAL_BOTS.values())) if GLOBAL_BOTS else None)
+                        or (next(iter(shared_state.GLOBAL_BOTS.values())) if getattr(shared_state, 'GLOBAL_BOTS', None) else None)
+                    )
+                    if bot_to_use:
+                        spawn_task(_update_all_drop_messages(bot_to_use, rec.drop_id, expiry_text))
+                        if rec.donor_id:
+                            try:
+                                spawn_task(bot_to_use.send_message(
+                                    chat_id=rec.donor_id,
+                                    text=(
+                                        f"⏳ <b>ДРОП ИСТЕК И ВОЗВРАЩЕН</b>\n\n"
+                                        f"Твой дроп на <b>{int(rec.amount)} ₪</b> никто не успел перехватить.\n"
+                                        f"Вся сумма возвращена на твой баланс!"
+                                    ),
+                                    parse_mode="HTML"
+                                ))
+                            except Exception:
+                                pass
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -23536,10 +24617,10 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
                     TaxReasonCategory.CYNICAL,
                 ]
                 for item in details:
-                    uid = item["user_id"]
-                    tax_amt = int(item["tax_amount"])
-                    old_bal = int(item["old_balance"])
-                    new_bal = int(item["new_balance"])
+                    uid = item.get("user_id", 0)
+                    tax_amt = int(item.get("tax_amount", 0))
+                    old_bal = int(item.get("old_balance") or item.get("old_wealth", 0))
+                    new_bal = int(item.get("new_balance") or item.get("new_wealth", 0))
                     anon_name = generate_anon_name(uid, stream='ru')
 
                     notif_text = generate_tax_notification(
@@ -23871,153 +24952,149 @@ async def setup_bot_commands(bots: dict):
     from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
     from aiogram.exceptions import TelegramBadRequest
     
+    # 1. Публичные команды для всех пользователей (BotCommandScopeDefault) — ровно 100/100 слотов без утечек админки
     user_commands = [
-        # Базовые и навигация
+        # Навигация и база (11)
         BotCommand(command="start", description="🚀 Запустить бота / статус"),
-        BotCommand(command="help", description="❓ Справка по командам"),
-        BotCommand(command="menu", description="📋 Главное меню"),
-        BotCommand(command="settings", description="⚙️ Настройки профиля и фильтры"),
+        BotCommand(command="help", description="❓ Справка по всем командам"),
+        BotCommand(command="menu", description="📋 Главное интерактивное меню"),
+        BotCommand(command="settings", description="⚙️ Настройки и фильтры"),
         BotCommand(command="boards", description="📌 Каталог борд и каналов"),
         BotCommand(command="threads", description="🧵 Список активных тредов"),
         BotCommand(command="create", description="✏️ Создать новый тред"),
         BotCommand(command="search", description="🔍 Поиск постов по тексту"),
         BotCommand(command="app", description="📱 Открыть Web Mini App"),
+        BotCommand(command="token", description="🔑 Токен для сайта tgach.top"),
+        BotCommand(command="wiki", description="📖 Энциклопедия и правила"),
 
-        # Экономика, баланс и покупки
-        BotCommand(command="wallet", description="💳 Баланс кошелька"),
-        BotCommand(command="bank", description="🏦 Банк Абу и Сейф от /rob"),
+        # Профиль, RPG, шмот и ачивки (10)
+        BotCommand(command="profile", description="🪪 Карточка профиля и паспорт"),
+        BotCommand(command="passport", description="🪪 Подробный паспорт анона"),
+        BotCommand(command="dossier", description="📁 Личное дело и досье"),
+        BotCommand(command="avatar", description="🎭 RPG-персонаж и аватар"),
+        BotCommand(command="ach", description="🏆 Зал достижений и ачивок"),
+        BotCommand(command="whois", description="ℹ️ Информация об аноне"),
+        BotCommand(command="getid", description="🆔 Узнать свой Telegram ID"),
+        BotCommand(command="color", description="🎨 Палитра цвета ника и ауры"),
+        BotCommand(command="inv", description="🎒 Инвентарь и баффы"),
+        BotCommand(command="wardrobe", description="👗 Бутик одежды и гардероб"),
+
+        # Экономика, банки, рынок и работа (18)
+        BotCommand(command="wallet", description="💳 Баланс шекелей и кошелек"),
+        BotCommand(command="balance", description="💰 Быстрая проверка баланса"),
+        BotCommand(command="bank", description="🏦 Банк Абу и вклады под %"),
         BotCommand(command="deposit", description="📥 Вклад в банк под процент"),
         BotCommand(command="withdraw", description="📤 Снять шекели из банка"),
+        BotCommand(command="safe", description="🛡️ Сейф от грабежей (/rob)"),
         BotCommand(command="market", description="🏪 P2P Барахолка и рынок лотов"),
         BotCommand(command="sell", description="🏷️ Выставить вещь на продажу"),
         BotCommand(command="my_lots", description="📋 Мои активные лоты на рынке"),
-        BotCommand(command="balance", description="💰 Баланс шекелей"),
-        BotCommand(command="pay", description="💸 Перевести шекели анону (реплай)"),
-        BotCommand(command="shop", description="🛒 Теневой черный рынок"),
-        BotCommand(command="wardrobe", description="👗 Бутик одежды и гардероб"),
-        BotCommand(command="color", description="🎨 Палитра цвета ника и ауры"),
+        BotCommand(command="shop", description="🛒 Черный рынок предметов"),
+        BotCommand(command="items", description="📖 Каталог предметов и сетов"),
         BotCommand(command="lootbox", description="📦 Открыть кейсы и лутбоксы"),
-        BotCommand(command="inv", description="🎒 Рюкзак и активные баффы"),
-        BotCommand(command="items", description="📖 Энциклопедия предметов и сетов"),
-        BotCommand(command="rates", description="📈 Курсы валют и прайс-лист"),
-        BotCommand(command="ledger", description="📜 История операций и транзакций"),
-        BotCommand(command="work", description="💼 Биржа труда (Заработок шекелей)"),
+        BotCommand(command="work", description="💼 Биржа труда (заработок)"),
         BotCommand(command="daily", description="🎁 Ежедневный бонус шекелей"),
         BotCommand(command="bonus", description="🎁 Бонус за активность"),
-        BotCommand(command="airdrop", description="🪂 Еженедельный аирдроп из казны"),
-        BotCommand(command="abu_fund", description="🛥️ Казна Яхты Абу"),
-        BotCommand(command="drop", description="💸 Дроп шекелей в тред на реакцию"),
+        BotCommand(command="airdrop", description="🪂 Еженедельный аирдроп"),
+        BotCommand(command="drop", description="💸 Раздать шекели в тред"),
+        BotCommand(command="pay", description="💸 Перевести шекели (реплай)"),
 
-        # Казино и мини-игры
+        # Казино, дуэли и азарт (12)
         BotCommand(command="casino", description="🎰 Подпольное казино Тгача"),
-        BotCommand(command="games", description="🎮 Игры и азартные развлечения"),
+        BotCommand(command="games", description="🎮 Меню азартных игр"),
         BotCommand(command="slots", description="🎰 Слоты 777"),
-        BotCommand(command="dice", description="🎲 Бросить кости"),
-        BotCommand(command="dice_duel", description="🎲 PvP Дайс-дуэль на шекели"),
-        BotCommand(command="duel", description="⚔️ Вызвать анона на дуэль"),
+        BotCommand(command="duel", description="⚔️ Вызвать анона на дуэль (50/50)"),
         BotCommand(command="duel_rr", description="💀 Русская рулетка PvP с мутом"),
         BotCommand(command="rroulette", description="💀 Одиночная русская рулетка"),
-        BotCommand(command="coinflip", description="🪙 Монетка 50/50"),
+        BotCommand(command="dice", description="🎲 Бросить кости"),
+        BotCommand(command="dice_duel", description="🎲 PvP Дайс-дуэль на шекели"),
         BotCommand(command="bj", description="🃏 Блэкджек 21"),
-        BotCommand(command="ttt", description="❌⭕ Крестики-нолики на шекели"),
+        BotCommand(command="ttt", description="❌⭕ Крестики-нолики на ставку"),
+        BotCommand(command="coinflip", description="🪙 Монетка 50/50"),
+        BotCommand(command="abu_fund", description="🛥️ Казна Яхты Абу"),
 
-        # Профиль, паспорт и статистика
-        BotCommand(command="passport", description="🪪 Паспорт и карта статистики"),
-        BotCommand(command="profile", description="🪪 Карточка профиля"),
-        BotCommand(command="dossier", description="📁 Личное дело анона"),
-        BotCommand(command="avatar", description="🎭 Карточка RPG и персонаж"),
-        BotCommand(command="ach", description="🏆 Зал достижений и ачивок"),
+        # Статистика, постеры и инфографика (12)
+        BotCommand(command="stats", description="📊 Статистика доски"),
+        BotCommand(command="my_stats", description="📊 Моя личная статистика"),
+        BotCommand(command="stats_hub", description="🌐 Пульс статистики WebApp"),
+        BotCommand(command="my_wrapped", description="🎴 Мой 2ch Wrapped года"),
         BotCommand(command="top", description="🏆 Топ пользователей доски"),
         BotCommand(command="global_top", description="🌐 Глобальный топ ТГАЧ"),
-        BotCommand(command="gtop", description="🌐 Топ богачей и авторов"),
-        BotCommand(command="stats", description="📊 Статистика доски"),
-        BotCommand(command="my_stats", description="📊 Моя статистика активности"),
-        BotCommand(command="stats_hub", description="📊 Пульс статистики WebApp"),
-        BotCommand(command="my_wrapped", description="🎴 Мой 2ch Wrapped"),
         BotCommand(command="wordcloud", description="☁️ Облако слов дня"),
         BotCommand(command="tags", description="🏷️ Облако тегов картинок"),
         BotCommand(command="graph", description="📈 График активности доски"),
-        BotCommand(command="whois", description="ℹ️ Информация о пользователе"),
-        BotCommand(command="getid", description="🆔 Узнать свой ID"),
+        BotCommand(command="heatmap", description="🗺️ Тепловая карта постов"),
+        BotCommand(command="pulse", description="💓 Пульс борды в реальном времени"),
+        BotCommand(command="rates", description="📈 Курсы валют и цены"),
 
-        # Интерактив и оружие в тредах (реплаи)
-        BotCommand(command="shoot", description="🔫 Выстрелить из мут-гана (реплай)"),
-        BotCommand(command="rob", description="🔪 Ограбить анона заточкой (реплай)"),
-        BotCommand(command="partyvan", description="🚔 Вызвать пативэн (реплай)"),
-        BotCommand(command="shit", description="💩 Кинуть говно в анона (реплай)"),
-        BotCommand(command="curse", description="🚽 Подсыпать слабительное (реплай)"),
-        BotCommand(command="pepperspray", description="🧯 Залить перцовкой (реплай)"),
-        BotCommand(command="puke", description="🤮 Облевать анона (реплай)"),
-        BotCommand(command="schizopill", description="💊 Скормить шизопил (реплай)"),
-        BotCommand(command="flag_ru", description="🇷🇺 Повесить флаг России (реплай)"),
-        BotCommand(command="flag_ua", description="🇺🇦 Повесить флаг Украины (реплай)"),
-        BotCommand(command="votemute", description="🗳️ Народный шизо-мут (реплай)"),
-        BotCommand(command="dopros", description="📋 Вызов на допрос в Отдел «К» (реплай/себе)"),
-        BotCommand(command="fine", description="🪪 Штраф от дружинника (реплай)"),
-        BotCommand(command="heist", description="🦹 Теневое AI-ограбление (реплай)"),
-        BotCommand(command="mega", description="📌 Закрепить свой пост (реплай)"),
-        BotCommand(command="ans", description="✉️ Задать вопрос автору поста"),
+        # Интерактив и оружие в тредах (реплаи) (18)
+        BotCommand(command="shoot", description="🔫 Мут-ган (замутить цель)"),
+        BotCommand(command="rob", description="🔪 Заточка (ограбить на шекели)"),
+        BotCommand(command="partyvan", description="🚔 Вызвать пативэн / ОМОН"),
+        BotCommand(command="shit", description="💩 Кинуть говно в анона"),
+        BotCommand(command="curse", description="🚽 Слабительное (понос в треде)"),
+        BotCommand(command="pepperspray", description="🧯 Залить перцовкой"),
+        BotCommand(command="puke", description="🤮 Облевать анона"),
+        BotCommand(command="schizopill", description="💊 Скормить шизопил"),
+        BotCommand(command="flag_ru", description="🇷🇺 Повесить флаг РФ на пост"),
+        BotCommand(command="flag_ua", description="🇺🇦 Повесить флаг Украины"),
+        BotCommand(command="votemute", description="🗳️ Народный шизо-мут"),
+        BotCommand(command="dopros", description="📋 Допрос в Отделе «К»"),
+        BotCommand(command="fine", description="🪪 Штраф от дружинника"),
+        BotCommand(command="heist", description="🦹 Теневое AI-ограбление"),
+        BotCommand(command="mega", description="📌 Закрепить свой пост"),
+        BotCommand(command="ans", description="✉️ Задать вопрос автору"),
         BotCommand(command="whisper", description="🤫 Анонимный шепот в ЛС"),
-        BotCommand(command="redact", description="✏️ Удалить/исправить свой пост"),
-        BotCommand(command="hide", description="👁️ Скрыть пост из ленты"),
         BotCommand(command="report", description="🚨 Пожаловаться модераторам"),
 
-        # Утилиты, медиа и режимы
-        BotCommand(command="roll", description="🎲 Ролл кубиков"),
-        BotCommand(command="poll", description="📊 Создать опрос"),
-        BotCommand(command="random", description="🎲 Случайное медиа с доски"),
-        BotCommand(command="quote", description="💬 Случайная цитата"),
+        # AI, медиа и утилиты (12)
         BotCommand(command="summarize", description="📝 ИИ-пересказ треда"),
         BotCommand(command="slop", description="🤖 Настройки нейрослопа"),
-        BotCommand(command="token", description="🔑 Токен для сайта"),
+        BotCommand(command="roast", description="🔥 Персональный AI-роаст"),
+        BotCommand(command="roll", description="🎲 Ролл кубиков d100"),
+        BotCommand(command="poll", description="📊 Создать опрос в треде"),
+        BotCommand(command="random", description="🎲 Случайное медиа с доски"),
+        BotCommand(command="quote", description="💬 Случайная цитата анона"),
         BotCommand(command="deanon", description="🎭 Шуточный деанон"),
         BotCommand(command="nsfw", description="🔞 Переключить спойлеры NSFW"),
         BotCommand(command="togglegif", description="🎞️ Отключить/включить GIF"),
         BotCommand(command="togglestickers", description="🎭 Отключить/включить стикеры"),
         BotCommand(command="togglemedia", description="🖼️ Отключить/включить медиа"),
-        BotCommand(command="invite", description="🔗 Пригласить на доску"),
+
+        # Тематические режимы и утилиты (7)
+        BotCommand(command="invite", description="🔗 Реферальный инвайт"),
         BotCommand(command="invite_pic", description="🖼️ Картинка-инвайт с QR"),
-        BotCommand(command="fap", description="🔞 Случайный арт 18+"),
-        BotCommand(command="hent", description="🔞 Случайный хентай"),
-        BotCommand(command="loli", description="🎀 Случайная лоли"),
         BotCommand(command="anime", description="🌸 Аниме-режим"),
         BotCommand(command="gopnik", description="🧢 Режим гопника"),
         BotCommand(command="zaputin", description="🇷🇺 Z-режим"),
         BotCommand(command="schizo", description="🌀 Режим шизофазии"),
-        BotCommand(command="active", description="🔄 Активные режимы на доске"),
         BotCommand(command="stop", description="⏹️ Остановить режим на доске")
     ]
 
+    # 2. Инструменты администратора (скрыты от обычных пользователей, доступны только в scope=BotCommandScopeChat для ADMIN_IDS)
     admin_tools = [
-        BotCommand(command="admin", description="Админ-панель управления"),
-        BotCommand(command="ban", description="Забанить юзера"),
-        BotCommand(command="unban", description="Разбанить юзера"),
-        BotCommand(command="gban", description="Глобальный бан"),
-        BotCommand(command="gunban", description="Глобальный разбан"),
-        BotCommand(command="shadowmute", description="Теневой мут"),
-        BotCommand(command="unshadowmute", description="Снять теневой мут"),
-        BotCommand(command="gshadowmute", description="Глобальный теневой мут"),
-        BotCommand(command="shadowmute_threads", description="Теневой мут на создание тредов"),
-        BotCommand(command="mute", description="Обычный мут"),
-        BotCommand(command="unmute", description="Размутить"),
-        BotCommand(command="wipe", description="Вайп всех постов юзера"),
-        BotCommand(command="del", description="Удалить пост"),
-        BotCommand(command="sdel", description="Удалить несколько постов"),
-        BotCommand(command="deletethread", description="Удалить тред"),
-        BotCommand(command="pin", description="Закрепить пост"),
-        BotCommand(command="unpin", description="Открепить пост"),
-        BotCommand(command="nuke_pins", description="Удалить все закрепления"),
-        BotCommand(command="lockdown", description="Заблокировать доску"),
-        BotCommand(command="bot_stats", description="Статистика бота"),
-        BotCommand(command="addmoney", description="Выдать деньги юзеру"),
-        BotCommand(command="restrict_anime", description="Ограничить аниме юзеру"),
-        BotCommand(command="debug_memory", description="Статистика памяти"),
-        BotCommand(command="queues", description="Статистика очередей"),
-        BotCommand(command="troll", description="Затроллить юзера"),
-        BotCommand(command="say", description="Написать от имени бота"),
-        BotCommand(command="togglereactions", description="Включить/выключить реакции"),
-        BotCommand(command="filter", description="Фильтр слов"),
-        BotCommand(command="lie", description="Искажение медиа")
+        BotCommand(command="admin", description="🛠️ Админ-панель управления"),
+        BotCommand(command="ban", description="🔨 Забанить юзера"),
+        BotCommand(command="unban", description="🔓 Разбанить юзера"),
+        BotCommand(command="gban", description="⛔ Глобальный бан"),
+        BotCommand(command="gunban", description="🟢 Глобальный разбан"),
+        BotCommand(command="shadowmute", description="👻 Теневой мут"),
+        BotCommand(command="unshadowmute", description="👁️ Снять теневой мут"),
+        BotCommand(command="gshadowmute", description="🌐 Глобальный теневой мут"),
+        BotCommand(command="mute", description="🔇 Обычный мут"),
+        BotCommand(command="unmute", description="🔊 Размутить"),
+        BotCommand(command="wipe", description="🧹 Вайп всех постов юзера"),
+        BotCommand(command="del", description="🗑️ Удалить пост"),
+        BotCommand(command="sdel", description="🗑️ Удалить несколько постов"),
+        BotCommand(command="deletethread", description="🔥 Удалить тред"),
+        BotCommand(command="pin", description="📌 Закрепить пост"),
+        BotCommand(command="unpin", description="📍 Открепить пост"),
+        BotCommand(command="lockdown", description="🚨 Заблокировать доску"),
+        BotCommand(command="bot_stats", description="📊 Системная статистика бота"),
+        BotCommand(command="addmoney", description="💰 Выдать деньги юзеру"),
+        BotCommand(command="queues", description="⚡ Статистика очередей"),
+        BotCommand(command="filter", description="🛑 Фильтр слов"),
+        BotCommand(command="debug_memory", description="🧠 Статистика памяти")
     ]
 
     # Для админов объединяем админские инструменты и основные юзерские (строго <= 99 команд для Telegram API)
@@ -24027,9 +25104,11 @@ async def setup_bot_commands(bots: dict):
 
     for bot in bots.values():
         try:
+            # Обычные юзеры видят полный слот из 100 команд
             await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
             for admin_id in ADMIN_IDS:
                 try:
+                    # Админы в своем личном чате видят админку + админские тулы + юзерские
                     await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
                 except TelegramBadRequest:
                     pass
@@ -25071,7 +26150,7 @@ async def cb_abu_fund_refresh(callback: types.CallbackQuery, board_id: str | Non
 from common.database import CATEGORY_EMOJIS, CATEGORY_NAMES_RU
 
 def _format_ledger_view(user_id: int, balance: float, transactions: list, summary: dict, offset: int = 0) -> tuple[str, InlineKeyboardMarkup]:
-    anon_tag = f"[{get_anon_id(user_id, 'ru')}]"
+    anon_tag = f"[{escape_html(str(get_anon_id(user_id, 'ru')))}]"
     
     lines = [
         f"🧾 <b>ВЫПИСКА И ИСТОРИЯ ОПЕРАЦИЙ</b>",
@@ -25093,18 +26172,19 @@ def _format_ledger_view(user_id: int, balance: float, transactions: list, summar
             dt = datetime.fromtimestamp(tx["timestamp"], tz=timezone.utc).astimezone(msk_tz)
             time_str = dt.strftime("%d.%m %H:%M")
             amt = tx["amount"]
-            cat_emoji = CATEGORY_EMOJIS.get(tx["category"], "💰")
-            cat_name = CATEGORY_NAMES_RU.get(tx["category"], tx["category"].upper())
+            cat_emoji = CATEGORY_EMOJIS.get(tx.get("category"), "💰")
+            raw_cat_name = CATEGORY_NAMES_RU.get(tx.get("category"), str(tx.get("category", "")).upper())
+            cat_name_safe = escape_html(raw_cat_name)
             
             if amt > 0:
                 amt_str = f"🟢 <b>+{amt:,.0f} ₪</b>".replace(",", " ")
             else:
                 amt_str = f"🔴 <b>{amt:,.0f} ₪</b>".replace(",", " ")
 
-            desc_clean = escape_html(tx["description"])
+            desc_clean = escape_html(str(tx.get("description", "")))
             lines.append(
                 f"{cat_emoji} {amt_str} | <code>{time_str}</code>\n"
-                f"   └ <i>{cat_name}: {desc_clean}</i>"
+                f"   └ <i>{cat_name_safe}: {desc_clean}</i>"
             )
 
     lines.append(f"<code>{'═'*28}</code>")

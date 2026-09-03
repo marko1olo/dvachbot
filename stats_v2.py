@@ -499,11 +499,13 @@ def generate_pvp_bioweapons_poster() -> io.BytesIO:
             ax4.set_ylabel("Применений оружия", fontsize=8)
 
             # 5. Mutes
+            now_ts = time.time()
             c.execute("""
                 SELECT mute_type, COUNT(*) as cnt 
                 FROM Mutes 
+                WHERE expires_at > ?
                 GROUP BY mute_type ORDER BY cnt DESC LIMIT 4
-            """)
+            """, (now_ts,))
             m_rows = c.fetchall()
             if m_rows:
                 m_lbls = [r['mute_type'][:10] for r in m_rows]
@@ -823,3 +825,243 @@ def generate_drama_beef_poster() -> io.BytesIO:
         plt.close('all')
         buf.seek(0)
         return buf
+
+
+# -----------------------------------------------------------------------------
+# 5. Requirement R5: Deep Database Sentiment & Moderation Forensics
+# -----------------------------------------------------------------------------
+
+def run_db_sentiment_moderation_forensics(
+    db_path: str = "file:dvach_bot.db?mode=ro",
+    conn: Optional[sqlite3.Connection] = None,
+    days: int = 30
+) -> Dict[str, Any]:
+    """
+    Executes forensic inspections across Posts, Reports, Mutes, and UserTransactions.
+    Extracts structured sentiment metrics on AI interventions, PvP fairness, economy balance,
+    and moderation efficacy. Safe read-only execution.
+    """
+    close_conn = False
+    if conn is None:
+        conn = connect_ro_db(db_path)
+        close_conn = True
+
+    try:
+        c = conn.cursor()
+        now_ts = time.time()
+        start_ts = now_ts - (days * 86400)
+
+        # 1. AI Interventions & Reply Sentiment
+        c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = 0 AND timestamp > ?", (start_ts,))
+        ai_posts_count = c.fetchone()[0] or 0
+
+        c.execute("""
+            SELECT COUNT(*)
+            FROM Posts repl
+            JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
+            WHERE orig.author_id = 0 AND repl.timestamp > ?
+        """, (start_ts,))
+        ai_replies_count = c.fetchone()[0] or 0
+
+        c.execute("""
+            SELECT COALESCE(repl.text_content, repl.content)
+            FROM Posts repl
+            JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
+            WHERE orig.author_id = 0 AND repl.timestamp > ?
+        """, (start_ts,))
+        ai_reply_texts = []
+        for r in c.fetchall():
+            raw = r[0] or ""
+            if raw.startswith("{") and raw.endswith("}"):
+                try:
+                    raw = json.loads(raw).get("text", raw)
+                except Exception:
+                    pass
+            ai_reply_texts.append(raw)
+
+        # Token sentiment scoring on AI replies
+        PRAISE_TOKENS = ["база", "сигма", "хорош", "гигачад", "красава", "увожение", "мощно", "годно", "гений"]
+        HOSTILITY_TOKENS = ["хуй", "бля", "пизд", "еба", "сояк", "шиз", "заткнись", "говно", "высер", "душный", "кринж"]
+        FEAR_TOKENS = ["страшно", "жесть", "пощади", "ужас", "ппц", "rip", "молчу"]
+
+        ai_sentiment_counts = {"praise": 0, "hostility": 0, "fear": 0, "neutral": 0}
+        for txt in ai_reply_texts:
+            lower_txt = txt.lower()
+            p_score = sum(1 for t in PRAISE_TOKENS if t in lower_txt)
+            h_score = sum(1 for t in HOSTILITY_TOKENS if t in lower_txt)
+            f_score = sum(1 for t in FEAR_TOKENS if t in lower_txt)
+
+            if p_score > h_score and p_score > f_score:
+                ai_sentiment_counts["praise"] += 1
+            elif h_score > p_score and h_score > f_score:
+                ai_sentiment_counts["hostility"] += 1
+            elif f_score > p_score and f_score > h_score:
+                ai_sentiment_counts["fear"] += 1
+            else:
+                ai_sentiment_counts["neutral"] += 1
+
+        # 2. General Board Sentiment & Hostility Breakdown
+        c.execute("""
+            SELECT 
+                COUNT(*) as total_posts,
+                SUM(CASE WHEN content LIKE '%база%' OR content LIKE '%сигма%' OR content LIKE '%годно%' OR content LIKE '%топ%' THEN 1 ELSE 0 END) as positive_posts,
+                SUM(CASE WHEN content LIKE '%хуй%' OR content LIKE '%бля%' OR content LIKE '%пизд%' OR content LIKE '%еба%' THEN 1 ELSE 0 END) as toxic_posts,
+                SUM(CASE WHEN content LIKE '%казино%' OR content LIKE '%рулетка%' OR content LIKE '%кости%' OR content LIKE '%дуэль%' OR content LIKE '%джекпот%' THEN 1 ELSE 0 END) as pvp_posts,
+                SUM(CASE WHEN content LIKE '%подкрут%' OR content LIKE '%скам%' OR content LIKE '%наеб%' OR content LIKE '%слив%' THEN 1 ELSE 0 END) as scam_complaint_posts
+            FROM Posts
+            WHERE timestamp > ?
+        """, (start_ts,))
+        row_sent = c.fetchone()
+        total_posts = row_sent[0] if row_sent else 0
+        positive_posts = row_sent[1] if row_sent else 0
+        toxic_posts = row_sent[2] if row_sent else 0
+        pvp_posts = row_sent[3] if row_sent else 0
+        scam_complaint_posts = row_sent[4] if row_sent else 0
+
+        # 3. Moderation Forensics (Mutes, Bans, Reports)
+        c.execute("SELECT COUNT(*) FROM Mutes")
+        total_mutes_in_db = c.fetchone()[0] or 0
+
+        c.execute("""
+            SELECT mute_type, COUNT(*) as cnt
+            FROM Mutes
+            GROUP BY mute_type
+        """)
+        mutes_by_type = {r['mute_type']: r['cnt'] for r in c.fetchall()}
+
+        c.execute("PRAGMA table_info(Mutes)")
+        mutes_cols = {r[1] for r in c.fetchall()}
+        top_mute_reasons = []
+        if 'reason' in mutes_cols:
+            c.execute("""
+                SELECT reason, COUNT(*) as cnt
+                FROM Mutes
+                WHERE reason IS NOT NULL AND reason != ''
+                GROUP BY reason
+                ORDER BY cnt DESC LIMIT 5
+            """)
+            top_mute_reasons = [(r['reason'], r['cnt']) for r in c.fetchall()]
+
+        c.execute("SELECT COUNT(*) FROM Reports WHERE created_at > ?", (start_ts,))
+        total_reports = c.fetchone()[0] or 0
+
+        c.execute("""
+            SELECT category, COUNT(*) as cnt
+            FROM Reports
+            WHERE created_at > ?
+            GROUP BY category
+            ORDER BY cnt DESC
+        """, (start_ts,))
+        reports_by_category = {r['category']: r['cnt'] for r in c.fetchall()}
+
+        c.execute("""
+            SELECT status, COUNT(*) as cnt
+            FROM Reports
+            WHERE created_at > ?
+            GROUP BY status
+        """, (start_ts,))
+        reports_by_status = {r['status']: r['cnt'] for r in c.fetchall()}
+
+        # 4. Economy & PvP Transaction Forensics
+        c.execute("""
+            SELECT category, COUNT(*) as cnt, COALESCE(SUM(ABS(amount)), 0) as vol
+            FROM UserTransactions
+            WHERE timestamp > ?
+            GROUP BY category
+            ORDER BY vol DESC
+        """, (start_ts,))
+        tx_breakdown = {r['category']: {"count": r['cnt'], "volume": r['vol']} for r in c.fetchall()}
+
+        # False report / arrest count from transactions
+        c.execute("""
+            SELECT COUNT(*)
+            FROM UserTransactions
+            WHERE description LIKE '%Арест за ложный донос%' AND timestamp > ?
+        """, (start_ts,))
+        false_report_arrests = c.fetchone()[0] or 0
+
+        # Robbery vs fine forensics
+        c.execute("""
+            SELECT COUNT(*), COALESCE(SUM(ABS(amount)), 0)
+            FROM UserTransactions
+            WHERE category = 'rob' AND amount < 0 AND timestamp > ?
+        """, (start_ts,))
+        rob_fines_row = c.fetchone()
+        rob_fines_count = rob_fines_row[0] if rob_fines_row else 0
+        rob_fines_vol = rob_fines_row[1] if rob_fines_row else 0
+
+        res_data = {
+            "period_days": days,
+            "total_posts": total_posts,
+            "ai_forensics": {
+                "posts_count": ai_posts_count,
+                "replies_count": ai_replies_count,
+                "sentiment_distribution": ai_sentiment_counts,
+                "praise_ratio": round(ai_sentiment_counts["praise"] / max(1, ai_replies_count) * 100, 1),
+                "hostility_ratio": round(ai_sentiment_counts["hostility"] / max(1, ai_replies_count) * 100, 1),
+                "fear_ratio": round(ai_sentiment_counts["fear"] / max(1, ai_replies_count) * 100, 1),
+            },
+            "sentiment_summary": {
+                "positive_ratio": round(positive_posts / max(1, total_posts) * 100, 1),
+                "toxicity_ratio": round(toxic_posts / max(1, total_posts) * 100, 1),
+                "pvp_discussion_ratio": round(pvp_posts / max(1, total_posts) * 100, 1),
+                "scam_complaint_ratio": round(scam_complaint_posts / max(1, total_posts) * 100, 1),
+            },
+            "moderation_forensics": {
+                "total_mutes": total_mutes_in_db,
+                "mutes_by_type": mutes_by_type,
+                "top_mute_reasons": top_mute_reasons,
+                "total_reports": total_reports,
+                "reports_by_category": reports_by_category,
+                "reports_by_status": reports_by_status,
+                "false_report_arrests": false_report_arrests,
+            },
+            "economy_forensics": {
+                "transactions_by_category": tx_breakdown,
+                "robbery_fines_count": rob_fines_count,
+                "robbery_fines_volume": rob_fines_vol,
+            }
+        }
+        return res_data
+    finally:
+        if close_conn and conn:
+            conn.close()
+
+
+def generate_forensics_report_text(
+    days: int = 7,
+    db_path: str = "file:dvach_bot.db?mode=ro",
+    conn: Optional[sqlite3.Connection] = None
+) -> str:
+    """
+    Generates a comprehensive diagnostic forensic report string.
+    """
+    f = run_db_sentiment_moderation_forensics(db_path=db_path, conn=conn, days=days)
+    ai_f = f["ai_forensics"]
+    sent = f["sentiment_summary"]
+    mod = f["moderation_forensics"]
+    eco = f["economy_forensics"]
+
+    report = (
+        f"🕵️ <b>ФОРЕНЗИК-ОТЧЕТ & СЕНТИМЕНТ-АНАЛИЗ БОРДЫ</b>\n"
+        f"⏱️ <i>Период выборки: последние {days} дней</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 <b>Киберчед & ИИ-Интервенции:</b>\n"
+        f"• Постов ИИ: <code>{ai_f['posts_count']}</code> | Ответов анонов: <code>{ai_f['replies_count']}</code>\n"
+        f"• Одобрение (База): <code>{ai_f['praise_ratio']}%</code>\n"
+        f"• Агрессия/Подгорание: <code>{ai_f['hostility_ratio']}%</code>\n"
+        f"• Страх/Уважение: <code>{ai_f['fear_ratio']}%</code>\n\n"
+        f"💬 <b>Общий сентимент досок:</b>\n"
+        f"• Позитив & База: <code>{sent['positive_ratio']}%</code>\n"
+        f"• Токсичность (% мата): <code>{sent['toxicity_ratio']}%</code>\n"
+        f"• Доля обсуждения PvP/Казино: <code>{sent['pvp_discussion_ratio']}%</code>\n"
+        f"• Жалобы на «подкрутку/скам»: <code>{sent['scam_complaint_ratio']}%</code>\n\n"
+        f"⚖️ <b>Модерация & Безопасность:</b>\n"
+        f"• Активных мутов в базе: <code>{mod['total_mutes']}</code>\n"
+        f"• Поступило репортов: <code>{mod['total_reports']}</code>\n"
+        f"• Арестов за ложные доносы: <code>{mod['false_report_arrests']}</code>\n\n"
+        f"💰 <b>Экономика:</b>\n"
+        f"• Штрафов за наглый грабеж: <code>{mod['false_report_arrests']}</code> шт (<code>{eco['robbery_fines_volume']:,} ₪</code>)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    return report

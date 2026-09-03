@@ -81,10 +81,15 @@ def calculate_hand(hand: List[Tuple[str, str]]) -> int:
 
 
 def format_hand(hand: List[Tuple[str, str]], hide_dealer_card: bool = False) -> str:
-    if hide_dealer_card:
-        visible = hand[0]
-        return f"`[{visible[0]}{visible[1]}]` `[🂠 ?]`"
-    return " ".join(f"`[{r}{s}]`" for r, s in hand)
+    if not hand:
+        return "<i>(нет карт)</i>"
+    cards_str = []
+    for i, (rank, suit) in enumerate(hand):
+        if hide_dealer_card and i == 1:
+            cards_str.append("🂠 <b>[ ? ]</b>")
+        else:
+            cards_str.append(f"🎴 <b>[ {rank}{suit} ]</b>")
+    return "  ".join(cards_str)
 
 
 # Anti-abuse and rate-limiting
@@ -140,15 +145,16 @@ def get_win_streak(user_id: int) -> int:
 def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, str]:
     """
     Spins 3 reels based on weighted probability (~96% RTP).
-    Applies Anti-Streak / High-Roller Tilt if user is on a high win streak (>=4) or balance > 250,000 ₪.
+    Applies Anti-Streak / High-Roller Tilt if user is on a high win streak (>=5) or balance > 100,000 ₪.
     Returns: (symbols_list, multiplier, result_title)
     """
     streak = user_win_streaks.get(user_id, 0) if user_id else 0
-    is_tilted = streak >= 5 or balance > 1_000_000
+    is_tilted = streak >= 5 or balance > 100_000
 
-    # Adjust weights if player is on a hot streak or is an oligarch
+    # Adjust weights if player is on a hot streak or is a highroller (>100k)
+    # Mild anti-streak tilt: keep crown jackpot achievable (~1/3,500 instead of harsh 1/13,000 tilt)
     if is_tilted:
-        weights = [3, 5, 8, 9, 10, 12]
+        weights = [3, 5, 8, 9, 11, 10]
     else:
         weights = [s[2] for s in SLOT_SYMBOLS]
 
@@ -415,14 +421,25 @@ def get_coinflip_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarku
 # --- BLACKJACK KEYBOARDS ---
 
 def get_blackjack_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
+    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
     presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:bj:lobby:{p}")
         for p in presets
     ]
+    half_bet = max(MIN_CASINO_BET, bet // 2)
+    double_bet = min(MAX_CASINO_BET, min(balance, bet * 2)) if balance >= bet * 2 else bet
+    max_bet = max(MIN_CASINO_BET, min(MAX_CASINO_BET, balance))
+
+    ctrl_row = [
+        InlineKeyboardButton(text="½", callback_data=f"cas:bj:lobby:{half_bet}"),
+        InlineKeyboardButton(text="2x", callback_data=f"cas:bj:lobby:{double_bet}"),
+        InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"cas:bj:lobby:{max_bet}"),
+    ]
     buttons = [
-        [InlineKeyboardButton(text=f"🃏 Раздать карты ({bet} ₪)", callback_data=f"cas:bj:start:{bet}")],
+        [InlineKeyboardButton(text=f"🃏 Раздать карты ({bet:,} ₪)", callback_data=f"cas:bj:start:{bet}")],
         preset_row,
+        ctrl_row,
         [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -430,15 +447,34 @@ def get_blackjack_lobby_keyboard(bet: int = 100, balance: int = 10000) -> Inline
 
 def get_blackjack_keyboard(bet: int, can_double: bool = True) -> InlineKeyboardMarkup:
     row1 = [
-        InlineKeyboardButton(text="🃏 Еще карту", callback_data=f"cas:bj:hit:{bet}"),
-        InlineKeyboardButton(text="✋ Хватит", callback_data=f"cas:bj:stand:{bet}"),
+        InlineKeyboardButton(text="🃏 Взять карту (+1)", callback_data=f"cas:bj:hit:{bet}"),
+        InlineKeyboardButton(text="✋ Хватит (Стоп)", callback_data=f"cas:bj:stand:{bet}"),
     ]
     if can_double:
-        row1.append(InlineKeyboardButton(text="💥 Дабл (x2)", callback_data=f"cas:bj:double:{bet}"))
+        row1.append(InlineKeyboardButton(text="💥 Дабл x2", callback_data=f"cas:bj:double:{bet}"))
 
     buttons = [
         row1,
-        [InlineKeyboardButton(text="❌ Сдаться", callback_data=f"cas:bj:surrender:{bet}")]
+        [
+            InlineKeyboardButton(text="🏳️ Сдаться (-50%)", callback_data=f"cas:bj:surrender:{bet}"),
+            InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_blackjack_replay_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
+    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
+    double_bet = min(MAX_CASINO_BET, min(balance, bet * 2)) if balance >= bet * 2 else bet
+    buttons = [
+        [
+            InlineKeyboardButton(text=f"🔄 Повторить ({bet:,} ₪)", callback_data=f"cas:bj:start:{bet}"),
+            InlineKeyboardButton(text=f"⚡ Удвоить ({double_bet:,} ₪)", callback_data=f"cas:bj:start:{double_bet}")
+        ],
+        [
+            InlineKeyboardButton(text="⚙️ Выбрать ставку", callback_data=f"cas:bj:lobby:{bet}"),
+            InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

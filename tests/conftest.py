@@ -206,6 +206,15 @@ def _restore_pristine_modules():
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_event_loop():
+    import logging
+    # Изоляция боевых логов от тестового загрязнения (MagicMock, test exceptions)
+    root_logger = logging.getLogger()
+    for h in list(root_logger.handlers):
+        if isinstance(h, logging.FileHandler):
+            root_logger.removeHandler(h)
+    null_h = logging.NullHandler()
+    root_logger.addHandler(null_h)
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     yield loop

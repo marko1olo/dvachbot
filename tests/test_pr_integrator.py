@@ -3,6 +3,12 @@ from unittest.mock import patch, MagicMock
 import pr_integrator
 import subprocess
 import sys
+import sys
+from pathlib import Path
+# scripts/ moved here after refactor
+_scripts_dir = str(Path(__file__).resolve().parents[1] / 'scripts')
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
 
 class TestPrIntegrator(unittest.TestCase):
     @patch('pr_integrator.run_git')

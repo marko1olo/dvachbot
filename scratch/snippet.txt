@@ -1,8 +1,0 @@
-@dp.message(F.media_group_id)
-async def handle_media_group_init(message: Message, board_id: str | None, stream: str = 'ru'):
-    """
-    (ИСПРАВЛЕННАЯ ВЕРСИЯ)
-    Собирает сообщения медиагруппы и НЕМЕДЛЕННО удаляет оригинал для консистентного UX.
-    """
-    media_group_id = message.media_group_id
-    user_id = message.from_user.id

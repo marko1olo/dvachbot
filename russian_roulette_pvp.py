@@ -41,6 +41,7 @@ from common.database import (
 from common.anon_identity import get_anon_id
 
 logger = logging.getLogger("runtime")
+runtime_logger = logger
 
 # -----------------------------------------------------------------------------
 # Configuration Constants
@@ -203,8 +204,84 @@ def format_rr_game_message(game: Dict[str, Any], last_action_text: Optional[str]
 
 
 # -----------------------------------------------------------------------------
-# Keyboards
+# Keyboards & Lobbies
 # -----------------------------------------------------------------------------
+
+def format_rr_bet_amount(amount: int) -> str:
+    if amount >= 1_000_000:
+        if amount % 1_000_000 == 0:
+            return f"{amount // 1_000_000}M ₪"
+        return f"{amount / 1_000_000:.1f}M ₪"
+    elif amount >= 1000:
+        if amount % 1000 == 0:
+            return f"{amount // 1000}k ₪"
+        return f"{amount / 1000:.1f}k ₪"
+    return f"{amount} ₪"
+
+
+def get_adaptive_rr_bet_presets(balance: int, current_bet: int = 100) -> List[int]:
+    """Generates affordable bet presets based on player's current balance."""
+    ALL_PRESETS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000]
+    eff_bal = max(0, int(balance))
+    if eff_bal < MIN_RR_BET:
+        return [MIN_RR_BET]
+    affordable = [p for p in ALL_PRESETS if p <= eff_bal and p <= MAX_RR_BET]
+    if not affordable:
+        return [max(MIN_RR_BET, min(eff_bal, MAX_RR_BET))]
+    if len(affordable) <= 5:
+        return affordable
+    indices = [0, len(affordable) // 4, len(affordable) // 2, (len(affordable) * 3) // 4, len(affordable) - 1]
+    return sorted(list(set(affordable[i] for i in indices)))
+
+
+def format_rr_lobby_message(balance: int, bet: int, target_id: Optional[int] = None) -> str:
+    target_str = f"🎯 <b>Цель дуэли:</b> Анон <code>[ID:{get_anon_id(target_id)}]</code>\n" if target_id else "🌐 <b>Тип вызова:</b> Открытый (любой анон в треде)\n"
+    return (
+        f"💀 <b>PvP РУССКАЯ РУЛЕТКА (6 КАМОР, 1 ПАТРОН)</b>\n\n"
+        f"💳 <b>Твой баланс:</b> <code>{int(balance):,} ₪</code>\n"
+        f"💰 <b>Выбранная ставка:</b> <code>{int(bet):,} ₪</code>\n"
+        f"{target_str}\n"
+        f"⚖️ <b>Правила:</b>\n"
+        f"• Револьвер: <b>6 камор, ровно 1 боевой патрон</b>.\n"
+        f"• Поочередный спуск курка с таймером <b>60 секунд на ход</b>.\n"
+        f"• 💥 <b>Проигравший:</b> теряет ставку и получает <b>МУТ НА 30 МИНУТ</b>!\n"
+        f"• 👑 <b>Победитель:</b> забирает весь банк (минус 5% налог Абу).\n\n"
+        f"Выбери ставку кнопками ниже или напиши: <code>/rr 500</code>"
+    )
+
+
+def get_rr_lobby_keyboard(bet: int, balance: int = 1000, target_id: Optional[int] = None) -> InlineKeyboardMarkup:
+    """Interactive lobby for selecting bets and launching Russian Roulette challenge."""
+    bet = max(MIN_RR_BET, min(MAX_RR_BET, bet))
+    presets = get_adaptive_rr_bet_presets(balance, bet)
+    target_tag = f":{target_id}" if target_id else ":0"
+
+    preset_row = [
+        InlineKeyboardButton(text=format_rr_bet_amount(p), callback_data=f"rr:lobby:{p}{target_tag}")
+        for p in presets
+    ]
+
+    half_bet = max(MIN_RR_BET, bet // 2)
+    double_bet = min(MAX_RR_BET, min(int(balance), bet * 2)) if balance >= bet * 2 else bet
+    max_bet = max(MIN_RR_BET, min(MAX_RR_BET, int(balance)))
+
+    ctrl_row = [
+        InlineKeyboardButton(text="/2", callback_data=f"rr:lobby:{half_bet}{target_tag}"),
+        InlineKeyboardButton(text="x2", callback_data=f"rr:lobby:{double_bet}{target_tag}"),
+        InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"rr:lobby:{max_bet}{target_tag}"),
+    ]
+
+    buttons = [
+        [InlineKeyboardButton(text=f"💀 Бросить вызов ({format_rr_bet_amount(bet)})", callback_data=f"rr:create:{bet}{target_tag}")],
+        preset_row,
+        ctrl_row,
+        [
+            InlineKeyboardButton(text="🎲 Дайс-Дуэль (/dice)", callback_data="cas:menu:dice"),
+            InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def get_rr_challenge_keyboard(game_id: str, bet: int) -> InlineKeyboardMarkup:
     """Keyboard for pending challenge."""
@@ -245,7 +322,7 @@ async def broadcast_game_announcement(bot, board_id: str, text: str):
             bot_instance=bot,
             board_id=board_id,
             user_id=0,
-            content={'type': 'text', 'text': text},
+            content={'type': 'text', 'text': text, 'is_system_message': True, 'archive_allowed': True},
             reply_to_post=None,
             is_shadow_muted=False,
             stream='ru'
@@ -253,6 +330,28 @@ async def broadcast_game_announcement(bot, board_id: str, text: str):
         await process_new_post(params)
     except Exception as e:
         logger.error(f"Failed to broadcast Russian Roulette announcement: {e}")
+
+
+async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> bool:
+    """
+    Safely sends a private notification DM to a user on Telegram with full error suppression.
+    Catches TelegramForbiddenError, TelegramBadRequest, and generic exceptions cleanly.
+    """
+    if not bot or not user_id:
+        return False
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        logger.debug(f"Direct notification suppressed for user {user_id}: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Direct notification failed for user {user_id}: {e}")
+        return False
 
 
 # -----------------------------------------------------------------------------
@@ -384,7 +483,7 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
     return True, "✅ Дуэль началась!", game
 
 
-async def decline_or_cancel_rr_challenge(game_id: str, user_id: int) -> Tuple[bool, str]:
+async def decline_or_cancel_rr_challenge(game_id: str, user_id: int, bot=None) -> Tuple[bool, str]:
     """
     Cancels pending challenge by creator or declines by target.
     """
@@ -410,7 +509,14 @@ async def decline_or_cancel_rr_challenge(game_id: str, user_id: int) -> Tuple[bo
 
     if user_id == ch_id:
         return True, "❌ Вызов на дуэль отменен создателем."
-    return True, f"❌ Вызов на дуэль отклонен Аноном [ID:{get_anon_id(user_id)}]."
+    else:
+        if bot and ch_id:
+            dec_dm = (
+                f"⚔️ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ОТКЛОНЕН</b>\n\n"
+                f"Анон [ID:{get_anon_id(user_id)}] отклонил твой вызов на дуэль."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot, ch_id, dec_dm))
+        return True, f"❌ Вызов на дуэль отклонен Аноном [ID:{get_anon_id(user_id)}]."
 
 
 async def pull_rr_trigger(game_id: str, user_id: int, bot=None) -> Tuple[bool, str, Dict[str, Any]]:
@@ -490,6 +596,7 @@ async def _finish_rr_game(
     game = active_rr_games[game_id]
     game["finished"] = True
     game["state"] = "finished"
+    game["finished_ts"] = time.time()
     game["outcome"] = reason
     game["winner_id"] = winner_id
     game["loser_id"] = loser_id
@@ -575,6 +682,37 @@ async def _finish_rr_game(
         )
 
     if bot:
+        win_notify_text = (
+            f"👑 <b>ПОБЕДА В РУССКОЙ РУЛЕТКЕ #{game_id}!</b>\n\n"
+            f"💰 Твой чистый выигрыш: <b>+{win_payout:,} ₪</b> (банк {pot:,} ₪ за вычетом {rake:,} ₪ в Казну Абу) зачислен на баланс!"
+        )
+        if reason == "shot":
+            lose_notify_text = (
+                f"💥 <b>СМЕРТЕЛЬНЫЙ ВЫСТРЕЛ В РУССКОЙ РУЛЕТКЕ #{game_id}!</b>\n\n"
+                f"Камора #{cur_ch + 1} оказалась заряжена.\n"
+                f"💸 Списано: <b>-{bet:,} ₪</b>.\n"
+                f"🔇 Наложен <b>МУТ НА 30 МИНУТ</b>."
+            )
+        elif reason == "timeout":
+            lose_notify_text = (
+                f"⏱️ <b>ТАЙМАУТ В РУССКОЙ РУЛЕТКЕ #{game_id}!</b>\n\n"
+                f"Ты не спустил курок за 60 секунд (техническое поражение).\n"
+                f"💸 Списано: <b>-{bet:,} ₪</b>.\n"
+                f"🔇 Наложен <b>МУТ НА 30 МИНУТ</b> за трусость."
+            )
+        else:  # surrender
+            lose_notify_text = (
+                f"🏳️ <b>КАПИТУЛЯЦИЯ В РУССКОЙ РУЛЕТКЕ #{game_id}!</b>\n\n"
+                f"Ты сдался без боя.\n"
+                f"💸 Списано: <b>-{bet:,} ₪</b>.\n"
+                f"🔇 Наложен <b>МУТ НА 30 МИНУТ</b>."
+            )
+
+        if winner_id:
+            asyncio.create_task(send_pvp_direct_notification(bot, winner_id, win_notify_text))
+        if loser_id:
+            asyncio.create_task(send_pvp_direct_notification(bot, loser_id, lose_notify_text))
+
         asyncio.create_task(broadcast_game_announcement(bot, board_id, announcement))
 
     return True, "Дуэль завершена.", game
@@ -596,7 +734,12 @@ async def rr_watchdog_step(bot=None):
 
     async with rr_lock:
         for gid, game in list(active_rr_games.items()):
-            if game.get("finished"):
+            if game.get("finished") or game.get("state") in ("finished", "expired", "cancelled"):
+                fin_ts = game.get("finished_ts")
+                if fin_ts is None:
+                    game["finished_ts"] = now
+                elif now - fin_ts > 60:
+                    active_rr_games.pop(gid, None)
                 continue
             if game["state"] == "playing":
                 if now > game["turn_deadline_ts"]:
@@ -611,6 +754,7 @@ async def rr_watchdog_step(bot=None):
                 # Expire unaccepted challenge
                 game["finished"] = True
                 game["state"] = "expired"
+                game["finished_ts"] = now
                 ch_id = game["challenger_id"]
                 user_active_rr_game.pop(ch_id, None)
                 expired_pending.append(gid)
@@ -660,21 +804,36 @@ async def rr_watchdog_step(bot=None):
         game = active_rr_games.get(gid)
         if not game:
             continue
-        if bot and game.get("chat_id") and game.get("msg_id"):
-            try:
-                await bot.edit_message_text(
-                    chat_id=game["chat_id"],
-                    message_id=game["msg_id"],
-                    text=(
-                        "⏳ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ИСТЕК!</b>\n\n"
-                        "Ни один анон не принял вызов на дуэль за 2 минуты.\n"
-                        "Вызов аннулирован, ставка не списана."
-                    ),
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        expired_text = (
+            "⏳ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ИСТЕК!</b>\n\n"
+            "Ни один анон не принял вызов на дуэль за 2 минуты.\n"
+            "Вызов аннулирован, ставка не списана."
+        )
+        ch_id = game.get("challenger_id")
+        if bot and ch_id:
+            exp_dm_text = (
+                f"⏳ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ИСТЕК</b>\n\n"
+                f"Ни один анон не принял твой вызов на дуэль (<b>{game.get('bet', 0):,} ₪</b>) за 2 минуты.\n"
+                f"Вызов аннулирован, ставка не списывалась."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text))
+
+        # Edit all broadcast messages (challenger + all board copies)
+        all_msgs = game.get("broadcast_msgs") or []
+        if not all_msgs and game.get("chat_id") and game.get("msg_id"):
+            all_msgs = [(game["chat_id"], game["msg_id"])]
+        for chat_id, msg_id in all_msgs:
+            if bot:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=expired_text,
+                        reply_markup=None,
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
 
 
 async def start_rr_watchdog_loop(bot):
@@ -742,10 +901,27 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
     args = (message.text or message.caption or "").split()[1:]
 
     if not args:
+        target_id = await _resolve_reply_author(message)
+        if target_id == user_id:
+            target_id = None
+        db = await get_pool()
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+        default_bet = 100 if balance >= 100 else (50 if balance >= 50 else MIN_RR_BET)
+        lobby_text = format_rr_lobby_message(balance=int(balance), bet=default_bet, target_id=target_id)
+        lobby_kb = get_rr_lobby_keyboard(bet=default_bet, balance=int(balance), target_id=target_id)
+        await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
+        return
+
+    subcmd = args[0].lower()
+
+    # HELP / RULES SHORTCUT
+    if subcmd in ("help", "помощь", "правила", "rules", "?"):
         help_text = (
             "💀 <b>PvP РУССКАЯ РУЛЕТКА (6 КАМОР, 1 ПАТРОН)</b>\n\n"
             "Смертельная дуэль на двоих с поочередным спуском курка и жестким таймером 60 секунд.\n\n"
             "📌 <b>Команды:</b>\n"
+            "• <code>/rr</code> — открыть лобби выбора ставки\n"
             "• <code>/rr 500</code> — создать открытый вызов на 500 ₪\n"
             "• <code>/rr 1000</code> (в ответ на пост) — вызвать конкретного анона на дуэль\n"
             "• <code>/rr accept</code> — принять активный вызов на борде\n"
@@ -759,8 +935,6 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
         )
         await message.answer(help_text, parse_mode="HTML")
         return
-
-    subcmd = args[0].lower()
 
     # ACCEPT SHORTCUT
     if subcmd in ("accept", "принять", "+", "ок", "ok"):
@@ -807,16 +981,33 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
         await message.answer(res_text, parse_mode="HTML")
         return
 
-    # CREATE CHALLENGE
-    try:
-        bet = int(args[0])
-    except ValueError:
-        await message.answer("❌ Неверная сумма ставки. Пример: <code>/rr 500</code>", parse_mode="HTML")
-        return
-
     target_id = await _resolve_reply_author(message)
     if target_id == user_id:
         target_id = None
+
+    if not args or not (args[0].isdigit() or args[0].lower() in ("all", "вабанк", "ва-банк", "всё", "все")):
+        db = await get_pool()
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+        default_bet = 100 if balance >= 100 else (50 if balance >= 50 else MIN_RR_BET)
+        lobby_text = format_rr_lobby_message(balance=int(balance), bet=default_bet, target_id=target_id)
+        lobby_kb = get_rr_lobby_keyboard(bet=default_bet, balance=int(balance), target_id=target_id)
+        await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
+        return
+
+    # CREATE CHALLENGE
+    raw_arg = args[0].lower().replace("к", "000").replace("k", "000").replace("м", "000000").replace("m", "000000")
+    if raw_arg in ("all", "вабанк", "ва-банк", "всё", "все"):
+        db = await get_pool()
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+        bet = int(balance)
+    else:
+        try:
+            bet = int(raw_arg)
+        except ValueError:
+            await message.answer("❌ Неверная сумма ставки. Пример: <code>/rr 500</code>", parse_mode="HTML")
+            return
 
     ok, err_text, game_id = await create_rr_challenge(board_id, user_id, bet, target_id=target_id)
     if not ok:
@@ -827,15 +1018,133 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
     card_text = format_rr_challenge_message(game)
     kb = get_rr_challenge_keyboard(game_id, bet)
 
+    # Отправляем карточку создателю
     sent = await message.answer(card_text, reply_markup=kb, parse_mode="HTML")
     async with rr_lock:
         game["chat_id"] = sent.chat.id
         game["msg_id"] = sent.message_id
+        game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
+
+    # Рассылаем карточку всем остальным активным юзерам борда
+    try:
+        from shared_state import board_data as _board_data
+        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+        for uid in active_users:
+            if uid == user_id:
+                continue
+            # Если дуэль целевая — шлём только цели
+            if target_id is not None and uid != target_id:
+                continue
+            try:
+                bcast_sent = await message.bot.send_message(
+                    chat_id=uid,
+                    text=card_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                async with rr_lock:
+                    game.setdefault("broadcast_msgs", []).append((uid, bcast_sent.message_id))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 # -----------------------------------------------------------------------------
 # CALLBACK QUERY HANDLERS
 # -----------------------------------------------------------------------------
+
+@rr_router.callback_query(F.data.startswith("rr:lobby:"))
+async def cb_rr_lobby(callback: types.CallbackQuery, board_id: str | None = None):
+    """Updates selected bet preset in Russian Roulette lobby."""
+    parts = callback.data.split(":")
+    user_id = callback.from_user.id
+    target_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() and int(parts[3]) > 0 else None
+
+    db = await get_pool()
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+
+    bet_str = parts[2] if len(parts) > 2 else "100"
+    if bet_str.isdigit():
+        bet = int(bet_str)
+    elif bet_str == "half":
+        bet = max(MIN_RR_BET, 100 // 2)
+    elif bet_str == "double":
+        bet = 200
+    elif bet_str == "max":
+        bet = int(balance)
+    else:
+        bet = 100
+
+    bet = max(MIN_RR_BET, min(MAX_RR_BET, min(int(balance), bet) if balance >= MIN_RR_BET else MIN_RR_BET))
+
+    text = format_rr_lobby_message(balance=int(balance), bet=bet, target_id=target_id)
+    kb = get_rr_lobby_keyboard(bet=bet, balance=int(balance), target_id=target_id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@rr_router.callback_query(F.data.startswith("rr:create:"))
+async def cb_rr_create(callback: types.CallbackQuery, board_id: str | None = None):
+    """Creates challenge from Russian Roulette lobby button."""
+    if not board_id:
+        board_id = getattr(callback.message.chat, 'id', 'b')
+        board_id = str(board_id)
+
+    parts = callback.data.split(":")
+    user_id = callback.from_user.id
+    bet = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
+    target_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() and int(parts[3]) > 0 else None
+
+    ok, err_text, game_id = await create_rr_challenge(board_id, user_id, bet, target_id=target_id)
+    if not ok:
+        await callback.answer(err_text, show_alert=True)
+        return
+
+    await callback.answer("💀 Вызов на Русскую Рулетку создан!")
+    game = active_rr_games[game_id]
+    card_text = format_rr_challenge_message(game)
+    kb = get_rr_challenge_keyboard(game_id, bet)
+
+    try:
+        sent = await callback.message.edit_text(card_text, reply_markup=kb, parse_mode="HTML")
+        async with rr_lock:
+            game["chat_id"] = sent.chat.id
+            game["msg_id"] = sent.message_id
+            game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
+    except Exception:
+        sent = await callback.message.answer(card_text, reply_markup=kb, parse_mode="HTML")
+        async with rr_lock:
+            game["chat_id"] = sent.chat.id
+            game["msg_id"] = sent.message_id
+            game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
+
+    # Рассылаем карточку всем остальным активным юзерам борда
+    try:
+        from shared_state import board_data as _board_data
+        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+        for uid in active_users:
+            if uid == user_id:
+                continue
+            if target_id is not None and uid != target_id:
+                continue
+            try:
+                bcast_sent = await callback.bot.send_message(
+                    chat_id=uid,
+                    text=card_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                async with rr_lock:
+                    game.setdefault("broadcast_msgs", []).append((uid, bcast_sent.message_id))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 @rr_router.callback_query(F.data.startswith("rr_accept:"))
 async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = None):
@@ -878,7 +1187,7 @@ async def cb_rr_decline(callback: types.CallbackQuery):
     game_id = parts[1]
     user_id = callback.from_user.id
 
-    ok, res_text = await decline_or_cancel_rr_challenge(game_id, user_id)
+    ok, res_text = await decline_or_cancel_rr_challenge(game_id, user_id, bot=callback.bot)
     if not ok:
         await callback.answer(res_text, show_alert=True)
         return

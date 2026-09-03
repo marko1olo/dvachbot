@@ -8,7 +8,7 @@ from common.database import (
     get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task, 
     add_file_mirror, get_file_owner_id, get_file_mirrors 
 )
-from site_tgach.catbox import upload_url_to_catbox, upload_file_to_catbox
+from site_tgach.catbox import upload_url_to_catbox, upload_file_to_catbox, is_catbox_available
 from common.bot_pool import global_bot_pool
 from common.board_config import BOARD_CONFIG
 from aiogram import Bot
@@ -108,6 +108,49 @@ async def _find_msg_info(file_id: str):
         logger.error(f"DB lookup error: {e}", exc_info=True)
         return None
 
+
+async def _try_pixhost_upload(lpath: str, file_id: str, file_info) -> str | None:
+    """Пытается загрузить изображение в Pixhost, проверяя размер и поддерживаемые форматы."""
+    try:
+        fsize = os.path.getsize(lpath)
+        if fsize > PIXHOST_MAX_MB * 1024 * 1024:
+            return None
+
+        _, fext = os.path.splitext(lpath)
+        target_path = lpath
+        needs_cleanup = False
+        if fext.lower() not in PIXHOST_SUPPORTED_EXT:
+            if file_info and getattr(file_info, 'file_path', None):
+                _, ext_from_tg = os.path.splitext(file_info.file_path)
+                if ext_from_tg and ext_from_tg.lower() in PIXHOST_SUPPORTED_EXT:
+                    fext = ext_from_tg.lower()
+            if fext.lower() not in PIXHOST_SUPPORTED_EXT:
+                fext = _detect_real_ext(lpath)
+            if not fext and file_id.startswith("AgAC"):
+                fext = ".jpg"
+
+            if fext and fext.lower() in PIXHOST_SUPPORTED_EXT:
+                new_lpath = lpath + fext.lower()
+                import shutil
+                shutil.copyfile(lpath, new_lpath)
+                target_path = new_lpath
+                needs_cleanup = True
+            else:
+                return None
+
+        try:
+            return await upload_file_to_pixhost(target_path)
+        finally:
+            if needs_cleanup and os.path.exists(target_path):
+                try:
+                    os.remove(target_path)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"⚠️ Pixhost upload error for {file_id[:10]}: {e}")
+        return None
+
+
 async def _process_single_task(task):
     file_id, mirror_type, task_id, attempt = task['file_id'], task['mirror_type'], task['id'], task['attempts']
     
@@ -172,9 +215,12 @@ async def _process_single_task(task):
                 if public_safe_bot:
                     tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
                     if mirror_type == 'catbox':
-                        logger.info(f"DEBUG: [Task {task_id}] Uploading URL to Catbox...")
-                        success_link = await upload_url_to_catbox(tg_url)
-                        logger.info(f"DEBUG: [Task {task_id}] Upload URL result: {success_link}")
+                        if is_catbox_available():
+                            logger.info(f"DEBUG: [Task {task_id}] Uploading URL to Catbox...")
+                            success_link = await upload_url_to_catbox(tg_url)
+                            logger.info(f"DEBUG: [Task {task_id}] Upload URL result: {success_link}")
+                        else:
+                            logger.info(f"DEBUG: [Task {task_id}] Catbox is paused/unavailable, skipping URL upload.")
                     elif mirror_type == '0x0':
                         success_link = await upload_url_to_0x0(tg_url)
         except Exception as e:
@@ -266,8 +312,8 @@ async def _process_single_task(task):
                         logger.warning(f"⚠️ Downloaded file is empty (0 bytes) for {file_id[:10]}. Rescheduling.")
                         await reschedule_mirror_task(task_id, attempt)
                         return
-                    if mirror_type == 'catbox' and fsize > 200 * 1024 * 1024:
-                        logger.warning(f"⚠️ File {file_id[:10]} is too large for Catbox ({fsize / 1024 / 1024:.1f} MB). Skipping upload and removing task.")
+                    if mirror_type == 'catbox' and fsize > 512 * 1024 * 1024:
+                        logger.warning(f"⚠️ File {file_id[:10]} is too large for Catbox and fallbacks ({fsize / 1024 / 1024:.1f} MB). Skipping upload and removing task.")
                         await remove_mirror_task(task_id)
                         return
                     elif mirror_type == '0x0' and fsize > 512 * 1024 * 1024:
@@ -283,32 +329,40 @@ async def _process_single_task(task):
                         await remove_mirror_task(task_id)
                         return
 
+                    actual_mirror_type = mirror_type
                     if mirror_type == 'catbox':
-                        success_link = await upload_file_to_catbox(lpath)
+                        if is_catbox_available() and fsize <= 200 * 1024 * 1024:
+                            success_link = await upload_file_to_catbox(lpath)
+
+                        if not success_link:
+                            logger.warning(
+                                f"⚠️ [MirrorWorker] Catbox unavailable or failed for {file_id[:10]} (size={fsize / 1024 / 1024:.2f} MB). "
+                                f"Attempting cascade fallback (pixhost -> 0x0)..."
+                            )
+                            # 1. Фоллбек: pixhost для картинок до 10MB
+                            if fsize <= PIXHOST_MAX_MB * 1024 * 1024:
+                                success_link = await _try_pixhost_upload(lpath, file_id, file_info)
+                                if success_link:
+                                    actual_mirror_type = 'pixhost'
+                                    logger.info(f"🔄 [MirrorWorker] Cascade fallback to Pixhost succeeded for {file_id[:10]}: {success_link}")
+
+                            # 2. Фоллбек: 0x0.st для файлов до 512MB
+                            if not success_link and fsize <= 512 * 1024 * 1024 and is_0x0_available():
+                                success_link = await upload_file_to_0x0(lpath)
+                                if success_link:
+                                    actual_mirror_type = '0x0'
+                                    logger.info(f"🔄 [MirrorWorker] Cascade fallback to 0x0.st succeeded for {file_id[:10]}: {success_link}")
+
                     elif mirror_type == '0x0':
                         success_link = await upload_file_to_0x0(lpath)
                     elif mirror_type == 'pixhost':
-                        _, fext = os.path.splitext(lpath)
-                        if fext.lower() not in PIXHOST_SUPPORTED_EXT:
-                            if file_info and getattr(file_info, 'file_path', None):
-                                _, ext_from_tg = os.path.splitext(file_info.file_path)
-                                if ext_from_tg and ext_from_tg.lower() in PIXHOST_SUPPORTED_EXT:
-                                    fext = ext_from_tg.lower()
-                            if fext.lower() not in PIXHOST_SUPPORTED_EXT:
-                                fext = _detect_real_ext(lpath)
-                            if not fext and file_id.startswith("AgAC"):
-                                fext = ".jpg"
-
-                            if fext and fext.lower() in PIXHOST_SUPPORTED_EXT:
-                                new_lpath = lpath + fext.lower()
-                                os.rename(lpath, new_lpath)
-                                lpath = new_lpath
-                                logger.debug(f"🔍 Pixhost: resolved {fext} for {file_id[:10]}")
-                            else:
+                        success_link = await _try_pixhost_upload(lpath, file_id, file_info)
+                        if not success_link and fsize <= PIXHOST_MAX_MB * 1024 * 1024:
+                            _, fext = os.path.splitext(lpath)
+                            if fext.lower() not in PIXHOST_SUPPORTED_EXT and not _detect_real_ext(lpath):
                                 logger.info(f"⏭️ Pixhost: cannot detect image type for {file_id[:10]} (ext={fext}). Removing task.")
                                 await remove_mirror_task(task_id)
                                 return
-                        success_link = await upload_file_to_pixhost(lpath)
                     elif mirror_type == 'imgbb':
                         _, fext = os.path.splitext(lpath)
                         if fext.lower() not in IMGBB_SUPPORTED_EXT:
@@ -348,9 +402,9 @@ async def _process_single_task(task):
                 except Exception: pass
             
         if success_link:
-            await add_file_mirror(file_id, mirror_type, success_link)
+            await add_file_mirror(file_id, actual_mirror_type, success_link)
             await remove_mirror_task(task_id)
-            logger.info(f"✅ Post #{p_num} | Mirrored {mirror_type}: {file_id[:10]}... -> {success_link}")
+            logger.info(f"✅ Post #{p_num} | Mirrored {actual_mirror_type}: {file_id[:10]}... -> {success_link}")
         else:
             if download_success:
                 await reschedule_mirror_task(task_id, attempt)
@@ -376,7 +430,9 @@ async def process_mirror_queue():
                 from site_tgach.pixhost import _pixhost_backoff_until
                 import time as _time
 
-                allowed_types = ['catbox', 'pixhost']
+                allowed_types = ['pixhost']
+                if is_catbox_available():
+                    allowed_types.append('catbox')
                 if is_0x0_available():
                     allowed_types.append('0x0')
                 if IMGBB_API_KEY:

@@ -1,8 +1,17 @@
-﻿import pytest
+import pytest
 import json
 import asyncio
+import io
+from PIL import Image
 from unittest.mock import patch, MagicMock, AsyncMock
-from site_tgach.vision import describe_image, prepare_image_for_analysis
+from site_tgach.vision import (
+    describe_image,
+    prepare_image_for_analysis,
+    prepare_image_for_groq,
+    _call_gemini_native,
+    _build_gemini_safety_settings,
+    GEMINI_SAFETY_CATEGORIES,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +27,7 @@ def reset_vision_module_state():
 
 
 class TestVisionCascade:
-    """Tests for site_tgach/vision.py models cascade and fallback resilience."""
+    """Tests for site_tgach/vision.py models cascade, native Gemini REST API, and Groq fallback."""
 
     VALID_VISION_MODELS = {
         "gemini-3.1-flash-lite",
@@ -35,23 +44,98 @@ class TestVisionCascade:
         src = inspect.getsource(v.describe_image)
         assert "gemini-2.5-flash-lite" not in src
 
+    def test_sanitized_prompt_has_no_porn_keywords(self):
+        """System prompt must be clinical and contain no provocative porn terms."""
+        import site_tgach.vision as v
+        import inspect
+        src = inspect.getsource(v.describe_image).lower()
+        forbidden_words = [
+            "penetration",
+            "oral",
+            "bondage",
+            "fetishes",
+            "fluids",
+            "cum",
+            "ahegao",
+        ]
+        import re
+        for word in forbidden_words:
+            assert not re.search(rf"\b{word}\b", src), f"Forbidden word '{word}' found in vision.py source!"
+
+    def test_prepare_image_for_groq_resizes_to_640(self):
+        """prepare_image_for_groq must resize images to max 640px to conserve tokens."""
+        img = Image.new("RGB", (1200, 800), color=(255, 0, 0))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        raw_bytes = buf.getvalue()
+
+        resized_bytes, err = prepare_image_for_groq(raw_bytes, max_size=640)
+        assert err is None
+        assert resized_bytes is not None
+
+        with Image.open(io.BytesIO(resized_bytes)) as result_img:
+            w, h = result_img.size
+            assert max(w, h) <= 640
+
+    @pytest.mark.asyncio
+    async def test_call_gemini_native_fallback_on_400(self):
+        """When BLOCK_NONE gets 400 from Google, it falls back to BLOCK_ONLY_HIGH."""
+        mock_http_client = AsyncMock()
+
+        # First call (BLOCK_NONE) returns 400
+        resp_400 = MagicMock()
+        resp_400.status_code = 400
+        resp_400.text = "INVALID_ARGUMENT: BLOCK_NONE not supported"
+
+        # Second call (BLOCK_ONLY_HIGH) returns 200
+        resp_200 = MagicMock()
+        resp_200.status_code = 200
+        resp_200.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": '{"tags": "anime, art", "description": "Арт."}'}]
+                    },
+                    "finishReason": "STOP"
+                }
+            ]
+        }
+
+        mock_http_client.post.side_effect = [resp_400, resp_200]
+
+        content, finish_reason = await _call_gemini_native(
+            http_client=mock_http_client,
+            model_name="gemini-2.5-flash",
+            api_key="test-key",
+            prompt_text="test prompt",
+            images_data=[b"fake_jpeg"],
+        )
+
+        assert mock_http_client.post.call_count == 2
+        first_payload = mock_http_client.post.call_args_list[0][1]["json"]
+        assert first_payload["safetySettings"][0]["threshold"] == "BLOCK_NONE"
+        assert first_payload["generationConfig"]["responseMimeType"] == "application/json"
+
+        second_payload = mock_http_client.post.call_args_list[1][1]["json"]
+        assert second_payload["safetySettings"][0]["threshold"] == "BLOCK_ONLY_HIGH"
+
+        assert content == '{"tags": "anime, art", "description": "Арт."}'
+        assert finish_reason == "stop"
+
     @pytest.mark.asyncio
     @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
-    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision._call_gemini_native")
     @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
     @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=["test-groq-key"])
-    async def test_vision_success_primary_gemini(self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_prep):
-        mock_client = AsyncMock()
-        mock_openai_cls.return_value = mock_client
-        mock_completion = MagicMock()
-        mock_choice = MagicMock()
-        mock_choice.finish_reason = "stop"
-        mock_choice.message.content = json.dumps({
-            "tags": "1girl, solo, anime, blonde_hair",
-            "description": "Тестовое описание изображения."
-        })
-        mock_completion.choices = [mock_choice]
-        mock_client.chat.completions.create.return_value = mock_completion
+    async def test_vision_success_primary_gemini(self, mock_groq_pool, mock_google_pool, mock_gemini_call, mock_prep):
+        """Primary Gemini model succeeds via native REST API."""
+        mock_gemini_call.return_value = (
+            json.dumps({
+                "tags": "1girl, solo, anime, blonde_hair",
+                "description": "Тестовое описание изображения."
+            }),
+            "stop"
+        )
 
         res = await describe_image("/dummy/path.jpg", source="TEST")
         assert res is not None
@@ -60,72 +144,85 @@ class TestVisionCascade:
         assert "1girl" in parsed["tags"]
         assert "blonde_hair" in parsed["tags"]
 
-        call_kwargs = mock_client.chat.completions.create.call_args[1]
-        assert call_kwargs["model"] in self.VALID_VISION_MODELS
-        assert call_kwargs["model"] == "gemini-3.1-flash-lite"
+        assert mock_gemini_call.call_count == 1
+        call_model = mock_gemini_call.call_args[1]["model_name"]
+        assert call_model == "gemini-3.1-flash-lite"
 
     @pytest.mark.asyncio
     @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
     @patch("site_tgach.vision.AsyncOpenAI")
     @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
     @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=["test-groq-key"])
-    async def test_vision_gemini_404_falls_back_to_next_models(self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_prep):
-        """When a model returns 404, it immediately falls back to the next model in cascade."""
-        mock_client_404 = AsyncMock()
-        mock_client_404.chat.completions.create.side_effect = Exception("404 Model Not Found")
-
-        mock_client_ok = AsyncMock()
-        mock_choice = MagicMock()
-        mock_choice.finish_reason = "stop"
-        mock_choice.message.content = json.dumps({
-            "tags": "cat, animal, cute",
-            "description": "Кот спит на диване."
-        })
-        mock_completion = MagicMock(choices=[mock_choice])
-        mock_client_ok.chat.completions.create.return_value = mock_completion
-
-        mock_openai_cls.side_effect = [mock_client_404, mock_client_ok]
+    async def test_vision_gemini_empty_response_does_not_panic_skip_all_gemini(
+        self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """Empty response from first Gemini model tries the NEXT Gemini model, not skip all."""
+        mock_gemini_call.side_effect = [
+            (None, "empty_response"),
+            (
+                json.dumps({
+                    "tags": "cat, animal, cute",
+                    "description": "Кот спит на диване."
+                }),
+                "stop"
+            ),
+        ]
 
         res = await describe_image("/dummy/path.jpg", source="TEST")
+        assert res is not None
         parsed = json.loads(res)
         assert "cat" in parsed["tags"]
-        assert mock_openai_cls.call_count >= 2
+        assert mock_gemini_call.call_count == 2
+        models_called = [c[1]["model_name"] for c in mock_gemini_call.call_args_list]
+        assert models_called == ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
+        assert mock_openai_cls.call_count == 0
 
     @pytest.mark.asyncio
     @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
     @patch("site_tgach.vision.AsyncOpenAI")
     @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
-    @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=["test-groq-key"])
-    async def test_vision_tpd_skips_provider_models(self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_prep):
-        """When Gemini hits TPD, remaining Gemini models are skipped and Groq vision is queried."""
-        mock_client_tpd = AsyncMock()
-        mock_client_tpd.chat.completions.create.side_effect = Exception("daily token limit (TPD) reached")
+    @patch("site_tgach.vision.groq_pool")
+    async def test_groq_tpd_penalizes_specific_key_and_continues(
+        self, mock_groq_pool_mod, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """When a Groq key hits TPD, penalize_token is called on that key, and other keys are tried."""
+        mock_gemini_call.side_effect = Exception("404 Model Not Found")
 
-        mock_client_groq = AsyncMock()
+        key1 = "groq-key-1"
+        key2 = "groq-key-2"
+        mock_groq_pool_mod.get_all_active_tokens.return_value = [key1, key2]
+        mock_groq_pool_mod._cooldown_until = {}
+
+        mock_client1 = AsyncMock()
+        mock_client1.chat.completions.create.side_effect = Exception("429 rate limit: tokens per day (TPD) exceeded")
+
+        mock_client2 = AsyncMock()
         mock_choice = MagicMock()
         mock_choice.finish_reason = "stop"
         mock_choice.message.content = json.dumps({
             "tags": "landscape, mountains, sky",
             "description": "Горы на закате."
         })
-        mock_completion = MagicMock(choices=[mock_choice])
-        mock_client_groq.chat.completions.create.return_value = mock_completion
+        mock_client2.chat.completions.create.return_value = MagicMock(choices=[mock_choice])
 
-        mock_openai_cls.side_effect = [mock_client_tpd, mock_client_groq]
+        mock_openai_cls.side_effect = [mock_client1, mock_client2]
 
         res = await describe_image("/dummy/path.jpg", source="TEST")
+        assert res is not None
         parsed = json.loads(res)
         assert "landscape" in parsed["tags"]
 
-        # Verify Groq was called
-        groq_call = mock_openai_cls.call_args_list[-1]
-        assert "groq" in groq_call[1]["base_url"]
+        mock_groq_pool_mod.penalize_token.assert_called_once()
+        penalized_token = mock_groq_pool_mod.penalize_token.call_args[0][0]
+        assert penalized_token in [key1, key2]
 
     @pytest.mark.asyncio
     @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
-    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision._call_gemini_native")
     @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=[])
     @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=[])
-    async def test_vision_no_tokens_returns_error_exhausted(self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_prep):
+    async def test_vision_no_tokens_returns_error_exhausted(self, mock_groq_pool, mock_google_pool, mock_gemini_call, mock_prep):
         res = await describe_image("/dummy/path.jpg", source="TEST")
         assert res == "error_api_exhausted"

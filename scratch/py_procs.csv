@@ -1,8 +1,0 @@
-﻿"ProcessId","CommandLine"
-"7424","python  -X utf8 -u bot_watchdog.py"
-"14776","python  -X utf8 -u bot_watchdog.py"
-"11456","python  -X utf8 -u ""C:\Users\danat\Desktop\stomchat\main.py"""
-"368","python  -X utf8 -u -m uvicorn site_tgach.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips ""127.0.0.1"" --timeout-keep-alive 30 --limit-concurrency 1000 --backlog 512 --log-level info"
-"6496","python  -X utf8 -u -m uvicorn site_tgach.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips ""127.0.0.1"" --timeout-keep-alive 30 --limit-concurrency 1000 --backlog 512 --log-level info"
-"5864","C:\Users\danat\Desktop\dvachbot\venv\Scripts\python.exe -X utf8 -u main.py"
-"15968","C:\Users\danat\Desktop\dvachbot\venv\Scripts\python.exe -X utf8 -u main.py"

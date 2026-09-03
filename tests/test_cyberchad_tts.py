@@ -31,17 +31,18 @@ class TestCyberchadPresets:
         """Validates that all expected presets are configured with valid parameters."""
         expected_keys = {
             "classic", "heavy_bass", "cyborg", "intercom",
-            "fast_aggressive", "overdrive", "valkyrie", "infernal"
+            "fast_aggressive", "overdrive", "infernal",
+            "drill_sergeant", "bunker", "studio_radio"
         }
         assert expected_keys == set(CYBERCHAD_PRESETS.keys())
-        assert len(CYBERCHAD_PRESETS) == 8
+        assert len(CYBERCHAD_PRESETS) == 10
 
         for key, p in CYBERCHAD_PRESETS.items():
             assert isinstance(p, CyberchadPreset)
             assert p.key == key
             assert len(p.name) > 0
             assert len(p.description) > 0
-            assert p.voice in ("ru-RU-DmitryNeural", "ru-RU-SvetlanaNeural")
+            assert p.voice == "ru-RU-DmitryNeural"
             assert p.rate.startswith(("+", "-")) and p.rate.endswith("%")
             assert p.pitch.startswith(("+", "-")) and p.pitch.endswith("Hz")
             assert len(p.ffmpeg_filter) > 0
@@ -64,8 +65,8 @@ class TestCyberchadPresets:
         p_cyborg = get_preset("Cybernetic Borg")
         assert p_cyborg.key == "cyborg"
 
-        p_valkyrie = get_preset("android valkyrie")
-        assert p_valkyrie.key == "valkyrie"
+        p_infernal = get_preset("infernal titan")
+        assert p_infernal.key == "infernal"
 
         # By preset instance
         assert get_preset(p_heavy) is p_heavy
@@ -139,7 +140,9 @@ class TestCyberchadTTSEngine:
                                     text,
                                     preset.voice,
                                     rate=preset.rate,
-                                    pitch=preset.pitch
+                                    pitch=preset.pitch,
+                                    connect_timeout=7,
+                                    receive_timeout=20
                                 )
 
                                 # Verify FFmpeg was called with heavy_bass DSP filter
@@ -244,7 +247,7 @@ class TestVoiceRoastCyberchadIntegration:
 
         mock_summarize.return_value = "Твой голос звучит омерзительно. 0/10 💩"
         preset = CYBERCHAD_PRESETS["heavy_bass"]
-        mock_synth_meta.return_value = (b"CYBERCHAD_VOICE_BYTES", preset)
+        mock_synth_meta.return_value = (b"MOCK_TTS_BYTES", preset)
 
         with patch("common.token_pool.groq_pool.get_all_active_tokens", return_value=["test-groq-key"]):
             await transcribe_and_roast_voice_note(mock_bot, mock_msg, board_id="b", stream="ru")

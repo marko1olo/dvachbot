@@ -78,40 +78,40 @@ class TestBayanDetection:
         assert not is_bayan
 
     def test_exponential_escalation(self):
-        """Repeated bayan offenses should double the mute duration."""
-        # First offense: 20 min
+        """Repeated bayan offenses escalate up to 30 min (1800s) cap."""
+        # First offense: 20 min (1200s)
         check_bayan(999, "spam1", "photo")
         check_bayan(999, "spam1", "photo")
         is_bayan, mute1 = check_bayan(999, "spam1", "photo")
         assert is_bayan
         assert mute1 == 1200  # 20 min
 
-        # Second offense: 40 min
+        # Second offense: 30 min (capped at 1800s)
         check_bayan(999, "spam2", "photo")
         check_bayan(999, "spam2", "photo")
         is_bayan, mute2 = check_bayan(999, "spam2", "photo")
         assert is_bayan
-        assert mute2 == 2400  # 40 min
+        assert mute2 == 1800  # 30 min cap
 
-        # Third offense: 80 min
+        # Third offense: 30 min (capped at 1800s)
         check_bayan(999, "spam3", "photo")
         check_bayan(999, "spam3", "photo")
         is_bayan, mute3 = check_bayan(999, "spam3", "photo")
         assert is_bayan
-        assert mute3 == 4800  # 80 min
+        assert mute3 == 1800  # 30 min cap
 
-    def test_escalation_cap_at_24h(self):
-        """Escalation should cap at 24 hours."""
+    def test_escalation_cap_at_30m(self):
+        """Escalation should cap at 30 minutes (1800s)."""
         _reset_bayan_state(997)
         # Manually set high escalation count
-        _bayan_mute_count[997] = 20  # 2^20 * 1200 would be absurdly high
+        _bayan_mute_count[997] = 20
         _bayan_mute_last_ts[997] = time.time()  # Recent, so no reset
         
         check_bayan(997, "spam_cap", "photo")
         check_bayan(997, "spam_cap", "photo")
         is_bayan, mute_sec = check_bayan(997, "spam_cap", "photo")
         assert is_bayan
-        assert mute_sec == 86400  # 24 hours cap
+        assert mute_sec == 1800  # 30 minutes cap
 
     def test_escalation_resets_after_cooldown(self):
         """Escalation counter resets after BAYAN_RESET_SEC of no mutes."""

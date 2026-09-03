@@ -460,6 +460,8 @@ async def create_market_listing(
     """
     if not isinstance(price, (int, float)) or math.isnan(price) or math.isinf(price) or price <= 0:
         return False, None, "Цена должна быть положительным числом больше 0 ₪."
+    if price > 100_000_000:
+        return False, None, "Максимальная цена предмета на Базаре — 100 000 000 ₪."
 
     board_id = seller_board_id or "b"
     price = round(float(price), 2)
@@ -1326,6 +1328,45 @@ async def cb_market_buy(callback: types.CallbackQuery, board_id: str | None = No
     ])
     await _render_market_view(callback, text, kb, category="shop")
     await callback.answer("✅ Предмет успешно куплен!", show_alert=False)
+
+
+@market_router.message(Command("my_lots", "мои_лоты", "mylots", ignore_case=True, ignore_mention=True))
+async def cmd_my_lots(message: types.Message, board_id: str | None = None):
+    """Slash command to view user's active market listings."""
+    b_id = board_id or "b"
+    user_id = message.from_user.id
+    db = await get_pool()
+    listings = await get_user_listings(db, user_id, status="active")
+
+    if not listings:
+        text = (
+            "📦 <b>МОИ АКТИВНЫЕ ЛОТЫ</b>\n\n"
+            "У тебя пока нет активных лотов на Базаре.\n"
+            "Выстави ненужный шмот командой /sell!"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏷 Продать предмет (/sell)", callback_data="market_sell_menu")],
+            [InlineKeyboardButton(text="🛒 На Базар (/market)", callback_data="market_main_hub")],
+        ])
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        return
+
+    lines = ["📦 <b>ТВОИ АКТИВНЫЕ ЛОТЫ НА БАЗАРЕ:</b>\n"]
+    kb_rows = []
+    for lot in listings:
+        p_str = f"{int(lot['price']):,} ₪" if lot['price'].is_integer() else f"{lot['price']:,.2f} ₪"
+        lines.append(f"• Лот <b>#{lot['id']}</b>: {lot['item_name']} — <code>{p_str}</code>")
+        kb_rows.append([
+            InlineKeyboardButton(
+                text=f"❌ Снять #{lot['id']} ({lot['item_name'][:12]})",
+                callback_data=f"market_cancel:{lot['id']}"
+            )
+        ])
+    kb_rows.append([
+        InlineKeyboardButton(text="🏷 Продать еще (/sell)", callback_data="market_sell_menu"),
+        InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub"),
+    ])
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
 
 
 @market_router.callback_query(F.data.startswith("market_my_lots") | F.data.startswith("market_my_lots:"))

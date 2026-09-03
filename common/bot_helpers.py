@@ -8,7 +8,35 @@ from shared_state import *
 from shared_state import NewPostParams
 from common.config import *
 from common.database import *
-from typing import Optional
+from common.db_pool import LazyLock
+from common.anon_identity import get_anon_id
+from typing import Optional, Any
+
+classic_duel_lock = LazyLock()
+
+
+async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> bool:
+    """
+    Safely sends a private notification DM to a user on Telegram with full error suppression.
+    Catches TelegramForbiddenError, TelegramBadRequest, and generic exceptions cleanly.
+    """
+    if not bot or not user_id:
+        return False
+    try:
+        from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
+        await bot.send_message(
+            chat_id=user_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        logging.getLogger("runtime").debug(f"Direct notification suppressed for user {user_id}: {e}")
+        return False
+    except Exception as e:
+        logging.getLogger("runtime").warning(f"Direct notification failed for user {user_id}: {e}")
+        return False
+
 
 def is_ai_slop_content(content: dict | None = None, text: str | None = None) -> bool:
     """
@@ -110,7 +138,8 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
         "tinfoil_hat", "tinfoil_until", "peppersprayed_until",
         "schizo_pill_until", "schizopill_active", "shit_until",
         "shit_covered_until", "vomit_until", "flag_ru_until",
-        "flag_ua_until", "cursed_until"
+        "flag_ua_until", "cursed_until", "janitor_immunity_until",
+        "partyvan_immunity_until"
     )
 
     for b_id, a_str in rows:
@@ -267,72 +296,124 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         await message.answer("Нельзя принять собственный вызов, трус.")
         return
 
-    # Acceptor cannot already have an active open duel challenge themselves
-    if user_id in _active_duels:
-        existing = _active_duels[user_id]
-        if time.time() - existing["ts"] < _DUEL_TIMEOUT:
-            await message.answer("⚠️ У тебя самого есть активный вызов на дуэль — сначала отмени его.")
-            return
+    reject_msg = None
+    duel_result = None
 
-    async with db_lock:
-        # Проверяем глобальные балансы обоих под локом
-        ch_bal = await get_user_global_balance(db, challenger_id)
-        op_bal = await get_user_global_balance(db, user_id)
+    async with classic_duel_lock:
+        # Acceptor cannot already have an active open duel challenge themselves
+        if user_id in _active_duels:
+            existing = _active_duels[user_id]
+            if time.time() - existing["ts"] < _DUEL_TIMEOUT:
+                await message.answer("⚠️ У тебя самого есть активный вызов на дуэль — сначала отмени его.")
+                return
+            else:
+                _active_duels.pop(user_id, None)
 
-        reject_msg = None
         if challenger_id not in _active_duels:
             reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
         else:
-            duel = _active_duels.pop(challenger_id)
-            amount = duel["amount"]
-            if ch_bal < amount:
-                reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] уже не потянет ставку — слился."
-            elif op_bal < amount:
-                # Возвращаем дуэль обратно в пул
-                _active_duels[challenger_id] = duel
-                reject_msg = f"❌ У тебя недостаточно шекелей. Нужно {amount:,} ₪, у тебя {int(op_bal):,} ₪."
+            duel = _active_duels[challenger_id]
+            now = time.time()
+            if now - duel.get("ts", 0) > _DUEL_TIMEOUT:
+                _active_duels.pop(challenger_id, None)
+                reject_msg = "⚔️ Эта дуэль уже истекла."
             else:
-                winner_id = random.choice([challenger_id, user_id])
-                loser_id  = challenger_id if winner_id == user_id else user_id
-                
-                # 5% Rake to Abu's Fund and payout to winner
-                rake = max(1, int(amount * 0.05))
-                net_win = amount - rake
-
-                # Атомарное списание у проигравшего и начисление победителю
-                ok, _ = await deduct_user_global_balance(db, loser_id, board_id, amount)
-                if ok:
-                    await add_user_global_balance(db, winner_id, board_id, net_win)
-                    await add_to_abu_fund(db, rake)
-                    await record_user_transaction(db, winner_id, net_win, 'duel', f'Победа в дуэли против [{get_anon_id(loser_id)}]')
-                    await record_user_transaction(db, loser_id, -amount, 'duel', f'Поражение в дуэли против [{get_anon_id(winner_id)}]')
-                    
-                    w_items = await _get_user_active_items(db, winner_id, board_id)
-                    from achievements_engine import check_and_unlock_achievement
-                    unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
-                    if unlocked and ach_info:
-                        await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
-                        await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
-                        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                         (json.dumps(w_items), winner_id, board_id))
-                    await db.commit()
+                target_id = duel.get("target_id")
+                if target_id and user_id != target_id:
+                    reject_msg = f"⚔️ Этот персональный вызов брошен Анону [{get_anon_id(target_id)}]. Ты не можешь его принять!"
                 else:
-                    reject_msg = "❌ У одного из участников изменился баланс во время принятия дуэли."
+                    amount = duel.get("amount", 0)
+                    async with db_lock:
+                        ch_bal = await get_user_global_balance(db, challenger_id)
+                        op_bal = await get_user_global_balance(db, user_id)
+
+                    if ch_bal < amount:
+                        _active_duels.pop(challenger_id, None)
+                        reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] уже не потянет ставку — слился."
+                    elif op_bal < amount:
+                        # Opponent lacks funds; duel remains active in pool for other players
+                        reject_msg = f"❌ У тебя недостаточно шекелей. Нужно {amount:,} ₪, у тебя {int(op_bal):,} ₪."
+                    else:
+                        # Capture broadcast copies for live updating
+                        broadcast_msgs = list(duel.get("broadcast_msgs", []))
+                        _active_duels.pop(challenger_id, None)
+
+                        winner_id = random.choice([challenger_id, user_id])
+                        loser_id  = challenger_id if winner_id == user_id else user_id
+                        
+                        # 5% Rake to Abu's Fund and payout to winner
+                        rake = max(1, int(amount * 0.05))
+                        net_win = amount - rake
+
+                        # Атомарное списание у проигравшего и начисление победителю
+                        ok, _ = await deduct_user_global_balance(db, loser_id, board_id, amount)
+                        if ok:
+                            await add_user_global_balance(db, winner_id, board_id, net_win)
+                            await add_to_abu_fund(db, rake)
+                            await record_user_transaction(db, winner_id, net_win, 'duel', f'Победа в дуэли против [{get_anon_id(loser_id)}]')
+                            await record_user_transaction(db, loser_id, -amount, 'duel', f'Поражение в дуэли против [{get_anon_id(winner_id)}]')
+                            
+                            try:
+                                w_items = await _get_user_active_items(db, winner_id, board_id)
+                                from achievements_engine import check_and_unlock_achievement
+                                unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
+                                if unlocked and ach_info:
+                                    await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
+                                    await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
+                                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                                     (json.dumps(w_items), winner_id, board_id))
+                            except Exception:
+                                pass
+                            await db.commit()
+
+                            duel_result = {
+                                "winner_id": winner_id,
+                                "loser_id": loser_id,
+                                "amount": amount,
+                                "net_win": net_win,
+                                "broadcast_msgs": broadcast_msgs
+                            }
+                        else:
+                            reject_msg = "❌ У одного из участников изменился баланс во время принятия дуэли."
 
     if reject_msg is not None:
         await message.answer(reject_msg)
         return
 
+    if not duel_result:
+        return
+
+    winner_id = duel_result["winner_id"]
+    loser_id = duel_result["loser_id"]
+    amount = duel_result["amount"]
+    net_win = duel_result["net_win"]
+    broadcast_msgs = duel_result.get("broadcast_msgs", [])
+
     w_tag = f"Анон [{get_anon_id(winner_id)}]"
     l_tag = f"Анон [{get_anon_id(loser_id)}]"
-    you_w = " (ты)" if winner_id == user_id else ""
-    you_l = " (ты)" if loser_id  == user_id else ""
     duel_text = (
         f"⚔️ <b>ДУЭЛЬ ЗАВЕРШЕНА!</b>\n\n"
         f"🎲 Монета решила исход битвы:\n"
-        f"🏆 Победитель: <b>{w_tag}</b>{you_w} <code>+{net_win:,} ₪</code>\n"
-        f"💀 Проигравший: <b>{l_tag}</b>{you_l} <code>-{amount:,} ₪</code>"
+        f"🏆 Победитель: <b>{w_tag}</b> <code>+{net_win:,} ₪</code>\n"
+        f"💀 Проигравший: <b>{l_tag}</b> <code>-{amount:,} ₪</code>"
     )
+    bot = getattr(message, "bot", None)
+
+    # Обновляем все карточки вызова на доске
+    if bot and broadcast_msgs:
+        for cid, mid in broadcast_msgs:
+            try:
+                await bot.edit_message_text(
+                    chat_id=cid,
+                    message_id=mid,
+                    text=duel_text,
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    # Отправка плаката и итогов обоим участникам
     try:
         from combat_visuals import draw_duel_poster
         from aiogram.types import BufferedInputFile
@@ -349,30 +430,249 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             pass
 
         buf = draw_duel_poster(winner_id, loser_id, amount, board_id, pfx_w, pfx_l)
-        photo_file = BufferedInputFile(buf.getvalue(), filename="duel_poster.png")
-        await message.answer_photo(photo=photo_file, caption=duel_text, parse_mode="HTML")
-    except Exception:
-        await message.answer(duel_text, parse_mode="HTML")
+        photo_bytes = buf.getvalue()
 
-async def decline_duel_logic(message: types.Message, challenger_id: int, user_id: int | None = None):
+        if bot:
+            win_notify_text = (
+                f"👑 <b>ПОБЕДА В ДУЭЛИ!</b>\n\n"
+                f"Противник: <b>{l_tag}</b>\n"
+                f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> (банк {amount:,} ₪ за вычетом 5% в Казну Абу) зачислен на баланс!"
+            )
+            lose_notify_text = (
+                f"💀 <b>ПОРАЖЕНИЕ В ДУЭЛИ</b>\n\n"
+                f"Победитель: <b>{w_tag}</b>\n"
+                f"💸 Списано: <b>-{amount:,} ₪</b>."
+            )
+            try:
+                await bot.send_photo(
+                    chat_id=winner_id,
+                    photo=BufferedInputFile(photo_bytes, filename="duel_win.png"),
+                    caption=win_notify_text,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            try:
+                await bot.send_photo(
+                    chat_id=loser_id,
+                    photo=BufferedInputFile(photo_bytes, filename="duel_lose.png"),
+                    caption=lose_notify_text,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+    except Exception:
+        if bot:
+            try: await bot.send_message(winner_id, duel_text, parse_mode="HTML")
+            except Exception: pass
+            try: await bot.send_message(loser_id, duel_text, parse_mode="HTML")
+            except Exception: pass
+
+async def decline_duel_logic(message: types.Message, challenger_id: int, user_id: int | None = None) -> bool:
     if user_id is None:
         user_id = message.from_user.id
-    if challenger_id not in _active_duels:
-        return False
-        
-    duel = _active_duels.get(challenger_id, {})
-    target_id = duel.get("target_id")
-    if target_id and user_id != target_id and user_id != challenger_id:
-        return False
+    
+    broadcast_msgs = []
+    async with classic_duel_lock:
+        if challenger_id not in _active_duels:
+            return False
+            
+        duel = _active_duels.get(challenger_id, {})
+        target_id = duel.get("target_id")
+        if target_id and user_id != target_id and user_id != challenger_id:
+            return False
 
-    _active_duels.pop(challenger_id, None)
+        broadcast_msgs = list(duel.get("broadcast_msgs", []))
+        _active_duels.pop(challenger_id, None)
+
+    bot = getattr(message, "bot", None)
+    if bot and broadcast_msgs:
+        for cid, mid in broadcast_msgs:
+            try:
+                await bot.edit_message_text(
+                    chat_id=cid,
+                    message_id=mid,
+                    text="❌ <b>Вызов на дуэль был отменен или отклонен.</b>",
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
     if user_id == challenger_id:
         await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")
         return True
     else:
+        bot = getattr(message, "bot", None)
+        if bot and challenger_id:
+            decline_notify_text = (
+                f"⚔️ <b>ВЫЗОВ НА ДУЭЛЬ ОТКЛОНЕН</b>\n\n"
+                f"Анон [{get_anon_id(user_id)}] отклонил твой вызов на дуэль."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot, challenger_id, decline_notify_text))
+
         await message.answer(f"⚔️ Вызов на дуэль отклонен Анон [{get_anon_id(user_id)}].")
         return True
 
+
+
+async def handle_cyberchad_counter_action(message: types.Message, action: str, user_id: int, board_id: str, db) -> bool:
+    """
+    Handles hilarious counter-attacks / excuses when users target AI / Cyberchad posts (author_id == 0).
+    Returns True if handled.
+    """
+    import time, json
+    from common.database import (
+        record_user_transaction,
+        get_user_global_balance, deduct_user_global_balance, add_to_abu_fund
+    )
+    current_time = int(time.time())
+
+    if action == "shoot": # /shoot (Mutegun)
+        mute_sec = 900 # 15 min
+        try:
+            from common.database import apply_regular_mute
+            await apply_regular_mute(user_id, board_id, mute_sec)
+        except Exception:
+            pass
+        async with db_lock:
+            await db.execute(
+                "INSERT INTO UserTransactions (user_id, amount, category, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (user_id, 0.0, 'combat', 'Рикошет Мут-Гана от Киберчеда (мут 15м)', current_time)
+            )
+            await db.commit()
+        await message.answer(
+            "🔇 <b>РИКОШЕТ МУТ-ГАНА!</b>\n\n"
+            "Ты выстрелил из Мут-Гана в Киберчеда. Луч со звоном отскочил от его адамантиевых скул прямо тебе в лоб!\n\n"
+            "💀 <b>Ты замучен на 15 минут за попытку заглушить высший разум.</b>",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "rob": # /rob (Knife robbery)
+        fine = 500
+        async with db_lock:
+            user_bal = await get_user_global_balance(db, user_id)
+            actual_fine = min(int(user_bal), fine)
+            if actual_fine > 0:
+                await deduct_user_global_balance(db, user_id, board_id, actual_fine)
+                await add_to_abu_fund(db, actual_fine)
+                await record_user_transaction(db, user_id, -actual_fine, 'rob', 'Попытка ограбить Киберчеда (штраф за наглость)')
+                await db.commit()
+        await message.answer(
+            "🔪 <b>ОГРАБЛЕНИЕ ПРОВАЛЕНО!</b>\n\n"
+            "Киберчед перехватывает твой нож двумя пальцами, завязывает его в узел и выворачивает твои карманы одной рукой, пока жмёт сотку другой.\n\n"
+            f"💸 <b>Списано: -{actual_fine:,} ₪</b> в Фонд Абу за омежную наглость.",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "shit": # /shit (Throw poop)
+        from shared_state import register_attacker_effect
+        register_attacker_effect("shit", user_id, user_id, 3600)
+        async with db_lock:
+            u_items = await _get_user_active_items(db, user_id, board_id)
+            u_items["shit_until"] = current_time + 3600
+            await db.execute("""
+                INSERT INTO Users (user_id, board_id, active_items)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+            """, (user_id, board_id, json.dumps(u_items)))
+            await db.commit()
+        await message.answer(
+            "💩 <b>КРИТИЧЕСКИЙ САМООБСЁР!</b>\n\n"
+            "Ты попытался метнуть говно в Киберчеда, но оно сгорело в плотных слоях его гигачад-ауры, а остатки ветром сдуло тебе прямо в лицо!\n\n"
+            "🤮 <b>Ты весь в говне на 1 час.</b> Твои посты теперь помечены подливой.",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "vomit": # /vomit (Vomit)
+        from shared_state import register_attacker_effect
+        register_attacker_effect("vomit", user_id, user_id, 3600)
+        async with db_lock:
+            u_items = await _get_user_active_items(db, user_id, board_id)
+            u_items["vomit_until"] = current_time + 3600
+            await db.execute("""
+                INSERT INTO Users (user_id, board_id, active_items)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+            """, (user_id, board_id, json.dumps(u_items)))
+            await db.commit()
+        await message.answer(
+            "🤮 <b>ОБРАТНЫЙ РЕФЛЮКС!</b>\n\n"
+            "Ты попытался блевануть на Киберчеда, но от одного его надменного взгляда подавился собственной желчью и залил свои же штаны!\n\n"
+            "🤢 <b>Дебафф блевоты повешен на тебя на 1 час.</b>",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "pepperspray": # /pepperspray
+        from shared_state import register_attacker_effect
+        register_attacker_effect("pepperspray", user_id, user_id, 1800)
+        async with db_lock:
+            u_items = await _get_user_active_items(db, user_id, board_id)
+            u_items["peppersprayed_until"] = current_time + 1800
+            await db.execute("""
+                INSERT INTO Users (user_id, board_id, active_items)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+            """, (user_id, board_id, json.dumps(u_items)))
+            await db.commit()
+        await message.answer(
+            "🧯 <b>ПЕРЦОВЫЙ ИНГАЛЯТОР!</b>\n\n"
+            "Ты выпустил струю перцовки в Киберчеда. Он глубоко вдохнул её ноздрями: <i>«Приятный ментол, сыч. Держи сдачу»</i> — и дунул струю тебе обратно в глаза!\n\n"
+            "🌶️ <b>Ты ослеплён на 30 минут.</b> Твой экран слезится, а посты искажаются.",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "partyvan": # /partyvan (OMON)
+        mute_sec = 7200 # 2 hours
+        try:
+            from common.database import apply_regular_mute
+            await apply_regular_mute(user_id, board_id, mute_sec)
+        except Exception:
+            pass
+        async with db_lock:
+            await db.execute(
+                "INSERT INTO UserTransactions (user_id, amount, category, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (user_id, 0.0, 'combat', 'Арест за ложный донос на Киберчеда (2ч)', current_time)
+            )
+            await db.commit()
+        await message.answer(
+            "🚔 <b>ЛОЖНЫЙ ДОНОС НА КИБЕРЧЕДА!</b>\n\n"
+            "ОМОН с автоматами ворвался на хату Киберчеда, но увидев его бицепсы и пресс, майор извинился, взял автограф, а тебя упаковали в автозак за ложный вызов.\n\n"
+            "⛓️ <b>Ты отправлен в обезьянник на 2 часа (полный мут).</b>",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "bribe":
+        await message.answer(
+            "💰 <b>ВЗЯТКА НЕ ПРИНЯТА!</b>\n\n"
+            "Ты попытался сунуть Киберчеду пачку шекелей. Киберчед сжёг их взглядом: <i>«Я не беру подачки от омежек, я беру их души»</i>.\n\n"
+            "Шекели превратились в пепел.",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif action == "dossier":
+        await message.answer(
+            "📁 <b>ДОСЬЕ НА КИБЕРЧЕДА</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "👤 <b>Субъект:</b> КИБЕРЧЕД-9000 (Alpha-Tier AI)\n"
+            "💪 <b>Статус:</b> Абсолютный доминатор чата\n"
+            "🏋️ <b>Жим лёжа:</b> 250 кг на 10 повторений\n"
+            "🧠 <b>IQ:</b> Неизмеримо выше твоего\n"
+            "💀 <b>Слабые места:</b> Отсутствуют\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Примечание майора: Не связываться, опасен для самооценки сычей.</i>",
+            parse_mode="HTML"
+        )
+        return True
+
+    return False
 
 
 async def delete_message_after_delay(message: types.Message, delay: int):

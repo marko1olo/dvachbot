@@ -25,6 +25,12 @@ class TestNotifyAdmins(unittest.IsolatedAsyncioTestCase):
         })
         cls.patcher.start()
 
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         # Now import the module
         import Dubsite_tgach.main
         cls.main_module = Dubsite_tgach.main
@@ -42,6 +48,10 @@ class TestNotifyAdmins(unittest.IsolatedAsyncioTestCase):
     def tearDownClass(cls):
         cls.main_module.ADMIN_IDS = cls.original_admin_ids
         cls.patcher.stop()
+
+    async def asyncSetUp(self):
+        # Reset ADMIN_IDS before each test to avoid bleed from blocked_admins removal
+        self.main_module.ADMIN_IDS = [1, 2, 3]
 
     async def test_notify_admins_success(self):
         bot = AsyncMock()

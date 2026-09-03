@@ -136,13 +136,14 @@ class NewPostProcessor:
                 return False
             if self.user_id in thread_info.get('local_shadow_mutes', {}) and time.time() < thread_info['local_shadow_mutes'][self.user_id]:
                 self.is_shadow_muted = True
-            self.recipients = thread_info.get('subscribers', set()) - {self.user_id}
+            self.recipients = set(thread_info.get('subscribers', set())) - {self.user_id}
         else:
+            active_set = set(self.b_data.get('users', {}).get('active', set()))
             if self.board_id == 'int' or not ENABLE_MULTILANG:
-                self.recipients = self.b_data.get('users', {}).get('active', set()) - {self.user_id}
+                self.recipients = active_set - {self.user_id}
             else:
                 stream_users = await get_stream_active_users(self.board_id, self.stream)
-                active_stream_users = stream_users.intersection(self.b_data.get('users', {}).get('active', set()))
+                active_stream_users = set(stream_users).intersection(active_set)
                 self.recipients = active_stream_users - {self.user_id}
         if self.content.get('exclude_recipients'):
             try:
@@ -183,15 +184,16 @@ class NewPostProcessor:
                 async with asyncio.timeout(2.0):
                     db = await get_pool()
                     async with db_lock:
+                        is_cursed = False
+                        is_schizo = False
+                        is_shat = False
+                        is_vomited = False
+                        is_flag_ua = False
+                        is_flag_ru = False
+                        now_ts = int(time.time())
+
                         async with db.execute("SELECT cursed_until, active_items FROM Users WHERE user_id = ?", (self.user_id,)) as c:
                             async for row in c:
-                                is_cursed = False
-                                is_schizo = False
-                                is_shat = False
-                                is_vomited = False
-                                is_flag_ua = False
-                                is_flag_ru = False
-                                now_ts = int(time.time())
                                 if row[0] and now_ts < row[0]:
                                     is_cursed = True
                                 if row[1]:
@@ -211,33 +213,33 @@ class NewPostProcessor:
                                             is_flag_ru = True
                                     except Exception:
                                         pass
-                                from common.debuff_phrases import get_debuff_footer
-                                if is_cursed:
-                                    if 'text' in self.author_content and self.author_content['text']:
-                                        curse_tag = get_debuff_footer("curse")
-                                        self.author_content['text'] += f"\n\n<i>{curse_tag}</i>"
-                                if is_shat:
-                                    if 'text' in self.author_content and self.author_content['text']:
-                                        shit_tag = get_debuff_footer("shit")
-                                        self.author_content['text'] += f"\n\n<i>{shit_tag}</i>"
-                                if is_vomited:
-                                    if 'text' in self.author_content and self.author_content['text']:
-                                        vomit_tag = get_debuff_footer("vomit")
-                                        self.author_content['text'] += f"\n\n<i>{vomit_tag}</i>"
-                                if is_flag_ua:
-                                    if 'text' in self.author_content and self.author_content['text']:
-                                        flag_ua_tag = get_debuff_footer("flag_ua")
-                                        self.author_content['text'] += f"\n\n<i>{flag_ua_tag}</i>"
-                                if is_flag_ru:
-                                    if 'text' in self.author_content and self.author_content['text']:
-                                        flag_ru_tag = get_debuff_footer("flag_ru")
-                                        self.author_content['text'] += f"\n\n<i>{flag_ru_tag}</i>"
-                                if is_schizo:
+
+                        from common.debuff_phrases import get_debuff_footer
+                        if is_cursed:
+                            if 'text' in self.author_content and self.author_content['text']:
+                                curse_tag = get_debuff_footer("curse")
+                                self.author_content['text'] += f"\n\n<i>{curse_tag}</i>"
+                        if is_schizo:
+                            if 'text' in self.author_content and self.author_content['text']:
+                                if "ШИЗО-ТАБЛЕТКА" not in self.author_content['text']:
                                     tag = get_debuff_footer("schizo")
-                                    if 'text' in self.author_content and self.author_content['text']:
-                                        if "ШИЗО-ТАБЛЕТКА" not in self.author_content['text']:
-                                            self.author_content['text'] = f"💊 <i>[ШИЗО-ТАБЛЕТКА]</i> {self.author_content['text']}\n\n<i>{tag}</i>"
-                                break
+                                    self.author_content['text'] = f"💊 <i>[ШИЗО-ТАБЛЕТКА]</i> {self.author_content['text']}\n\n<i>{tag}</i>"
+                        if is_shat:
+                            if 'text' in self.author_content and self.author_content['text']:
+                                shit_tag = get_debuff_footer("shit")
+                                self.author_content['text'] += f"\n\n<i>{shit_tag}</i>"
+                        if is_vomited:
+                            if 'text' in self.author_content and self.author_content['text']:
+                                vomit_tag = get_debuff_footer("vomit")
+                                self.author_content['text'] += f"\n\n<i>{vomit_tag}</i>"
+                        if is_flag_ua:
+                            if 'text' in self.author_content and self.author_content['text']:
+                                flag_ua_tag = get_debuff_footer("flag_ua")
+                                self.author_content['text'] += f"\n\n<i>{flag_ua_tag}</i>"
+                        if is_flag_ru:
+                            if 'text' in self.author_content and self.author_content['text']:
+                                flag_ru_tag = get_debuff_footer("flag_ru")
+                                self.author_content['text'] += f"\n\n<i>{flag_ru_tag}</i>"
             except Exception:
                 pass
                         
@@ -396,6 +398,22 @@ class NewPostProcessor:
             content_for_ram = self.final_content.copy()
             content_for_ram.pop('image_bytes', None)
             content_for_ram.pop('voice_bytes', None)
+            if content_for_ram.get('type') == 'media_group' and isinstance(content_for_ram.get('media'), list):
+                cleaned_media = []
+                for item in content_for_ram['media']:
+                    if isinstance(item, dict):
+                        m_val = item.get('media')
+                        cleaned_media.append({
+                            'type': item.get('type'),
+                            'file_id': getattr(m_val, 'file_id', None) or (m_val if isinstance(m_val, str) else None)
+                        })
+                    else:
+                        m_val = getattr(item, 'media', None)
+                        cleaned_media.append({
+                            'type': getattr(item, 'type', None),
+                            'file_id': getattr(m_val, 'file_id', None) or (m_val if isinstance(m_val, str) else None)
+                        })
+                content_for_ram['media'] = cleaned_media
             
             chain_depth = 0
             reply_to = self.final_content.get('reply_to_post')
@@ -445,6 +463,11 @@ class NewPostProcessor:
                         self.final_content.pop('image_url', None)
                         self.final_content.pop('image_bytes', None)
                         self.final_content.pop('voice_bytes', None)
+                        async with storage_lock:
+                            if self.current_post_num in messages_storage:
+                                stored_msg = messages_storage[self.current_post_num]
+                                if isinstance(stored_msg.get('content'), dict):
+                                    stored_msg['content']['media'] = new_media_items
                 elif messages_to_process:
                     msg = messages_to_process[0]
                     file_id_to_persist = None
@@ -465,7 +488,10 @@ class NewPostProcessor:
                     stored = messages_storage.get(self.current_post_num)
                     if stored is not None:
                         stored['author_message_id'] = author_message_ids_to_archive
-                        stored['content'] = self.final_content
+                        clean_content = self.final_content.copy()
+                        clean_content.pop('image_bytes', None)
+                        clean_content.pop('voice_bytes', None)
+                        stored['content'] = clean_content
                     post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
                         author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
                     )
