@@ -4197,10 +4197,9 @@ def _build_color_picker_content(user_id: int, balance: float, active_items: dict
         f"Текущий статус в постах: <b>{cur_text}</b>\n\n"
     )
     if has_color_pass:
-        exp_h = max(0, (active_items.get("badge_color_expires", 0) - now) // 3600)
-        text += f"✅ <b>Цветной пропуск активен</b> (осталось {exp_h}ч). Выбирай любой цвет бесплатно или сними кружок кнопкой ниже:"
+        text += "✅ <b>Цветной пропуск активен</b> (⏳ неизвестно, когда слетит). Выбирай любой цвет бесплатно или сними кружок кнопкой ниже:"
     else:
-        text += f"Купи доступ к палитре на 3 дня за <b>{p_color} ₪</b> или выбери цвет (с баланса спишется {p_color} ₪):"
+        text += f"Купи доступ к палитре (действует 70-94ч, неизвестно точно, когда слетит) за <b>{p_color} ₪</b> или выбери цвет (с баланса спишется {p_color} ₪):"
 
     color_names_clean = {
         "red": ("🔴", "Красный"),
@@ -4521,7 +4520,7 @@ async def cmd_color(message: types.Message, board_id: str | None, stream: str = 
                     return
                 await record_user_transaction(db, user_id, -price, 'shop', f'Покупка цвета: {sub}')
                 active_items["badge_color_active"] = True
-                active_items["badge_color_expires"] = now + 3 * 86400
+                active_items["badge_color_expires"] = now + random.randint(70 * 3600, 94 * 3600)
 
             active_items["badge_color"] = sub
             async with db_transaction(db):
@@ -4795,7 +4794,7 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
                 return
             await record_user_transaction(db, user_id, -price, 'shop', f'Покупка цвета: {color_key}')
             active_items["badge_color_active"] = True
-            active_items["badge_color_expires"] = now + 3 * 86400
+            active_items["badge_color_expires"] = now + random.randint(70 * 3600, 94 * 3600)
 
         active_items["badge_color"] = color_key
         async with db_transaction(db):
@@ -5138,7 +5137,7 @@ async def _build_inventory_content(user_id: int, board_id: str):
         c_info = avatar_generator.COLOR_PALETTE.get(b_col, {})
         c_name = c_info.get("name", "Аура")
         c_emo = c_info.get("emoji", "🟣")
-        buffs.append(f"{c_emo} <b>Цвет ника:</b> {c_name}")
+        buffs.append(f"{c_emo} <b>Цвет ника:</b> {c_name} <i>(неизвестно когда слетит)</i>")
 
     janitor_until = items.get("janitor_until", 0)
     deletes_left = items.get("janitor_deletes_left", 0)

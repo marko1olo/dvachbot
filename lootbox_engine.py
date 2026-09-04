@@ -94,9 +94,9 @@ def roll_trash_lootbox() -> Tuple[str, str, str, Dict[str, Any], int]:
         else:
             return (
                 "✨ РЕДКИЙ ПРЕДМЕТ",
-                "🎨 Цветной Бейдж ника (на 3 дня)",
-                "Открывает доступ к кастомному цвету ника (/color)!",
-                {"badge_color_active": True, "badge_color_expires": now + 3 * 86400},
+                "🎨 Цветной Бейдж ника (неизвестно когда слетит)",
+                "Открывает доступ к кастомному цвету ника (/color) на 70-94ч (неизвестно когда слетит)!",
+                {"badge_color_active": True, "badge_color_expires": now + random.randint(70 * 3600, 94 * 3600)},
                 0
             )
 
