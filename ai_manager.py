@@ -2684,6 +2684,15 @@ async def build_cyberchad_context(
 
     return f"{block1}{block2}{block3}{block4}{block5}".strip()
 
+
+_BOARD_FIGHT_TRACKER: dict[str, list] = {}
+_LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION: dict[str, float] = {}
+_LAST_DIRECT_ROAST_USER_TS: dict[tuple[str, int], float] = {}
+_ACTIVE_CHAD_BOARDS: set[str] = set()
+_LAST_CHAD_POST_TS: dict[str, float] = {}
+CHAD_BOARD_COOLDOWN_SEC: float = 25.0
+
+
 async def register_post_and_maybe_trigger_cyberchad_intervention(
     bot,
     board_id: str,
@@ -2827,13 +2836,24 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     )
 
     if should_intervene and user_prompt_text:
-        if is_direct_mode:
-            _LAST_DIRECT_ROAST_USER_TS[(board_id, user_id)] = now
-        else:
-            _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION[board_id] = now
+        now_curr = time.time()
+        if board_id in _ACTIVE_CHAD_BOARDS:
+            logger.info(f"⏳ [Cyberchad Intervention] Генерация уже идёт на /{board_id}/. Пропуск.")
+            return
 
-        logger.info(f"💥 [Cyberchad Intervention] Запуск голосового разъёба на /{board_id}/ (direct: {is_direct_mode})...")
+        if now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0) < CHAD_BOARD_COOLDOWN_SEC:
+            rem_cd = CHAD_BOARD_COOLDOWN_SEC - (now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0))
+            logger.info(f"⏳ [Cyberchad Intervention] Доска /{board_id}/ в кулдауне Киберчеда ({rem_cd:.1f}с). Пропуск.")
+            return
+
+        _ACTIVE_CHAD_BOARDS.add(board_id)
         try:
+            if is_direct_mode:
+                _LAST_DIRECT_ROAST_USER_TS[(board_id, user_id)] = now_curr
+            else:
+                _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION[board_id] = now_curr
+
+            logger.info(f"💥 [Cyberchad Intervention] Запуск голосового разъёба на /{board_id}/ (direct: {is_direct_mode})...")
             raw = await summarize_text_with_hf(system_prompt, user_prompt_text, model_preference="persona")
             if raw:
                 parsed = parse_cyberchad_response(raw)
@@ -2873,9 +2893,12 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                         is_shadow_muted=False,
                         stream=stream
                     ))
+                    _LAST_CHAD_POST_TS[board_id] = time.time()
                     logger.info(f"✅ [Cyberchad Intervention] Голосовой разъёб успешно отправлен на /{board_id}/")
         except Exception as interv_err:
             logger.warning(f"⚠️ [Cyberchad Intervention] Ошибка интервенции: {interv_err}")
+        finally:
+            _ACTIVE_CHAD_BOARDS.discard(board_id)
 
 
 def _summarize_delivery_metrics() -> dict:
@@ -3119,113 +3142,128 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                     target_author_id = p_db.get('author_id')
 
         # Задержка естественности
-        await asyncio.sleep(random.uniform(6.0, 18.0) if not is_admin_trigger else 0)
+        if not is_admin_trigger:
+            await asyncio.sleep(random.uniform(6.0, 18.0))
 
-        print(f"🤖 [Cyberchad Reply] Requesting Cyberchad reply for post {target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
+            now_curr = time.time()
+            if board_id in _ACTIVE_CHAD_BOARDS:
+                print(f"⏳ [Cyberchad Reply] Пропуск: на /{board_id}/ уже идёт генерация Киберчеда.")
+                return
+            if now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0) < CHAD_BOARD_COOLDOWN_SEC:
+                rem_cd = CHAD_BOARD_COOLDOWN_SEC - (now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0))
+                print(f"⏳ [Cyberchad Reply] Пропуск: доска /{board_id}/ в кулдауне Киберчеда ({rem_cd:.1f}с).")
+                return
 
-        # 1. Строим богатый многомерный контекст (55 постов чата + 20 постов юзера + 6 постов Киберчеда)
-        rich_context = await build_cyberchad_context(
-            board_id=board_id,
-            target_post_num=target_post_num,
-            author_id=target_author_id,
-            limit_board=55,
-            limit_author=20,
-            limit_chad=6,
-            target_text_override=context_text
-        )
-
-        user_prompt = (
-            f"{rich_context}\n\n"
-            f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
-        )
-
-        raw_reply = await summarize_text_with_hf(
-            prompt=CYBERCHAD_SYSTEM_JSON_PROMPT,
-            text_dump=user_prompt,
-            model_preference="persona"
-        )
-
-        if not raw_reply:
-            print(f"⚠️ [Cyberchad Reply] Model returned empty response for post {target_post_num}.")
-            return
-
-        parsed = parse_cyberchad_response(raw_reply)
-
-        # Проверка отказа от ответа
-        if not parsed.get("reply", True):
-            reason = parsed.get("reason_if_skipped", "не указана")
-            print(f"ℹ️ [Cyberchad Reply] Модель отказалась от ответа (reply=False) на пост #{target_post_num}: {reason}")
-            return
-
-        reply_text = parsed.get("text", "").strip()
-        if not reply_text or len(reply_text) < 3:
-            print(f"⚠️ [Cyberchad Reply] Reply text too short or empty for post {target_post_num}.")
-            return
-
-        if parsed.get("generate_image"):
-            logger.info(f"🎨 [Cyberchad Reply] Запрошена генерация изображения: '{parsed.get('image_prompt')}'")
-
-        # Синтез голосового сообщения Киберчеда
-        voice_bytes = None
+        _ACTIVE_CHAD_BOARDS.add(board_id)
         try:
-            voice_res = await synthesize_cyberchad_voice_with_meta(reply_text)
-            if isinstance(voice_res, tuple):
-                voice_bytes = voice_res[0]
-            else:
-                voice_bytes = voice_res
-        except Exception as tts_err:
-            logger.warning(f"⚠️ [Cyberchad Reply] TTS synthesis error: {tts_err}")
+            print(f"🤖 [Cyberchad Reply] Requesting Cyberchad reply for post {target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
 
-        now_dt = datetime.now(UTC)
-        content = {
-            'type': 'voice' if voice_bytes else 'text',
-            'is_system_message': True,
-            'archive_allowed': True,
-            'is_ai_roast': True,
-            'is_ai': True,
-            'is_cyberchad': True,
-            'reply_to': target_post_num if target_post_num else None
-        }
-
-        if voice_bytes:
-            content['voice_bytes'] = voice_bytes
-            content['caption'] = '🔥 Разъёб от Киберчеда'
-            content['roast_text'] = reply_text
-        else:
-            content['text'] = reply_text
-
-        pnum = await create_post(
-            board_id=board_id,
-            author_id=0,
-            content=content,
-            timestamp=now_dt.timestamp(),
-            is_from_site=False,
-            stream=stream,
-            reply_to=target_post_num if target_post_num else None
-        )
-
-        if pnum:
-            header = await format_header(board_id, pnum, 0)
-            content['header'] = f"🔥 КИБЕРЧЕД 🔥\n{header}" if stream == 'ru' else f"🔥 CYBERCHAD 🔥\n{header}"
-            await update_post_content(pnum, content)
-            async with storage_lock:
-                messages_storage[pnum] = {
-                    'author_id': 0,
-                    'timestamp': now_dt,
-                    'content': content,
-                    'board_id': board_id,
-                    'reply_to_post_num': target_post_num if target_post_num else None
-                }
-            await NewPostProcessor(NewPostContext(
-                bot_instance=bot,
+            # 1. Строим богатый многомерный контекст (55 постов чата + 20 постов юзера + 6 постов Киберчеда)
+            rich_context = await build_cyberchad_context(
                 board_id=board_id,
-                user_id=0,
+                target_post_num=target_post_num,
+                author_id=target_author_id,
+                limit_board=55,
+                limit_author=20,
+                limit_chad=6,
+                target_text_override=context_text
+            )
+
+            user_prompt = (
+                f"{rich_context}\n\n"
+                f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
+            )
+
+            raw_reply = await summarize_text_with_hf(
+                prompt=CYBERCHAD_SYSTEM_JSON_PROMPT,
+                text_dump=user_prompt,
+                model_preference="persona"
+            )
+
+            if not raw_reply:
+                print(f"⚠️ [Cyberchad Reply] Model returned empty response for post {target_post_num}.")
+                return
+
+            parsed = parse_cyberchad_response(raw_reply)
+
+            # Проверка отказа от ответа
+            if not parsed.get("reply", True):
+                reason = parsed.get("reason_if_skipped", "не указана")
+                print(f"ℹ️ [Cyberchad Reply] Модель отказалась от ответа (reply=False) на пост #{target_post_num}: {reason}")
+                return
+
+            reply_text = parsed.get("text", "").strip()
+            if not reply_text or len(reply_text) < 3:
+                print(f"⚠️ [Cyberchad Reply] Reply text too short or empty for post {target_post_num}.")
+                return
+
+            if parsed.get("generate_image"):
+                logger.info(f"🎨 [Cyberchad Reply] Запрошена генерация изображения: '{parsed.get('image_prompt')}'")
+
+            # Синтез голосового сообщения Киберчеда
+            voice_bytes = None
+            try:
+                voice_res = await synthesize_cyberchad_voice_with_meta(reply_text)
+                if isinstance(voice_res, tuple):
+                    voice_bytes = voice_res[0]
+                else:
+                    voice_bytes = voice_res
+            except Exception as tts_err:
+                logger.warning(f"⚠️ [Cyberchad Reply] TTS synthesis error: {tts_err}")
+
+            now_dt = datetime.now(UTC)
+            content = {
+                'type': 'voice' if voice_bytes else 'text',
+                'is_system_message': True,
+                'archive_allowed': True,
+                'is_ai_roast': True,
+                'is_ai': True,
+                'is_cyberchad': True,
+                'reply_to': target_post_num if target_post_num else None
+            }
+
+            if voice_bytes:
+                content['voice_bytes'] = voice_bytes
+                content['caption'] = '🔥 Разъёб от Киберчеда'
+                content['roast_text'] = reply_text
+            else:
+                content['text'] = reply_text
+
+            pnum = await create_post(
+                board_id=board_id,
+                author_id=0,
                 content=content,
-                reply_to_post=target_post_num if target_post_num else None,
-                is_shadow_muted=False,
-                stream=stream
-            )).execute()
-            print(f"✅ [Cyberchad Reply] Пост #{pnum} успешно создан в ответ на #{target_post_num} (voice={bool(voice_bytes)}).")
+                timestamp=now_dt.timestamp(),
+                is_from_site=False,
+                stream=stream,
+                reply_to=target_post_num if target_post_num else None
+            )
+
+            if pnum:
+                header = await format_header(board_id, pnum, 0)
+                content['header'] = f"🔥 КИБЕРЧЕД 🔥\n{header}" if stream == 'ru' else f"🔥 CYBERCHAD 🔥\n{header}"
+                await update_post_content(pnum, content)
+                async with storage_lock:
+                    messages_storage[pnum] = {
+                        'author_id': 0,
+                        'timestamp': now_dt,
+                        'content': content,
+                        'board_id': board_id,
+                        'reply_to_post_num': target_post_num if target_post_num else None
+                    }
+                await NewPostProcessor(NewPostContext(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content=content,
+                    reply_to_post=target_post_num if target_post_num else None,
+                    is_shadow_muted=False,
+                    stream=stream
+                )).execute()
+                _LAST_CHAD_POST_TS[board_id] = time.time()
+                print(f"✅ [Cyberchad Reply] Пост #{pnum} успешно создан в ответ на #{target_post_num} (voice={bool(voice_bytes)}).")
+        finally:
+            _ACTIVE_CHAD_BOARDS.discard(board_id)
     except Exception as e:
         print(f"Error in schedule_persona_reply: {e}")
 

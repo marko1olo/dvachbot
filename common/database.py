@@ -1726,7 +1726,7 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                         INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id, reason)
                         VALUES (?, ?, 'shadow', ?, NULL, ?)
                         """,
-                        (user_id, board_id, expires_at, reason or 'wipe')
+                        (user_id, board_id, expires_at, reason or 'auto_spam')
                     )
                 except Exception as col_err:
                     if "no column named reason" in str(col_err).lower():
@@ -1737,7 +1737,7 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                                 INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id, reason)
                                 VALUES (?, ?, 'shadow', ?, NULL, ?)
                                 """,
-                                (user_id, board_id, expires_at, reason or 'wipe')
+                                (user_id, board_id, expires_at, reason or 'auto_spam')
                             )
                         except Exception:
                             await db.execute(
@@ -2277,7 +2277,7 @@ async def apply_shadow_mute(
     except Exception:
         pass
 
-    await update_shadow_mute(user_id, board_id, new_expires_at)
+    await update_shadow_mute(user_id, board_id, new_expires_at, reason=reason)
     return new_expires_at
 
 def _process_site_db_row(row):

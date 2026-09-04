@@ -70,17 +70,21 @@ def _load_google_keys() -> list[str]:
 _key_cooldowns: dict[tuple[str, str], float] = {}
 _provider_cooldowns: dict[str, float] = {}
 
-async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: str | None = None) -> str:
+async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference: str | None = None) -> str:
     """
-    Summarize text using a cascade of OpenAI-compatible endpoints:
-    Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
-    Prioritizes 500 RPD Gemini Lite models to maximize free quota.
+    Dispatch LLM completion using a cascade of OpenAI-compatible endpoints (Google Gemini & Groq).
+    Supports choosing model/provider preference: persona, fast, gemini, qwen, llama, or default.
+    Prioritizes high-throughput Gemini models with Groq Qwen failover.
     """
-    if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot: строго 1 параллельный вызов через семафор
+    if model_preference in ("persona", "persona_gemini"):
+        # Persona / Cyberchad: строго 1 параллельный вызов через семафор
         async with _get_persona_semaphore():
             return await _summarize_inner(prompt, text_dump, None, model_preference)
     return await _summarize_inner(prompt, text_dump, None, model_preference)
+
+
+# Канонический алиас для обратной совместимости
+summarize_text_with_hf = dispatch_llm_completion
 
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
@@ -88,18 +92,16 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.7-flash", "gemini"),
         ]
     elif model_preference == "fast":
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.8-27b", "groq"),
-            ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.6-flash", "gemini"),
+            ("qwen/qwen3.8-27b", "groq"),
         ]
     elif model_preference == "gemini":
         models_cascade = [
@@ -108,7 +110,6 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
-            ("qwen/qwen3.6-27b", "groq"),
         ]
     elif model_preference in ("qwen", "llama", "groq"):
         models_cascade = [
@@ -123,13 +124,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.7-flash", "gemini"),
         ]
 
-    
     system_instruction = prompt + (
         "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
         "ALLOWED tags (ONLY these): <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">.\n"
@@ -139,11 +138,6 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         "For bullet lists use • character with a newline, NOT <ul>/<li> tags.\n"
         "Output must be parseable by Telegram Bot API HTML parser."
     )
-    
-    messages = [
-        {"role": "system", "content": system_instruction},
-        {"role": "user", "content": text_dump}
-    ]
 
     import time
     now_ts = time.time()
@@ -170,7 +164,18 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             logger.info(f"All keys for {provider} are in cooldown. Skipping model {model_name}.")
             continue
 
-        model_max_tokens = None if provider == "gemini" else 6000
+        # Безопасный лимит выходных токенов: для Gemini None (без урезания), для Groq 1024 (вместо 6000!)
+        model_max_tokens = None if provider == "gemini" else 1024
+
+        # Защита Groq от 413 Payload Too Large: обрезаем входной дамп до 8000 символов
+        effective_dump = text_dump
+        if provider == "groq" and len(effective_dump) > 8000:
+            effective_dump = effective_dump[-8000:]
+
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": effective_dump}
+        ]
 
         skip_model = False
         consecutive_429 = 0
@@ -220,10 +225,13 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     await asyncio.sleep(2.5)
                     continue  # try next key
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
-                    logger.warning(f"⚠️ {model_name}: request too large. Shrinking by 40% and retrying...")
+                    logger.warning(f"⚠️ {model_name}: request too large ({provider}). Shrinking by 40% and retrying...")
                     half_len = int(len(text_dump) * 0.6)
                     text_dump = text_dump[-half_len:]
-                    messages[1]["content"] = text_dump
+                    effective_dump = text_dump
+                    if provider == "groq":
+                        model_max_tokens = 512
+                    messages[1]["content"] = effective_dump
                     await asyncio.sleep(2.5)
                     continue  # retry same key with smaller input
                 if "403" in err_str:

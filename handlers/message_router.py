@@ -120,6 +120,9 @@ import __main__ as main
 
 
 
+# Debuff LLM rate-limit tracker (protect against API spam on rapid user messages)
+_LAST_DEBUFF_LLM_TS: dict[int, float] = {}
+
 # Duel logic
 
 
@@ -569,32 +572,53 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if not is_admin(user_id, board_id) and (message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice'])):
             db_p = await get_pool()
             c_items = await _get_user_active_items(db_p, user_id, board_id)
-            if c_items.get("cursed_until", 0) > time.time():
-                from summarize import summarize_text_with_hf
+            now_curr = time.time()
+            can_call_llm = (now_curr - _LAST_DEBUFF_LLM_TS.get(user_id, 0.0) >= 4.0)
+
+            if c_items.get("cursed_until", 0) > now_curr:
                 original_text = message.text or message.caption or ""
-                prompt = "Перепиши этот текст от лица человека, у которого прямо во время речи начался взрывной понос. Прерывай предложения многоточиями, вставляй крики боли (ААА, БЛЯЯ, УУУФ), звуки бульканья в животе (БУРЛК-БУРЛК) и панику. Обязательно сохрани изначальный смысл текста, но пропусти его через призму невыносимой боли в животе и попыток сдержать кал. Пиши грязно, сыро, без ИИ-шаблонов. Текст жертвы:"
-                try:
-                    rewritten = await asyncio.wait_for(summarize_text_with_hf(prompt, original_text, model_preference="llama"), timeout=3.0)
-                    if len(rewritten) > 1000:
-                        rewritten = rewritten[:1000]
-                except Exception:
-                    rewritten = "БУРЛК-БУРЛК... БЛЯЯЯЯ! Я... я обосрался... " + original_text[:50]
+                rewritten = None
+                if can_call_llm:
+                    _LAST_DEBUFF_LLM_TS[user_id] = now_curr
+                    from summarize import dispatch_llm_completion
+                    prompt = "Перепиши этот текст от лица человека, у которого прямо во время речи начался взрывной понос. Прерывай предложения многоточиями, вставляй крики боли (ААА, БЛЯЯ, УУУФ), звуки бульканья в животе (БУРЛК-БУРЛК) и панику. Обязательно сохрани изначальный смысл текста, но пропусти его через призму невыносимой боли в животе и попыток сдержать кал. Пиши грязно, сыро, без ИИ-шаблонов. Текст жертвы:"
+                    try:
+                        rewritten = await asyncio.wait_for(dispatch_llm_completion(prompt, original_text, model_preference="fast"), timeout=3.0)
+                        if len(rewritten) > 1000:
+                            rewritten = rewritten[:1000]
+                    except Exception:
+                        rewritten = None
+
+                if not rewritten:
+                    farts = ["БУРЛК-БУРЛК...", "ПФФФРТ...", "БЛЯЯЯЯ!", "УУУФ...", "АААА ТЕРПЕТЬ НЕТ СИЛ!"]
+                    f1 = random.choice(farts)
+                    f2 = random.choice(farts)
+                    rewritten = f"{f1} {original_text} ... {f2}"
                 
                 try: await message.delete()
                 except Exception: pass
                 
                 cursed_text_override = f"🚽 [ПРОКЛЯТЫЙ ПОНОСОМ]\n{rewritten}"
 
-            if c_items.get("schizo_pill_until", 0) > time.time() and not cursed_text_override:
-                from summarize import summarize_text_with_hf
+            if c_items.get("schizo_pill_until", 0) > now_curr and not cursed_text_override:
                 original_text = message.text or message.caption or ""
-                prompt = "Перепиши этот текст от лица абсолютно поехавшего шизофреника, конспиролога и параноика. Везде заговоры, рептилоиды, ЦРУ, излучение от вышек 5G и массоны. Перескакивай с мысли на мысль, пиши капсом случайные СЛОВА, используй много восклицательных знаков и вопросов. Сохрани изначальный смысл текста, но пропусти его через шизофазию и паранойю. Текст пациента:"
-                try:
-                    rewritten = await asyncio.wait_for(summarize_text_with_hf(prompt, original_text, model_preference="llama"), timeout=3.0)
-                    if len(rewritten) > 1000:
-                        rewritten = rewritten[:1000]
-                except Exception:
-                    rewritten = "ОНИ СЛЕДЯТ ЗА МНОЙ!! ВЫШКИ ОБЛУЧАЮТ!! " + original_text[:50]
+                rewritten = None
+                if can_call_llm:
+                    _LAST_DEBUFF_LLM_TS[user_id] = now_curr
+                    from summarize import dispatch_llm_completion
+                    prompt = "Перепиши этот текст от лица абсолютно поехавшего шизофреника, конспиролога и параноика. Везде заговоры, рептилоиды, ЦРУ, излучение от вышек 5G и массоны. Перескакивай с мысли на мысль, пиши капсом случайные СЛОВА, используй много восклицательных знаков и вопросов. Сохрани изначальный смысл текста, но пропусти его через шизофазию и паранойю. Текст пациента:"
+                    try:
+                        rewritten = await asyncio.wait_for(dispatch_llm_completion(prompt, original_text, model_preference="fast"), timeout=3.0)
+                        if len(rewritten) > 1000:
+                            rewritten = rewritten[:1000]
+                    except Exception:
+                        rewritten = None
+
+                if not rewritten:
+                    schizo_tags = ["ОНИ СЛЕДЯТ ЗА МНОЙ!!", "ВЫШКИ 5G ОБЛУЧАЮТ!!", "РЕПТИЛОИДЫ КРУГОМ!!", "ШИЗОФАЗИЯ!!"]
+                    s1 = random.choice(schizo_tags)
+                    s2 = random.choice(schizo_tags)
+                    rewritten = f"{s1} {original_text} {s2}"
                 
                 try: await message.delete()
                 except Exception: pass
@@ -729,26 +753,21 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                             post_num=post_num, reply_to_post=post_num_to_reply, stream=stream
                         ))
                     should_reply = False
-                    if is_reply_to_bot:
-                        now_t = time.time()
-                        last_user_t = last_persona_dialogue_user_ts.get(user_id, 0)
-                        if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
-                            should_reply = True
-                            last_persona_dialogue_user_ts[user_id] = now_t
-                    elif user_id in b_data.get('persona_favorites', {}):
-                        now_t_fav = time.time()
-                        if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.08:
-                            should_reply = True
-                    else:
-                        # Глобальный пассивный тригер: 4%
-                        now_t_glob = time.time()
-                        if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
-                            should_reply = True
+                    if not is_reply_to_bot:
+                        if user_id in b_data.get('persona_favorites', {}):
+                            now_t_fav = time.time()
+                            if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.08:
+                                should_reply = True
+                        else:
+                            # Глобальный пассивный тригер: 4%
+                            now_t_glob = time.time()
+                            if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
+                                should_reply = True
                     if should_reply:
                         last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
                         photo_id = message.photo[-1].file_id if message.photo else None
-                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=False))
                     # --- THE ANCHOR (Мудрый Чед) ---
                     from anchor_bot import anchor_tick, trigger_anchor_post
                     if anchor_tick(board_id):
@@ -956,31 +975,23 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     return thumb.file_id if thumb else msg.document.file_id
                 return None
             photo_id = extract_msg_media_file_id(message) or extract_msg_media_file_id(message.reply_to_message)
-            if is_reply_to_bot:
-                now_t = time.time()
-                last_user_t = last_persona_dialogue_user_ts.get(user_id, 0)
-                # Уменьшено в 10 раз: 3.5% шанс на ответ, минимальный кулдаун 300 секунд
-                if (now_t - last_user_t >= 300.0) and (random.random() < 0.035):
-                    should_reply = True
-                    last_persona_dialogue_user_ts[user_id] = now_t
+            if not is_reply_to_bot:
+                if user_id in b_data.get('persona_favorites', {}):
+                    text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
+                    now_t_fav = time.time()
+                    # Уменьшено в 10 раз: шанс 0.8%, кулдаун 600 секунд
+                    if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 600.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.008:
+                        should_reply = True
                 else:
-                    print(f"ℹ️ [Persona Dialogue] Ignored dialogue trigger for user {user_id} (cooldown or chance check).")
-            elif user_id in b_data.get('persona_favorites', {}):
-                text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
-                now_t_fav = time.time()
-                # Уменьшено в 10 раз: шанс 0.8%, кулдаун 600 секунд
-                if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 600.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.008:
-                    should_reply = True
-            else:
-                # Глобальный пассивный тригер: 0.4%
-                text_clean2 = message.text or message.caption or None
-                now_t_glob = time.time()
-                if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 900.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.004:
-                    should_reply = True
+                    # Глобальный пассивный тригер: 0.4%
+                    text_clean2 = message.text or message.caption or None
+                    now_t_glob = time.time()
+                    if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 900.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.004:
+                        should_reply = True
             if should_reply:
                 last_persona_board_ts[board_id] = time.time()  # race guard
                 text_chunk = message.text or message.caption or f"[{message.content_type}]"
-                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=False))
             # --- THE ANCHOR (Мудрый Чед) ---
             from anchor_bot import anchor_tick, trigger_anchor_post
             if anchor_tick(board_id):
