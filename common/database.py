@@ -4960,13 +4960,13 @@ async def lift_shadow_ban(user_id: int, board_id: str):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'shadow'", (user_id, board_id))
+                await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL')", (user_id, board_id))
                 
                 await db.execute("COMMIT")
                 try:
                     from shared_state import board_data
-                    if board_id in board_data:
-                        board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
+                    for b_name in list(board_data.keys()):
+                        board_data[b_name].get('shadow_mutes', {}).pop(user_id, None)
                 except Exception:
                     pass
                 return
