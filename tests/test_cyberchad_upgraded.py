@@ -127,13 +127,12 @@ class TestCyberchadSystemPrompt:
         assert "голосовых" in prompt_lower
         assert "разговорный киберчед" in prompt_lower
 
-        # Blocks 1-6 check
+        # Blocks 1-5 check
         assert "блок 1" in prompt_lower
         assert "блок 2" in prompt_lower
         assert "блок 3" in prompt_lower
         assert "блок 4" in prompt_lower
         assert "блок 5" in prompt_lower
-        assert "блок 6" in prompt_lower
 
         # Thought and schema checks
         assert "thought" in prompt_lower
@@ -224,7 +223,7 @@ class TestCyberchadContextBuilder:
             limit_chad=3
         )
 
-        # Verify all explicit blocks 1-6 are present and correctly structured
+        # Verify all explicit blocks 1-5 are present and correctly structured
         assert "=== [БЛОК 1: ЦЕЛЕВОЕ СООБЩЕНИЕ ДЛЯ ОТВЕТА (ЦЕЛЬ)] ===" in context
         assert ">>103" in context
         assert "киберчед ты сам омежка" in context
@@ -238,8 +237,7 @@ class TestCyberchadContextBuilder:
 
         assert "=== [БЛОК 4: ПРОШЛЫЕ СООБЩЕНИЯ ЭТОГО ЮЗЕРА (ДЛЯ ЛОВЛИ НА ПЕРЕОБУВАНИИ)] ===" in context
         assert "=== [БЛОК 5: ТВОИ ПРОШЛЫЕ ОТВЕТЫ (ЗАПРЕТ САМОПОВТОРОВ)] ===" in context
-        assert "=== [БЛОК 6: СЕРВЕРНОЕ ВРЕМЯ (МСК)] ===" in context
-        assert "МСК" in context
+        assert "=== [БЛОК 6: СЕРВЕРНОЕ ВРЕМЯ (МСК)] ===" not in context
 
         # Verify no dossier bloat (no balance, no items query)
         assert "шекелей" not in context
