@@ -227,8 +227,17 @@ def test_all_114_commands_unshadowed():
     import inspect
     from aiogram.filters import Command
 
-    src = inspect.getsource(main.setup_bot_commands)
-    commands = re.findall(r'BotCommand\(command="([^"]+)"', src)
+    try:
+        src = inspect.getsource(main.setup_bot_commands)
+        commands = re.findall(r'BotCommand\(command="([^"]+)"', src)
+    except Exception:
+        commands = []
+    if len(commands) < 114:
+        with open("main.py", "r", encoding="utf-8") as f:
+            content = f.read()
+        match = re.search(r"async def setup_bot_commands\b.*?(?=\n(?:async )?def |\Z)", content, re.DOTALL)
+        if match:
+            commands = re.findall(r'BotCommand\(command="([^"]+)"', match.group(0))
     
     # Command count grows as bot features are added; accept any count >= 114
     assert len(commands) >= 114, f"Expected at least 114 commands, found {len(commands)}"

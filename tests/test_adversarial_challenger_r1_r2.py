@@ -845,9 +845,11 @@ class TestAdversarialR2VoiceOnlyPayloadAndTTSDSPPipelines:
     async def test_synthesize_voice_failure_graceful_handling(self):
         """
         Verifies synthesize_cyberchad_voice_with_meta returns (None, preset)
-        gracefully when edge_tts raises an exception, without crashing the caller.
+        gracefully when edge_tts and gtts raise exceptions, without crashing the caller.
         """
         with patch("edge_tts.Communicate", side_effect=RuntimeError("Edge-TTS connection timeout")):
-            voice_bytes, preset = await synthesize_cyberchad_voice_with_meta("Тестовая реплика")
-            assert voice_bytes is None
-            assert isinstance(preset, CyberchadPreset)
+            with patch("gtts.gTTS", side_effect=RuntimeError("gTTS connection failed")):
+                voice_bytes, preset = await synthesize_cyberchad_voice_with_meta("Тестовая реплика")
+                assert voice_bytes is None
+                assert isinstance(preset, CyberchadPreset)
+

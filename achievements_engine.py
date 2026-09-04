@@ -112,6 +112,30 @@ ACHIEVEMENTS_CATALOG = {
         "icon": "🕶️",
         "category": "wardrobe"
     },
+    "ach_wardrobe_enthusiast": {
+        "id": "ach_wardrobe_enthusiast",
+        "name": "👔 Модник Борды",
+        "desc": "Собрать 5+ вещей в своем гардеробе.",
+        "reward_cash": 500,
+        "icon": "👔",
+        "category": "wardrobe"
+    },
+    "ach_wardrobe_collector": {
+        "id": "ach_wardrobe_collector",
+        "name": "🎩 Шмоточный Олигарх",
+        "desc": "Собрать 15+ вещей в своем гардеробе.",
+        "reward_cash": 1500,
+        "icon": "🎩",
+        "category": "wardrobe"
+    },
+    "ach_fashion_demon": {
+        "id": "ach_fashion_demon",
+        "name": "👑 Икона Стиля Двача",
+        "desc": "Собрать 30+ вещей в своем гардеробе.",
+        "reward_cash": 5000,
+        "icon": "👑",
+        "category": "wardrobe"
+    },
     "ach_slots_jackpot": {
         "id": "ach_slots_jackpot",
         "name": "🎰 Король Азарта 777",
@@ -238,6 +262,7 @@ def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
     try:
         import wardrobe_engine
         wardrobe_engine.check_wardrobe_set_achievements(active_items)
+        wardrobe_engine.check_wardrobe_collection_achievements(active_items)
     except Exception:
         pass
 

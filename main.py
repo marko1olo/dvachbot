@@ -6456,6 +6456,12 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
 
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    if await check_target_grief_protection(message, target_id, user_id, board_id):
+        return
+
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("shit_gun"):
         await message.answer("⚠️ У тебя нет куска говна в карманах! Купи его в /shop.")
@@ -6513,6 +6519,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         )
         await db.commit()
     register_attacker_effect("shit_gun", user_id, target_id, duration_sec)
+    register_target_attack(target_id)
     from common.debuff_phrases import get_shit_hit_text
     await message.answer(get_shit_hit_text(dur_str), parse_mode="HTML")
     try:
@@ -6564,6 +6571,12 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    if await check_target_grief_protection(message, target_id, user_id, board_id):
         return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
@@ -6633,6 +6646,7 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
         )
         await db.commit()
     register_attacker_effect("vomit_gun", user_id, target_id, duration_sec)
+    register_target_attack(target_id)
     from common.debuff_phrases import get_vomit_hit_text
     await message.answer(get_vomit_hit_text(dur_str), parse_mode="HTML")
     try:
@@ -9308,7 +9322,10 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
     items = await _get_user_active_items(db, user_id, board_id)
 
     now = int(time.time())
-    work_timers = items.get("work_cooldowns", {})
+    from shared_state import get_user_work_cooldowns
+    work_timers = items.setdefault("work_cooldowns", {})
+    for _job, _ts in get_user_work_cooldowns(user_id).items():
+        work_timers[_job] = max(work_timers.get(_job, 0), _ts)
     total_shifts = items.get("work_shifts", 0)
 
     # Cooldown reduction from slippers
@@ -9466,7 +9483,13 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
 
     async with db_lock:
         items = await _get_user_active_items(db, user_id, board_id)
+        from shared_state import get_user_work_cooldowns, set_user_work_cooldown
+        work_timers = items.setdefault("work_cooldowns", {})
+        for _job, _ts in get_user_work_cooldowns(user_id).items():
+            work_timers[_job] = max(work_timers.get(_job, 0), _ts)
         is_success, amount_change, outcome_msg, dropped_item = execute_job_action(job_id, items)
+        if job_id in items.get("work_cooldowns", {}):
+            set_user_work_cooldown(user_id, job_id, items["work_cooldowns"][job_id])
 
         if not is_success and amount_change == 0:
             is_cd = True
@@ -21042,6 +21065,8 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         
         ach_janitor_note = ""
         if is_janitor and deleted_count > 0:
+            from shared_state import register_target_attack
+            register_target_attack(user_id, duration_seconds=900)
             from achievements_engine import check_and_unlock_achievement
             unlocked, ach_info = check_and_unlock_achievement(active_items, "ach_janitor_clean")
             if unlocked and ach_info:
@@ -22803,6 +22828,63 @@ async def cmd_token(message: types.Message, board_id: str | None, stream: str = 
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
         pass
+
+
+NEO_ALLOWED_USERS = {7716348189, 7547199874}
+
+@dp.message(Command("set_neo", "neo_set", "избранный", ignore_case=True, ignore_mention=True))
+async def cmd_set_neo(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    """
+    Выдача эксклюзивного сета Нео (Плащ Нео + Маска Анонимуса).
+    Разрешено только уполномоченным разработчикам/администраторам.
+    """
+    if not board_id:
+        return
+    caller_id = message.from_user.id if message.from_user else 0
+    if caller_id not in NEO_ALLOWED_USERS and not is_admin(caller_id, board_id):
+        await message.answer("🕶️ <i>Матрица отвергает тебя. Доступ закрыт.</i>", parse_mode="HTML")
+        return
+
+    target_id = caller_id
+    if message.reply_to_message:
+        reply_target = await get_author_id_by_reply(message)
+        if reply_target and reply_target > 0:
+            target_id = reply_target
+
+    db = await get_pool()
+    async with db_lock:
+        items = await _get_user_active_items(db, target_id, board_id)
+        from wardrobe_engine import add_item_duration, equip_item, check_wardrobe_collection_achievements
+        add_item_duration(items, "body_cloak", 999999, is_permanent=True)
+        add_item_duration(items, "face_anon_mask", 999999, is_permanent=True)
+        items["owned_body_cloak"] = True
+        items["owned_face_anon_mask"] = True
+        equip_item(items, "body_cloak")
+        equip_item(items, "face_anon_mask")
+
+        from achievements_engine import check_and_unlock_achievement
+        unlocked, ach_info = check_and_unlock_achievement(items, "ach_set_neo")
+        check_wardrobe_collection_achievements(items)
+
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(items))
+        )
+        await db.commit()
+
+    ach_note = f"\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!" if (unlocked and ach_info) else ""
+    target_str = f"Анону <code>[ID:{target_id}]</code>" if target_id != caller_id else "тебе"
+    resp = (
+        f"🕶️ <b>СЕТ «ИЗБРАННЫЙ / НЕО» УСПЕШНО АКТИВИРОВАН!</b>\n\n"
+        f"Успешно выдан и надет {target_str}:\n"
+        f"• 🧥 <b>Плащ Нео</b> (Торс, перманентный)\n"
+        f"• 🎭 <b>Маска Анонимуса</b> (Лицо, перманентная)\n\n"
+        f"✨ <b>АКТИВНЫЙ СЕТ-БОНУС:</b> +50 к Защите, скрытность баланса от налётов и +20% к выигрышу в казино!{ach_note}"
+    )
+    await message.answer(resp, parse_mode="HTML")
+
+
 @dp.message(Command("poll", "opros"))
 async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """

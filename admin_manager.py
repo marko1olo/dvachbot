@@ -1445,6 +1445,9 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
     deleted_count = await delete_single_post(post_num, message.bot)
     role_str = "Админ" if admin_status else "Дворник"
     await log_global_event('bot', f"🗑️ DEL: {role_str} {user_id} удалил пост #{post_num} на /{board_id}/ (и {deleted_count} копий)")
+    if is_janitor and deleted_count > 0:
+        from shared_state import register_target_attack
+        register_target_attack(user_id, duration_seconds=900)
     if lang == 'en':
         resp = f"🗑 Post #{post_num} deleted ({deleted_count} copies)."
         if is_janitor:

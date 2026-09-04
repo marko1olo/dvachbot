@@ -75,6 +75,7 @@ class TestCasinoAndDrop(unittest.IsolatedAsyncioTestCase):
             await db.commit()
 
             # Step 1: Create drop
+            drop_engine._user_drop_cooldowns.pop(donor_id, None)
             ok, msg, drop_rec = await drop_engine.create_money_drop(
                 donor_id=donor_id,
                 donor_name="DonorAnon",
@@ -82,6 +83,7 @@ class TestCasinoAndDrop(unittest.IsolatedAsyncioTestCase):
                 amount=1000,
                 db_lock=db_lock,
                 db_conn=db,
+                check_cooldown=False,
             )
             self.assertTrue(ok)
             self.assertIsNotNone(drop_rec)

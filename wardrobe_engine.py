@@ -501,3 +501,31 @@ def check_wardrobe_set_achievements(active_items: Dict[str, Any]) -> List[Dict[s
             if unlocked and ach_info:
                 unlocked_achievements.append(ach_info)
     return unlocked_achievements
+
+
+def check_wardrobe_collection_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Checks wardrobe collection size (5+, 15+, 30+ items) and awards trophies:
+    - ach_wardrobe_enthusiast (5+ items)
+    - ach_wardrobe_collector (15+ items)
+    - ach_fashion_demon (30+ items)
+    """
+    owned = get_owned_wardrobe_items(active_items)
+    count = len(owned)
+    unlocked_achievements = []
+    import achievements_engine
+
+    if count >= 5:
+        u, ach_info = achievements_engine.check_and_unlock_achievement(active_items, "ach_wardrobe_enthusiast")
+        if u and ach_info:
+            unlocked_achievements.append(ach_info)
+    if count >= 15:
+        u, ach_info = achievements_engine.check_and_unlock_achievement(active_items, "ach_wardrobe_collector")
+        if u and ach_info:
+            unlocked_achievements.append(ach_info)
+    if count >= 30:
+        u, ach_info = achievements_engine.check_and_unlock_achievement(active_items, "ach_fashion_demon")
+        if u and ach_info:
+            unlocked_achievements.append(ach_info)
+
+    return unlocked_achievements

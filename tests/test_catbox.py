@@ -25,17 +25,16 @@ def test_is_invalid_uploader_valid_text():
 def test_is_catbox_available_and_cooldown():
     import time
     import site_tgach.catbox as catbox
-    from site_tgach.catbox import is_catbox_available, CATBOX_PAUSE_COOLDOWN
 
-    assert CATBOX_PAUSE_COOLDOWN == 1800
+    assert catbox.CATBOX_PAUSE_COOLDOWN == 1800
     catbox._CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
-    assert is_catbox_available() is True
+    assert catbox.is_catbox_available() is True
 
     # When on cooldown
-    catbox._CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + 1000
-    assert is_catbox_available() is False
+    catbox._CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + 1000.0
+    assert catbox.is_catbox_available() is False
 
     # Reset
     catbox._CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
-    assert is_catbox_available() is True
+    assert catbox.is_catbox_available() is True
 

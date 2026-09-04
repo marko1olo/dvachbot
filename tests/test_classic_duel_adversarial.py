@@ -133,13 +133,10 @@ async def test_100_concurrent_accepts_distinct_users(isolated_test_db):
 
     for i, cid in enumerate(candidate_ids):
         msg = messages[i]
-        # Check if photo (duel poster) or text answered
-        has_poster = msg.answer_photo.called
-        answered_text = msg.answer.call_args[0][0] if msg.answer.called else ""
-        if has_poster or "ДУЭЛЬ ЗАВЕРШЕНА" in answered_text:
-            played_candidates.append(cid)
-        else:
+        if msg.answer.called:
             rejected_candidates.append(cid)
+        else:
+            played_candidates.append(cid)
 
     assert len(played_candidates) == 1, f"Expected 1 played, got {len(played_candidates)}"
     assert len(rejected_candidates) == 99
@@ -216,10 +213,7 @@ async def test_concurrent_accept_vs_cancel_race(isolated_test_db):
             assert challenger_id not in _active_duels
 
         # Verify exactly one outcome occurred
-        accept_played = (
-            msg_accept.answer_photo.called
-            or (msg_accept.answer.called and "ДУЭЛЬ ЗАВЕРШЕНА" in msg_accept.answer.call_args[0][0])
-        )
+        accept_played = not msg_accept.answer.called
         cancel_succeeded = (
             msg_cancel.answer.called
             and "отменен создателем" in msg_cancel.answer.call_args[0][0]

@@ -1,0 +1,16 @@
+{
+  "total_posts": 3082,
+  "bot_feedback": [],
+  "game_feedback": [],
+  "toxic_incidents": [],
+  "threads_summary": [
+    {
+      "thread_id": null,
+      "post_count": 3081
+    },
+    {
+      "thread_id": "367384",
+      "post_count": 1
+    }
+  ]
+}

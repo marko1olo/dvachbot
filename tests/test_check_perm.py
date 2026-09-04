@@ -81,9 +81,9 @@ class TestCheckPerm(unittest.TestCase):
         self.assertTrue(check_perm(user, 'user'))
         self.assertFalse(check_perm(user, 'janitor'))
 
-        # Checking against an invalid role should require level >= 0
+        # Checking against an invalid required role must be rejected for security (fail-closed)
         user_mod = {'id': 1, 'role': 'mod'}
-        self.assertTrue(check_perm(user_mod, 'non_existent_role'))
+        self.assertFalse(check_perm(user_mod, 'non_existent_role'))
 
 if __name__ == "__main__":
     unittest.main()

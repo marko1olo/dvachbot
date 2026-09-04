@@ -19,7 +19,7 @@ class TestAutoRoastPrompt(unittest.TestCase):
             self.ai_manager_code = f.read()
 
         # Extract the inline prompt definition from transcribe_and_roast_voice_note
-        match = re.search(r'prompt\s*=\s*\((.*?)\)\n\s*from common\.token_pool', self.ai_manager_code, re.DOTALL)
+        match = re.search(r'prompt\s*=\s*\((.*?)\)\n\s*(?:from common\.token_pool|raw_roast\s*=)', self.ai_manager_code, re.DOTALL)
         self.assertTrue(match, "Could not find inline prompt definition in ai_manager.py")
         self.inline_prompt_raw = match.group(1)
         
