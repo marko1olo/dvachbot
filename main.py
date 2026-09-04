@@ -4179,7 +4179,8 @@ def _build_lootbox_shop_content(user_id: int, balance: float):
 
 def _build_color_picker_content(user_id: int, balance: float, active_items: dict):
     now = int(time.time())
-    has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+    bce = active_items.get("badge_color_expires", 0)
+    has_color_pass = (bce > now) or (active_items.get("badge_color_active") and bce == 0)
     cur_color = active_items.get("badge_color")
 
     p_color = get_current_item_price('badge_color')
@@ -4506,7 +4507,8 @@ async def cmd_color(message: types.Message, board_id: str | None, stream: str = 
             balance = await get_user_global_balance(db, user_id)
             active_items = await _get_user_active_items(db, user_id, board_id)
             now = int(time.time())
-            has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+            bce = active_items.get("badge_color_expires", 0)
+            has_color_pass = (bce > now) or (active_items.get("badge_color_active") and bce == 0)
             price = get_current_item_price('badge_color')
 
             if not has_color_pass:
@@ -4779,7 +4781,8 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
         active_items = await _get_user_active_items(db, user_id, board_id)
         now = int(time.time())
 
-        has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+        bce = active_items.get("badge_color_expires", 0)
+        has_color_pass = (bce > now) or (active_items.get("badge_color_active") and bce == 0)
         price = get_current_item_price('badge_color')
 
         if not has_color_pass:
@@ -5129,9 +5132,12 @@ async def _build_inventory_content(user_id: int, board_id: str):
         left_m = ((tinfoil_until - now) % 3600) // 60
         buffs.append(f"👽 <b>Шапочка из фольги:</b> Активна (осталось {left_h}ч {left_m}мин)")
 
-    if items.get("badge_color_expires", 0) > now or items.get("badge_color_active"):
-        c_name = avatar_generator.COLOR_PALETTE.get(items.get("badge_color", "gold"), {}).get("name", "Аура")
-        c_emo = avatar_generator.COLOR_PALETTE.get(items.get("badge_color", "gold"), {}).get("emoji", "🟣")
+    bce = items.get("badge_color_expires", 0)
+    b_col = items.get("badge_color")
+    if ((bce > now) or (items.get("badge_color_active") and bce == 0)) and b_col and b_col not in ("none", "off", "0", ""):
+        c_info = avatar_generator.COLOR_PALETTE.get(b_col, {})
+        c_name = c_info.get("name", "Аура")
+        c_emo = c_info.get("emoji", "🟣")
         buffs.append(f"{c_emo} <b>Цвет ника:</b> {c_name}")
 
     janitor_until = items.get("janitor_until", 0)

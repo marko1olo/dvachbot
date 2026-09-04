@@ -263,8 +263,14 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
         result["badge_color"] = badge_color
     else:
         result["badge_color"] = None
-    if badge_color_active:
+
+    now_ts = int(time.time())
+    if badge_color_expires > 0 and now_ts >= badge_color_expires:
+        result["badge_color"] = None
+        result["badge_color_active"] = False
+    elif badge_color_active:
         result["badge_color_active"] = True
+
     if badge_color_expires > 0:
         result["badge_color_expires"] = badge_color_expires
 

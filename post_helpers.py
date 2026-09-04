@@ -177,7 +177,9 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                             has_flag_ua = True
                         if items.get("flag_ru_until", 0) > now_ts:
                             has_flag_ru = True
-                        if items.get("badge_color_expires", 0) > now_ts or items.get("badge_color_active"):
+                        bce = items.get("badge_color_expires", 0)
+                        is_color_valid = (bce > now_ts) or (items.get("badge_color_active") and bce == 0)
+                        if is_color_valid:
                             b_col = items.get("badge_color")
                             if b_col and b_col not in ("none", "off", "0", ""):
                                 emo = COLOR_EMOJIS.get(b_col)
