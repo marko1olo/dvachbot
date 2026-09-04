@@ -3912,15 +3912,15 @@ def _build_main_shop_hub(user_id: int, balance: float):
             InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub")
         ],
         [
-            InlineKeyboardButton(text="⚔️ Оружие и Токсик", callback_data="shop_cat_weapons"),
+            InlineKeyboardButton(text="⚔️ Оружие и атака", callback_data="shop_cat_weapons"),
             InlineKeyboardButton(text="👗 Бутик одежды", callback_data="shop_cat_clothes")
         ],
         [
             InlineKeyboardButton(text="💊 Аптека и Защита", callback_data="shop_cat_pharma"),
-            InlineKeyboardButton(text="📦 Кейсы и Гача", callback_data="shop_cat_lootbox")
+            InlineKeyboardButton(text="📦 Кейсы и лутбоксы", callback_data="shop_cat_lootbox")
         ],
         [
-            InlineKeyboardButton(text="🎨 Цвет ника (/color)", callback_data="shop_cat_color"),
+            InlineKeyboardButton(text="🎨 Цвет ника и кружок (/color)", callback_data="shop_cat_color"),
             InlineKeyboardButton(text="🎒 Мой Аватар (/avatar)", callback_data="avatar_view")
         ],
         [
@@ -3928,8 +3928,8 @@ def _build_main_shop_hub(user_id: int, balance: float):
             InlineKeyboardButton(text="🏆 Достижения (/ach)", callback_data="achievements_view")
         ],
         [
-            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
-            InlineKeyboardButton(text="📊 Прайс-лист биржи", callback_data="scam_rates")
+            InlineKeyboardButton(text="💰 Мой Кошелек", callback_data="prof_wallet"),
+            InlineKeyboardButton(text="📊 Котировки биржи", callback_data="scam_rates")
         ]
     ])
     return text, kb
@@ -3961,28 +3961,29 @@ def _build_weapons_shop_content(user_id: int, balance: float):
         f"8. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Проклятие поноса: /curse)\n"
         f"9. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Проклятие шизы: /schizopill)\n"
         f"10. 🚮 <b>Билет Дворника (6ч)</b> — <i>{p_jan} ₪</i> (Права удаления /del)\n"
-        f"11. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 12ч через /partyvan)"
+        f"11. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 12ч через /partyvan)\n\n"
+        f"💡 <i>Смыть любой дебафф (флаги, говно, блевоту, шизу) можно Аминазином в Аптеке или командой /cure!</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"🐒 Говно ({p_shit}₪)", callback_data="shop_buy_shit"),
+            InlineKeyboardButton(text=f"🐒 Кусок говна ({p_shit}₪)", callback_data="shop_buy_shit"),
             InlineKeyboardButton(text=f"🤮 Блевота ({p_vomit}₪)", callback_data="shop_buy_vomit")
         ],
         [
-            InlineKeyboardButton(text=f"🇺🇦 Флаг UA ({p_flag_ua}₪)", callback_data="shop_buy_flag_ua"),
-            InlineKeyboardButton(text=f"🇷🇺 Флаг RU ({p_flag_ru}₪)", callback_data="shop_buy_flag_ru")
+            InlineKeyboardButton(text=f"🇺🇦 Флаг Украины ({p_flag_ua}₪)", callback_data="shop_buy_flag_ua"),
+            InlineKeyboardButton(text=f"🇷🇺 Флаг России ({p_flag_ru}₪)", callback_data="shop_buy_flag_ru")
         ],
         [
             InlineKeyboardButton(text=f"🔪 Заточка ({p_knife}₪)", callback_data="shop_buy_knife"),
-            InlineKeyboardButton(text=f"🧯 Перцовка ({p_spray}₪)", callback_data="shop_buy_pepperspray")
+            InlineKeyboardButton(text=f"🧯 Перцовый баллон ({p_spray}₪)", callback_data="shop_buy_pepperspray")
         ],
         [
             InlineKeyboardButton(text=f"🔇 Мут-Ган ({p_mute}₪)", callback_data="shop_buy_mute"),
             InlineKeyboardButton(text=f"🚽 Слабительное ({p_lax}₪)", callback_data="shop_buy_laxative")
         ],
         [
-            InlineKeyboardButton(text=f"💊 Шизопил ({p_schizo}₪)", callback_data="shop_buy_schizopill"),
-            InlineKeyboardButton(text=f"🚮 Дворник ({p_jan}₪)", callback_data="shop_buy_janitor")
+            InlineKeyboardButton(text=f"💊 Шизо-Таблетка ({p_schizo}₪)", callback_data="shop_buy_schizopill"),
+            InlineKeyboardButton(text=f"🚮 Билет Дворника ({p_jan}₪)", callback_data="shop_buy_janitor")
         ],
         [
             InlineKeyboardButton(text=f"🚔 Пативэн ({p_van}₪)", callback_data="shop_buy_partyvan")
@@ -4024,36 +4025,36 @@ def _build_clothes_shop_content(user_id: int, balance: float):
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"👽 Фольга ({p_foil}₪)", callback_data="shop_buy_hat_tinfoil"),
+            InlineKeyboardButton(text=f"👽 Шапочка из фольги ({p_foil}₪)", callback_data="shop_buy_hat_tinfoil"),
             InlineKeyboardButton(text=f"👑 Корона ({p_crown}₪)", callback_data="shop_buy_hat_crown")
         ],
         [
             InlineKeyboardButton(text=f"🐱 Неко-Ушки ({p_ears}₪)", callback_data="shop_buy_hat_cat_ears"),
-            InlineKeyboardButton(text=f"📦 Пакет ({p_bag}₪)", callback_data="shop_buy_hat_bag")
+            InlineKeyboardButton(text=f"📦 Пакет на голову ({p_bag}₪)", callback_data="shop_buy_hat_bag")
         ],
         [
             InlineKeyboardButton(text=f"🪖 Шлем ОМОНа ({p_helm}₪)", callback_data="shop_buy_hat_helmet"),
             InlineKeyboardButton(text=f"🎩 Цилиндр ({p_tophat}₪)", callback_data="shop_buy_hat_tophat")
         ],
         [
-            InlineKeyboardButton(text=f"🦺 Вассерман ({p_wass}₪)", callback_data="shop_buy_body_wasserman"),
-            InlineKeyboardButton(text=f"🩲 Треники ({p_track}₪)", callback_data="shop_buy_body_tracksuit")
+            InlineKeyboardButton(text=f"🦺 Жилетка Вассермана ({p_wass}₪)", callback_data="shop_buy_body_wasserman"),
+            InlineKeyboardButton(text=f"🩲 Спортивные треники ({p_track}₪)", callback_data="shop_buy_body_tracksuit")
         ],
         [
             InlineKeyboardButton(text=f"👘 Худи Аски ({p_hoodie}₪)", callback_data="shop_buy_body_hoodie"),
             InlineKeyboardButton(text=f"🧥 Плащ Нео ({p_cloak}₪)", callback_data="shop_buy_body_cloak")
         ],
         [
-            InlineKeyboardButton(text=f"🥼 Рубашка ({p_strait}₪)", callback_data="shop_buy_body_straitjacket"),
-            InlineKeyboardButton(text=f"😎 Thug Life ({p_thug}₪)", callback_data="shop_buy_face_thug_glasses")
+            InlineKeyboardButton(text=f"🥼 Смирительная рубашка ({p_strait}₪)", callback_data="shop_buy_body_straitjacket"),
+            InlineKeyboardButton(text=f"😎 Очки Thug Life ({p_thug}₪)", callback_data="shop_buy_face_thug_glasses")
         ],
         [
             InlineKeyboardButton(text=f"🥽 Очки Онотоле ({p_wg}₪)", callback_data="shop_buy_face_wasserman_glasses"),
-            InlineKeyboardButton(text=f"🎭 Маска Гая ({p_mask}₪)", callback_data="shop_buy_face_anon_mask")
+            InlineKeyboardButton(text=f"🎭 Маска Анонимуса ({p_mask}₪)", callback_data="shop_buy_face_anon_mask")
         ],
         [
-            InlineKeyboardButton(text=f"🤡 Клоун ({p_clown}₪)", callback_data="shop_buy_face_clown_nose"),
-            InlineKeyboardButton(text=f"🩴 Сланцы ({p_slip}₪)", callback_data="shop_buy_feet_slippers")
+            InlineKeyboardButton(text=f"🤡 Нос клоуна ({p_clown}₪)", callback_data="shop_buy_face_clown_nose"),
+            InlineKeyboardButton(text=f"🩴 Сланцы с носками ({p_slip}₪)", callback_data="shop_buy_feet_slippers")
         ],
         [
             InlineKeyboardButton(text=f"🥾 Берцы ОМОНа ({p_boot}₪)", callback_data="shop_buy_feet_boots"),
@@ -4123,24 +4124,24 @@ def _build_pharma_shop_content(user_id: int, balance: float):
     text = (
         f"💊 <b>АПТЕКА, ЗАЩИТА И КОРРУПЦИЯ</b>\n"
         f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
-        f"1. 💊 <b>Аминазин</b> — <i>{p_pills} ₪</i> (Моментально смывает говно, понос и шизу)\n"
-        f"2. 🪞 <b>Зеркало заднего вида (6ч)</b> — <i>{p_shield} ₪</i> (Отражает любые PvP-атаки и дебаффы прямо в нападающего!)\n"
-        f"3. 📜 <b>Взятка (Индульгенция)</b> — <i>{p_bribe} ₪</i> (Моментально снимает мут)\n"
-        f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от грабежа и говна)\n"
+        f"1. 💊 <b>Аминазин</b> — <i>{p_pills} ₪</i> (Моментально смывает ВСЕ дебаффы: флаги UA/RU 🇺🇦🇷🇺, говно 💩, блевоту 🤮, понос и шизу. Команда: /cure)\n"
+        f"2. 🪞 <b>Зеркальный щит (6ч)</b> — <i>{p_shield} ₪</i> (Отражает любые PvP-атаки и дебаффы прямо в нападающего!)\n"
+        f"3. 📜 <b>Взятка модератору</b> — <i>{p_bribe} ₪</i> (Моментально снимает обычный мут. Команда: /bribe)\n"
+        f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Пассивная защита от грабежа и говна)\n"
         f"5. 🎖️ <b>Ксива полковника</b> — <i>{p_ksiva} ₪</i> (100% спасение от облавы пативана)\n"
         f"6. 🪪 <b>Удостоверение дружинника (7д)</b> — <i>{p_druzh} ₪</i> (Штрафы анонов /fine)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"💊 Аминазин ({p_pills}₪)", callback_data="shop_buy_pills"),
-            InlineKeyboardButton(text=f"🪞 Зеркало ({p_shield}₪)", callback_data="shop_buy_shield")
+            InlineKeyboardButton(text=f"💊 Аминазин (смыть дебаффы) ({p_pills}₪)", callback_data="shop_buy_pills"),
+            InlineKeyboardButton(text=f"🪞 Зеркальный щит ({p_shield}₪)", callback_data="shop_buy_shield")
         ],
         [
-            InlineKeyboardButton(text=f"📜 Взятка ({p_bribe}₪)", callback_data="shop_buy_bribe"),
-            InlineKeyboardButton(text=f"👽 Фольга ({p_foil}₪)", callback_data="shop_buy_tinfoil")
+            InlineKeyboardButton(text=f"📜 Взятка (снять мут) ({p_bribe}₪)", callback_data="shop_buy_bribe"),
+            InlineKeyboardButton(text=f"👽 Шапочка из фольги ({p_foil}₪)", callback_data="shop_buy_tinfoil")
         ],
         [
-            InlineKeyboardButton(text=f"🎖️ Ксива ({p_ksiva}₪)", callback_data="shop_buy_ksiva_polkovnik"),
+            InlineKeyboardButton(text=f"🎖️ Ксива полковника ({p_ksiva}₪)", callback_data="shop_buy_ksiva_polkovnik"),
             InlineKeyboardButton(text=f"🪪 Дружинник ({p_druzh}₪)", callback_data="shop_buy_badge_druzhinnik")
         ],
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
@@ -4179,29 +4180,49 @@ def _build_lootbox_shop_content(user_id: int, balance: float):
 def _build_color_picker_content(user_id: int, balance: float, active_items: dict):
     now = int(time.time())
     has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
-    cur_color = active_items.get("badge_color", "gold")
+    cur_color = active_items.get("badge_color")
 
     p_color = get_current_item_price('badge_color')
 
+    if cur_color and cur_color in avatar_generator.COLOR_PALETTE and cur_color not in ("none", "off", "0", ""):
+        cur_info = avatar_generator.COLOR_PALETTE[cur_color]
+        cur_text = f"{cur_info['emoji']} {cur_info['name']}"
+    else:
+        cur_text = "⚪ Без цвета (выключен)"
+
     text = (
-        f"🎨 <b>ПАЛИТРА ЦВЕТА НИКА И АУРЫ АНОНА</b>\n"
+        f"🎨 <b>ПАЛИТРА ЦВЕТА НИКА И КРУЖКА</b>\n"
         f"Твой баланс: <code>{int(balance):,} ₪</code>\n"
-        f"Текущий цвет: <b>{avatar_generator.COLOR_PALETTE.get(cur_color, {}).get('emoji', '⚪')} {avatar_generator.COLOR_PALETTE.get(cur_color, {}).get('name', 'Обычный')}</b>\n\n"
+        f"Текущий статус в постах: <b>{cur_text}</b>\n\n"
     )
     if has_color_pass:
-        exp_h = (active_items.get("badge_color_expires", 0) - now) // 3600
-        text += f"✅ <b>Цветной пропуск активен</b> (осталось {max(0, exp_h)}ч). Выбирай любой цвет бесплатно:"
+        exp_h = max(0, (active_items.get("badge_color_expires", 0) - now) // 3600)
+        text += f"✅ <b>Цветной пропуск активен</b> (осталось {exp_h}ч). Выбирай любой цвет бесплатно или сними кружок кнопкой ниже:"
     else:
         text += f"Купи доступ к палитре на 3 дня за <b>{p_color} ₪</b> или выбери цвет (с баланса спишется {p_color} ₪):"
 
+    color_names_clean = {
+        "red": ("🔴", "Красный"),
+        "green": ("🟢", "Зеленый"),
+        "blue": ("🔵", "Синий"),
+        "purple": ("🟣", "Аметист"),
+        "gold": ("🟡", "Золото"),
+        "orange": ("🟠", "Оранж"),
+        "white": ("⚪", "Платина"),
+        "black": ("🏴", "Черный"),
+        "rainbow": ("🌈", "Радуга"),
+    }
+
     kb_rows = []
-    colors_list = list(avatar_generator.COLOR_PALETTE.items())
+    colors_list = list(avatar_generator.COLOR_PALETTE.keys())
     for i in range(0, len(colors_list), 3):
         row = []
-        for c_key, c_val in colors_list[i:i+3]:
-            row.append(InlineKeyboardButton(text=f"{c_val['emoji']} {c_val['name'].split()[0]}", callback_data=f"color_set_{c_key}"))
+        for c_key in colors_list[i:i+3]:
+            emo, name = color_names_clean.get(c_key, (avatar_generator.COLOR_PALETTE[c_key]['emoji'], c_key))
+            row.append(InlineKeyboardButton(text=f"{emo} {name}", callback_data=f"color_set_{c_key}"))
         kb_rows.append(row)
 
+    kb_rows.append([InlineKeyboardButton(text="❌ Снять цвет (убрать кружок)", callback_data="color_set_none")])
     kb_rows.append([InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")])
     return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
@@ -4460,11 +4481,54 @@ async def cmd_lootbox(message: types.Message, board_id: str | None, stream: str 
     except Exception: pass
 
 
-@dp.message(Command("color", "badge", "badgecolor", "цвет", "бейдж"))
+@dp.message(Command("color", "badge", "badgecolor", "цвет", "бейдж", "uncolor", "снятьцвет", "снять_цвет", "resetcolor", ignore_case=True, ignore_mention=True))
 async def cmd_color(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     db = await get_pool()
+
+    text_parts = (message.text or "").split()
+    cmd_name = text_parts[0].lower().lstrip("/").split("@")[0] if text_parts else ""
+    args = text_parts[1:]
+    sub = args[0].lower().strip() if args else ""
+
+    if cmd_name in ("uncolor", "снятьцвет", "снять_цвет", "resetcolor") or sub in ("off", "none", "0", "remove", "del", "clear", "снять", "убрать", "выкл", "reset"):
+        async with db_lock:
+            active_items = await _get_user_active_items(db, user_id, board_id)
+            active_items["badge_color"] = None
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+        await message.reply("⚪ <b>Цветной кружок снят!</b>\nТвои посты снова отображаются без цветного бейджа.", parse_mode="HTML")
+        return
+
+    if sub and sub in avatar_generator.COLOR_PALETTE:
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+            active_items = await _get_user_active_items(db, user_id, board_id)
+            now = int(time.time())
+            has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+            price = get_current_item_price('badge_color')
+
+            if not has_color_pass:
+                if balance < price:
+                    await message.reply(f"❌ Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.")
+                    return
+                ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
+                if not ok:
+                    await message.reply("❌ Ошибка списания баланса.")
+                    return
+                await record_user_transaction(db, user_id, -price, 'shop', f'Покупка цвета: {sub}')
+                active_items["badge_color_active"] = True
+                active_items["badge_color_expires"] = now + 3 * 86400
+
+            active_items["badge_color"] = sub
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+
+        col_info = avatar_generator.COLOR_PALETTE[sub]
+        await message.reply(f"🎨 Цвет успешно установлен на {col_info['emoji']} <b>{col_info['name']}</b>!\nСнять цвет в любой момент: /color off или /uncolor", parse_mode="HTML")
+        return
+
     balance = await get_user_global_balance(db, user_id)
     active_items = await _get_user_active_items(db, user_id, board_id)
     text, kb = _build_color_picker_content(user_id, balance, active_items)
@@ -4692,11 +4756,24 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     user_id = callback.from_user.id
     color_key = callback.data.replace("color_set_", "")
+    db = await get_pool()
+
+    if color_key in ("none", "off", "reset", "clear", "remove"):
+        async with db_lock:
+            active_items = await _get_user_active_items(db, user_id, board_id)
+            active_items["badge_color"] = None
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+        await callback.answer("⚪ Цветной кружок снят! Посты снова без цветного бейджа.", show_alert=True)
+        new_bal = await get_user_global_balance(db, user_id)
+        text, kb = _build_color_picker_content(user_id, new_bal, active_items)
+        await _render_shop_subview(callback, text, kb, category="shop")
+        return
+
     if color_key not in avatar_generator.COLOR_PALETTE:
         await callback.answer("Неверный цвет.", show_alert=True)
         return
 
-    db = await get_pool()
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
         active_items = await _get_user_active_items(db, user_id, board_id)
@@ -4713,15 +4790,16 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
             if not ok:
                 await callback.answer("Ошибка списания баланса.", show_alert=True)
                 return
+            await record_user_transaction(db, user_id, -price, 'shop', f'Покупка цвета: {color_key}')
             active_items["badge_color_active"] = True
             active_items["badge_color_expires"] = now + 3 * 86400
 
         active_items["badge_color"] = color_key
         async with db_transaction(db):
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
 
     col_info = avatar_generator.COLOR_PALETTE[color_key]
-    await callback.answer(f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден в шапках твоих постов и на аватарке.", show_alert=True)
+    await callback.answer(f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден перед номерами твоих постов.", show_alert=True)
 
     # Re-render color picker view
     new_bal = await get_user_global_balance(db, user_id)
@@ -6974,6 +7052,60 @@ async def cmd_flag_ru(message: types.Message, board_id: str | None, stream: str 
         await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
     except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
+
+
+@dp.message(Command("cure", "heal", "pills", "аминазин", "лечение", "снятьфлаг", "снять_флаг", "unflag", ignore_case=True, ignore_mention=True))
+async def cmd_cure(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    now = int(time.time())
+    active_items = await _get_user_active_items(db, user_id, board_id)
+
+    has_debuff = (
+        active_items.get("shit_until", 0) > now or
+        active_items.get("vomit_until", 0) > now or
+        active_items.get("flag_ua_until", 0) > now or
+        active_items.get("flag_ru_until", 0) > now or
+        active_items.get("peppersprayed_until", 0) > now or
+        active_items.get("cursed_until", 0) > now
+    )
+
+    async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+        if row and row[0] and row[0] > now:
+            has_debuff = True
+
+    if not has_debuff:
+        await message.reply("✨ <b>У тебя нет активных дебаффов!</b>\nТы абсолютно чист: нет ни флагов (🇺🇦/🇷🇺), ни говна (💩), ни блевоты (🤮), ни шизы.", parse_mode="HTML")
+        return
+
+    price = get_current_item_price('pills')
+    balance = await get_user_global_balance(db, user_id)
+    if balance < price:
+        await message.reply(f"❌ <b>Недостаточно шекелей на Аминазин!</b>\nНужно <b>{price} ₪</b>, у тебя <b>{int(balance)} ₪</b>.\nЗаработай на смене (/work) или в казино (/dice).", parse_mode="HTML")
+        return
+
+    ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
+    if not ok:
+        await message.reply("❌ Ошибка списания шекелей.")
+        return
+
+    await record_user_transaction(db, user_id, -price, 'shop', 'Покупка: Аминазин (/cure)')
+
+    active_items.pop("shit_until", None)
+    active_items.pop("vomit_until", None)
+    active_items.pop("flag_ua_until", None)
+    active_items.pop("flag_ru_until", None)
+    active_items.pop("peppersprayed_until", None)
+
+    async with db_lock:
+        if not is_user_under_unbribable_mute(active_items):
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (user_id,))
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+        await db.commit()
+
+    await message.reply(f"💊 <b>ТЫ ПРИНЯЛ АМИНАЗИН ЗА {price} ₪!</b>\nВсе дебаффы (флаги 🇺🇦/🇷🇺, говно 💩, блевота 🤮, понос и шиза) моментально смыты! Твои посты снова чистые.", parse_mode="HTML")
 
 
 @dp.message(Command("curse", "laxative", "понос", "слабительное", ignore_case=True, ignore_mention=True))

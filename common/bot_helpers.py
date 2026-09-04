@@ -199,7 +199,7 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
             badge_color_expires = int(bce)
         if data.get("badge_color_active"):
             badge_color_active = True
-        if data.get("badge_color"):
+        if data.get("badge_color") and data.get("badge_color") not in ("none", "off", "0", ""):
             badge_color = data.get("badge_color")
 
         # 8. Guns
@@ -256,8 +256,13 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
         result["janitor_until"] = janitor_until
     if janitor_deletes_left > 0:
         result["janitor_deletes_left"] = janitor_deletes_left
-    if badge_color:
+    if current_items and "badge_color" in current_items:
+        c_val = current_items.get("badge_color")
+        result["badge_color"] = c_val if c_val not in ("none", "off", "0", "") else None
+    elif badge_color and badge_color not in ("none", "off", "0", ""):
         result["badge_color"] = badge_color
+    else:
+        result["badge_color"] = None
     if badge_color_active:
         result["badge_color_active"] = True
     if badge_color_expires > 0:

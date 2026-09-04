@@ -97,6 +97,11 @@ try:
 except ImportError:
     import traceback; traceback.print_exc()
 
+COLOR_EMOJIS = {
+    "red": "🔴", "green": "🟢", "blue": "🔵", "purple": "🟣",
+    "gold": "🟡", "orange": "🟠", "white": "⚪", "black": "🏴", "rainbow": "🌈"
+}
+
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru') -> str:
 
     b_data = board_data[board_id]
@@ -158,10 +163,6 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
         has_flag_ru = False
         prefix_str = ""
         badge_emoji = ""
-        COLOR_EMOJIS = {
-            "red": "🔴", "green": "🟢", "blue": "🔵", "purple": "🟣",
-            "gold": "🟡", "orange": "🟠", "white": "⚪", "black": "🏴", "rainbow": "🌈"
-        }
         now_ts = int(time.time())
         async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
             async for row in c:
@@ -177,8 +178,11 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                         if items.get("flag_ru_until", 0) > now_ts:
                             has_flag_ru = True
                         if items.get("badge_color_expires", 0) > now_ts or items.get("badge_color_active"):
-                            b_col = items.get("badge_color", "gold")
-                            badge_emoji = f"{COLOR_EMOJIS.get(b_col, '🟣')} "
+                            b_col = items.get("badge_color")
+                            if b_col and b_col not in ("none", "off", "0", ""):
+                                emo = COLOR_EMOJIS.get(b_col)
+                                if emo:
+                                    badge_emoji = f"{emo} "
                     except Exception:
                         pass
                 if row[1] and row[2] and now_ts < row[2]:

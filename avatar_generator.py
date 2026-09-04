@@ -75,7 +75,12 @@ def build_character_card(
         draw.line([(x, 0), (x, H)], fill=(32, 34, 46, 18), width=1)
 
     # Accent color & border
-    color_info = COLOR_PALETTE.get(badge_color or "gold", COLOR_PALETTE["gold"])
+    if badge_color and badge_color in COLOR_PALETTE:
+        color_info = COLOR_PALETTE[badge_color]
+        badge_tag = f"{color_info['emoji']} {color_info['name'].upper()}"
+    else:
+        color_info = {"hex": "#888899", "emoji": "⚪", "name": "Обычный", "aura": (100, 100, 120, 60)}
+        badge_tag = "⚪ ОБЫЧНЫЙ АНОН"
     accent_hex = color_info["hex"]
     accent_rgb = tuple(int(accent_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
 
@@ -88,7 +93,6 @@ def build_character_card(
     font_title = get_font(30, IMPACT_FONT)
     draw.text((35, 28), "ТГАЧ RPG // КАРТОЧКА ПЕРСОНАЖА", fill=(255, 255, 255), font=font_title)
 
-    badge_tag = f"{color_info['emoji']} {color_info['name'].upper()}" if badge_color else "⚪ ОБЫЧНЫЙ АНОН"
     font_sub = get_font(16)
     draw.text((W - 270, 36), badge_tag, fill=accent_rgb, font=font_sub)
 
