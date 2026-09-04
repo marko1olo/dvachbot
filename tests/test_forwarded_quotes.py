@@ -154,6 +154,20 @@ class TestForwardedQuoteFormatting(unittest.TestCase):
         cleaned = clean_html_for_tg(text)
         self.assertEqual(cleaned, "<blockquote><b>Цитата</b>\nтекст</blockquote>")
 
+    def test_post_header_inside_code_tag_not_split_into_blockquote(self):
+        raw = "🔥 <b>[КАНОНИЧНЫЙ БУГУРТ-ТРЕД]</b>\n\nТЫ ОМЕЖКА...\n\n<code>[2ch.hk/soc/ | Пост #2017344 | Постов: 192/500 | Сажа: +57 | Пасскод: Не куплен (Нищий)]</code>"
+        self.assertFalse(contains_board_post_header(raw))
+        formatted = format_forwarded_quote(raw)
+        self.assertEqual(formatted, raw)
+        self.assertNotIn("<blockquote", formatted)
+
+    def test_unclosed_tag_in_prefix_prevents_malformed_blockquote(self):
+        raw = "<b>Текст с открытым тегом Пост №504200 продолжение жирного</b>"
+        formatted = format_forwarded_quote(raw)
+        self.assertEqual(formatted, raw)
+        self.assertNotIn("<blockquote", formatted)
+
+
 
 class TestForwardedQuoteIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_handle_message_forward_from_bot(self):

@@ -780,9 +780,11 @@ from votemute_engine import votemute_router
 from ttt_engine import router as ttt_router, cmd_ttt, MIN_TTT_BET, MAX_TTT_BET
 from dice_duel_engine import router as dice_duel_router, cmd_dice_duel_entry as cmd_dice_duel
 from russian_roulette_pvp import router as russian_roulette_pvp_router, cmd_russian_roulette as cmd_duel_rr
+from combat_moderation_engine import combat_moderation_router
 dp.include_router(economy_router)
 dp.include_router(stats_hub_router)
 dp.include_router(votemute_router)
+dp.include_router(combat_moderation_router)
 dp.include_router(ttt_router)
 dp.include_router(dice_duel_router)
 dp.include_router(russian_roulette_pvp_router)
@@ -5850,7 +5852,13 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     import time
     from shared_state import (
         count_active_attacker_effects, register_attacker_effect,
-        get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
+        get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack,
+        set_partyvan_victim_immunity, get_partyvan_victim_immunity
+    )
+    from combat_moderation_engine import (
+        calculate_combat_duration_and_backfire, record_combat_attack,
+        check_pair_attack_cooldown, format_duration_str,
+        create_combat_appeal_session, get_combat_appeal_keyboard, active_combat_appeals
     )
     target_id = await get_author_id_by_reply(message)
     if target_id == 0:
@@ -5871,11 +5879,51 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     db = await get_pool()
     current_time = int(time.time())
 
-    async with db.execute("SELECT posts_count, grief_protection FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
+    # --- Иммунитет и отлёт атаки для новичков (< 50 постов) ---
+    async with db.execute("SELECT posts_count FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
         target_row = await cursor.fetchone()
-        if target_row and (target_row[0] < 5 or target_row[1]):
-            await message.reply("⛔ Цель защищена от гриферства для новичков.", parse_mode="HTML")
+        target_posts = target_row[0] if target_row and target_row[0] is not None else 0
+        if target_posts < 50:
+            set_partyvan_victim_immunity(target_id, current_time + 3600)
+            await message.reply("🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\nВыстрел срикошетил! Цель защищена статусом новичка (менее 50 постов на борде). Дай человеку освоиться!\n<i>(Мут-Ган остался в твоем рюкзаке, жертва получила иммунитет на 1 час)</i>", parse_mode="HTML")
             return
+
+    # --- Полный иммунитет жертвы после предыдущей атаки/мута (1 час) ---
+    victim_immunity = get_partyvan_victim_immunity(target_id)
+    if victim_immunity > current_time:
+        cd_left = int(victim_immunity - current_time)
+        cd_min = cd_left // 60
+        cd_sec = cd_left % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.reply(
+            f"🛡️ <b>ЖЕРТВА ПОД ЗАЩИТОЙ!</b>\n"
+            f"Анон недавно перенес атаку / отбыл наказание и имеет полный иммунитет ещё <b>{time_str}</b>.\n"
+            f"<i>(Мут-Ган остался в твоем рюкзаке, кулдаун жертвы 1 час)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Защита от спама атаками по разным целям
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    # 5-минутное окно защиты жертвы от повторных нападений
+    if await check_target_grief_protection(message, target_id, user_id, board_id):
+        return
+
+    # Защита от преследования одной и той же цели (15 мин кулдаун между атаками на ту же пару)
+    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id)
+    if is_pair_blocked:
+        rem_min = pair_rem // 60
+        rem_sec = pair_rem % 60
+        time_str = f"{rem_min}м {rem_sec}с" if rem_min > 0 else f"{rem_sec}с"
+        await message.reply(
+            f"⏳ <b>Нельзя атаковать одного и того же анона подряд!</b>\n"
+            f"Повторный выстрел по этой цели доступен через <b>{time_str}</b>.\n"
+            f"<i>(Мут-Ган остался в твоем рюкзаке)</i>",
+            parse_mode="HTML"
+        )
+        return
 
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
@@ -5912,6 +5960,34 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
             f"Мут-Ган остался в твоем рюкзаке.",
             parse_mode="HTML"
         )
+        return
+
+    # --- Расчет прогрессивного времени и шанса осечки/бэкфайра ---
+    duration_sec, is_backfire, backfire_chance = calculate_combat_duration_and_backfire(
+        user_id, target_id, "shoot", target_posts
+    )
+
+    # --- СЛУЧАЙ ОСЕЧКИ / ВЗРЫВА СТВОЛА ОТ СПАМА ВЫСТРЕЛАМИ ---
+    if is_backfire:
+        active_items["mute_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+
+        set_combat_cooldown(user_id, 180)
+        record_combat_attack(user_id, user_id, "shoot")
+        await apply_regular_mute(user_id, board_id, 1800)
+
+        misfire_msg = (
+            f"💥 <b>ОСЕЧКА И РАЗРЫВ СТВОЛА!</b> 💥\n\n"
+            f"Мут-Ган перегрелся от частой стрельбы и <b>взорвался прямо в руках стрелка</b>!\n"
+            f"Стрелок оглушен пороховыми газами и отправлен в мут на <b>30 минут</b>!\n"
+            f"<i>(Шанс разрыва ствола от спама атаками составлял {int(backfire_chance * 100)}%)</i>"
+        )
+        await message.bot.send_message(message.chat.id, misfire_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        try: await message.delete()
+        except Exception: pass
         return
 
     t_items = await _get_user_active_items(db, target_id, board_id)
@@ -5994,27 +6070,46 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     if is_bounced:
-        register_attacker_effect("mute_gun", target_id, user_id, 3600)
+        register_attacker_effect("mute_gun", target_id, user_id, duration_sec)
         await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
         return
 
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
+        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
 
-    await apply_regular_mute(target_id, board_id, 3600)
-    register_attacker_effect("mute_gun", user_id, target_id, 3600)
-    set_combat_cooldown(user_id, 45)
+    await apply_regular_mute(target_id, board_id, duration_sec)
+    register_attacker_effect("mute_gun", user_id, target_id, duration_sec)
+    record_combat_attack(user_id, target_id, "shoot")
+    set_combat_cooldown(user_id, 180)
+    set_partyvan_victim_immunity(target_id, current_time + duration_sec + 3600)
     
+    # Регистрация интерактивной сессии апелляции (кнопки народного протеста и залога)
+    session_id = create_combat_appeal_session(board_id, user_id, target_id, "shoot", duration_sec, message.chat.id)
+    appeal_kb = get_combat_appeal_keyboard(session_id)
+
     from common.debuff_phrases import get_mute_gun_announcement
-    shoot_msg = get_mute_gun_announcement()
-    await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    dur_str = format_duration_str(duration_sec)
+    shoot_msg = (
+        f"{get_mute_gun_announcement()}\n\n"
+        f"⏳ <b>Длительность мута:</b> {dur_str}\n"
+        f"<i>(Время сбалансировано с учетом активности цели и частоты стрельбы)</i>"
+    )
+    sent_msg = await message.bot.send_message(
+        message.chat.id,
+        shoot_msg,
+        reply_to_message_id=message.reply_to_message.message_id,
+        reply_markup=appeal_kb,
+        parse_mode="HTML"
+    )
+    if session_id in active_combat_appeals and sent_msg:
+        active_combat_appeals[session_id].announcement_msg_id = sent_msg.message_id
 
     try:
         await message.bot.send_message(
             target_id,
-            "💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
-            "Тебя отправили в мут на 1 час — ты временно не можешь писать на этой доске.\n"
-            "Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop.",
+            f"💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
+            f"Тебя отправили в мут на <b>{dur_str}</b> — ты временно не можешь писать на этой доске.\n"
+            f"💡 Аноны могут опротестовать этот мут кнопкой в треде, либо ты можешь внести залог.",
             parse_mode="HTML"
         )
     except TelegramForbiddenError:
@@ -6027,6 +6122,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
+
 
 @dp.message(Command("pepperspray", "pepper", "перцовка", "баллончик", "пшик"))
 async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -7157,21 +7253,42 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     db = await get_pool()
     current_time = int(time.time())
 
-    # Проверка идемпотентности: цель уже отбывает длительный срок в КПЗ (> 11 часов)
+    from shared_state import (
+        get_partyvan_user_cooldown, set_partyvan_user_cooldown,
+        get_partyvan_board_cooldown, set_partyvan_board_cooldown,
+        get_partyvan_victim_immunity, set_partyvan_victim_immunity,
+        register_attacker_effect, register_target_attack
+    )
+    from combat_moderation_engine import (
+        calculate_combat_duration_and_backfire, record_combat_attack,
+        check_pair_attack_cooldown, format_duration_str,
+        create_combat_appeal_session, get_combat_appeal_keyboard, active_combat_appeals
+    )
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("partyvan_gun"):
+        await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
+        return
+
+    # --- Иммунитет и отлёт доноса для новичков (< 50 постов) ---
+    async with db.execute("SELECT posts_count FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
+        t_row = await cursor.fetchone()
+        target_posts = t_row[0] if t_row and t_row[0] is not None else 0
+        if target_posts < 50:
+            set_partyvan_victim_immunity(target_id, current_time + 3600)
+            await message.reply("🔰 <b>ОТЛЁТ ДОНОСА! ИММУНИТЕТ НОВИЧКА!</b>\nДежурный порвал донос: цель защищена статусом новичка (менее 50 постов на борде). ОМОН не выезжает по новичкам!\n<i>(Рация осталась в твоем рюкзаке, жертва получила иммунитет на 1 час)</i>", parse_mode="HTML")
+            return
+
+    # Проверка идемпотентности: цель уже отбывает длительный срок в КПЗ (> 3ч)
     existing_mute = board_data.get(board_id, {}).get('mutes', {}).get(target_id)
-    if existing_mute and existing_mute > datetime.now(UTC) + timedelta(hours=11):
+    if existing_mute and existing_mute > datetime.now(UTC) + timedelta(hours=3):
         await message.answer("🚔 <b>Вызов отменен:</b> Эта цель УЖЕ откисает в КПЗ!\nРация осталась в твоем рюкзаке.", parse_mode="HTML")
         return
 
     # --- Пер-юзерный куладун на вызов пативэна: 1 час ---
-    from shared_state import (
-        get_partyvan_user_cooldown, set_partyvan_user_cooldown,
-        get_partyvan_board_cooldown, set_partyvan_board_cooldown,
-        get_partyvan_victim_immunity
-    )
     user_pv_cd = get_partyvan_user_cooldown(user_id)
     if user_pv_cd > current_time:
-        cd_left = user_pv_cd - current_time
+        cd_left = int(user_pv_cd - current_time)
         cd_min = cd_left // 60
         cd_sec = cd_left % 60
         await message.answer(
@@ -7185,7 +7302,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     # --- Пер-борд куладун: 30 минут между вызовами на одну доску ---
     board_pv_cd = get_partyvan_board_cooldown(board_id)
     if board_pv_cd > current_time:
-        cd_left = board_pv_cd - current_time
+        cd_left = int(board_pv_cd - current_time)
         cd_min = cd_left // 60
         cd_sec = cd_left % 60
         await message.answer(
@@ -7196,15 +7313,16 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         )
         return
 
-    # --- Иммунитет жертвы: 2 часа после освобождения ---
+    # --- Иммунитет жертвы: 1 час после освобождения ---
     victim_immunity = get_partyvan_victim_immunity(target_id)
     if victim_immunity > current_time:
-        cd_left = victim_immunity - current_time
+        cd_left = int(victim_immunity - current_time)
         cd_min = cd_left // 60
+        cd_sec = cd_left % 60
         await message.answer(
             f"🛡️ <b>Жертва под защитой!</b>\n"
-            f"Анон недавно вышел из КПЗ и имеет иммунитет ещё <b>{cd_min}м</b>.\n"
-            f"<i>(Иммунитет жертвы 2 часа после освобождения/взятки)</i>",
+            f"Анон недавно перенес атаку / вышел из КПЗ и имеет иммунитет ещё <b>{cd_min}м {cd_sec}с</b>.\n"
+            f"<i>(Иммунитет жертвы 1 час после освобождения/взятки)</i>",
             parse_mode="HTML"
         )
         return
@@ -7215,6 +7333,19 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if await check_target_grief_protection(message, target_id, user_id, board_id):
         return
 
+    # Защита от преследования одной и той же цели (15 мин кулдаун между атаками на ту же пару)
+    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id)
+    if is_pair_blocked:
+        rem_min = pair_rem // 60
+        rem_sec = pair_rem % 60
+        time_str = f"{rem_min}м {rem_sec}с" if rem_min > 0 else f"{rem_sec}с"
+        await message.reply(
+            f"⏳ <b>Нельзя атаковать одного и того же анона подряд!</b>\n"
+            f"Повторный вызов ОМОНа по этой цели доступен через <b>{time_str}</b>.\n"
+            f"<i>(Рация сохранена в твоем рюкзаке)</i>",
+            parse_mode="HTML"
+        )
+        return
 
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
@@ -7229,11 +7360,6 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         )
         return
 
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("partyvan_gun"):
-        await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
-        return
-
     # Защита от спама: максимум 2 активных вызова ОМОНа от одного автора
     if count_active_attacker_effects("partyvan_gun", user_id) >= 2:
         await message.answer(
@@ -7243,6 +7369,36 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             "Рация осталась в твоем рюкзаке.",
             parse_mode="HTML"
         )
+        return
+
+    # --- Расчет прогрессивной длительности и шанса бэкфайра за спам вызовами ---
+    duration_sec, is_backfire, backfire_chance = calculate_combat_duration_and_backfire(
+        user_id, target_id, "partyvan", target_posts
+    )
+
+    # --- СЛУЧАЙ ЛОЖНОГО ВЫЗОВА СПЕЦСЛУЖБ (БЭКФАЙР) ---
+    if is_backfire:
+        active_items["partyvan_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+
+        async with storage_lock:
+            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(hours=2)
+
+        await apply_regular_mute(user_id, board_id, 7200)
+        set_partyvan_user_cooldown(user_id, current_time + 3600)
+        record_combat_attack(user_id, user_id, "partyvan")
+
+        backfire_msg = (
+            f"🚨 <b>ОБЛАВА ПО ЛОЖНОМУ ДОНОСУ!</b> 🚨\n\n"
+            f"ОМОН установил, что анон <b>[ID:{user_id}]</b> злоупотребляет экстренной связью и строчит кляузы на невиновных!\n"
+            f"Спецназ развернул автозак и <b>упаковал самого доносчика в КПЗ на 2 часа</b> по статье о заведомо ложном вызове специализированных служб!\n"
+            f"<i>(Риск ложного вызова составлял {int(backfire_chance * 100)}%)</i>"
+        )
+        await message.bot.send_message(message.chat.id, backfire_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        try: await message.delete()
+        except Exception: pass
         return
 
     t_items = await _get_user_active_items(db, target_id, board_id)
@@ -7266,19 +7422,19 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             await db.commit()
 
         async with storage_lock:
-            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(hours=12)
+            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
 
-        await apply_regular_mute(user_id, board_id, 12 * 3600)
-        register_attacker_effect("partyvan_gun", target_id, user_id, 12 * 3600)
+        await apply_regular_mute(user_id, board_id, duration_sec)
+        register_attacker_effect("partyvan_gun", target_id, user_id, duration_sec)
 
         reply_txt = (
             "🪞 <b>ОТРАЖЕНИЕ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\n"
-            "Жертва выставила Зеркало! ОМОН приехал по ложному доносу, выломал дверь и <b>упаковал в автозак самого доносчика</b> на 12 часов!\n"
+            "Жертва выставила Зеркало! ОМОН приехал по ложному доносу, выломал дверь и <b>упаковал в автозак самого доносчика</b>!\n"
             "<i>(Зеркало жертвы израсходовано)</i>"
         )
         target_txt = (
             "🪞 <b>ЗЕРКАЛО ОТРАЗИЛО ПАТИВЭН!</b>\n"
-            "Анон попытался вызвать на тебя ОМОН, но Зеркало перенаправило наряд прямо к нему на адрес! Доносчик сам уехал в КПЗ на 12 часов!"
+            "Анон попытался вызвать на тебя ОМОН, но Зеркало перенаправило наряд прямо к нему на адрес! Доносчик сам уехал в КПЗ!"
         )
         try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
         except Exception: pass
@@ -7313,17 +7469,42 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await db.commit()
     
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(hours=12)
-    await apply_regular_mute(target_id, board_id, 12 * 3600)
-    register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
+        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
+    await apply_regular_mute(target_id, board_id, duration_sec)
+    register_attacker_effect("partyvan_gun", user_id, target_id, duration_sec)
     register_target_attack(target_id)
+    record_combat_attack(user_id, target_id, "partyvan")
+    set_partyvan_victim_immunity(target_id, current_time + duration_sec + 3600)
 
     # Выставляем куладуны: 1ч на юзера, 30м на доску
     set_partyvan_user_cooldown(user_id, current_time + 3600)
     set_partyvan_board_cooldown(board_id, current_time + 1800)
 
+    # Регистрация интерактивной сессии апелляции (кнопки народного протеста и залога)
+    session_id = create_combat_appeal_session(board_id, user_id, target_id, "partyvan", duration_sec, message.chat.id)
+    appeal_kb = get_combat_appeal_keyboard(session_id)
+
     from common.debuff_phrases import get_partyvan_announcement
-    await message.bot.send_message(message.chat.id, get_partyvan_announcement(), reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    from combat_moderation_engine import get_partyvan_flavor_text, get_attacker_24h_usage_count
+    attacks_count = get_attacker_24h_usage_count(user_id, "partyvan") - 1
+    flavor = get_partyvan_flavor_text(max(0, attacks_count))
+    dur_str = format_duration_str(duration_sec)
+    announcement_text = (
+        f"{get_partyvan_announcement()}\n\n"
+        f"{flavor}\n\n"
+        f"⏳ <b>Срок ареста в КПЗ:</b> {dur_str}\n"
+        f"<i>(Время сбалансировано с учетом активности цели и частоты вызовов)</i>"
+    )
+    sent_msg = await message.bot.send_message(
+        message.chat.id,
+        announcement_text,
+        reply_to_message_id=message.reply_to_message.message_id,
+        reply_markup=appeal_kb,
+        parse_mode="HTML"
+    )
+    if session_id in active_combat_appeals and sent_msg:
+        active_combat_appeals[session_id].announcement_msg_id = sent_msg.message_id
+
 
 
 
@@ -7352,15 +7533,49 @@ async def cmd_bribe(message: types.Message, board_id: str | None = None, stream:
         await message.answer("🔒 <b>ВЗЯТКА НЕ ПРИНЯТА!</b>\n\n⚖️ На тебя наложен <b>Железный Народный Мут</b> по итогам вотума недоверия. Он не продается за шекели!", parse_mode="HTML")
         return
 
+    now_ts = time.time()
+    now_dt = datetime.now(UTC)
+
+    # 1. Проверяем активные муты в БД
+    async with db.execute(
+        "SELECT board_id, mute_type, reason, expires_at FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL') AND expires_at > ?",
+        (user_id, board_id, now_ts)
+    ) as cursor:
+        active_db_mutes = await cursor.fetchall()
+
     b_data = board_data.get(board_id, {})
-    is_muted = (b_data.get('mutes', {}).get(user_id) and b_data['mutes'][user_id] > datetime.now(UTC)) or \
-               (b_data.get('shadow_mutes', {}).get(user_id) and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+
+    # 2. Проверяем теневые муты (в БД или в RAM)
+    has_shadow_mute = any(m[1] == 'shadow' for m in active_db_mutes) or \
+                      (b_data.get('shadow_mutes', {}).get(user_id) and b_data['shadow_mutes'][user_id] > now_dt) or \
+                      (board_data.get('ALL', {}).get('shadow_mutes', {}).get(user_id) and board_data['ALL']['shadow_mutes'][user_id] > now_dt)
+
+    # 3. Проверяем админские/модераторские муты (в БД)
+    has_admin_mute = False
+    for m in active_db_mutes:
+        r = (m[2] or '').lower()
+        if 'admin' in r or 'мод' in r or 'warn' in r:
+            has_admin_mute = True
+            break
+
+    # Если висит теневой мут или админский мут — взятка КАТЕГОРИЧЕСКИ запрещена!
+    if has_shadow_mute or has_admin_mute:
+        await message.answer(
+            "👮 <b>ОМОН/Администрация взяток не берёт!</b>\n\n"
+            "🔒 Теневые и админские санкции обжалованию за шекели не подлежат.",
+            parse_mode="HTML"
+        )
+        return
+
+    # 4. Проверяем наличие обычного юзерского PvP-мута на ТЕКУЩЕЙ доске
+    has_regular_user_mute = any(m[0] == board_id and m[1] == 'mute' for m in active_db_mutes) or \
+                            (b_data.get('mutes', {}).get(user_id) and b_data['mutes'][user_id] > now_dt)
 
     cost = get_current_item_price('bribe')
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
 
-    if not is_muted and not message.reply_to_message:
+    if not has_regular_user_mute and not message.reply_to_message:
         await message.answer(
             f"📜 <b>ИНДУЛЬГЕНЦИЯ / ВЗЯТКА</b>\n\n"
             f"Стоимость досрочного снятия мута: <b>{cost} ₪</b>.\n"
@@ -7376,20 +7591,19 @@ async def cmd_bribe(message: types.Message, board_id: str | None = None, stream:
 
     await deduct_user_global_balance(db, user_id, board_id, cost)
     async with db_transaction(db):
-        await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+        await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'", (user_id, board_id))
     b_data.get('mutes', {}).pop(user_id, None)
-    b_data.get('shadow_mutes', {}).pop(user_id, None)
     await record_user_transaction(db, user_id, -cost, 'bribe', 'Покупка индульгенции /bribe')
     await add_to_abu_fund(db, cost, donor_id=user_id, reason="Взятка /bribe")
 
-    # Иммунитет жертвы: 2 часа после досрочного освобождения из пативэна
+    # Иммунитет жертвы: 1 час после досрочного освобождения из пативэна
     from shared_state import set_partyvan_victim_immunity
-    set_partyvan_victim_immunity(user_id, int(time.time()) + 7200)
+    set_partyvan_victim_immunity(user_id, int(time.time()) + 3600)
 
     await message.answer(
         f"🕊️ <b>ТЫ НА СВОБОДЕ!</b>\n\n"
         f"📜 Взятка в <b>{cost} ₪</b> передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!\n"
-        f"<i>🛡️ Тебе дан иммунитет от пативэна на 2 часа.</i>",
+        f"<i>🛡️ Тебе дан полный иммунитет от оружия и пативэна на 1 час.</i>",
         parse_mode="HTML"
     )
 
@@ -9244,21 +9458,51 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                     "Этот мут не продается за шекели и не снимается модераторами. Дождись окончания срока!"
                 )
             else:
-                cost = get_current_item_price('bribe')
-                if balance < cost:
-                    answer_text = f"❌ Недостаточно шекелей на взятку! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work."
-                else:
-                    await deduct_user_global_balance(db, user_id, board_id, cost)
-                    async with db_transaction(db):
-                        await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-                    b_data = board_data.get(board_id, {})
-                    b_data.get('mutes', {}).pop(user_id, None)
-                    b_data.get('shadow_mutes', {}).pop(user_id, None)
-                    answer_text = "📜 Взятка передана! Ты досрочно освобожден из мута/КПЗ."
+                now_ts = time.time()
+                now_dt = datetime.now(UTC)
+                b_data = board_data.get(board_id, {})
+
+                # 1. Проверяем активные муты в БД
+                async with db.execute(
+                    "SELECT board_id, mute_type, reason, expires_at FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL') AND expires_at > ?",
+                    (user_id, board_id, now_ts)
+                ) as cursor:
+                    active_db_mutes = await cursor.fetchall()
+
+                # 2. Проверяем теневые муты
+                has_shadow_mute = any(m[1] == 'shadow' for m in active_db_mutes) or \
+                                  (b_data.get('shadow_mutes', {}).get(user_id) and b_data['shadow_mutes'][user_id] > now_dt) or \
+                                  (board_data.get('ALL', {}).get('shadow_mutes', {}).get(user_id) and board_data['ALL']['shadow_mutes'][user_id] > now_dt)
+
+                # 3. Проверяем админские муты
+                has_admin_mute = False
+                for m in active_db_mutes:
+                    r = (m[2] or '').lower()
+                    if 'admin' in r or 'мод' in r or 'warn' in r:
+                        has_admin_mute = True
+                        break
+
+                if has_shadow_mute or has_admin_mute:
+                    answer_text = "👮 ОМОН/Администрация взяток не берёт!"
                     edit_html = (
-                        f"🕊️ <b>ТЫ НА СВОБОДЕ!</b>\n\n"
-                        f"📜 Взятка в {cost} ₪ передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!"
+                        "🔒 <b>ВЗЯТКА НЕ ПРИНЯТА!</b>\n\n"
+                        "👮 <b>ОМОН/Администрация взяток не берёт!</b>\n"
+                        "Теневые и админские санкции обжалованию за шекели не подлежат."
                     )
+                else:
+                    cost = get_current_item_price('bribe')
+                    if balance < cost:
+                        answer_text = f"❌ Недостаточно шекелей на взятку! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work."
+                    else:
+                        await deduct_user_global_balance(db, user_id, board_id, cost)
+                        async with db_transaction(db):
+                            await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'", (user_id, board_id))
+                        b_data.get('mutes', {}).pop(user_id, None)
+                        answer_text = "📜 Взятка передана! Ты досрочно освобожден из мута/КПЗ."
+                        edit_html = (
+                            f"🕊️ <b>ТЫ НА СВОБОДЕ!</b>\n\n"
+                            f"📜 Взятка в {cost} ₪ передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!"
+                        )
 
         elif action == "buy_tinfoil":
             cost = get_current_item_price('tinfoil')
@@ -12367,11 +12611,40 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
                 count += 1
         except Exception as e:
             runtime_logger.error(f"Error during global unban on board {b_id} for user {target_id}: {e}", exc_info=True)
-    await log_global_event('bot', f"🕊️ GUNBAN: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗБАНИЛ {target_id} на {count} досках")
-    if lang == 'en': final = f"✅ User <code>{target_id}</code> unbanned/unmuted on {count} boards."
-    elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板でBAN/ミュート解除しました。"
-    else: final = f"✅ Пользователь <code>{target_id}</code> разбанен/размучен на {count} досках."
+    from common.database import remove_global_mute
+    await remove_global_mute(target_id)
+    await log_global_event('bot', f"🕊️ GUNBAN: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗБАНИЛ {target_id} на {count} досках и снял ALL")
+    if lang == 'en': final = f"✅ User <code>{target_id}</code> unbanned/unmuted on {count} boards and ALL."
+    elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板およびALLでBAN/ミュート解除しました。"
+    else: final = f"✅ Пользователь <code>{target_id}</code> разбанен/размучен на {count} досках и ALL."
     await status_msg.edit_text(final, parse_mode="HTML")
+
+@dp.message(Command("global_unmute", "gunmute"))
+async def cmd_global_unmute(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Админская команда для полного снятия глобального мута (board_id = 'ALL') и мутов со всех досок.
+    """
+    if not board_id or not is_admin(message.from_user.id, board_id): return
+    target_id = None
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
+        except Exception: pass
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if not target_id:
+        await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
+        try: await message.delete()
+        except Exception: pass
+        return
+    try: await message.delete()
+    except Exception: pass
+    from common.database import remove_global_mute
+    await remove_global_mute(target_id)
+    await log_global_event('bot', f"🔊 GUNMUTE: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗМУТИЛ {target_id} со всех досок и ALL")
+    msg = f"🔊 Пользователь <code>{target_id}</code> глобально размучен со всех досок и ALL." if lang == 'ru' else f"🔊 User <code>{target_id}</code> globally unmuted from all boards and ALL."
+    await message.answer(msg, parse_mode="HTML")
+
 async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru') -> str:
     """
     Генерирует глубоко информативную, стильную и аутентичную шапку главного меню ТГАЧА.
@@ -18698,7 +18971,7 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
 
     if is_auto_mute:
         # 24h auto-mute
-        await apply_regular_mute(target_id, board_id, duration_seconds=86400)
+        await apply_regular_mute(target_id, board_id, duration_seconds=86400, reason=f"admin:warn:{user_id}")
         await log_global_event('bot', f"🚨 3/3 WARNS AUTO-MUTE: Мод {user_id} заварнил {target_id} на /{board_id}/ (3/3 -> мут на 24ч)")
 
         resp_text = (
@@ -18834,7 +19107,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
     deleted = await delete_user_posts(message.bot, target_id, 5, board_id)
     async with storage_lock:
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=mute_seconds)
-    await apply_regular_mute(target_id, board_id, mute_seconds)
+    await apply_regular_mute(target_id, board_id, mute_seconds, reason=f"admin:{message.from_user.id}")
     await log_global_event('bot', f"🔇 MUTE: Мод {message.from_user.id} замутил {target_id} на /{board_id}/ на {duration_text}")
     if lang == 'en':
         msg = f"🔇 User <code>{target_id}</code> muted for {duration_text}. Deleted: {deleted}"
@@ -22794,7 +23067,11 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
             unbanned = True
             
     board_name = BOARD_CONFIG[board_id]['name']
-    if unbanned:
+    is_global_request = any(a.lower() in ("all", "global", "all_boards") for a in args) or board_id == 'ALL'
+    if is_global_request:
+        from common.database import remove_global_mute
+        await remove_global_mute(target_id)
+    if unbanned or is_global_request:
         await add_or_activate_user(target_id, board_id) 
         if lang == 'en': msg = f"User {target_id} unbanned on {board_name}."
         elif lang == 'jp': msg = f"ユーザー {target_id} のBANを解除しました ({board_name})。"
@@ -23670,7 +23947,21 @@ async def postcopies_daily_cleanup_loop():
             break
         except Exception as e:
             print(f"⛔ Ошибка в postcopies_daily_cleanup_loop: {e}")
-            await asyncio.sleep(1800)
+async def mutes_cleanup_loop():
+    """
+    Фоновая задача регулярной очистки просроченных мутов из таблицы Mutes (интервал: 10 минут).
+    Гарантирует своевременное удаление просроченных мутов без чрезмерной нагрузки на базу данных.
+    """
+    await asyncio.sleep(60) # Даем боту прогреться перед первым прогоном
+    while True:
+        try:
+            from common.database import clean_expired_mutes
+            await clean_expired_mutes()
+            await asyncio.sleep(600)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            await asyncio.sleep(600)
 
 async def mode_auto_disabler():
     """
@@ -24834,6 +25125,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "tagging_worker": lambda: tagging_loop(),
         "sqlite_wal_checkpoint": lambda: sqlite_wal_checkpoint_task(),
         "postcopies_daily_cleanup": lambda: postcopies_daily_cleanup_loop(),
+        "mutes_cleanup_worker": lambda: mutes_cleanup_loop(),
         "drop_expiry_cleaner": lambda: drop_expiry_loop(),
         "wealth_tax_daily": lambda: wealth_tax_daily_loop(bots),
         "weekly_airdrop": lambda: weekly_airdrop_loop(bots) if callable(weekly_airdrop_loop) else asyncio.sleep(0),
@@ -26553,155 +26845,17 @@ async def main():
                 print("⚠️ Lock-файл нечитаемый при shutdown; не удаляю чужой возможный live-lock.")
 
 async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
-    try:
-        from site_tgach.persona_bot import generate_anon_reply, is_valid_for_persona
-
-        if target_post_num and target_post_num in _persona_processed_posts:
-            print(f"ℹ️ [Persona Debounce] Reply for post #{target_post_num} already processed, skipping duplicate trigger.")
-            return
-        if target_post_num:
-            _persona_processed_posts.add(target_post_num)
-            if len(_persona_processed_posts) > 3000:
-                _persona_processed_posts.clear()
-
-        now_ts = time.time()
-
-        attach_file_id = None
-        attach_media_type = None
-
-        if not photo_file_id and target_post_num and target_post_num in messages_storage:
-            p_data = messages_storage[target_post_num]
-            c = p_data.get('content', {})
-            m_type = c.get('type')
-            if m_type == 'image': m_type = 'photo'
-            if m_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
-                photo_file_id = c.get('thumbnail_file_id') or c.get('file_id')
-                attach_file_id = c.get('file_id')
-                attach_media_type = m_type
-            elif m_type == 'media_group' and c.get('media'):
-                for m in c.get('media', []):
-                    if m.get('file_id'):
-                        photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
-                        attach_file_id = m.get('file_id')
-                        sub_type = m.get('type') or 'photo'
-                        attach_media_type = 'photo' if sub_type == 'image' else sub_type
-                        break
-            # Если в самом посте нет картинки, проверим родительский пост, на который отвечают
-            if not photo_file_id:
-                reply_to_num = p_data.get('reply_to_post_num') or p_data.get('reply_to')
-                if reply_to_num and reply_to_num in messages_storage:
-                    parent_c = messages_storage[reply_to_num].get('content', {})
-                    pm_type = parent_c.get('type')
-                    if pm_type == 'image': pm_type = 'photo'
-                    if pm_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
-                        photo_file_id = parent_c.get('thumbnail_file_id') or parent_c.get('file_id')
-                        attach_file_id = parent_c.get('file_id')
-                        attach_media_type = pm_type
-                    elif pm_type == 'media_group' and parent_c.get('media'):
-                        for m in parent_c.get('media', []):
-                            if m.get('file_id'):
-                                photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
-                                attach_file_id = m.get('file_id')
-                                sub_type = m.get('type') or 'photo'
-                                attach_media_type = 'photo' if sub_type == 'image' else sub_type
-                                break
-
-        vision_desc = None
-        if photo_file_id and not (context_text and "[ИЗОБРАЖЕНИЕ:" in context_text):
-            vision_desc = await analyze_telegram_photo(bot, photo_file_id, caption=context_text)
-            if vision_desc:
-                img_tag = f"\n[ИЗОБРАЖЕНИЕ: {vision_desc}]"
-                context_text = (context_text or "") + img_tag
-
-        if not is_admin_trigger and not is_valid_for_persona(context_text):
-            return
-            
-        await asyncio.sleep(random.uniform(12.0, 35.0) if not is_admin_trigger else 0)
-        
-        print(f"🤖 [Persona] Requesting reply generation for post {target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
-        
-        # Строим общую атмосферу доски (25 последних постов)
-        atmosphere_context = await build_board_atmosphere_context(board_id, exclude_post_num=target_post_num, limit=25)
-        
-        # Строим контекст всей цепочки ответов (до 25 уровней)
-        chain_context = await build_reply_chain_context(target_post_num, max_depth=25)
-        if not chain_context:
-            chain_context = context_text
-        elif photo_file_id and vision_desc and "[ИЗОБРАЖЕНИЕ:" not in chain_context:
-            chain_context += f"\n[ИЗОБРАЖЕНИЕ: {vision_desc}]"
-
-        replies = await generate_anon_reply(
-            context_text=chain_context,
-            target_post=context_text,
-            is_dialogue=is_dialogue,
-            atmosphere_text=atmosphere_context
-        )
-        
-        # Гарантия от "замалчивания": если юзер вел диалог с ботом, но генератор сбросился — даем аноновский фаллбэк-ответ
-        if not replies and is_dialogue:
-            print(f"⚠️ [Persona] Dialogue fallback for post {target_post_num} (preventing silence).")
-            fallback_options = [
-                "Понял тебя, анон.",
-                "Ладно, проехали.",
-                "Хз даже чё сказать на это, анон.",
-                "Ну допустим.",
-                "Ладно, забей.",
-                "Останемся при своих, анон."
-            ]
-            replies = [random.choice(fallback_options)]
-
-        if not replies:
-            print(f"⚠️ [Persona] Generation failed or returned empty for post {target_post_num}.")
-            return
-            
-        print(f"✅ [Persona] Successfully generated {len(replies)} replies for post {target_post_num}.")
-            
-        for i, text in enumerate(replies):
-            now_dt = datetime.now(UTC)
-            # Прикрепляем картинку только в 30% случаев чтобы не спамить медиа
-            attach_media = attach_file_id and attach_media_type in {'photo', 'video', 'animation', 'gif'} and i == 0 and random.random() < 0.30
-            content = {
-                'type': attach_media_type if attach_media else 'text',
-                'is_system_message': True,
-                'archive_allowed': True
-            }
-            if attach_media:
-                content['caption'] = text
-                content['file_id'] = attach_file_id
-            else:
-                content['text'] = text
-                
-            pnum = await create_post(
-                board_id=board_id,
-                author_id=0,
-                content=content,
-                timestamp=now_dt.timestamp(),
-                is_from_site=False, stream=stream,
-                reply_to=target_post_num if target_post_num else None
-            )
-            if pnum:
-                header = await format_header(board_id, pnum, 0)
-                content['header'] = f"### АНОН ###\n{header}" if stream == 'ru' else f"### ANON ###\n{header}"
-                await update_post_content(pnum, content)
-                async with storage_lock:
-                    messages_storage[pnum] = {
-                        'author_id': 0, 'timestamp': now_dt, 
-                        'content': content, 'board_id': board_id,
-                        'reply_to_post_num': target_post_num if target_post_num else None
-                    }
-                await process_new_post(NewPostParams(
-                    bot_instance=bot,
-                    board_id=board_id,
-                    user_id=0,
-                    content=content,
-                    reply_to_post=target_post_num if target_post_num else None,
-                    is_shadow_muted=False,
-                    stream=stream
-                ))
-            if len(replies) > 1:
-                await asyncio.sleep(random.uniform(1.0, 3.0))
-    except Exception as e:
-        print(f"Error in schedule_persona_reply: {e}")
+    import ai_manager
+    return await ai_manager.schedule_persona_reply(
+        bot=bot,
+        board_id=board_id,
+        target_post_num=target_post_num,
+        context_text=context_text,
+        stream=stream,
+        is_admin_trigger=is_admin_trigger,
+        photo_file_id=photo_file_id,
+        is_dialogue=is_dialogue
+    )
 
 async def check_and_send_contextual_reply(bot: Bot, user_id: int, text: str, board_id: str, stream: str = 'ru'):
     """

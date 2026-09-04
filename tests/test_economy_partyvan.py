@@ -45,29 +45,15 @@ import main
 
 SNITCH = 5001
 TARGET = 5002
-TWELVE_HOURS = 12 * 3600
+SIX_HOURS = 21600
 
 
 @contextlib.asynccontextmanager
 async def isolated_board():
-    """Свежая запись board_data[BOARD] и свежий storage_lock на время теста.
-
-    Менеджер асинхронный не потому, что внутри есть await, а чтобы его можно
-    было ставить в один `async with` рядом с live_economy(): смешивать в одном
-    операторе синхронный и асинхронный менеджеры Python не разрешает.
-
-    board_data - defaultdict в main, общий на весь прогон pytest. Вернуть на
-    место тот же объект недостаточно: мутация словаря 'mutes' уже внутри него.
-    Поэтому подставляется НОВАЯ запись, созданная тем же default_factory
-    (полный набор ключей, как в проде), а на выходе исходная возвращается либо
-    удаляется, если её не было.
-
-    storage_lock подменяется по той же причине, что db_lock в economy_live:
-    asyncio.Lock привязывается к циклу, в котором его впервые ЖДУТ, а
-    IsolatedAsyncioTestCase даёт каждому тесту свой цикл. Это страховка от
-    состояния, оставленного другим тестовым файлом, а не обход дефекта бота -
-    незанятый замок берётся быстрым путём, вообще не обращаясь к циклу.
-    """
+    import shared_state
+    import combat_moderation_engine as cme
+    shared_state.reset_combat_state()
+    cme.reset_combat_moderation_state()
     fresh = main.board_data.default_factory()
     existed = BOARD in main.board_data
     saved = main.board_data.get(BOARD)
@@ -78,6 +64,8 @@ async def isolated_board():
         yield fresh
     finally:
         lock_patch.stop()
+        shared_state.reset_combat_state()
+        cme.reset_combat_moderation_state()
         if existed:
             main.board_data[BOARD] = saved
         else:
@@ -155,7 +143,7 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
         async with live_economy() as live, isolated_board() as board:
             existing = datetime.now(UTC) + timedelta(hours=12)
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 100.0, {})
+            await live.seed_user(TARGET, 100.0, {}, posts_count=300)
             live.aim_at(TARGET)
             board["mutes"][TARGET] = existing
             msg = live.message(SNITCH)
@@ -169,14 +157,14 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
             msg.bot.send_message.assert_not_awaited()
 
     async def test_short_mute_does_not_block_the_partyvan(self):
-        """Порог идемпотентности - 11 часов, а не «есть хоть какой-то мут».
+        """Порог идемпотентности - 3 часа, а не «есть хоть какой-то мут».
 
-        Сидящего час пативэн всё равно забирает и срок поднимается до 12 часов.
+        Сидящего 2 часа пативэн всё равно забирает и срок поднимается до 6 часов.
         """
         async with live_economy() as live, isolated_board() as board:
-            short = datetime.now(UTC) + timedelta(hours=1)
+            short = datetime.now(UTC) + timedelta(hours=2)
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 100.0, {})
+            await live.seed_user(TARGET, 100.0, {}, posts_count=300)
             live.aim_at(TARGET)
             board["mutes"][TARGET] = short
             msg = live.message(SNITCH)
@@ -188,28 +176,28 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(await mute_rows(live, TARGET)), 1)
 
     async def test_mute_just_under_the_threshold_still_fires(self):
-        """10 ч 50 мин < 11 ч - вызов проходит.
+        """2 ч 50 мин < 3 ч - вызов проходит.
 
         Взято с запасом от границы: сравнение в обработчике идёт с его
         собственным datetime.now(UTC), который на микросекунды позже нашего.
         """
         async with live_economy() as live, isolated_board() as board:
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 100.0, {})
+            await live.seed_user(TARGET, 100.0, {}, posts_count=300)
             live.aim_at(TARGET)
-            board["mutes"][TARGET] = datetime.now(UTC) + timedelta(hours=10, minutes=50)
+            board["mutes"][TARGET] = datetime.now(UTC) + timedelta(hours=2, minutes=50)
             await live_handler("partyvan")(live.message(SNITCH), BOARD)
 
             self.assertFalse((await live.items_of(SNITCH))["partyvan_gun"])
             self.assertEqual(len(await mute_rows(live, TARGET)), 1)
 
     async def test_mute_just_over_the_threshold_is_refused(self):
-        """11 ч 10 мин > 11 ч - вызов отклонён, рация остаётся."""
+        """3 ч 10 мин > 3 ч - вызов отклонён, рация остаётся."""
         async with live_economy() as live, isolated_board() as board:
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 100.0, {})
+            await live.seed_user(TARGET, 100.0, {}, posts_count=300)
             live.aim_at(TARGET)
-            board["mutes"][TARGET] = datetime.now(UTC) + timedelta(hours=11, minutes=10)
+            board["mutes"][TARGET] = datetime.now(UTC) + timedelta(hours=3, minutes=10)
             msg = live.message(SNITCH)
             await live_handler("partyvan")(msg, BOARD)
 
@@ -220,7 +208,7 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
     async def test_successful_call_writes_memory_and_db_consistently(self):
         async with live_economy() as live, isolated_board() as board:
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 100.0, {})
+            await live.seed_user(TARGET, 100.0, {}, posts_count=300)
             live.aim_at(TARGET)
             msg = live.message(SNITCH)
             before = time.time()
@@ -232,10 +220,10 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
             # Рация израсходована.
             self.assertFalse((await live.items_of(SNITCH))["partyvan_gun"])
 
-            # Память: 12 часов от «сейчас».
+            # Память: 6 часов от «сейчас».
             memory_expires = board["mutes"][TARGET].timestamp()
-            self.assertLessEqual(before + TWELVE_HOURS, memory_expires)
-            self.assertLessEqual(memory_expires, before + TWELVE_HOURS + 5)
+            self.assertLessEqual(before + SIX_HOURS, memory_expires)
+            self.assertLessEqual(memory_expires, before + SIX_HOURS + 10)
 
             # БД: ровно одна строка обычного мута с тем же сроком. Разъезд этих
             # двух значений виден только после рестарта, когда board_data
@@ -256,12 +244,12 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
         """Повторный вызов по той же цели отклоняется, дублей в Mutes нет.
 
         Проверяется сквозь состояние, оставленное первым вызовом, а не
-        подготовленное руками: после первого пативэна цель уже сидит 12 часов,
+        подготовленное руками: после первого пативэна цель уже сидит 6 часов,
         значит второй обязан упереться в идемпотентность.
         """
         async with live_economy() as live, isolated_board() as board:
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 100.0, {})
+            await live.seed_user(TARGET, 100.0, {}, posts_count=300)
             live.aim_at(TARGET)
             partyvan = live_handler("partyvan")
             await partyvan(live.message(SNITCH), BOARD)
@@ -280,7 +268,7 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
     async def test_partyvan_does_not_move_money(self):
         async with live_economy() as live, isolated_board():
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
-            await live.seed_user(TARGET, 200.0, {})
+            await live.seed_user(TARGET, 200.0, {}, posts_count=300)
             live.aim_at(TARGET)
             await live_handler("partyvan")(live.message(SNITCH), BOARD)
 
@@ -292,7 +280,7 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
         async with live_economy() as live, isolated_board():
             await live.seed_user(
                 SNITCH, 100.0, {"partyvan_gun": True, "knife_gun": True})
-            await live.seed_user(TARGET, 200.0, {"tinfoil_hat": 0})
+            await live.seed_user(TARGET, 200.0, {"tinfoil_hat": 0}, posts_count=300)
             live.aim_at(TARGET)
             await live_handler("partyvan")(live.message(SNITCH), BOARD)
 

@@ -1517,6 +1517,26 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
     finally:
         _release_media_group_timer(media_group_key)
 
+async def _roast_album_tracks_in_batches(bot, audio_msgs, board_id, stream, post_num):
+    """
+    Батчинг треков медиагруппы: объединяет до 5 треков за один мультимодальный вызов Gemini API.
+    Если пришло больше 5 треков (например 10), разбивает на чанки по 5 файлов плюс остаток,
+    каждый чанк отправляется отдельным сообщением с интервалом между пачками.
+    """
+    if not audio_msgs:
+        return
+    from ai_manager import handle_music_roast_batch
+    CHUNK_SIZE = 5
+    chunks = [audio_msgs[i:i + CHUNK_SIZE] for i in range(0, len(audio_msgs), CHUNK_SIZE)]
+    for idx, chunk in enumerate(chunks):
+        try:
+            await handle_music_roast_batch(bot, chunk, board_id=board_id, stream=stream, post_num=post_num)
+        except Exception as e:
+            logger.warning(f"⚠️ [Music Roast Batch] Ошибка роаста пачки треков из альбома: {e}")
+        if idx < len(chunks) - 1:
+            await asyncio.sleep(2.0)
+
+
 async def _roast_album_tracks_sequentially(bot, audio_msgs, board_id, stream, post_num):
     from ai_manager import handle_music_roast
     for msg in audio_msgs:
@@ -1642,7 +1662,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         ]
         is_user_bot = (user_id <= 0) or any(getattr(getattr(m, 'from_user', None), 'is_bot', False) is True for m in raw_msgs)
         if audio_msgs and not is_user_bot and board_id != 'trash':
-            spawn_task(_roast_album_tracks_sequentially(bot_instance, audio_msgs, board_id, stream, first_post_num))
+            spawn_task(_roast_album_tracks_in_batches(bot_instance, audio_msgs, board_id, stream, first_post_num))
 
         first_photo_id = None
         for m in all_media:

@@ -1275,7 +1275,9 @@ async def tagging_loop():
                 should_deep_check = False
 
                 # Проверка исключительно по ключевым словам в тегах и описании с контролем границ слов
-                if save_success and tags and "error" not in tags:
+                # Telegram-стикеры и аудио не подлежат Deep Check веб-модератора
+                is_excluded_media = file_type in ("sticker", "audio", "voice") or str(file_id).startswith("CAAC") or str(file_id).startswith("sticker_")
+                if not is_excluded_media and save_success and tags and "error" not in tags:
                     full_text = f"{tags} {description or ''}".lower()
                     # Исключаем ложные срабатывания (например, вейп charon_baby)
                     cleaned_text = re.sub(r'\bcharon[_\s]*baby\b', '', full_text)

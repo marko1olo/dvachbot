@@ -147,12 +147,12 @@ class LiveEconomy:
         self.db = db
 
     async def seed_user(self, user_id: int, balance: float = 0.0,
-                        items: dict | None = None) -> None:
+                        items: dict | None = None, posts_count: int = 100) -> None:
         await self.db.execute(
-            "INSERT INTO Users (user_id, board_id, balance, active_items) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT(user_id, board_id) DO UPDATE SET "
-            "balance = excluded.balance, active_items = excluded.active_items",
-            (user_id, BOARD, balance, json.dumps(items or {})))
+            "INSERT INTO Users (user_id, board_id, balance, active_items, posts_count) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, board_id) DO UPDATE SET "
+            "balance = excluded.balance, active_items = excluded.active_items, posts_count = excluded.posts_count",
+            (user_id, BOARD, balance, json.dumps(items or {}), posts_count))
         await self.db.commit()
 
     async def balance_of(self, user_id: int) -> float:

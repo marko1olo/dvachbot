@@ -136,14 +136,14 @@ class TestCyberchadDirectReplyRoasts:
     @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
     @patch("common.bot_helpers.process_new_post", new_callable=AsyncMock)
-    @patch("ai_manager.build_reply_chain_context", new_callable=AsyncMock)
+    @patch("ai_manager.build_cyberchad_context", new_callable=AsyncMock)
     async def test_direct_reply_triggers_personalized_voice_roast_ignoring_spontaneous_cooldown(
-        self, mock_build_chain, mock_process_post, mock_summarize, mock_synth_meta
+        self, mock_build_ctx, mock_process_post, mock_summarize, mock_synth_meta
     ):
         mock_bot = AsyncMock()
-        mock_summarize.return_value = "Слышь ты, сопляк, пошел вон из треда."
+        mock_summarize.return_value = '{"reply": true, "text": "Слышь ты, сопляк, пошел вон из треда."}'
         mock_synth_meta.return_value = (b"MOCK_DIRECT_ROAST_VOICE", CYBERCHAD_PRESETS["infernal"])
-        mock_build_chain.return_value = ">>500 [Киберчед]: Трек — говно.\n>>505 [Анон 123]: Сам ты говно!"
+        mock_build_ctx.return_value = "=== [БЛОК 1: ЦЕЛЕВОЕ СООБЩЕНИЕ] ===\nТы кого клоуном назвал"
 
         now = 1000000.0
 
@@ -178,8 +178,8 @@ class TestCyberchadDirectReplyRoasts:
         # Spontaneous cooldown was not updated by direct roast
         assert _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION["b"] == now
 
-        # Verify ancestral context was built
-        mock_build_chain.assert_called_once_with(500, max_depth=10)
+        # Verify rich context was built
+        mock_build_ctx.assert_called_once()
 
         # Verify LLM was invoked with direct roast prompt and context
         mock_summarize.assert_called_once()

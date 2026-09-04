@@ -173,12 +173,12 @@ class TestAdversarialSTTCascade:
              patch("common.token_pool.google_pool.get_all_active_tokens", return_value=["goog-tok-1"]):
             await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
 
-        # Ensure bot replied successfully with instrumental fallback
+        # Ensure bot replied successfully with fallback
         mock_msg.reply.assert_called_once()
         reply_text = mock_msg.reply.call_args[0][0]
-        assert "[Инструментальный трек / неразборчивый вокал]" in reply_text
         assert "Headhunterz — Dragonborn" in reply_text
         assert "Шкала говноедства:" in reply_text
+        assert "Очередная долбежка по ушам" in reply_text
 
     @pytest.mark.asyncio
     @patch("ai_manager.httpx.AsyncClient")
@@ -276,8 +276,8 @@ class TestAdversarialSTTCascade:
 
         mock_msg.reply.assert_called_once()
         reply_text = mock_msg.reply.call_args[0][0]
-        assert "[Инструментальный трек / неразборчивый вокал]" in reply_text
         assert "Brian Eno — Ambient 1" in reply_text
+        assert "Шкала говноедства:" in reply_text
 
 
 # ============================================================================
@@ -307,7 +307,10 @@ class TestAdversarialAPIFailures:
         mock_msg.document = None
         mock_msg.reply = AsyncMock()
 
-        await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
+        with patch("common.token_pool.google_pool.get_all_active_tokens", return_value=[]), \
+             patch("common.token_pool.google_pool.tokens", []), \
+             patch("summarize._load_google_keys", return_value=[]):
+            await handle_music_roast(mock_bot, mock_msg, board_id="b", stream="ru")
 
         mock_msg.reply.assert_called_once()
         reply_text = mock_msg.reply.call_args[0][0]

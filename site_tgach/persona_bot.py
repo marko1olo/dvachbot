@@ -99,48 +99,52 @@ def is_valid_for_persona(post_text: str) -> bool:
     return True
 
 async def generate_anon_reply(context_text: str, target_post: str, is_dialogue: bool = False, atmosphere_text: str = "") -> list[str] | None:
+    """
+    Генератор ответов Киберчеда (замена старой текстовой Персоны).
+    Поддерживает JSON Schema и механизм отказа от ответа (reply: false).
+    """
     try:
-        # Prevent token limit crashes (allow up to 10k chars for 25 messages)
-        context_text = (context_text[:10000] + "...") if len(context_text) > 10000 else context_text
-        atmosphere_text = (atmosphere_text[:10000] + "...") if len(atmosphere_text) > 10000 else atmosphere_text
-        target_post = (target_post[:2000] + "...") if len(target_post) > 2000 else target_post
-        
-        prompt = get_random_persona_prompt(is_dialogue=is_dialogue)
-        
+        from ai_manager import CYBERCHAD_SYSTEM_JSON_PROMPT, parse_cyberchad_response
+
+        # Ограничение длины входящих дампов
+        context_text = (context_text[:15000] + "...") if len(context_text) > 15000 else context_text
+        atmosphere_text = (atmosphere_text[:15000] + "...") if len(atmosphere_text) > 15000 else atmosphere_text
+        target_post = (target_post[:3000] + "...") if len(target_post) > 3000 else target_post
+
         full_text = ""
         if atmosphere_text:
-            full_text += f"=== ОБЩАЯ АТМОСФЕРА ЧАТА / ДРУГИЕ ТЕМЫ ===\n{atmosphere_text}\n\n"
-            
-        full_text += f"=== КОНТЕКСТ ДИАЛОГА ===\n{context_text}\n\n=== СООБЩЕНИЕ ДЛЯ ОТВЕТА ===\n{target_post}\n\nТВОЙ ОТВЕТ (только текст реплики):"
+            full_text += f"=== АТМОСФЕРА ЧАТА / ДРУГИЕ СООБЩЕНИЯ ===\n{atmosphere_text}\n\n"
 
-        print(f"🤖 [Persona] Generating reply for: '{target_post[:60]}...' (is_dialogue={is_dialogue})", flush=True)
-        reply = await summarize_text_with_hf(
-            prompt=prompt,
+        full_text += f"=== КОНТЕКСТ ДИАЛОГА ===\n{context_text}\n\n=== ЦЕЛЕВОЙ ПОСТ ДЛЯ ОТВЕТА ===\n{target_post}\n\nТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON):"
+
+        print(f"🤖 [Cyberchad Engine] Generating reply for: '{target_post[:60]}...' (is_dialogue={is_dialogue})", flush=True)
+        raw_reply = await summarize_text_with_hf(
+            prompt=CYBERCHAD_SYSTEM_JSON_PROMPT,
             text_dump=full_text,
             model_preference="persona"
         )
-        if not reply or "Нейронка" in reply:
-            print("⚠️ [Persona] Gemini Flash Lite failed, trying Llama 70B fallback...", flush=True)
-            reply = await summarize_text_with_hf(
-                prompt=prompt,
-                text_dump=full_text,
-                model_preference="llama"
-            )
-            
-        print(f"📝 [Persona] Raw reply from LLM: '{reply}'", flush=True)
-        if not reply or len(reply) > 400 or "Нейронка" in reply:
-            print(f"❌ [Persona] Reply discarded by validation (len={len(reply) if reply else 0})", flush=True)
+
+        if not raw_reply:
             return None
-        
+
+        parsed = parse_cyberchad_response(raw_reply)
+        if not parsed.get("reply", True):
+            print(f"ℹ️ [Cyberchad Engine] Отказ от ответа (reply=False): {parsed.get('reason_if_skipped', 'не указана')}", flush=True)
+            return None
+
+        reply = parsed.get("text", "").strip()
+        if not reply or len(reply) < 3:
+            return None
+
         reply = re.sub(r"<[^>]*>", "", reply)
         reply = re.sub(r"#\d{3,6}", "", reply)
         reply = reply.replace('\n', ' ').strip()
-        
+
         if "|||" in reply:
             parts = [p.strip() for p in reply.split("|||") if p.strip()]
             return parts[:3] if parts else None
         else:
             return [reply] if reply else None
     except Exception as e:
-        print(f"❌ [Persona] Critical generation error: {e}", flush=True)
+        print(f"❌ [Cyberchad Engine] Critical generation error: {e}", flush=True)
         return None

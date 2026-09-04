@@ -26,7 +26,7 @@ AI_CONFIG = {
     "provider": "groq",
     "api_key": None, 
     "base_url": "https://api.groq.com/openai/v1",
-    "model": "llama-3.3-70b-versatile", 
+    "model": "qwen/qwen3.8-27b", 
     "temperature": 0.9,
 }
 
@@ -584,7 +584,7 @@ class NeuroManager:
             messages=messages,
             max_tokens=500,
             temperature=0.1,
-            model="qwen/qwen3.6-27b" 
+            model="qwen/qwen3.8-27b" 
         )
         
         if result: return result
@@ -613,7 +613,7 @@ class NeuroManager:
             messages=messages,
             max_tokens=300, 
             temperature=0.3,
-            model="qwen/qwen3.6-27b" 
+            model="qwen/qwen3.8-27b" 
         )
         
         if result:

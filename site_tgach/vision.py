@@ -213,7 +213,7 @@ async def _call_gemini_native(
 # Per-provider timestamps moved to module-level dict above
 
 async def describe_image(file_paths, caption: str = None, is_passive: bool = False, source: str = "SITE") -> str:
-    """Анализирует изображение(я) через каскад Vision (Gemini 3.1 -> Gemini 2.5 -> Gemini 3.5 -> Qwen 3.6)."""
+    """Анализирует изображение(я) через каскад Vision (Gemini 3.1 -> Gemini 2.5 -> Gemini 3.5 -> Qwen 3.8 -> Qwen 3.6)."""
 
 
     if isinstance(file_paths, str):
@@ -255,13 +255,14 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"}}\n"
                 f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
-            # Vision cascade: reliable Gemini Flash models with Groq Vision fallback
+            # Vision cascade: modern Gemini Flash models with Groq Qwen Vision fallback
             models_cascade = [
                 ("gemini-3.1-flash-lite", "gemini"),
                 ("gemini-2.5-flash", "gemini"),
                 ("gemini-3.5-flash-lite", "gemini"),
+                ("gemini-3.8-flash", "gemini"),
+                ("qwen/qwen3.8-27b", "groq"),
                 ("qwen/qwen3.6-27b", "groq"),
-                ("llama-3.2-11b-vision-preview", "groq"),
             ]
             
             skip_gemini_models = False

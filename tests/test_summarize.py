@@ -37,7 +37,7 @@ async def test_summarize_success_removes_think_tags(
 
     assert result == "Actual Summary."
     mock_client.chat.completions.create.assert_called_once()
-    assert mock_client.chat.completions.create.call_args[1]["model"] == "qwen/qwen3.6-27b"
+    assert mock_client.chat.completions.create.call_args[1]["model"] == "qwen/qwen3.8-27b"
 
 
 @pytest.mark.asyncio

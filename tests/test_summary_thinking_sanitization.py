@@ -139,6 +139,7 @@ class TestModelCascadeValidity:
         "gemini-3.1-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "qwen/qwen3.8-27b",
         "qwen/qwen3.6-27b",
     }
 
@@ -165,7 +166,7 @@ class TestModelCascadeValidity:
     @patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key-01"])
     @patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key-01"])
     async def test_qwen_preference_queries_qwen_first(self, mock_google, mock_groq, mock_openai_cls):
-        """model_preference='qwen' routes to qwen/qwen3.6-27b first."""
+        """model_preference='qwen' routes to qwen/qwen3.8-27b first."""
         mock_client = AsyncMock()
         mock_openai_cls.return_value = mock_client
         mock_completion = MagicMock()
@@ -176,14 +177,14 @@ class TestModelCascadeValidity:
 
         assert res == "Qwen Response"
         call_model = mock_client.chat.completions.create.call_args[1]["model"]
-        assert call_model == "qwen/qwen3.6-27b"
+        assert call_model == "qwen/qwen3.8-27b"
 
     @pytest.mark.asyncio
     @patch("summarize.AsyncOpenAI")
     @patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key-01"])
     @patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key-01"])
     async def test_llama_preference_routes_to_groq_first(self, mock_google, mock_groq, mock_openai_cls):
-        """model_preference='llama' routes to qwen/qwen3.6-27b on Groq first."""
+        """model_preference='llama' routes to qwen/qwen3.8-27b on Groq first."""
         mock_client = AsyncMock()
         mock_openai_cls.return_value = mock_client
         mock_completion = MagicMock()
@@ -194,7 +195,7 @@ class TestModelCascadeValidity:
 
         assert res == "Groq Response"
         call_model = mock_client.chat.completions.create.call_args[1]["model"]
-        assert call_model == "qwen/qwen3.6-27b"
+        assert call_model == "qwen/qwen3.8-27b"
 
     @pytest.mark.asyncio
     @patch("summarize.AsyncOpenAI")

@@ -277,7 +277,7 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
             
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         data = {
-            "model": "qwen/qwen3.6-27b",
+            "model": "qwen/qwen3.8-27b",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 200,
             "temperature": 0.8
@@ -352,10 +352,10 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
         return
         
     db = await get_pool()
-    async with db.execute("SELECT posts_count, grief_protection FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
+    async with db.execute("SELECT posts_count FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
         target_row = await cursor.fetchone()
-        if target_row and (target_row[0] < 5 or target_row[1]):
-            await message.reply("⛔ Цель защищена от гриферства для новичков.", parse_mode="HTML")
+        if target_row and target_row[0] is not None and target_row[0] < 50:
+            await message.reply("🔰 <b>ИММУНИТЕТ НОВИЧКА!</b>\nЦель защищена от доносов ОМОНа (менее 50 постов на борде). Дай человеку освоиться!", parse_mode="HTML")
             return
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()

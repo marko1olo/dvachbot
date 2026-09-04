@@ -371,6 +371,9 @@ def reset_combat_state():
     _VICTIM_ROB_COOLDOWNS.clear()
     _ATTACKER_TARGET_HISTORY.clear()
     _ATTACKER_ABUSE_WARNINGS.clear()
+    _USER_PARTYVAN_COOLDOWNS.clear()
+    _BOARD_PARTYVAN_COOLDOWNS.clear()
+    _VICTIM_PARTYVAN_IMMUNITY.clear()
 
 
 def _media_group_state_key(chat_id: int, media_group_id: str) -> str:

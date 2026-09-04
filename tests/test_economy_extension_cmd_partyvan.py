@@ -17,7 +17,7 @@ class DummyLock:
 class TestEconomyExtensionPartyvan(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.db = await aiosqlite.connect(":memory:")
-        await self.db.execute("CREATE TABLE Users (user_id INTEGER, board_id TEXT, active_items TEXT, balance INTEGER)")
+        await self.db.execute("CREATE TABLE Users (user_id INTEGER, board_id TEXT, active_items TEXT, balance INTEGER, posts_count INTEGER DEFAULT 100)")
         await self.db.commit()
 
         patcher = patch('economy_extension.get_pool', return_value=self.db)

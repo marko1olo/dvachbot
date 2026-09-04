@@ -39,7 +39,7 @@ logger = logging.getLogger("neuro_mod")
 # === НАСТРОЙКИ ===
 PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
 # Groq Models for DeepCheck (MUST BE VISION MODELS!)
-GROQ_MODELS = ["qwen/qwen3.6-27b"]
+GROQ_MODELS = ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]
 GROQ_MODEL = GROQ_MODELS[0]
 GROQ_TIMEOUT = 45.0
 
@@ -144,11 +144,8 @@ async def _safe_groq_json(messages, max_tokens=1024):
                                 f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
                             )
                             if resp.status_code == 400 and "refusal" in resp.text.lower():
-                                return {
-                                    "visual_style": "photorealistic",
-                                    "subject_age_visual": "child",
-                                    "safety_flags": ["REFUSAL_HARD_CSAM"],
-                                }
+                                logger.warning(f"DeepCheck API refusal for {file_id}, skipping without false positive penalty.")
+                                return None
                             break
                 except Exception as e:
                     err_str = str(e).lower()
@@ -173,7 +170,7 @@ async def _safe_groq_json(messages, max_tokens=1024):
     gemini_keys = google_pool.get_all_active_tokens()
     if gemini_keys:
         for g_key in gemini_keys:
-            for g_model in ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+            for g_model in ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.5-flash"]:
                 try:
                     transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
                     async with httpx.AsyncClient(timeout=GROQ_TIMEOUT, transport=transport, verify=False) as client:
@@ -232,6 +229,11 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
     import base64
     import time
 
+    # Telegram stickers and animated media are not subject to deep check
+    if not file_id or file_id.startswith("CAAC") or file_id.startswith("sticker_"):
+        logger.info(f"⏩ [DeepCheck] Skipping sticker media: {file_id[:16]}")
+        return
+
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
 
     try:
@@ -268,10 +270,10 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
     description = check_res.get("description", "No description provided.")
 
     # === КРИТЕРИЙ КРИТИЧЕСКОГО НАРУШЕНИЯ (ЦП) ===
-    # Мы баним только за фотореалистичное ЦП или если нейронка выдала жесткий отказ по безопасности.
+    # Баним только при явном подтверждении NSFW + фотореалистичный ребенок
     is_hard_violation = (
-        visual_style == "photorealistic" and age in ["child", "toddler", "infant"]
-    ) or ("REFUSAL_HARD_CSAM" in flags)
+        is_nsfw is True and visual_style == "photorealistic" and age in ["child", "toddler", "infant"]
+    )
 
     if is_hard_violation:
         logger.critical(f"🔞 !!! CSAM/HARD VIOLATION DETECTED !!! File: {file_id}")
@@ -297,33 +299,33 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                     "ip"
                 )  # Берем IP из записи поста (если реализовано в схеме)
 
-                # Бан по ID (слепку) на 100 лет (3.15 млрд секунд)
+                # Шедоубан по ID на 1 день (86400 секунд) + теневое скрытие поста
                 if uid and uid not in banned_authors:
-                    forever = time.time() + 3153600000
-                    await update_shadow_mute(uid, "ALL", forever)
+                    one_day = time.time() + 86400
+                    await update_shadow_mute(uid, "ALL", one_day)
                     banned_authors.add(uid)
 
-                    # Бан по IP адресу (локально, пакетно обновим в БД ниже)
+                    # Бан по IP адресу на 1 день
                     if ip_addr:
-                        IP_BAN_LIST[ip_addr] = forever
+                        IP_BAN_LIST[ip_addr] = one_day
                         banned_ips.add(ip_addr)
-                        logger.warning(f"🔨 IP BANNED PERMANENTLY: {ip_addr}")
+                        logger.warning(f"🔨 IP SHADOWMUTED FOR 1 DAY: {ip_addr}")
 
                     # Логируем событие в БД
-                    log_msg = f"☢️ NEURO-NUKE: User {uid} (IP: {ip_addr or 'unknown'}) banned FOREVER for CSAM attempt on post #{pid}"
-                    spawn_task(log_global_event("bot", log_msg))
+                    log_msg = f"🛡️ SITE NEURO-MOD: User {uid} (IP: {ip_addr or 'unknown'}) shadowmuted for 24h, post #{pid} hidden (Shadow Wipe)"
+                    spawn_task(log_global_event("site", log_msg))
 
                     # 3. Уведомляем админов в Telegram
                     if bot:
                         alert_text = (
-                            f"🔞 <b>КРИТИЧЕСКАЯ УГРОЗА: ЦП</b>\n\n"
-                            f"Нейросеть обнаружила запрещенный контент и применила санкции.\n\n"
+                            f"🔞 <b>ОБНАРУЖЕНО НАРУШЕНИЕ НА САЙТЕ</b>\n\n"
+                            f"Нейросеть сайта зафиксировала подозрительный контент и скрыла пост.\n\n"
                             f"📝 <b>AI Описание:</b> <i>{description}</i>\n"
                             f"👤 <b>User ID:</b> <code>{uid}</code>\n"
                             f"🌐 <b>IP автора:</b> <code>{ip_addr or 'unknown'}</code>\n"
                             f"🖼️ <b>File ID:</b> <code>{file_id}</code>\n"
                             f"📌 <b>Пост:</b> #{pid} (/{post.get('board_id')}/)\n\n"
-                            f"🛡️ <b>Меры:</b> Автор забанен на 100 лет, IP заблокирован, пост скрыт (Shadow Wipe)."
+                            f"🛡️ <b>Меры:</b> Пост скрыт (шедоу-удаление), автор в шедоубане на 24 часа."
                         )
                         for admin_id in ADMIN_IDS:
                             try:

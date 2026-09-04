@@ -33,16 +33,23 @@ class TestVisionCascade:
         "gemini-3.1-flash-lite",
         "gemini-2.5-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
         "qwen/qwen3.6-27b",
-        "llama-3.2-11b-vision-preview",
+        "qwen/qwen3.8-27b",
     }
 
-    def test_invalid_gemini_2_5_flash_lite_is_excluded(self):
-        """gemini-2.5-flash-lite (which caused 404 in logs) must not be present in the cascade."""
+    def test_obsolete_legacy_models_are_excluded(self):
+        """Obsolete legacy models (Gemini 1.5/2.0, non-existent llama vision) must not be present in the cascade."""
         import site_tgach.vision as v
         import inspect
         src = inspect.getsource(v.describe_image)
-        assert "gemini-2.5-flash-lite" not in src
+        for old_model in [
+            "gemini-1.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-pro",
+            "llama-3.2-90b-vision-preview",
+        ]:
+            assert old_model not in src, f"Obsolete model {old_model} found in vision.py!"
 
     def test_sanitized_prompt_has_no_porn_keywords(self):
         """System prompt must be clinical and contain no provocative porn terms."""

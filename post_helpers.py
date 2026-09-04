@@ -121,14 +121,14 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
         elif rand < 0.012: circle = "🟡 "
         elif rand < 0.015: circle = "🔵 "
         elif rand < 0.018: circle = "⭐ "
-    if b_data['slavaukraine_mode']: return f"💙💛 Пост №{post_num_formatted}"
-    if b_data['zaputin_mode']: return f"🇷🇺 Пост №{post_num_formatted}"
-    if b_data['anime_mode']: return f"🌸 投稿 {post_num_formatted} 番"
-    if b_data['suka_blyat_mode']: return f"💥 Пост №{post_num_formatted}"
-    if b_data['polish_mode']: return f"🇵🇱 Post №{post_num_formatted}"
+    if b_data.get('slavaukraine_mode'): return f"💙💛 Пост №{post_num_formatted}"
+    if b_data.get('zaputin_mode'): return f"🇷🇺 Пост №{post_num_formatted}"
+    if b_data.get('anime_mode'): return f"🌸 投稿 {post_num_formatted} 番"
+    if b_data.get('suka_blyat_mode'): return f"💥 Пост №{post_num_formatted}"
+    if b_data.get('polish_mode'): return f"🇵🇱 Post №{post_num_formatted}"
     if b_data.get('schizo_mode'): return f"++ СИГНАЛ #{post_num_formatted} ++"
-    if b_data['warhammer_mode']: return f"⚡ Донесение №{post_num_formatted}"
-    if b_data['imperial_mode']: return f"📜 Депеша №{post_num_formatted}"
+    if b_data.get('warhammer_mode'): return f"⚡ Донесение №{post_num_formatted}"
+    if b_data.get('imperial_mode'): return f"📜 Депеша №{post_num_formatted}"
     if b_data.get('matrix_mode'): return f"🟩 Пакет №{post_num_formatted}"
     if b_data.get('america_mode'): return f"🦅 Freedom Post №{post_num_formatted}"
     if b_data.get('holiday_mode'): return f"🎅 Подарок №{post_num_formatted}"
@@ -263,92 +263,105 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             return
         b_data['last_auto_roast_time'] = now_ts
 
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    
-    msgs = []
-    cutoff = time.time() - 3600
-    
-    async with storage_lock:
-        for p_info in reversed(messages_storage.values()):
-            if len(msgs) >= 40: break
-            if p_info.get('board_id') == board_id:
-                ts = p_info.get('timestamp', 0)
-                if hasattr(ts, 'timestamp'):
-                    ts = ts.timestamp()
-                if ts > cutoff:
-                    if not p_info.get('thread_id'):
-                        msgs.append(p_info)
-                
-    msgs.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
-    
-    if not msgs:
-        return
-        
-    chunk_parts = []
-    for p in msgs:
-        text = p.get('content', {}).get('text', '') if isinstance(p.get('content'), dict) else ''
-        if text:
-            chunk_parts.append(f"[Anon]: {text}")
-            
-    chunk = " | ".join(chunk_parts)
-    if len(chunk) < 50:
-        return
-        
-    if lang == 'en':
-        prompt = random.choice(ROAST_PROMPTS_EN)
-    elif lang == 'jp':
-        prompt = random.choice(ROAST_PROMPTS_JP)
-    else:
-        prompt = random.choice(ROAST_PROMPTS)
-        
-    hf_token = os.getenv("HF_TOKEN")
     try:
-        summary = await summarize_text_with_hf(prompt, chunk)
-        summary = clean_html_for_tg(summary)
+        from ai_manager import (
+            build_cyberchad_context,
+            CYBERCHAD_SYSTEM_JSON_PROMPT,
+            parse_cyberchad_response,
+        )
+        from common.tts_engine import synthesize_cyberchad_voice_with_meta
+
+        rich_context = await build_cyberchad_context(
+            board_id=board_id,
+            limit_board=55,
+            limit_author=0,
+            limit_chad=5
+        )
+
+        user_prompt = (
+            f"{rich_context}\n\n"
+            f"Оцени текущую атмосферу и активность в треде/чате /{board_id}/. "
+            f"Ворвись и выдай мощный, брутальный вердикт Киберчеда (верни строго валидный JSON согласно инструкции):"
+        )
+
+        raw = await summarize_text_with_hf(
+            prompt=CYBERCHAD_SYSTEM_JSON_PROMPT,
+            text_dump=user_prompt,
+            model_preference="persona"
+        )
+
+        if not raw:
+            return
+
+        parsed = parse_cyberchad_response(raw)
+        if not parsed.get("reply", True):
+            print(f"ℹ️ [Auto-Roast] Киберчед отказался от интервенции (reply=False): {parsed.get('reason_if_skipped', 'не указана')}")
+            return
+
+        roast_text = parsed.get("text", "").strip()
+        if not roast_text or len(roast_text) < 5:
+            return
+
+        if parsed.get("generate_image"):
+            print(f"🎨 [Auto-Roast] Запрошена генерация изображения: '{parsed.get('image_prompt')}'")
+
+        # Синтезируем голос Киберчеда
+        voice_bytes = None
+        try:
+            voice_res = await synthesize_cyberchad_voice_with_meta(roast_text)
+            if isinstance(voice_res, tuple):
+                voice_bytes = voice_res[0]
+            else:
+                voice_bytes = voice_res
+        except Exception as tts_err:
+            print(f"⚠️ [Auto-Roast] TTS synthesis error: {tts_err}")
+
+        content_payload = {
+            'type': 'voice' if voice_bytes else 'text',
+            'is_system_message': True,
+            'archive_allowed': True,
+            'is_ai_roast': True,
+            'is_ai': True,
+            'is_cyberchad': True
+        }
+
+        if voice_bytes:
+            content_payload['voice_bytes'] = voice_bytes
+            content_payload['caption'] = '🔥 Разъёб от Киберчеда'
+            content_payload['text'] = roast_text
+        else:
+            content_payload['text'] = roast_text
+        
+        pnum = await create_post(
+            board_id=board_id,
+            author_id=0,
+            content=content_payload,
+            timestamp=time.time(),
+            is_from_site=False,
+            stream=stream
+        )
+        if pnum:
+            header = await format_header(board_id, pnum, 0)
+            content_payload['header'] = f"🔥 КИБЕРЧЕД 🔥\n{header}" if stream == 'ru' else f"🔥 CYBERCHAD 🔥\n{header}"
+            await update_post_content(pnum, content_payload)
+            async with storage_lock:
+                messages_storage[pnum] = {'author_id': 0, 'timestamp': datetime.now(UTC), 'content': content_payload, 'board_id': board_id}
+                
+            base_recipients = b_data['users']['active'] - b_data['users']['banned']
+            if ENABLE_MULTILANG and board_id != 'int':
+                stream_users = await get_stream_active_users(board_id, stream)
+                base_recipients = base_recipients.intersection(stream_users)
+                
+            await enqueue_board_message(board_id, {
+                'recipients': base_recipients,
+                'content': content_payload,
+                'post_num': pnum,
+                'board_id': board_id
+            })
+            print(f"✅ [Auto-Roast] Киберчед успешно опубликовал пост #{pnum} на /{board_id}/ (voice={bool(voice_bytes)}).")
     except Exception as e:
         print(f"[auto-roast] Error: {e}")
         return
-        
-    if not summary:
-        return
-        
-    roast_text = f"🔥 <b>АВТО-ПРОЖАРКА СРАЧА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>AUTO-ROAST</b> 🔥\n\n{summary}"
-    if lang == 'jp':
-        roast_text = f"🔥 <b>自動煽り</b> 🔥\n\n{summary}"
-    
-    content_payload = {
-        'type': 'text',
-        'text': roast_text,
-        'is_system_message': True,
-        'archive_allowed': True
-    }
-    
-    pnum = await create_post(
-        board_id=board_id,
-        author_id=0,
-        content=content_payload,
-        timestamp=time.time(),
-        is_from_site=False,
-        stream=stream
-    )
-    if pnum:
-        header = await format_header(board_id, pnum)
-        content_payload['header'] = header
-        await update_post_content(pnum, content_payload)
-        async with storage_lock:
-            messages_storage[pnum] = {'author_id': 0, 'timestamp': datetime.now(UTC), 'content': content_payload, 'board_id': board_id}
-            
-        base_recipients = b_data['users']['active'] - b_data['users']['banned']
-        if ENABLE_MULTILANG and board_id != 'int':
-            stream_users = await get_stream_active_users(board_id, stream)
-            base_recipients = base_recipients.intersection(stream_users)
-            
-        await enqueue_board_message(board_id, {
-            'recipients': base_recipients,
-            'content': content_payload,
-            'post_num': pnum,
-            'board_id': board_id
-        })
 _MEDIA_DESC_CACHE: dict[str, dict] = {}
 
 RE_HTML_TAGS = re.compile(r'<[^>]+>')
@@ -368,11 +381,16 @@ def _get_cached_anon_name(author_id: int, stream_lang: str) -> str:
         return f"名無し [{aid}]"
     return f"Анон [{aid}]"
 
-def _format_media_context(media_meta: dict | None) -> str | None:
+def _format_media_context(
+    media_meta: dict | None,
+    max_desc_len: int = 150,
+    max_tags_len: int = 80,
+    smart_boundary: bool = True
+) -> str | None:
     if not media_meta or not isinstance(media_meta, dict):
         return None
 
-    if 'formatted' in media_meta:
+    if 'formatted' in media_meta and max_desc_len == 150 and max_tags_len == 80:
         return media_meta['formatted']
 
     raw_desc = media_meta.get('description')
@@ -404,28 +422,64 @@ def _format_media_context(media_meta: dict | None) -> str | None:
                 continue
             clean_tags_list.append(t)
 
-    tags_str = ", ".join(clean_tags_list)
-
-    if not desc and not tags_str:
-        media_meta['formatted'] = None
+    if not desc and not clean_tags_list:
+        if max_desc_len == 150 and max_tags_len == 80:
+            media_meta['formatted'] = None
         return None
 
-    # Truncate descriptions to ~150 chars (`...`) and tags to ~80 chars
-    d_short = desc[:150].rstrip() + ("..." if len(desc) > 150 else "") if desc else ""
-    t_short = tags_str[:80].rstrip() + ("..." if len(tags_str) > 80 else "") if tags_str else ""
+    # Truncate descriptions smartly at word boundary without chopping words in half
+    if desc:
+        if len(desc) > max_desc_len:
+            cut = desc[:max_desc_len].rstrip()
+            last_space = cut.rfind(' ')
+            if smart_boundary and last_space > int(max_desc_len * 0.75):
+                d_short = cut[:last_space].rstrip() + "..."
+            else:
+                d_short = cut + "..."
+        else:
+            d_short = desc
+    else:
+        d_short = ""
 
-    if d_short and t_short:
-        desc_and_tags = f"{d_short}. Теги: {t_short}"
-    elif d_short:
+    # Truncate tags by whole items up to max_tags_len without cutting tags mid-word
+    if clean_tags_list:
+        chosen_tags = []
+        cur_t_len = 0
+        for tag in clean_tags_list:
+            item_len = len(tag) + (2 if chosen_tags else 0)
+            if cur_t_len + item_len > max_tags_len:
+                break
+            chosen_tags.append(tag)
+            cur_t_len += item_len
+        if chosen_tags:
+            t_short = ", ".join(chosen_tags)
+            if len(chosen_tags) < len(clean_tags_list):
+                t_short += "..."
+        else:
+            t_short = clean_tags_list[0][:max_tags_len].rstrip() + "..."
+    else:
+        t_short = ""
+
+    d_short_clean = d_short.rstrip('.').rstrip()
+    if d_short_clean and t_short:
+        desc_and_tags = f"{d_short_clean}. Теги: {t_short}"
+    elif d_short_clean:
         desc_and_tags = d_short
     else:
         desc_and_tags = t_short
 
     formatted = f"[Фото: {desc_and_tags}]"
-    media_meta['formatted'] = formatted
+    if max_desc_len == 150 and max_tags_len == 80:
+        media_meta['formatted'] = formatted
     return formatted
 
-def _format_post_text(content: dict, msg_type: str, media_meta: dict | None = None) -> str | None:
+def _format_post_text(
+    content: dict,
+    msg_type: str,
+    media_meta: dict | None = None,
+    max_desc_len: int | None = None,
+    max_tags_len: int | None = None
+) -> str | None:
     if not isinstance(content, dict):
         return None
 
@@ -436,9 +490,17 @@ def _format_post_text(content: dict, msg_type: str, media_meta: dict | None = No
         text = ""
 
     if media_meta:
-        media_annotation = media_meta.get('formatted')
-        if media_annotation is None and ('description' in media_meta or 'tags' in media_meta):
-            media_annotation = _format_media_context(media_meta)
+        if max_desc_len is not None and max_tags_len is not None:
+            media_annotation = _format_media_context(
+                media_meta,
+                max_desc_len=max_desc_len,
+                max_tags_len=max_tags_len,
+                smart_boundary=True
+            )
+        else:
+            media_annotation = media_meta.get('formatted')
+            if media_annotation is None and ('description' in media_meta or 'tags' in media_meta):
+                media_annotation = _format_media_context(media_meta)
     else:
         media_annotation = None
 
@@ -986,24 +1048,24 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
         prefix = _get_random_header_prefix(lang='en')
         return f"{circle}{prefix}Post No.{post_num_formatted}"
     b_data = board_data[board_id]
-    if b_data['slavaukraine_mode']:
+    if b_data.get('slavaukraine_mode'):
         headers = [f"💙💛 Пiст №{post_num_formatted}", f"🇺🇦 Повiдомлення №{post_num_formatted}"]
         return random.choice(headers)
-    if b_data['zaputin_mode']:
+    if b_data.get('zaputin_mode'):
         return f"🇷🇺 Пост №{post_num_formatted}"
-    if b_data['anime_mode']:
+    if b_data.get('anime_mode'):
         return f"🌸 投稿 {post_num_formatted} 番"
-    if b_data['suka_blyat_mode']:
+    if b_data.get('suka_blyat_mode'):
         return f"💢 Пост №{post_num_formatted}"
-    if b_data['gopnik_mode']:
+    if b_data.get('gopnik_mode'):
         return f"🤙 Малява №{post_num_formatted}"
     if b_data.get('schizo_mode'):
         return f"++ СИГНАЛ #{post_num_formatted} ++"
-    if b_data['polish_mode']:
+    if b_data.get('polish_mode'):
         return f"🇵🇱 Post №{post_num_formatted}"
-    if b_data['warhammer_mode']:
+    if b_data.get('warhammer_mode'):
         return f"⚔️ Донесение №{post_num_formatted}"
-    if b_data['imperial_mode']:
+    if b_data.get('imperial_mode'):
         return f"📜 Депеша №{post_num_formatted}"
     if b_data.get('matrix_mode'):
         return f"🟩 Пакет №{post_num_formatted}"

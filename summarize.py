@@ -11,7 +11,7 @@ logger = logging.getLogger("summarize")
 
 GROQ_CONFIG = {
     "base_url": "https://api.groq.com/openai/v1",
-    "model": "qwen/qwen3.6-27b", 
+    "model": "qwen/qwen3.8-27b", 
     "temperature": 0.8,
 }
 
@@ -88,6 +88,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
@@ -96,6 +97,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.6-flash", "gemini"),
         ]
@@ -105,10 +107,12 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
+            ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
         ]
     elif model_preference in ("qwen", "llama", "groq"):
         models_cascade = [
+            ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
@@ -119,6 +123,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),

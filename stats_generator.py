@@ -2581,13 +2581,13 @@ def _generate_chart_40(images):
         groq_keys_raw = _os.getenv('GROQ_API_KEYS', '')
         groq_keys = [k.strip() for k in groq_keys_raw.split(',') if k.strip()]
         ai_text = None
-        model_used = 'qwen/qwen3.6-27b'
+        model_used = 'qwen/qwen3.8-27b'
 
         session = _req.Session()
         session.trust_env = False  # Avoid proxy deadlocks
 
         for key in groq_keys[:3]:
-            for model_candidate in ['qwen/qwen3.6-27b']:
+            for model_candidate in ['qwen/qwen3.8-27b', 'qwen/qwen3.6-27b']:
                 try:
                     resp = session.post(
                         'https://api.groq.com/openai/v1/chat/completions',

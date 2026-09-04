@@ -207,6 +207,7 @@ async def _create_tables(db):
             mute_type TEXT NOT NULL,
             thread_id TEXT,
             expires_at REAL NOT NULL,
+            reason TEXT,
             PRIMARY KEY (user_id, board_id, mute_type, thread_id)
         );
         """)
@@ -503,6 +504,7 @@ async def _create_tables(db):
             mute_type TEXT NOT NULL,
             thread_id TEXT, -- Опционально, если бан только в одном треде
             expires_at REAL NOT NULL,
+            reason TEXT,
             PRIMARY KEY (user_id, board_id, mute_type, thread_id)
         );
         """)
@@ -696,6 +698,10 @@ async def _apply_migrations(db):
         try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN posts_count INTEGER DEFAULT 0;")
             print("✅ Migrated: Added posts_count to Users.")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("ALTER TABLE Mutes ADD COLUMN reason TEXT;")
+            print("✅ Migrated: Added reason to Mutes.")
         except aiosqlite.OperationalError: pass
         try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN last_failed_amount REAL DEFAULT 0;")
@@ -1750,6 +1756,12 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                 )
             
             await db.execute("COMMIT")
+            try:
+                from shared_state import board_data
+                if board_id in board_data:
+                    board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
+            except Exception:
+                pass
         except Exception as e:
             try: await db.execute("ROLLBACK")
             except: pass
@@ -4951,6 +4963,12 @@ async def lift_shadow_ban(user_id: int, board_id: str):
                 await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'shadow'", (user_id, board_id))
                 
                 await db.execute("COMMIT")
+                try:
+                    from shared_state import board_data
+                    if board_id in board_data:
+                        board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
+                except Exception:
+                    pass
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -4967,9 +4985,9 @@ async def lift_shadow_ban(user_id: int, board_id: str):
                 print(f"⛔ Error lifting shadow ban: {e}")
                 break
 
-async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int):
+async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int, reason: str | None = None):
     """
-    Применяет обычный мут пользователю.
+    Применяет обычный мут пользователю на конкретной доске.
     """
     expires_at = time.time() + duration_seconds
     from common.db_pool import get_pool, db_lock
@@ -4984,10 +5002,19 @@ async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int)
                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
                     (user_id, board_id)
                 )
-                await db.execute(
-                    "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
-                    (user_id, board_id, expires_at)
-                )
+                try:
+                    await db.execute(
+                        "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at, reason) VALUES (?, ?, 'mute', ?, ?)",
+                        (user_id, board_id, expires_at, reason)
+                    )
+                except sqlite3.OperationalError as col_err:
+                    if "no column named reason" in str(col_err).lower():
+                        await db.execute(
+                            "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
+                            (user_id, board_id, expires_at)
+                        )
+                    else:
+                        raise
                 
                 await db.execute("COMMIT")
                 return True
@@ -4998,17 +5025,24 @@ async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int)
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
-                print(f"⛔ DB Error applying regular mute: {e}")
+                try:
+                    print(f"⛔ DB Error applying regular mute: {e}")
+                except Exception:
+                    pass
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                print(f"⛔ DB Error applying regular mute: {e}")
+                try:
+                    print(f"⛔ DB Error applying regular mute: {e}")
+                except Exception:
+                    pass
                 break
     return False
+
 async def remove_regular_mute(user_id: int, board_id: str):
     """
-    Удаляет обычный мут из базы данных.
+    Удаляет обычный мут из базы данных на конкретной доске.
     """
     from common.db_pool import get_pool, db_lock
     
@@ -5024,6 +5058,12 @@ async def remove_regular_mute(user_id: int, board_id: str):
                 )
                 
                 await db.execute("COMMIT")
+                try:
+                    from shared_state import board_data
+                    if board_id in board_data:
+                        board_data[board_id].get('mutes', {}).pop(user_id, None)
+                except Exception:
+                    pass
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -5039,6 +5079,45 @@ async def remove_regular_mute(user_id: int, board_id: str):
                 except: pass
                 print(f"⛔ DB Error removing regular mute: {e}")
                 break
+
+async def remove_global_mute(user_id: int, mute_type: str | None = None):
+    """
+    Снимает глобальный мут (board_id = 'ALL') и муты со всех досок для указанного пользователя.
+    Используется исключительно глобальными админскими командами (/gunban, /global_unmute, /gunmute).
+    """
+    from common.db_pool import get_pool, db_lock
+    async with db_lock:
+        for attempt in range(10):
+            try:
+                db = await get_pool()
+                await db.execute("BEGIN IMMEDIATE")
+                if mute_type:
+                    await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = 'ALL' OR mute_type = ?)", (user_id, mute_type))
+                else:
+                    await db.execute("DELETE FROM Mutes WHERE user_id = ?", (user_id,))
+                await db.execute("COMMIT")
+                break
+            except sqlite3.OperationalError as e:
+                try: await db.execute("ROLLBACK")
+                except: pass
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    await db_sleep(0.1 * (attempt + 1))
+                    continue
+                break
+            except Exception:
+                try: await db.execute("ROLLBACK")
+                except: pass
+                break
+    try:
+        from shared_state import board_data, BOARDS
+        for b in list(BOARDS) + ['ALL']:
+            if b in board_data:
+                if mute_type == 'mute' or mute_type is None:
+                    board_data[b].get('mutes', {}).pop(user_id, None)
+                if mute_type == 'shadow' or mute_type is None:
+                    board_data[b].get('shadow_mutes', {}).pop(user_id, None)
+    except Exception:
+        pass
 async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 20, stream: str = 'ru', observer_id: Optional[int] = None) -> list:
     """
     Получает посты с доски с файлами.
@@ -9015,6 +9094,26 @@ async def postcopies_daily_cleanup_loop():
         except Exception as e:
             logging.getLogger("database").error(f"⚠️ [POSTCOPIES_LOOP] Ошибка в цикле чистки: {e}")
             await asyncio.sleep(3600)
+
+
+async def clean_expired_mutes() -> int:
+    """
+    Удаляет все истекшие муты из таблицы Mutes и синхронизирует board_data в памяти.
+    """
+    from common.db_pool import get_pool, db_lock
+    now_ts = time.time()
+    async with db_lock:
+        try:
+            db = await get_pool()
+            cursor = await db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,))
+            deleted = cursor.rowcount
+            if deleted > 0:
+                await db.commit()
+                logging.getLogger("database").info(f"🧹 [MUTES_CLEANUP] Удалено {deleted} просроченных мутов из базы данных.")
+            return deleted
+        except Exception as e:
+            logging.getLogger("database").error(f"⚠️ [MUTES_CLEANUP] Ошибка быстрой чистки просроченных мутов: {e}")
+            return 0
 
 
 import math

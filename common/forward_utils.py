@@ -165,13 +165,38 @@ def is_forwarded_from_bot(message: Any, bot_instance: Any = None) -> bool:
     return False
 
 
+def _mask_code_blocks(text: str) -> str:
+    """Replaces content inside <code>...</code> and <pre>...</pre> with whitespace to preserve character indices."""
+    def repl(m):
+        return ' ' * len(m.group(0))
+    return re.sub(r'<(code|pre)\b[^>]*>.*?</\1>', repl, text, flags=re.DOTALL | re.IGNORECASE)
+
+
+def _has_unclosed_tags(html_str: str) -> bool:
+    """Checks whether html_str contains any unclosed HTML tags."""
+    tag_pattern = re.compile(r'</?([a-z0-9_-]+)\b[^>]*>', re.IGNORECASE)
+    stack = []
+    for m in tag_pattern.finditer(html_str):
+        full_tag = m.group(0)
+        tag_name = m.group(1).lower()
+        if full_tag.startswith('</'):
+            if stack and stack[-1] == tag_name:
+                stack.pop()
+        else:
+            if not full_tag.endswith('/>'):
+                stack.append(tag_name)
+    return len(stack) > 0
+
+
 def contains_board_post_header(text: str) -> bool:
     """
     Checks whether text contains a board post header (e.g. '🟣 Пост №504200' or 'Post No.12345').
+    Code blocks (<code> and <pre>) are masked to avoid false positives on system footers or inline code.
     """
     if not text or not isinstance(text, str):
         return False
-    return bool(RE_BOARD_POST_HEADER.search(text))
+    masked = _mask_code_blocks(text)
+    return bool(RE_BOARD_POST_HEADER.search(masked))
 
 
 def extract_board_post_number(text: str) -> int | None:
@@ -180,7 +205,8 @@ def extract_board_post_number(text: str) -> int | None:
     """
     if not text or not isinstance(text, str):
         return None
-    match = RE_BOARD_POST_HEADER.search(text)
+    masked = _mask_code_blocks(text)
+    match = RE_BOARD_POST_HEADER.search(masked)
     if not match:
         return None
     raw_num = match.group(1)
@@ -244,12 +270,16 @@ def format_forwarded_quote(text: str, is_forward: bool = False, expandable: bool
         return f"{tag_open}{clean_content}{tag_close}"
 
     # Case 2: Contains a board post header in text
-    match = RE_BOARD_POST_HEADER.search(stripped)
+    masked = _mask_code_blocks(stripped)
+    match = RE_BOARD_POST_HEADER.search(masked)
     if match:
         start_idx = match.start()
-        # If the header starts at the beginning (or only whitespace/emojis before it)
         prefix = stripped[:start_idx].rstrip()
         board_content = stripped[start_idx:].strip()
+
+        # If prefix has unclosed HTML tags, do NOT split and inject blockquote to avoid corrupting HTML
+        if _has_unclosed_tags(prefix):
+            return text
 
         clean_board_content = _clean_nested_blockquotes(board_content)
 
