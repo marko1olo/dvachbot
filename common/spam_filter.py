@@ -444,7 +444,8 @@ def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record
 
 def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None) -> Tuple[bool, str]:
     """
-    Checks for link spam, Telegram invite links, or advertisement/scam keywords.
+    Checks for link spam or doxing phone number leaks (Anti-Dox).
+    Casino keywords are not flagged per owner directive (regular chat mentions must not cause bans).
     Returns (is_spam: bool, reason: str).
     """
     try:
@@ -464,12 +465,7 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
     for wl in URL_WHITELIST:
         clean_text = clean_text.replace(wl, "")
 
-    # 1. Casino / Crypto / Scam keywords
-    scam_match = RE_AD_SCAM.search(clean_text)
-    if scam_match:
-        return True, f"Реклама/скам: '{scam_match.group(0)}'"
-
-    # 2. Phone number / doxing leaks (+79..., 89..., +380..., +375...)
+    # Phone number / doxing leaks (+79..., 89..., +380..., +375...)
     if contains_phone_number(clean_text):
         phones = extract_phone_numbers(clean_text)
         return True, f"Слив телефонного номера (Anti-Dox): {phones[0]}"

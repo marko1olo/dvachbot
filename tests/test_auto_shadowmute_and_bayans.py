@@ -216,20 +216,24 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(res3)
 
     async def test_link_and_ad_spam_detection(self):
-        """Telegram links are allowed; casino/scam keywords must trigger spam."""
+        """Telegram links and casino mentions are allowed; phone dox leaks must trigger spam."""
         now = 1000000.0
         
-        # Telegram links are now allowed
+        # Telegram links are allowed
         is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Вступайте в чат t.me/+AbCdEfGhIjKl", now_ts=now)
         self.assertFalse(is_sp)
         
         is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Конфа тут: t.me/joinchat/xyz12345", now_ts=now)
         self.assertFalse(is_sp)
         
-        # Casino / Scam keywords remain blocked
-        is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Поднимай бабло в 1win и казино вулкан", now_ts=now)
+        # Casino / brand mentions are allowed (no mute for mere words without scam)
+        is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Поднимай бабло в 1win и казино вулкан вавада", now_ts=now)
+        self.assertFalse(is_sp)
+        
+        # Doxing phone leaks remain blocked
+        is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Номер деанона +79991112233 звоните", now_ts=now)
         self.assertTrue(is_sp)
-        self.assertIn("Реклама/скам", r)
+        self.assertIn("Anti-Dox", r)
         
         is_sp, _ = check_link_or_ad_spam(self.user_id, self.board_id, "Смотри архив на tgach.top и t.me/tgchan_archive", now_ts=now)
         self.assertFalse(is_sp)

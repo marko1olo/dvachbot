@@ -47,26 +47,31 @@ class TestGhostPostLinkFilter(unittest.IsolatedAsyncioTestCase):
         is_spam, reason = check_link_or_ad_spam(user_id, board_id, link_text)
         self.assertFalse(is_spam)
 
-        # 2. Casino / Scam keywords still trigger auto-shadowmute
-        scam_text = "Поднимай бабло в 1win и казино вулкан"
+        # 2. Casino / Scam keywords no longer trigger auto-shadowmute (no bans for words)
+        scam_text = "Поднимай бабло в 1win и казино вулкан вавада"
         is_scam, scam_reason = check_link_or_ad_spam(user_id, board_id, scam_text)
-        self.assertTrue(is_scam)
-        self.assertIn("Реклама/скам", scam_reason)
+        self.assertFalse(is_scam)
+
+        # 3. Dox phone leaks still trigger auto-shadowmute
+        dox_text = "Слив мобильного номера деанона +79991234567"
+        is_dox, dox_reason = check_link_or_ad_spam(user_id, board_id, dox_text)
+        self.assertTrue(is_dox)
+        self.assertIn("Anti-Dox", dox_reason)
 
         should_mute, reason, _ = await evaluate_message_for_autoshadowmute(
             user_id=user_id,
             board_id=board_id,
-            content=scam_text,
+            content=dox_text,
             msg_type='text',
             raw_content_type='text'
         )
         self.assertTrue(should_mute)
         mock_apply_mute.assert_called_once()
 
-        # 3. check_spam returns True (allowing message_router to route to process_shadow_reject!)
+        # 4. check_spam returns True (allowing message_router to route to process_shadow_reject!)
         mock_msg = MagicMock()
         mock_msg.content_type = 'text'
-        mock_msg.text = scam_text
+        mock_msg.text = dox_text
         mock_msg.caption = None
         mock_msg.photo = None
         mock_msg.video = None
