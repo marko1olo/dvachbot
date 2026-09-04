@@ -9942,13 +9942,13 @@ async def cb_economy_daily(callback: types.CallbackQuery, board_id: str | None):
     streak_bonus = min(streak - 1, 7) * 10
     total_bonus = bonus + streak_bonus
     async with db_lock:
-        await add_user_global_balance(db, user_id, board_id, total_bonus)
+        new_balance = await add_user_global_balance(db, user_id, board_id, total_bonus)
         await db.execute(
             "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
             (json.dumps(ai), user_id, board_id)
         )
         await db.commit()
-    await callback.answer(f"✅ Получено +{total_bonus} ₪! Баланс: {int(balance + total_bonus)} ₪", show_alert=True)
+    await callback.answer(f"✅ Получено +{total_bonus} ₪! Баланс: {int(new_balance)} ₪", show_alert=True)
 
 @dp.callback_query(F.data == "economy_work")
 async def cb_economy_work(callback: types.CallbackQuery, board_id: str | None):
