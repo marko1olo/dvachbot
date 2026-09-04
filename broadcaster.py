@@ -158,6 +158,16 @@ def _format_reactions_block(post_data: dict) -> str | None:
     return None
 
 def _format_main_text(content: dict) -> str | None:
+    # Для голосовых сообщений Киберчеда подпись ВСЕГДА должна быть краткой ("🔥 Разъёб от Киберчеда"),
+    # а НЕ дублирующий текст транскрипции произнесенной речи!
+    if content.get('type') == 'voice' and (
+        content.get('is_cyberchad') or content.get('is_ai_roast') or content.get('is_ai')
+    ):
+        cap = content.get('caption')
+        if cap and len(cap) < 50:
+            return convert_site_tags_to_telegram(cap)
+        return "🔥 Разъёб от Киберчеда"
+
     main_text_raw = content.get('text') or content.get('caption') or ''
     if not main_text_raw:
         return None

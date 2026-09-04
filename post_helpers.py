@@ -328,7 +328,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
         if voice_bytes:
             content_payload['voice_bytes'] = voice_bytes
             content_payload['caption'] = '🔥 Разъёб от Киберчеда'
-            content_payload['text'] = roast_text
+            content_payload['roast_text'] = roast_text
         else:
             content_payload['text'] = roast_text
         

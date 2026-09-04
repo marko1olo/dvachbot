@@ -409,7 +409,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
     if getattr(message, 'is_system_message', None) is True:
         return
     caption_raw = (getattr(message, 'caption', '') or '').lower() if isinstance(getattr(message, 'caption', None), str) else ''
-    if 'разъёб от киберчеда' in caption_raw or 'разъеб от киберчеда' in caption_raw or 'вердикт /b/' in caption_raw or 'шкала говноедства' in caption_raw:
+    if 'разъёб от киберчеда' in caption_raw or 'разъеб от киберчеда' in caption_raw or 'киберчед' in caption_raw or 'вердикт /b/' in caption_raw or 'шкала говноедства' in caption_raw:
         return
 
     try:
@@ -765,7 +765,6 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                         'type': 'voice',
                         'voice_bytes': voice_bytes,
                         'caption': '🔥 Разъёб от Киберчеда',
-                        'text': roast,
                         'roast_text': roast,
                         'is_ai_roast': True,
                         'is_ai': True,
@@ -1385,7 +1384,7 @@ def build_batch_music_roast_prompt(tracks_info: list[dict], tone: dict) -> str:
 # Rate limiting: хранит timestamps отправок треков по user_id для защиты от спама
 _music_roast_user_times: dict[int, list[float]] = {}
 _music_roast_seen_mg: set[str] = set()
-MUSIC_ROAST_RATE_LIMIT = 15         # треков в час максимум (с учетом альбомов)
+MUSIC_ROAST_RATE_LIMIT = 5          # максимум 5 треков в час на юзера
 MUSIC_ROAST_RATE_WINDOW_SEC = 3600  # окно (1 час)
 MUSIC_ROAST_FLOOD_RESPONSES = [
     "Слышь, пидор, ты уже весь чат своим музыкальным мусором завалил? Даже мусоровоз так не воняет. Иди отдохни, дай ушам людей передышку.",
@@ -1599,7 +1598,7 @@ async def handle_music_roast_batch(
         if getattr(msg, 'is_system_message', None) is True:
             continue
         caption_raw = (getattr(msg, 'caption', '') or '').lower() if isinstance(getattr(msg, 'caption', None), str) else ''
-        if any(marker in caption_raw for marker in ('разъёб от киберчеда', 'разъеб от киберчеда', 'вердикт /b/', 'шкала говноедства')):
+        if any(marker in caption_raw for marker in ('разъёб от киберчеда', 'разъеб от киберчеда', 'киберчед', 'вердикт /b/', 'шкала говноедства')):
             continue
         is_audio = bool(getattr(msg, 'audio', None))
         is_music_doc = bool(getattr(msg, 'document', None) and is_music_document(msg.document))
@@ -1630,19 +1629,35 @@ async def handle_music_roast_batch(
         if len(_music_roast_user_times[sender_id]) >= MUSIC_ROAST_RATE_LIMIT and not is_repeat_chunk:
             _remaining = int(MUSIC_ROAST_RATE_WINDOW_SEC - (_now - _music_roast_user_times[sender_id][0]))
             _mins_left = max(1, _remaining // 60)
-            stub_text = random.choice(MUSIC_ROAST_FLOOD_RESPONSES) + f" Следующий приму через ~{_mins_left} мин."
+            stub_text = random.choice(MUSIC_ROAST_FLOOD_RESPONSES)
+            # Язвительный отлуп строго в ЛС юзеру (chat_id=sender_id)
             try:
-                await _safe_send_roast(lead_msg, f"🎵 {stub_text}", log_prefix="Music Flood Stub")
-            except Exception:
-                pass
+                if hasattr(bot, 'send_message'):
+                    await bot.send_message(chat_id=sender_id, text=f"🎵 {stub_text}")
+                else:
+                    await _safe_send_roast(lead_msg, f"🎵 {stub_text}", log_prefix="Music Flood Stub")
+            except Exception as _pm_err:
+                logger.debug(f"[Music Roast Rate Limit] Direct PM send error ({_pm_err}), trying fallback reply...")
+                try:
+                    await _safe_send_roast(lead_msg, f"🎵 {stub_text}", log_prefix="Music Flood Stub")
+                except Exception:
+                    pass
+
             try:
                 from common.tts_engine import synthesize_cyberchad_voice_with_meta
                 stub_voice_res = await synthesize_cyberchad_voice_with_meta(stub_text)
                 stub_voice_bytes = stub_voice_res[0] if isinstance(stub_voice_res, tuple) else stub_voice_res
                 if stub_voice_bytes:
-                    await _safe_send_voice_roast(lead_msg, stub_voice_bytes, caption="🔇 Хватит уже", log_prefix="Music Flood Voice")
+                    try:
+                        from aiogram.types import BufferedInputFile
+                        voice_file = BufferedInputFile(stub_voice_bytes, filename="cyberchad_flood.ogg")
+                        await bot.send_voice(chat_id=sender_id, voice=voice_file, caption="🔥 Разъёб от Киберчеда")
+                    except Exception:
+                        await _safe_send_voice_roast(lead_msg, stub_voice_bytes, caption="🔥 Разъёб от Киберчеда", log_prefix="Music Flood Voice")
             except Exception as _tts_err:
                 logger.debug(f"[Music Flood] TTS error: {_tts_err}")
+
+            logger.info(f"🚫 [Music Roast Rate Limit] Юзер {sender_id} превысил лимит (5 треков/час). Нейроанализ пропущен, отлуп отправлен в ЛС.")
             return
 
         for _ in range(count):
@@ -1984,7 +1999,6 @@ async def handle_music_roast_batch(
                         'type': 'voice',
                         'voice_bytes': voice_bytes,
                         'caption': '🔥 Разъёб от Киберчеда',
-                        'text': voice_summary,
                         'roast_text': voice_summary,
                         'is_ai_roast': True,
                         'is_ai': True,
@@ -2455,7 +2469,7 @@ async def build_cyberchad_context(
             c_val.get('is_cyberchad')
             or c_val.get('is_ai_roast')
             or c_val.get('is_ai_persona')
-            or c_val.get('caption') == '🔥 Разъёб от Киберчеда'
+            or c_val.get('caption') in ('🔥 Разъёб от Киберчеда', 'Киберчед')
             or "КИБЕРЧЕД" in c_val.get('header', '')
             or "🔥 КИБЕРЧЕД 🔥" in c_val.get('header', '')
         )
@@ -2465,7 +2479,7 @@ async def build_cyberchad_context(
         raw_text = c_val.get('roast_text') or c_val.get('text') or txt_val or ''
 
         # If voice post without embedded text, check companion text post (pnum - 1)
-        if ptype == 'voice' and (not raw_text or raw_text.strip() == "🔥 Разъёб от Киберчеда"):
+        if ptype == 'voice' and (not raw_text or raw_text.strip() in ("🔥 Разъёб от Киберчеда", "Киберчед")):
             if storage_map and (pnum_val - 1) in storage_map:
                 comp_data = storage_map[pnum_val - 1]
                 if isinstance(comp_data, dict):
@@ -2479,7 +2493,7 @@ async def build_cyberchad_context(
                 if "Вердикт" in c_text or "разъёб" in c_text.lower():
                     raw_text = c_text
 
-        if not raw_text or raw_text.strip() == "🔥 Разъёб от Киберчеда":
+        if not raw_text or raw_text.strip() in ("🔥 Разъёб от Киберчеда", "Киберчед"):
             return ""
 
         clean_t = clean_html_tags(raw_text).replace('\n', ' ').strip()
@@ -3090,7 +3104,7 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
         if voice_bytes:
             content['voice_bytes'] = voice_bytes
             content['caption'] = '🔥 Разъёб от Киберчеда'
-            content['text'] = reply_text
+            content['roast_text'] = reply_text
         else:
             content['text'] = reply_text
 
