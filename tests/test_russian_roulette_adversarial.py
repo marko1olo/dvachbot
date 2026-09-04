@@ -378,7 +378,7 @@ class TestRussianRouletteAdversarial(unittest.IsolatedAsyncioTestCase):
         async with self.db.execute("SELECT expires_at FROM Mutes WHERE user_id=? AND mute_type='mute'", (turn_player,)) as c:
             mute_row = await c.fetchone()
             self.assertIsNotNone(mute_row, "Loser must have a record in Mutes table")
-            self.assertGreater(mute_row[0], time.time() + 1750, "Mute duration must be ~1800 seconds (30m)")
+            self.assertGreater(mute_row[0], time.time() + 550, "Mute duration must be ~600 seconds (10m)")
 
         # Loser Mute in RAM shared_state
         async with shared_state.storage_lock:

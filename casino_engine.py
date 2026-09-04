@@ -239,11 +239,11 @@ def play_coinflip(chosen_side: str, user_id: int = 0, balance: int = 0) -> Tuple
 # -----------------------------------------------------------------------------
 
 ROULETTE_STREAK_MULTS = {
-    1: 1.16,  # 83.33% chance * 1.16 = 96.67% RTP
-    2: 1.40,  # 69.44% chance * 1.40 = 97.22% RTP
-    3: 1.75,  # 57.87% chance * 1.75 = 101.2% RTP
-    4: 2.40,
-    5: 4.50,
+    1: 1.12,  # 83.33% chance * 1.12 = 93.3% RTP
+    2: 1.35,  # 69.44% chance * 1.35 = 93.7% RTP
+    3: 1.62,  # 57.87% chance * 1.62 = 93.7% RTP
+    4: 1.94,  # 48.22% chance * 1.94 = 93.5% RTP
+    5: 2.33,  # 40.18% chance * 2.33 = 93.6% RTP
 }
 
 def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int, str]:
@@ -262,7 +262,7 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
         return False, 0.0, 0, "💥 БАХ! Пуля пробила череп! Ставка сгорела."
 
     new_streak = session.get("streak", 0) + 1
-    mult = ROULETTE_STREAK_MULTS.get(new_streak, 4.5 + (new_streak - 5) * 1.0)
+    mult = ROULETTE_STREAK_MULTS.get(new_streak, round(0.94 * (1.2 ** new_streak), 2))
 
     active_roulette_sessions[user_id] = {
         "streak": new_streak,

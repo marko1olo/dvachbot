@@ -51,7 +51,7 @@ MAX_RR_BET = 10_000_000
 RR_CHAMBERS_COUNT = 6
 RR_TURN_TIMEOUT_SEC = 60.0
 RR_CHALLENGE_TIMEOUT_SEC = 120.0
-RR_MUTE_DURATION_SEC = 1800  # 30 minutes
+RR_MUTE_DURATION_SEC = 600  # 10 minutes
 RR_RAKE_PERCENT = 0.05  # 5% to Abu's Fund
 
 # In-memory storage for active games & challenges

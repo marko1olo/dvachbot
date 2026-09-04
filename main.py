@@ -5871,6 +5871,12 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     db = await get_pool()
     current_time = int(time.time())
 
+    async with db.execute("SELECT posts_count, grief_protection FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
+        target_row = await cursor.fetchone()
+        if target_row and (target_row[0] < 5 or target_row[1]):
+            await message.reply("⛔ Цель защищена от гриферства для новичков.", parse_mode="HTML")
+            return
+
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
         cd_sec = cd_rem
@@ -8117,6 +8123,21 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
             "Самому себе донатить нельзя, шизофреник. Иди на завод устраивайся: /work",
             parse_mode="HTML"
         )
+        return
+
+    b_data = board_data.get(board_id, {})
+    is_target_muted = False
+    if target_user_id in b_data.get('users', {}).get('banned', []):
+        is_target_muted = True
+    elif b_data.get('mutes', {}).get(target_user_id) and b_data['mutes'][target_user_id] > datetime.now(UTC):
+        is_target_muted = True
+    else:
+        async with db.execute("SELECT expires_at FROM Mutes WHERE user_id=? AND board_id=? AND expires_at > ?", (target_user_id, board_id, time.time())) as cursor:
+            if await cursor.fetchone():
+                is_target_muted = True
+
+    if is_target_muted:
+        await message.reply("⛔ Пользователь находится в муте, переводы ему заблокированы.")
         return
 
     # Обработка edge cases сумм
@@ -23400,7 +23421,7 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
     if not await check_spam(user_id, message, board_id):
         try:
             await message.delete()
-            await apply_penalty(message.bot, user_id, 'animation', board_id) # Voice often treated similarly for spam
+            await apply_penalty(message.bot, user_id, 'voice', board_id) # Voice often treated similarly for spam
         except TelegramBadRequest: pass
         return
     try:
@@ -23465,7 +23486,7 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
     if not await check_spam(user_id, message, board_id):
         try:
             await message.delete()
-            await apply_penalty(message.bot, user_id, 'animation', board_id)
+            await apply_penalty(message.bot, user_id, 'video_note', board_id)
         except TelegramBadRequest: pass
         return
     try:

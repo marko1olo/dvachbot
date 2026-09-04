@@ -374,7 +374,7 @@ def get_bayan_escalation_level(user_id: int) -> int:
     return _bayan_mute_count.get(user_id, 0)
 
 
-def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record_history: bool = True) -> Tuple[bool, str]:
+def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record_history: bool = True, is_reply: bool = False) -> Tuple[bool, str]:
     """
     Checks if a user is flooding requests (burst and minute limit).
     Returns (is_flooding: bool, reason: str).
@@ -415,11 +415,13 @@ def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record
     current_timestamps.append(now)
 
     # 1. Burst flood: > 4 messages in 4 seconds
-    burst_count = sum(1 for ts in current_timestamps if now - ts <= BURST_FLOOD_WINDOW)
-    if burst_count > BURST_FLOOD_LIMIT:
+    burst_limit = 8 if is_reply else BURST_FLOOD_LIMIT
+    burst_window = 10.0 if is_reply else BURST_FLOOD_WINDOW
+    burst_count = sum(1 for ts in current_timestamps if now - ts <= burst_window)
+    if burst_count > burst_limit:
         if record_history:
             tracker.append(now)
-        return True, f"Burst флуд: {burst_count} сообщений за {BURST_FLOOD_WINDOW}с"
+        return True, f"Burst флуд: {burst_count} сообщений за {burst_window}с"
 
     # 2. Rate flood: > 8 messages in 15 seconds
     rate_count = sum(1 for ts in current_timestamps if now - ts <= RATE_FLOOD_WINDOW)
@@ -653,7 +655,8 @@ async def evaluate_message_for_autoshadowmute(
     file_unique_id: str | None = None,
     file_id: str | None = None,
     media_hash: str | None = None,
-    now_ts: float | None = None
+    now_ts: float | None = None,
+    is_reply: bool = False
 ) -> Tuple[bool, str, float]:
     """
     Comprehensive evaluation of an incoming message for auto-shadowmute:
@@ -675,7 +678,7 @@ async def evaluate_message_for_autoshadowmute(
     text_content = content if isinstance(content, str) else (content.get('text') or content.get('caption') if isinstance(content, dict) else None)
 
     # 1. Flood check
-    is_flood, flood_reason = check_flood(user_id, board_id, now_ts=now)
+    is_flood, flood_reason = check_flood(user_id, board_id, now_ts=now, is_reply=is_reply)
     if is_flood:
         from common.database import apply_shadow_mute
         expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=FLOOD_BASE_MUTE_SEC, reason=flood_reason, is_exponential=False)

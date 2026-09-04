@@ -238,7 +238,7 @@ class TestRussianRoulettePvP(unittest.IsolatedAsyncioTestCase):
         async with self.db.execute("SELECT expires_at FROM Mutes WHERE user_id=? AND mute_type='mute'", (waiting_player,)) as c:
             mute_row = await c.fetchone()
             self.assertIsNotNone(mute_row)
-            self.assertGreater(mute_row[0], time.time() + 1700)
+            self.assertGreater(mute_row[0], time.time() + 500)
 
     async def test_voluntary_surrender(self):
         """Tests voluntary surrender."""
@@ -265,7 +265,7 @@ class TestRussianRoulettePvP(unittest.IsolatedAsyncioTestCase):
         async with self.db.execute("SELECT expires_at FROM Mutes WHERE user_id=?", (p2,)) as c:
             mute_row = await c.fetchone()
             self.assertIsNotNone(mute_row)
-            self.assertGreater(mute_row[0], time.time() + 1700)
+            self.assertGreater(mute_row[0], time.time() + 500)
 
     async def test_turn_timeout_watchdog(self):
         """Tests auto-timeout when player does not pull the trigger within 60s."""
@@ -298,7 +298,7 @@ class TestRussianRoulettePvP(unittest.IsolatedAsyncioTestCase):
         async with self.db.execute("SELECT expires_at FROM Mutes WHERE user_id=?", (turn_player,)) as c:
             mute_row = await c.fetchone()
             self.assertIsNotNone(mute_row)
-            self.assertGreater(mute_row[0], time.time() + 1700)
+            self.assertGreater(mute_row[0], time.time() + 500)
 
 
 if __name__ == "__main__":

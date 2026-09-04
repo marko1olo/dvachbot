@@ -1,0 +1,34 @@
+[
+  {
+    "user_id": 5264555563,
+    "board_id": "ALL",
+    "mute_type": "shadow",
+    "thread_id": null,
+    "expires_at": 4941988584.959889,
+    "reason": "wipe"
+  },
+  {
+    "user_id": 7642123724,
+    "board_id": "b",
+    "mute_type": "shadow",
+    "thread_id": null,
+    "expires_at": 1788556018.494931,
+    "reason": "wipe"
+  },
+  {
+    "user_id": 8349102176,
+    "board_id": "sex",
+    "mute_type": "shadow",
+    "thread_id": null,
+    "expires_at": 1788541842.518906,
+    "reason": null
+  },
+  {
+    "user_id": 8349102176,
+    "board_id": "po",
+    "mute_type": "shadow",
+    "thread_id": null,
+    "expires_at": 1788541836.947028,
+    "reason": null
+  }
+]

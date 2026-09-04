@@ -1018,7 +1018,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         # Проверяем, совершает ли замученный пользователь НАРУШЕНИЕ ПРАВИЛ (флуд, спам, баян, скам-ссылки)
         from common.spam_filter import check_flood, check_link_or_ad_spam, _check_cross_board_spam, is_bayan
         now_check = msg_date_ts
-        is_fl, fl_reason = check_flood(user_id, board_id, now_ts=now_check, record_history=False)
+        is_fl, fl_reason = check_flood(user_id, board_id, now_ts=now_check, record_history=False, is_reply=bool(msg.reply_to_message))
         text_str = content if isinstance(content, str) else ""
         is_link, link_reason = check_link_or_ad_spam(user_id, board_id, text_str, now_ts=now_check)
         payload = text_str or f_uid or f_id or ""
@@ -1045,7 +1045,8 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         raw_content_type=raw_content_type,
         file_unique_id=f_uid,
         file_id=f_id,
-        now_ts=msg_date_ts
+        now_ts=msg_date_ts,
+        is_reply=bool(msg.reply_to_message)
     )
     if should_mute:
         # User is placed into silent shadow-mute in DB and RAM.
@@ -1282,7 +1283,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                 from common.spam_filter import check_flood, evaluate_message_for_autoshadowmute
                 msg_date_ts = message.date.timestamp() if getattr(message, 'date', None) else time.time()
                 # Flood-only check для медиагруппы
-                is_flood, flood_reason = check_flood(user_id, board_id, now_ts=msg_date_ts)
+                is_flood, flood_reason = check_flood(user_id, board_id, now_ts=msg_date_ts, is_reply=bool(message.reply_to_message))
                 if is_flood:
                     from common.database import apply_shadow_mute
                     await apply_shadow_mute(user_id, board_id, duration_seconds=300.0,

@@ -9,7 +9,7 @@ cursor = conn.cursor()
 
 # Get posts from last 48 hours
 query = """
-SELECT post_num, board_id, thread_id, author_id, text_content, timestamp, is_shadow
+SELECT post_num, board_id, thread_id, author_id, content, timestamp, is_shadow
 FROM Posts
 WHERE timestamp >= 1788329880
 ORDER BY timestamp ASC
@@ -40,8 +40,14 @@ for t_id, t_posts in threads.items():
     })
 
 for p in posts:
-    text = str(p['text_content'] or '').lower()
+    if not p['content']: continue
     
+    try:
+        c_json = json.loads(p['content'])
+        text = str(c_json.get('text', c_json.get('caption', ''))).lower()
+    except:
+        continue
+        
     is_bot = any(k in text for k in bot_keywords)
     is_game = any(k in text for k in game_keywords)
     is_toxic = any(k in text for k in toxic_keywords)
@@ -50,7 +56,7 @@ for p in posts:
         'post_num': p['post_num'],
         'author_id': p['author_id'],
         'thread_id': p['thread_id'],
-        'text': p['text_content'],
+        'text': c_json.get('text', c_json.get('caption', '')),
         'timestamp': p['timestamp']
     }
     

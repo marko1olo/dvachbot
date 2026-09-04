@@ -352,6 +352,11 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
         return
         
     db = await get_pool()
+    async with db.execute("SELECT posts_count, grief_protection FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
+        target_row = await cursor.fetchone()
+        if target_row and (target_row[0] < 5 or target_row[1]):
+            await message.reply("⛔ Цель защищена от гриферства для новичков.", parse_mode="HTML")
+            return
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
