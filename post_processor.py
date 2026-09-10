@@ -311,6 +311,10 @@ class NewPostProcessor:
             repost_count = self.content.get('repost_count')
             if isinstance(repost_count, int) and repost_count > 1:
                 header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
+            if self.content.get('is_cyberchad') or self.final_content.get('is_cyberchad'):
+                prefix = "🔥 КИБЕРЧЕД 🔥" if self.stream != 'en' else "🔥 CYBERCHAD 🔥"
+                if prefix not in header_text:
+                    header_text = f"{prefix}\n{header_text}"
             self.final_content['header'] = header_text
             self.author_content['header'] = header_text
             self.final_content.pop('exclude_recipients', None)

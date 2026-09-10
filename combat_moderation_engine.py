@@ -117,17 +117,83 @@ def check_pair_attack_cooldown(attacker_id: int, target_id: int) -> Tuple[bool, 
     return False, 0
 
 
+async def get_user_posts_count(db, user_id: int, board_id: Optional[str] = None) -> int:
+    """
+    Returns accurate total post count for a user across boards.
+    Queries total posts across all boards from Users, with fallback to Posts table
+    to accurately recognize legacy users and users on new boards.
+    """
+    total = 0
+    try:
+        async with db.execute("SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+            total = int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        total = 0
+
+    if total < NEWBIE_POSTS_THRESHOLD:
+        try:
+            async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,)) as cur:
+                p_row = await cur.fetchone()
+                p_count = int(p_row[0]) if p_row and p_row[0] is not None else 0
+                if p_count > total:
+                    total = p_count
+        except Exception:
+            pass
+
+    return total
+
+
+async def is_newbie(db, user_id: int, board_id: Optional[str] = None, threshold: int = NEWBIE_POSTS_THRESHOLD) -> bool:
+    """Checks whether user has fewer posts than the newbie threshold."""
+    posts = await get_user_posts_count(db, user_id, board_id)
+    return posts < threshold
+
+
+check_newbie_immunity = is_newbie
+
+
+async def check_target_grief_protection(message: Any, target_id: int, user_id: int, board_id: str) -> bool:
+    """
+    Проверяет 5-минутное окно защиты цели от повторных атак (Anti-Griefing Target Immunity).
+    Если цель атаковали менее 5 минут назад, блокирует нападение и сохраняет предмет атакующему.
+    """
+    try:
+        from main import is_admin
+        if is_admin(user_id, board_id):
+            return False
+    except Exception:
+        pass
+    from shared_state import get_target_grief_protection_remaining
+    rem = get_target_grief_protection_remaining(target_id)
+    if rem > 0:
+        rem_min = rem // 60
+        rem_sec = rem % 60
+        time_str = f"{rem_min}м {rem_sec}с" if rem_min > 0 else f"{rem_sec}с"
+        await message.answer(
+            f"🔰 <b>ИММУНИТЕТ ЦЕЛИ ОТ ГРИФЕРСТВА!</b>\n\n"
+            f"Анон еще отходит от предыдущей разборки и находится под защитой борды.\n"
+            f"Повторное нападение на этого анона возможно через <b>{time_str}</b>.\n"
+            f"<i>(Оружие сохранено в твоем инвентаре)</i>",
+            parse_mode="HTML"
+        )
+        return True
+    return False
+
+
 def calculate_combat_duration_and_backfire(
     attacker_id: int,
     target_id: int,
     weapon_type: str,
-    target_posts: int
+    target_posts: int,
+    target_items: Optional[Dict[str, Any]] = None
 ) -> Tuple[int, bool, float]:
     """
     Calculates:
       1. Progressive mute duration (seconds) based on attacker's 24h frequency.
       2. Target activity resistance multiplier (posts_count reduction).
-      3. Backfire chance & trigger (false report / gun explosion).
+      3. Wardrobe mute reduction (-50% for helmet, -70% for riot police).
+      4. Backfire chance & trigger (false report / gun explosion).
 
     Returns:
       (final_duration_sec: int, is_backfire: bool, backfire_chance: float)
@@ -137,18 +203,18 @@ def calculate_combat_duration_and_backfire(
 
     # 1. Base duration & backfire scaling by attack count
     if weapon_type == "partyvan":
-        # Partyvan base durations: 6h -> 3h -> 1.5h -> 1h
+        # Partyvan base durations: 3h -> 1.5h -> 45m -> 20m
         if attacks_24h == 0:
-            base_duration = 21600  # 6 hours
+            base_duration = 10800  # 3 hours
             backfire_chance = 0.0
         elif attacks_24h == 1:
-            base_duration = 10800  # 3 hours
+            base_duration = 5400   # 1.5 hours
             backfire_chance = 0.15
         elif attacks_24h == 2:
-            base_duration = 5400   # 1.5 hours
+            base_duration = 2700   # 45 minutes
             backfire_chance = 0.40
         else:
-            base_duration = 3600   # 1 hour
+            base_duration = 1200   # 20 minutes
             backfire_chance = 0.75
     else:  # shoot (мут-ган)
         # Mute-gun base durations: 15m -> 10m -> 5m -> 1m
@@ -185,6 +251,18 @@ def calculate_combat_duration_and_backfire(
         return 0, False, backfire_chance
 
     final_duration = max(60, int(round(base_duration * multiplier)))
+
+    # 4. Wardrobe mute duration reduction (hat_helmet -50%, set_riot_police -70%)
+    if target_items:
+        try:
+            from wardrobe_engine import get_wardrobe_total_stats
+            w_stats = get_wardrobe_total_stats(target_items)
+            mute_red = w_stats.get("mute_reduction_pct", 0)
+            if mute_red > 0:
+                final_duration = max(60, int(round(final_duration * (1.0 - mute_red / 100.0))))
+        except Exception:
+            pass
+
     return final_duration, False, backfire_chance
 
 
@@ -193,11 +271,11 @@ def get_partyvan_flavor_text(attacks_24h: int) -> str:
     if attacks_24h <= 0:
         return "🚔 <b>ОМОН сработал по первому разряду!</b> Наряд прибыл в масках, шмон с пристрастием, камера-одиночка."
     elif attacks_24h == 1:
-        return "🚨 <b>В местном ОВД переполнение!</b> Менты устали строчить протоколы на твоих оппонентов. Срок урезан до 3 часов!"
+        return "🚨 <b>В местном ОВД переполнение!</b> Менты устали строчить протоколы на твоих оппонентов. Срок урезан до 1.5 часа!"
     elif attacks_24h == 2:
-        return "🚨 <b>Товарищ майор не спеша пьёт чай с пряниками</b> и зевает от твоих кляуз. Дежурный выписал задержанному УДО через 1.5 часа!"
+        return "🚨 <b>Товарищ майор не спеша пьёт чай с пряниками</b> и зевает от твоих кляуз. Дежурный выписал задержанному УДО через 45 минут!"
     else:
-        return "🚨 <b>В честь дня рождения Абу объявлена амнистия!</b> В обезьяннике кончились свободные шконки, задержанный выйдет уже через 1 час!"
+        return "🚨 <b>В честь дня рождения Абу объявлена амнистия!</b> В обезьяннике кончились свободные шконки, задержанный выйдет уже через 20 минут!"
 
 
 def format_duration_str(seconds: int) -> str:
@@ -309,9 +387,7 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
 
     # 4. Voter eligibility: minimum 10 posts to avoid burner bot brigades
     db = await get_pool()
-    async with db.execute("SELECT posts_count FROM Users WHERE user_id = ? AND board_id = ?", (voter_id, sess.board_id)) as cur:
-        row = await cur.fetchone()
-        voter_posts = row[0] if row and row[0] is not None else 0
+    voter_posts = await get_user_posts_count(db, voter_id, sess.board_id)
 
     if voter_posts < 10:
         await callback.answer("⛔ Голосовать за апелляцию могут только участники с 10+ постами на борде.", show_alert=True)

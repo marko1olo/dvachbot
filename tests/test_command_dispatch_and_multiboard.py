@@ -298,8 +298,10 @@ class TestCommandDispatch(unittest.IsolatedAsyncioTestCase):
     async def test_dispatch_duel_rr(self):
         # 1. Dispatch with no args shows interactive rules
         msg_help = create_mock_message(user_id=self.user_id, text="/duel_rr")
-        await russian_roulette_pvp.cmd_russian_roulette(msg_help, board_id="b", stream="ru")
+        with patch("russian_roulette_pvp.get_pool", return_value=self.db_conn):
+            await russian_roulette_pvp.cmd_russian_roulette(msg_help, board_id="b", stream="ru")
         self.assertTrue(msg_help.answer.called)
+
         self.assertIn("РУССКАЯ РУЛЕТКА", msg_help.answer.call_args[0][0])
 
         # 2. Dispatch with bet creates challenge

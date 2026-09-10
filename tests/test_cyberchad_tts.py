@@ -21,6 +21,7 @@ from common.tts_engine import (
     CyberchadPreset,
     DEFAULT_VOICE,
     CYBERCHAD_FFMPEG_FILTER,
+    CYBERCHAD_GTTS_FALLBACK_FILTER,
 )
 
 
@@ -198,7 +199,7 @@ class TestCyberchadTTSEngine:
                                     # DSP should still be executed on gTTS output
                                     mock_exec.assert_called_once()
                                     cmd_args = mock_exec.call_args[0]
-                                    assert CYBERCHAD_PRESETS["cyborg"].ffmpeg_filter in cmd_args
+                                    assert CYBERCHAD_GTTS_FALLBACK_FILTER in cmd_args
 
     @pytest.mark.asyncio
     async def test_ffmpeg_missing_falls_back_to_raw_mp3(self):
@@ -229,7 +230,7 @@ class TestVoiceRoastCyberchadIntegration:
 
         mock_bot = AsyncMock()
         mock_bot.get_file.return_value = MagicMock(file_path="voice/note.ogg", file_size=500_000)
-        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_OGG_VOICE")
+        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_OGG_VOICE_PAYLOAD_FOR_TESTS_1234567890AB")
 
         mock_http_client = AsyncMock()
         mock_resp = MagicMock()
@@ -310,7 +311,7 @@ class TestVoiceRoastCyberchadIntegration:
 
         mock_bot = AsyncMock()
         mock_bot.get_file.return_value = MagicMock(file_path="voice/note.ogg", file_size=500_000)
-        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_OGG_VOICE")
+        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_OGG_VOICE_PAYLOAD_FOR_TESTS_1234567890AB")
 
         mock_http_client = AsyncMock()
         mock_resp = MagicMock()
@@ -480,7 +481,7 @@ class TestCyberchadBoardBroadcast:
 
         mock_bot = AsyncMock()
         mock_bot.get_file.return_value = MagicMock(file_path="voice/note.ogg", file_size=500_000)
-        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_OGG_VOICE")
+        mock_bot.download_file.return_value = io.BytesIO(b"MOCK_OGG_VOICE_PAYLOAD_FOR_TESTS_1234567890AB")
 
         mock_http_client = AsyncMock()
         mock_resp = MagicMock()

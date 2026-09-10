@@ -149,6 +149,14 @@ async def test_wealth_tax_includes_bank_deposits():
                     value TEXT
                 )
             """)
+            await db.execute("""
+                CREATE TABLE MarketListings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER,
+                    price REAL,
+                    status TEXT DEFAULT 'active'
+                )
+            """)
             await db.commit()
 
             # Insert a user with 500 ₪ in wallet, but 100,000 ₪ in active BankDeposit

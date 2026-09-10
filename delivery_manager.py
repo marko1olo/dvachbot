@@ -6,6 +6,7 @@ from common.config import (
     BOT_PRIORITY_SPLIT_MIN_PASSIVE, BOT_PASSIVE_MAX_PREEMPTIONS
 )
 
+import os
 import shared_state
 from shared_state import *
 from common.database import (
@@ -678,9 +679,41 @@ async def execute_delayed_edit(
                     notify_text,
                     reply_to_message_id=reply_to_message_id
                 )
+            except TelegramRetryAfter as flood:
+                runtime_logger.warning(
+                    f"⏳ [delayed_edit] FloodWait {flood.retry_after}s при отправке уведомления автору {author_id} для #{post_num}"
+                )
+                if flood.retry_after <= 15:
+                    try:
+                        await asyncio.sleep(flood.retry_after + 0.5)
+                        await bot_instance.send_message(
+                            author_id,
+                            notify_text,
+                            reply_to_message_id=reply_to_message_id
+                        )
+                    except Exception as retry_err:
+                        runtime_logger.warning(f"⚠️ [delayed_edit] Повторное уведомление автора {author_id} не удалось: {retry_err}")
             except (TelegramForbiddenError, TelegramBadRequest):
                 pass  # юзер заблокировал бота или сообщение удалено — норм
-        await edit_post_for_all_recipients(post_num, bot_instance)
+            except Exception as notify_err:
+                runtime_logger.warning(f"⚠️ [delayed_edit] Не удалось уведомить автора {author_id}: {notify_err}")
+
+        # Гарантированное редактирование поста у всех получателей независимо от статуса уведомления автора
+        try:
+            await edit_post_for_all_recipients(post_num, bot_instance)
+        except TelegramRetryAfter as flood:
+            runtime_logger.warning(
+                f"⏳ [delayed_edit] FloodWait {flood.retry_after}s в edit_post_for_all_recipients для #{post_num}. Retrying after delay..."
+            )
+            await asyncio.sleep(flood.retry_after + 0.5)
+            try:
+                await edit_post_for_all_recipients(post_num, bot_instance)
+            except Exception as retry_edit_err:
+                runtime_logger.error(
+                    f"❌ [delayed_edit] Повторная ошибка в edit_post_for_all_recipients для #{post_num}: {retry_edit_err}"
+                )
+        except Exception as edit_err:
+            runtime_logger.error(f"❌ [delayed_edit] Ошибка в edit_post_for_all_recipients для #{post_num}: {edit_err}")
     except asyncio.CancelledError:
         raise  # нормальная отмена таски — не логируем, propagate вверх
     except Exception as e:
@@ -1332,12 +1365,18 @@ async def board_help_worker(board_id: str):
                 }
                 banner_cat = cat_map.get(choice, "start")
                 fname, photo_payload = get_banner_file(category=banner_cat)
-                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-                if not fid and _BANNER_CACHE:
-                    fid = next(iter(_BANNER_CACHE.values()), None)
+                fid = photo_payload if isinstance(photo_payload, str) else None
+                img_bytes = None
+                if not fid and hasattr(photo_payload, 'path') and os.path.exists(photo_payload.path):
+                    try:
+                        with open(photo_payload.path, 'rb') as bf:
+                            img_bytes = bf.read()
+                    except Exception:
+                        pass
                 content = {
-                    'type': 'photo' if fid else 'text',
+                    'type': 'photo' if (fid or img_bytes) else 'text',
                     'file_id': fid,
+                    'image_bytes': img_bytes,
                     'caption': message_text,
                     'text': message_text,
                     'is_system_message': True,

@@ -312,6 +312,10 @@ async def publish_casino_jackpot_news(
     if not news_channel_id or news_channel_id == 0:
         return False
 
+    # Строгий фильтр: только заносы с множителем не менее 4.0x (отсекаем 1.8x и мелкие совпадения)
+    if multiplier < 4.0:
+        return False
+
     bot_info = await bot.get_me()
     bot_uname = bot_info.username or "tgach_bot"
     anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"

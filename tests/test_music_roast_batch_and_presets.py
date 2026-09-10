@@ -138,7 +138,8 @@ class TestMusicResponseParsing:
         raw = "ВЕРДИКТ: Глухая бочка и каша в нижней середине.\nОЦЕНКА: 2/10 💩 (Уши кровоточат)"
         roast, rating = parse_music_roast_response(raw)
         assert "Глухая бочка" in roast
-        assert "2/10 💩" in rating
+        # Inverted scale on negative diagnosis: 2/10 -> 8/10 on шкала говноедства
+        assert "8/10 💩" in rating
 
     def test_parse_single_response_ignores_transcript_if_present(self):
         raw = (
@@ -173,8 +174,8 @@ class TestMusicResponseParsing:
         assert reviews[2]["score"] == 0
 
         assert "генетическом уровне" in overall_verdict
-        assert "1/10 💩" in overall_rating
-        assert overall_score == 1
+        assert "9/10 💩" in overall_rating
+        assert overall_score == 9
 
     def test_parse_batch_response_missing_track_graceful_fallback(self):
         """If model returned only 2 of 3 tracks, the 3rd gets a graceful placeholder."""
@@ -268,7 +269,8 @@ class TestGeminiMultiAudioBatching:
         assert "Artist2 — Song2" in sent_html
         assert "Artist3 — Song3" in sent_html
         assert "Общий вердикт /b/" in sent_html
-        assert "2/10 💩" in sent_html
+        # Inverted scale on negative diagnosis: 2/10 -> 8/10 on шкала говноедства
+        assert "8/10 💩" in sent_html
 
     @pytest.mark.asyncio
     @patch("ai_manager._safe_send_voice_roast", new_callable=AsyncMock)

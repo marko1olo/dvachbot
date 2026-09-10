@@ -408,7 +408,7 @@ def draw_leaderboard_card(data: LeaderboardData) -> io.BytesIO:
         row_stroke = accent_color if is_me else card_stroke
         row_fill = badge_bg if is_me else card_fill
 
-        draw.rounded_rectangle([rx, ry, rx + col_w, ry + row_h], radius=8, fill=row_fill, outline=row_stroke, width=1.5 if is_me else 1)
+        draw.rounded_rectangle([rx, ry, rx + col_w, ry + row_h], radius=8, fill=row_fill, outline=row_stroke, width=2 if is_me else 1)
 
         # Rank Badge Box
         draw.rounded_rectangle([rx + 8, ry + 7, rx + 36, ry + 29], radius=5, fill=(35, 44, 64, 255))

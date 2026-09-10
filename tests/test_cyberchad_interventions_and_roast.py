@@ -24,6 +24,7 @@ from ai_manager import (
     _LAST_DIRECT_ROAST_USER_TS,
     CYBERCHAD_FIGHT_INTERVENTION_PROMPT,
     CYBERCHAD_DIRECT_ROAST_PROMPT,
+    CYBERCHAD_RATE_LIMIT_REJECTIONS,
 )
 
 
@@ -233,22 +234,36 @@ class TestCyberchadDirectReplyRoasts:
             )
 
         assert mock_process_post.call_count == 1
+        assert mock_summarize.call_count == 1
 
-        # Second reply from same user within 5s is debounced
+        # Second reply from same user within 60s triggers offline voice rejection WITHOUT calling Gemini
         with patch("time.time", return_value=t0 + 4.0):
             await register_post_and_maybe_trigger_cyberchad_intervention(
                 mock_bot, "b", 555, "Ответ 2 спам", post_num=602, reply_to_post=600
             )
 
-        assert mock_process_post.call_count == 1  # Still 1
+        assert mock_summarize.call_count == 1  # Gemini NOT called
+        assert mock_process_post.call_count == 2  # Rejection voice sent
+        rej_call = mock_process_post.call_args_list[1][0][0]
+        assert rej_call.content["roast_text"] in CYBERCHAD_RATE_LIMIT_REJECTIONS
 
-        # Reply from a different user is NOT blocked
-        with patch("time.time", return_value=t0 + 4.0):
+        # Third reply within 15s of rejection is completely debounced (anti-flood for rejections)
+        with patch("time.time", return_value=t0 + 8.0):
             await register_post_and_maybe_trigger_cyberchad_intervention(
-                mock_bot, "b", 888, "Ответ от другого юзера", post_num=603, reply_to_post=600
+                mock_bot, "b", 555, "Ответ 3 спам флуд", post_num=603, reply_to_post=600
             )
 
-        assert mock_process_post.call_count == 2
+        assert mock_summarize.call_count == 1
+        assert mock_process_post.call_count == 2  # Still 2
+
+        # Reply from a different user is NOT blocked
+        with patch("time.time", return_value=t0 + 8.0):
+            await register_post_and_maybe_trigger_cyberchad_intervention(
+                mock_bot, "b", 888, "Ответ от другого юзера", post_num=604, reply_to_post=600
+            )
+
+        assert mock_summarize.call_count == 2  # Gemini called for user 888
+        assert mock_process_post.call_count == 3
 
 
 class TestRootCyberchadTTSModule:

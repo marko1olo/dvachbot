@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from work_alerts import (
-    WORK_ALERT_PHRASES, schedule_work_cooldown_alert,
+    WORK_ALERT_PHRASES, WORK_ALERT_50_PHRASES, WORK_ALERT_100_PHRASES, schedule_work_cooldown_alert,
     _work_cooldown_alert_task, _scheduled_work_alerts
 )
 
@@ -12,6 +12,18 @@ class TestWorkAlertPhrases:
     def test_phrases_not_empty(self):
         assert len(WORK_ALERT_PHRASES) >= 4
         for p in WORK_ALERT_PHRASES:
+            assert "<b>" in p
+            assert len(p) > 50
+
+    def test_50_phrases_not_empty(self):
+        assert len(WORK_ALERT_50_PHRASES) >= 10
+        for p in WORK_ALERT_50_PHRASES:
+            assert "<b>" in p
+            assert len(p) > 50
+
+    def test_100_phrases_not_empty(self):
+        assert len(WORK_ALERT_100_PHRASES) >= 10
+        for p in WORK_ALERT_100_PHRASES:
             assert "<b>" in p
             assert len(p) > 50
 
@@ -51,3 +63,24 @@ async def test_work_cooldown_alert_skips_if_active_cooldown_remains():
         await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0)
         
         mock_send_banner.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_work_cooldown_alert_tier_50_fires():
+    """Verify that tier=50 alert fires when cooldowns remain in future."""
+    mock_bot = MagicMock()
+    user_id = 999333
+    board_id = "b"
+
+    with patch("work_alerts.asyncio.sleep", new=AsyncMock()), \
+         patch("common.db_pool.get_pool", new=AsyncMock(return_value=MagicMock())), \
+         patch("common.bot_helpers._get_user_active_items", new=AsyncMock(return_value={"work_cooldowns": {"factory": 9999999999}})), \
+         patch("banner_manager.send_banner_message", new=AsyncMock()) as mock_send_banner:
+        
+        await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0, tier=50)
+        
+        mock_send_banner.assert_called_once()
+        args, kwargs = mock_send_banner.call_args
+        caption_lower = kwargs["caption"].lower()
+        assert any(w in caption_lower for w in ["экватор", "50%", "половин", "смен", "ваканси", "кулдаун", "шекел", "стан"])
+

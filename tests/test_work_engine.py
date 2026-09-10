@@ -11,13 +11,13 @@ import main
 
 
 def test_work_vacancies_structure():
-    assert len(WORK_VACANCIES) == 16, f"Expected 16 vacancies, found {len(WORK_VACANCIES)}"
+    assert len(WORK_VACANCIES) == 21, f"Expected 21 vacancies, found {len(WORK_VACANCIES)}"
     
     expected_keys = [
-        "bottles", "sweeper", "courier", "captcha", "spy", "factory",
-        "it_freelance", "scam", "deputy", "escort_sugar", "crypto_cartel",
-        "infogypsy_cult", "propaganda_troll", "abu_consigliere",
-        "shadow_oligarch", "matrix_architect"
+        "bottles", "sweeper", "courier", "captcha", "cho_security", "spy", "factory",
+        "mod_b", "it_freelance", "scam", "deputy", "cam_model", "escort_sugar", "crypto_cartel",
+        "darknet_courier", "infogypsy_cult", "propaganda_troll", "abu_consigliere",
+        "shadow_oligarch", "matrix_architect", "deep_state_operator"
     ]
     for k in expected_keys:
         assert k in WORK_VACANCIES, f"Missing job key: {k}"
@@ -410,12 +410,12 @@ async def test_build_work_card_length_under_1024_all_tiers():
             assert f"{shifts} смен" in caption
 
             # 2. Keyboard structure assertion
-            # 8 rows of 2 vacancies + 1 row side hustles + 2 rows nav = 11 rows
-            assert len(markup.inline_keyboard) == 11
+            # 11 rows of vacancies (10 rows of 2 + 1 row of 1) + 4 rows side hustles + 2 rows nav = 17 rows
+            assert len(markup.inline_keyboard) == 17
 
             # 3. Check badge states on vacancy buttons
-            all_buttons = [btn for row in markup.inline_keyboard[:8] for btn in row]
-            assert len(all_buttons) == 16
+            all_buttons = [btn for row in markup.inline_keyboard[:11] for btn in row]
+            assert len(all_buttons) == 21
 
             for btn in all_buttons:
                 job_key = btn.callback_data.replace("work_do_", "")
@@ -432,6 +432,11 @@ async def test_build_work_card_length_under_1024_all_tiers():
             # 4. Check side hustles and navigation
             all_callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row]
             assert "work_bottles" in all_callbacks
+            assert "work_dumpster" in all_callbacks
+            assert "work_flyers" in all_callbacks
+            assert "work_microloan" in all_callbacks
+            assert "work_overtime" in all_callbacks
+            assert "work_quests" in all_callbacks
             assert "work_sell_mother" in all_callbacks
             assert "work_refresh" in all_callbacks
             assert "shop_main_hub" in all_callbacks

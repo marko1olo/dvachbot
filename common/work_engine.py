@@ -132,6 +132,34 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "💎 <b>СБОЙ АЛГОРИТМА!</b> Заказчик случайно ошибся нулем в ставке за распознавание базы токенов! Выплата: <code>+{reward} ₪</code>!"
         ]
     },
+    "cho_security": {
+        "title": "👮 Ночной ЧОПовец в «Пятёрочке»",
+        "desc": "Разгадывание сканвордов, ловля школьников на краже энергетиков и поедание доширака у монитора",
+        "tier": "Уровень 4.5 • Страж Полок",
+        "required_shifts": 20,
+        "reward_range": (150, 320),
+        "cooldown_sec": 2100,  # 35 min
+        "risk_pct": 0.12,
+        "penalty": 45,
+        "item_drop": "pepperspray",
+        "item_drop_chance": 0.07,
+        "phrases": [
+            "Поймал школьника с банкой Flash в рукаве: директор магазина выписала премию <code>+{reward} ₪</code>!",
+            "Успешно разгадал японский кроссворд за 8-часовую смену: получка за бдительность <code>+{reward} ₪</code>!",
+            "Предотвратил кражу элитного коньяка местным алкашом: старший кассир отсыпал <code>+{reward} ₪</code>!",
+            "Отобрал у наглого зумера неоплаченный сырок «Б.Ю. Александров»: премия за охрану периметра <code>+{reward} ₪</code>!",
+            "Просидел всю ночь в подсобке без происшествий под чай с бергамотом: ночной оклад <code>+{reward} ₪</code>!",
+            "Заставил подозрительного типа вывернуть карманы, тип испугался и оплатил всю тележку: <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "💤 <b>УСНУЛ НА ПОСТУ!</b> Пока спал, цыгане выкатили две тележки с икрой: удержание из ЗП <code>-{penalty} ₪</code>!",
+            "Перепутал директора магазина с вором и брызнул перцовкой в лицо: штраф и компенсация <code>-{penalty} ₪</code>!",
+            "Разбил витрину со стеклом при попытке задержать воришку: оплата битого товара <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>ОТВАЖНЫЙ ОХРАННИК!</b> Задержал беглого федерального преступника на кассе самообслуживания! Награда от МВД: <code>+{reward} ₪</code>!"
+        ]
+    },
     "spy": {
         "title": "🔍 Слив инфы майору / Стукач",
         "desc": "Анонимные доносы на треды, слив IP-адресов вайперов и аналитика для товарища майора",
@@ -190,6 +218,34 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ],
         "jackpot_phrases": [
             "💎 <b>УДАРНИК ТРУДА!</b> Награжден Орденом Стаханова и 13-й зарплатой от гендиректора! Куш: <code>+{reward} ₪</code>!"
+        ]
+    },
+    "mod_b": {
+        "title": "🛡 Модератор /b/ / Ночной Вахтёр",
+        "desc": "Круглосуточная чистка ЦП, закрытие вайп-тредов, баны за 'нетакой' и сбор доносов",
+        "tier": "Уровень 6.5 • Вахтёр Доски",
+        "required_shifts": 50,
+        "reward_range": (380, 780),
+        "cooldown_sec": 9000,  # 2.5 hours
+        "risk_pct": 0.16,
+        "penalty": 110,
+        "item_drop": "janitor_broom",
+        "item_drop_chance": 0.06,
+        "phrases": [
+            "Успешно забанил 300 ботов с гифками шредингера за одну минуту: премия от Абу <code>+{reward} ₪</code>!",
+            "Скрыл тред с деаноном куратора и зачистил все реплаи: куратор перевел на киви <code>+{reward} ₪</code>!",
+            "Выкатил пермач толстому троллю за провокацию срача: аноны скинулись на пиво модератору <code>+{reward} ₪</code>!",
+            "Очистил нулевую страницу от ЦП-рейда в 4 часа утра: дежурная ставка вахтёра <code>+{reward} ₪</code>!",
+            "Продал разбан забаненному стримеру мимо официальной кассы: теневой профит <code>+{reward} ₪</code>!",
+            "Удачно приколол в топ собственный шизоидный тред и собрал донаты: <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🦹 <b>ДЕАНОН МОДЕРАТОРА!</b> Обиженный битард вычислил твой адрес и заказал 20 курьеров с навозом: тушение последствий <code>-{penalty} ₪</code>!",
+            "Случайно забанил аккаунт самого Абу во время массовой зачистки: штраф за самоуправство <code>-{penalty} ₪</code>!",
+            "Проспал ночной вайп доски скриптом с рулетами: лишение суточного пайка <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>КУРАТОР БОРДЫ!</b> Накрыл организованную сеть набегаторов и получил личную похвалу Абу с конвертом! Куш: <code>+{reward} ₪</code>!"
         ]
     },
     "it_freelance": {
@@ -288,6 +344,34 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "💎 <b>ГОСЗАКАЗ ГОДА!</b> Выиграл генеральный подряд на постройку космодрома в степи! Освоено: <code>+{reward} ₪</code>!"
         ]
     },
+    "cam_model": {
+        "title": "📹 OnlyFans & Вебкам-Модель / Альтушка",
+        "desc": "Стримы в кошачьих ушках, продажа ношеных носочков скуфам, распаковка подарков из вишлиста",
+        "tier": "Уровень 9.5 • Принцесса Донатов",
+        "required_shifts": 140,
+        "reward_range": (1100, 2300),
+        "cooldown_sec": 19800,  # 5.5 hours
+        "risk_pct": 0.25,
+        "penalty": 380,
+        "item_drop": "schizopill",
+        "item_drop_chance": 0.06,
+        "phrases": [
+            "Скуф из Норильска задонатил всю зарплату за привет шепотом в микрофон: залутано <code>+{reward} ₪</code>!",
+            "Продала банку с воздухом из своей комнаты фанату из /b/: чистый профит <code>+{reward} ₪</code>!",
+            "Провела 6-часовой стрим в бассейне с надувным фламинго: донаты рекой принесли <code>+{reward} ₪</code>!",
+            "Отправила ношеные чулочки постоянному спонсору сдэком: щедрая оплата <code>+{reward} ₪</code>!",
+            "Собрала 50 000 лайков на косплее Аски в ТикТоке: рекламный контракт закрыт на <code>+{reward} ₪</code>!",
+            "Выполнила кринжовый челлендж за донат в 500 шекелей от анонимного благодетеля: <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "😱 <b>СЛИВ ПРИВАТОК!</b> Бывший слил архив фотосессий на Двач: затраты на адвоката и DMCA-страйки <code>-{penalty} ₪</code>!",
+            "Мама зашла в комнату во время приватного вебкам-стрима: семейный скандал и моральный ущерб <code>-{penalty} ₪</code>!",
+            "Twitch выдал бан канала за слишком глубокое декольте: сгорели выплаты на <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>ДУБАЙСКИЙ ДОНАТЕР!</b> Нефтяной магнат оплатил пожизненную подписку первого тира! Куш: <code>+{reward} ₪</code>!"
+        ]
+    },
     "escort_sugar": {
         "title": "💄 Элитный Трап / Эскорт в Дубае",
         "desc": "Поездки на шейх-пати, позирование в чулочках и развод крипто-инвесторов на Патриках",
@@ -345,6 +429,33 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ],
         "jackpot_phrases": [
             "💎 <b>RUGPULL ВЕКА!</b> Обрушил топ-10 мемкоин и вывел 500 ETH прямо на холодный кошелек! Навар: <code>+{reward} ₪</code>!"
+        ]
+    },
+    "darknet_courier": {
+        "title": "📦 Кладмен в лесополосе / Магнитный Курьер",
+        "desc": "Ночные прогулки с фонариком и изолентой, квесты по координатам и бег от патрулей ППС",
+        "tier": "Уровень 11.5 • Повелитель Изоленты",
+        "required_shifts": 240,
+        "reward_range": (2500, 5200),
+        "cooldown_sec": 27000,  # 7.5 hours
+        "risk_pct": 0.35,
+        "penalty": 850,
+        "item_drop": "knife_gun",
+        "item_drop_chance": 0.07,
+        "phrases": [
+            "Успешно разложил 20 магнитов по водосточным трубам в тихом районе: оплата биткоином <code>+{reward} ₪</code>!",
+            "Спрятал мастер-клад в дупле старого дуба в Битцевском парке: куратор перевел <code>+{reward} ₪</code>!",
+            "Ловко перепрыгнул забор и ушел дворами от скучающего экипажа ДПС: получка за смену <code>+{reward} ₪</code>!",
+            "Заминировал промзону кладами с идеальными тайниками: магазин на гидре выплатил бонус <code>+{reward} ₪</code>!",
+            "Закрыл горячий квест за 15 минут до рассвета без свидетелей: профит <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🚔 <b>ПАТРУЛЬ В КУСТАХ!</b> Засада ППС у гаражей, пришлось сбросить вес и откупиться всеми деньгами: взятка <code>-{penalty} ₪</code>!",
+            "Чайки раскопали тайник раньше клиента, куратор повесил недостачу: вычет из залога <code>-{penalty} ₪</code>!",
+            "Сломал ногу в овраге в глухом лесу, вызывал такси за бешеные деньги: траты <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>СКЛАДСКОЙ ОПТОВИК!</b> Успешно доставил оптовую партию до склада без единого хвоста! Спецгонорар: <code>+{reward} ₪</code>!"
         ]
     },
     "infogypsy_cult": {
@@ -486,12 +597,49 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "jackpot_phrases": [
             "💎 <b>БОЖЕСТВЕННАЯ СИНГУЛЯРНОСТЬ!</b> Подчинил себе ткань реальности и слил всю мировую денежную массу в один клик! Итог: <code>+{reward} ₪</code>!"
         ]
+    },
+    "deep_state_operator": {
+        "title": "👁️ Оператор Глубинного Государства / Куратор РКН",
+        "desc": "Блокировка протоколов интернета, управление ТСПУ, вербовка лидеров мнений и вызовы пативэнов",
+        "tier": "Уровень 17 • Теневой Демиург",
+        "required_shifts": 750,
+        "reward_range": (15000, 32000),
+        "cooldown_sec": 64800,  # 18 hours
+        "risk_pct": 0.42,
+        "penalty": 6000,
+        "item_drop": "gold_safe",
+        "item_drop_chance": 0.10,
+        "phrases": [
+            "Замедлил YouTube на всей территории страны ради тренировки бдительности граждан: гонорар за учения <code>+{reward} ₪</code>!",
+            "Выписал оборотный штраф зарубежному IT-гиганту и перевел процент в тайный фонд: <code>+{reward} ₪</code>!",
+            "Подписал распоряжение о блокировке популярного VPN-сервиса: благодарность от отечественных провайдеров <code>+{reward} ₪</code>!",
+            "Направил пативэн к админу оппозиционного канала и конфисковал серверную стойку: профит <code>+{reward} ₪</code>!",
+            "Одобрил закрытый бюджет на квантовое шифрование правительственной спецсвязи: распил <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🚨 <b>ВНУТРЕННЯЯ БЕЗОПАСНОСТЬ!</b> Собственная служба безопасности обнаружила незадекларированные криптоактивы: штраф и конфискация <code>-{penalty} ₪</code>!",
+            "Случайно заблокировал сайт правительства вместо пиратского кинотеатра: огромный вычет из зарплаты <code>-{penalty} ₪</code>!",
+            "Хакеры из Anonymous выложили переписку кураторов в даркнет: экстренное тушение пожара <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>ТОТАЛЬНЫЙ РУБИЛЬНИК!</b> Получил доступ к главному рубильнику Чебурнета и обложил трафик данью! Куш: <code>+{reward} ₪</code>!"
+        ]
     }
 }
 
 
 def get_vacancies() -> Dict[str, Dict[str, Any]]:
     return WORK_VACANCIES
+
+
+def is_night_shift_active(current_time: Optional[int] = None) -> bool:
+    """
+    Checks if Night Shift bonus (x1.5 payout) is active.
+    Night hours: 00:00 to 07:00 Moscow Time (MSK = UTC+3), i.e. 21:00 to 04:00 UTC.
+    """
+    ts = current_time if current_time is not None else int(time.time())
+    msk_hour = ((ts + 3 * 3600) % 86400) // 3600
+    return 0 <= msk_hour < 7
 
 
 def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str, Optional[str]]:
@@ -508,9 +656,36 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
     last_time = work_timers.get(job_id, 0)
     passed = now - last_time
 
+    # Resolve equipped items with durability / expiration validation
+    try:
+        from wardrobe_engine import get_equipped_gear
+        equipped = get_equipped_gear(current_items, current_time=now)
+    except Exception:
+        equipped = {}
+
+    def resolve_slot(slot: str) -> Optional[str]:
+        eq_item = equipped.get(slot)
+        if eq_item:
+            return eq_item["id"]
+        raw = current_items.get(f"equipped_{slot}")
+        if raw:
+            perm = current_items.get(f"{raw}_is_permanent", False)
+            if perm:
+                return raw
+            exp = current_items.get(f"{raw}_expires")
+            if exp is not None:
+                return raw if exp > now else None
+            return raw
+        return None
+
+    feet = resolve_slot("feet")
+    torso = resolve_slot("torso")
+    head = resolve_slot("head")
+    face = resolve_slot("face")
+
     # Cooldown Buffs: Slippers reduce cooldown by 20%
     base_cd = job["cooldown_sec"]
-    if current_items.get("equipped_feet") == "feet_slippers":
+    if feet == "feet_slippers":
         base_cd = int(base_cd * 0.8)
 
     if passed < base_cd:
@@ -536,17 +711,13 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
     buff_notes = []
 
     # Individual Gear Buffs
-    torso = current_items.get("equipped_torso")
-    head = current_items.get("equipped_head")
-    face = current_items.get("equipped_face")
-
     if torso == "body_wasserman":
         salary_mult += 0.25
         buff_notes.append("🦺 Жилетка Вассермана: +25% ЗП")
-    if head == "hat_crown" and job_id in ["courier", "deputy", "scam", "escort_sugar", "abu_consigliere", "shadow_oligarch"]:
+    if head == "hat_crown" and job_id in ["courier", "deputy", "scam", "escort_sugar", "abu_consigliere", "shadow_oligarch", "cam_model", "deep_state_operator"]:
         salary_mult += 0.20
         buff_notes.append("👑 Корона: +20% чаевых")
-    if face in ["face_wasserman_glasses", "face_thug_glasses"] and job_id in ["captcha", "it_freelance", "spy", "crypto_cartel", "propaganda_troll", "matrix_architect"]:
+    if face in ["face_wasserman_glasses", "face_thug_glasses"] and job_id in ["captcha", "it_freelance", "spy", "crypto_cartel", "propaganda_troll", "matrix_architect", "mod_b", "deep_state_operator"]:
         salary_mult += 0.15
         buff_notes.append("👓 Очки Интеллекта: +15% ЗП")
 
@@ -567,11 +738,18 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
     except Exception:
         active_set = None
 
+    # Night Shift Multiplier (x1.5 from 00:00 to 07:00 MSK)
+    if is_night_shift_active(now):
+        salary_mult *= 1.5
+        buff_notes.append("🌙 Ночной тариф x1.5")
+
+    salary_mult = round(salary_mult, 2)
+
     # Failure & Risk Calculation
     risk_pct = job.get("risk_pct", 0.0)
-    if active_set and active_set.get("id") in ["set_riot_police", "set_omon"]:
-        risk_pct = 0.0  # Riot police immunity to work fines
-        buff_notes.append("🪖 Спецназ: 0% штрафов")
+    if (active_set and active_set.get("id") in ["set_riot_police", "set_omon"]) or head == "hat_helmet":
+        risk_pct = 0.0  # Riot police or helmet immunity to work fines
+        buff_notes.append("🪖 Шлем ОМОНа: 0% штрафов" if head == "hat_helmet" else "🪖 Спецназ: 0% штрафов")
 
     is_fail = (risk_pct > 0.0 and random.random() < risk_pct)
     if is_fail:
@@ -588,12 +766,12 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
 
     if is_jackpot:
         mult = random.randint(2, 3)
-        reward = int(base_reward * mult * salary_mult)
+        reward = int(round(base_reward * mult * salary_mult))
         work_timers[job_id] = now
         jp_tmpl = random.choice(job["jackpot_phrases"]).format(reward=reward, penalty=0)
         clean_msg = re.sub(r'<[^>]+>', '', jp_tmpl)
     else:
-        reward = int(base_reward * salary_mult)
+        reward = int(round(base_reward * salary_mult))
         work_timers[job_id] = now
         succ_list = job.get("phrases", ["✅ Успешно отработал смену: +{reward} ₪!"])
         raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
@@ -623,14 +801,21 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
     except Exception:
         pass
 
-    # Check Random Item Drop (Anime set doubles drop rate)
+    # Check Random Item Drop (Anime set 2x, Tracksuit 2x, Bag 1.5x / 8% flat)
     drop_rate_mult = 2.0 if (active_set and active_set.get("id") in ["set_anime", "set_anime_hikka"]) else 1.0
     if head == "hat_bag":
         drop_rate_mult *= 1.5
+    if torso == "body_tracksuit":
+        drop_rate_mult *= 2.0
 
     dropped_item = None
-    if job.get("item_drop") and random.random() < (job.get("item_drop_chance", 0.0) * drop_rate_mult):
-        dropped_item = job["item_drop"]
+    if job.get("item_drop"):
+        if random.random() < (job.get("item_drop_chance", 0.0) * drop_rate_mult):
+            dropped_item = job["item_drop"]
+        elif head == "hat_bag" and random.random() < 0.08:
+            dropped_item = "trash_lootbox"
+    elif head == "hat_bag" and random.random() < 0.08:
+        dropped_item = "trash_lootbox"
 
     buff_suffix = f" (Шмот: {', '.join(buff_notes)})" if buff_notes else ""
     final_text = f"{clean_msg}{ach_note}{buff_suffix}"

@@ -100,6 +100,9 @@ def apply_tinfoil_damage(
     hat_until = target_items.get("tinfoil_hat", 0)
     if hat_until <= now:
         target_items.pop("tinfoil_hat", None)
+        target_items.pop("tinfoil_until", None)
+        if target_items.get("equipped_head") == "hat_tinfoil":
+            target_items.pop("equipped_head", None)
         return True, 0, 0, 0
 
     current_remaining = hat_until - now
@@ -112,6 +115,9 @@ def apply_tinfoil_damage(
     new_remaining = current_remaining - damage_sec
     if is_burned or new_remaining <= 0:
         target_items.pop("tinfoil_hat", None)
+        target_items.pop("tinfoil_until", None)
+        if target_items.get("equipped_head") == "hat_tinfoil":
+            target_items.pop("equipped_head", None)
         return True, 0, 0, 0
     else:
         target_items["tinfoil_hat"] = now + new_remaining
@@ -138,30 +144,45 @@ async def cmd_work_menu(message: types.Message, board_id: str | None = None):
         pass
 
 
-@economy_router.callback_query(F.data.in_({"work_bottles", "work_sell_mother"}))
+@economy_router.callback_query(F.data.in_({
+    "work_bottles", "work_dumpster", "work_flyers", "work_microloan", "work_overtime", "work_sell_mother"
+}))
 async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
     if not board_id: return
     user_id = callback.from_user.id
-    action = callback.data.split("_", 1)[1]
-    
+    action = callback.data.replace("work_", "")
+
     ans_text = ""
     db = await get_pool()
+    now = int(time.time())
+
+    from common.work_engine import is_night_shift_active, WORK_VACANCIES
+    from common.daily_quests_engine import record_quest_progress
+    night_mult = 1.5 if is_night_shift_active(now) else 1.0
+
     async with db_lock:
         from common.bot_helpers import _get_user_active_items
         active_items = await _get_user_active_items(db, user_id, board_id)
-    
+
+        # Gear buffs calculation
+        slippers = active_items.get("equipped_feet") == "feet_slippers"
+        cd_mult = 0.8 if slippers else 1.0
+
         if action == "bottles":
-            now = int(time.time())
             last_bottles = active_items.get("last_bottles", 0)
-            if now - last_bottles < 86400:
-                left = 86400 - (now - last_bottles)
+            base_cd = int(10800 * cd_mult)  # 3 hours base
+            passed = now - last_bottles
+            if passed < base_cd:
+                left = base_cd - passed
                 hours = left // 3600
                 mins = (left % 3600) // 60
-                ans_text = f"❌ Пункты приема закрыты! Приходи через {hours} ч {mins} мин."
+                ans_text = f"⏳ Пункты приема закрыты на переучет! Доступно через {hours}ч {mins}м."
             else:
-                earned = random.randint(10, 50)
+                base_earned = random.randint(150, 500)
+                earned = int(base_earned * night_mult)
                 active_items["last_bottles"] = now
-                
+                record_quest_progress(active_items, "side_hustle", now=now)
+
                 await add_user_global_balance(db, user_id, board_id, earned)
                 await record_user_transaction(db, user_id, earned, 'work', 'Сдал стеклотару у теплотрассы')
                 await db.execute(
@@ -170,8 +191,151 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                     (user_id, board_id, json.dumps(active_items))
                 )
                 await db.commit()
-                ans_text = f"🍾 Ты успешно сдал бутылки у теплотрассы и заработал {earned} Шекелей!"
-    
+                night_note = " <i>(Ночной тариф x1.5!)</i>" if night_mult > 1.0 else ""
+                ans_text = f"🍾 Ты сдал 2 мешка стеклотары у теплотрассы и залутал +{earned} ₪!{night_note}"
+
+        elif action == "dumpster":
+            last_dumpster = active_items.get("last_dumpster", 0)
+            base_cd = int(7200 * cd_mult)  # 2 hours base
+            passed = now - last_dumpster
+            if passed < base_cd:
+                left = base_cd - passed
+                mins = left // 60
+                ans_text = f"⏳ Баки уже обчистили местные бомжи! Новые отходы через {mins} мин."
+            else:
+                base_earned = random.randint(100, 800)
+                earned = int(base_earned * night_mult)
+                active_items["last_dumpster"] = now
+                record_quest_progress(active_items, "risk_action", now=now)
+
+                drop_note = ""
+                # 5% chance of item drop
+                if random.random() < 0.05:
+                    drop_choice = random.choice(["trash_lootbox", "beer_cap", "feet_socks"])
+                    inv = active_items.setdefault("inventory", {})
+                    inv[drop_choice] = inv.get(drop_choice, 0) + 1
+                    drop_names = {
+                        "trash_lootbox": "📦 Мусорный Лутбокс",
+                        "beer_cap": "🍺 Коллекционная пивная крышка",
+                        "feet_socks": "🧦 Дырявые носки бомжа"
+                    }
+                    drop_note = f"\n✨ <b>НАХОДКА В МУСОРКЕ:</b> {drop_names.get(drop_choice, drop_choice)}!"
+
+                await add_user_global_balance(db, user_id, board_id, earned)
+                await record_user_transaction(db, user_id, earned, 'work', 'Порылся в помойке у элитного ЖК')
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                    (user_id, board_id, json.dumps(active_items))
+                )
+                await db.commit()
+                night_note = " <i>(Ночной тариф x1.5!)</i>" if night_mult > 1.0 else ""
+                ans_text = f"🗑 Порылся в контейнерах у ЖК «Алые Паруса»: нашел в кармане выброшенной куртки +{earned} ₪!{night_note}{drop_note}"
+
+        elif action == "flyers":
+            last_flyers = active_items.get("last_flyers", 0)
+            base_cd = int(14400 * cd_mult)  # 4 hours base
+            passed = now - last_flyers
+            if passed < base_cd:
+                left = base_cd - passed
+                hours = left // 3600
+                mins = (left % 3600) // 60
+                ans_text = f"⏳ Клей еще не высох! Следующая партия стикеров через {hours}ч {mins}м."
+            else:
+                active_items["last_flyers"] = now
+                record_quest_progress(active_items, "risk_action", now=now)
+
+                # 15% risk of getting caught by police patrol
+                if random.random() < 0.15:
+                    fine = 3000
+                    balance = await get_user_global_balance(db, user_id)
+                    deducted = min(int(balance), fine)
+                    if deducted > 0:
+                        await deduct_user_global_balance(db, user_id, board_id, deducted)
+                        await record_user_transaction(db, user_id, -deducted, 'work', 'Штраф ППС за расклейку солей')
+                    await db.execute(
+                        "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                        (user_id, board_id, json.dumps(active_items))
+                    )
+                    await db.commit()
+                    ans_text = f"🚨 <b>ОБЛАВА ППС!</b> Тебя прижали к теплотрассе за расклейку солей! Отобрали клей и выписали штраф: -{deducted} ₪!"
+                else:
+                    base_earned = random.randint(1500, 4500)
+                    earned = int(base_earned * night_mult)
+                    await add_user_global_balance(db, user_id, board_id, earned)
+                    await record_user_transaction(db, user_id, earned, 'work', 'Расклейка солевых стикеров на подъездах')
+                    await db.execute(
+                        "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                        (user_id, board_id, json.dumps(active_items))
+                    )
+                    await db.commit()
+                    night_note = " <i>(Ночной тариф x1.5!)</i>" if night_mult > 1.0 else ""
+                    ans_text = f"🚪 Оклеил 10 подъездов солевой рекламой: заказчик скинул на криптокошелек +{earned} ₪!{night_note}"
+
+        elif action == "microloan":
+            last_loan = active_items.get("last_microloan", 0)
+            base_cd = 43200  # 12 hours
+            passed = now - last_loan
+            if passed < base_cd:
+                left = base_cd - passed
+                hours = left // 3600
+                mins = (left % 3600) // 60
+                ans_text = f"⏳ В офисе «БыстроДеньги» пересменка! Новый микрозайм через {hours}ч {mins}м."
+            else:
+                earned = random.randint(5000, 15000)
+                active_items["last_microloan"] = now
+                current_debt = active_items.get("microloan_debt", 0)
+                new_debt = current_debt + int(earned * 1.3)
+                active_items["microloan_debt"] = new_debt
+
+                await add_user_global_balance(db, user_id, board_id, earned)
+                await record_user_transaction(db, user_id, earned, 'work', 'Оформил микрозайм на паспорт бомжа')
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                    (user_id, board_id, json.dumps(active_items))
+                )
+                await db.commit()
+                ans_text = f"👵 Ты оформил онлайн-займ на паспорт бомжа Михалыча и залутал +{earned:,} ₪! (Долг коллекторам: {new_debt:,} ₪). Прячь шекели в банк!"
+
+        elif action == "overtime":
+            last_ot = active_items.get("last_overtime", 0)
+            if now - last_ot < 43200:
+                left = 43200 - (now - last_ot)
+                hours = left // 3600
+                mins = (left % 3600) // 60
+                ans_text = f"⏳ Пульс зашкаливает! Энергетик можно въебать через {hours}ч {mins}м."
+            else:
+                work_timers = active_items.get("work_cooldowns", {})
+                best_job = None
+                best_left = float('inf')
+
+                for jid, jcfg in WORK_VACANCIES.items():
+                    jcd = int(jcfg["cooldown_sec"] * cd_mult)
+                    jlast = work_timers.get(jid, 0)
+                    jpassed = now - jlast
+                    if jpassed < jcd:
+                        rem = jcd - jpassed
+                        if rem < best_left:
+                            best_left = rem
+                            best_job = (jid, jcfg["title"].split('/')[0].strip())
+
+                if not best_job:
+                    ans_text = "❌ У тебя сейчас нет карьерных смен на кулдауне! Все работы и так свободны."
+                else:
+                    target_jid, target_title = best_job
+                    work_timers[target_jid] = 0
+                    active_items["last_overtime"] = now
+                    await db.execute(
+                        "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                        (user_id, board_id, json.dumps(active_items))
+                    )
+                    await db.commit()
+                    ans_text = f"⚡ Ты залпом въебал банку Flash Ultra с таурином! Кулдаун с вакансии «{target_title}» мгновенно сброшен! Бегом на смену!"
+
         elif action == "sell_mother":
             if active_items.get("mother_sold"):
                 ans_text = "❌ Ты уже продал мать. Второй раз не получится."
@@ -188,11 +352,12 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 ans_text = "💸 Сделка века! Ты продал мать и получил 8000 Шекелей! Клеймо занесено в твоё Личное Дело и Паспорт."
 
     if ans_text:
+        clean_toast = re.sub(r'<[^>]+>', '', ans_text)
         try:
-            await callback.answer(ans_text, show_alert=True)
+            await callback.answer(clean_toast[:190], show_alert=True)
         except Exception:
             try:
-                await callback.answer(ans_text[:100], show_alert=False)
+                await callback.answer(clean_toast[:100], show_alert=False)
             except Exception:
                 pass
 
@@ -200,6 +365,83 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
     try:
         from main import _build_work_card
         text, kb = await _build_work_card(user_id, board_id)
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@economy_router.callback_query(F.data == "work_quests")
+async def cb_work_quests(callback: types.CallbackQuery, board_id: str | None = None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    async with db_lock:
+        from common.bot_helpers import _get_user_active_items
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        from common.daily_quests_engine import render_quests_text
+        text, can_claim = render_quests_text(active_items)
+
+    kb_rows = []
+    if can_claim:
+        kb_rows.append([InlineKeyboardButton(text="🎁 Забрать премию от Абу (+7,500 ₪)", callback_data="work_claim_quests")])
+    kb_rows.append([InlineKeyboardButton(text="🔙 Назад к бирже", callback_data="work_refresh")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@economy_router.callback_query(F.data == "work_claim_quests")
+async def cb_work_claim_quests(callback: types.CallbackQuery, board_id: str | None = None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    ans_text = ""
+    async with db_lock:
+        from common.bot_helpers import _get_user_active_items
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        from common.daily_quests_engine import claim_daily_quests_reward, render_quests_text
+        ok, cash, msg, item = claim_daily_quests_reward(active_items)
+        if ok:
+            await add_user_global_balance(db, user_id, board_id, cash)
+            await record_user_transaction(db, user_id, cash, 'work', 'Премия от Абу за наряд дня')
+            if item:
+                inv = active_items.setdefault("inventory", {})
+                inv[item] = inv.get(item, 0) + 1
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
+            )
+            await db.commit()
+            ans_text = "🎉 Премия от Абу успешно получена!"
+        else:
+            ans_text = msg
+
+    try:
+        clean_toast = re.sub(r'<[^>]+>', '', ans_text)
+        await callback.answer(clean_toast[:190], show_alert=True)
+    except Exception:
+        pass
+
+    # In-place refresh of quests view
+    from common.daily_quests_engine import render_quests_text
+    text, can_claim = render_quests_text(active_items)
+    kb_rows = []
+    if can_claim:
+        kb_rows.append([InlineKeyboardButton(text="🎁 Забрать премию от Абу (+7,500 ₪)", callback_data="work_claim_quests")])
+    kb_rows.append([InlineKeyboardButton(text="🔙 Назад к бирже", callback_data="work_refresh")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    try:
         if callback.message.photo:
             await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
         else:

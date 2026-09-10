@@ -17,7 +17,105 @@ logger = logging.getLogger(__name__)
 # Tracks the latest scheduled notification timestamp per user: {user_id: target_finish_ts}
 _scheduled_work_alerts: Dict[int, float] = {}
 
-WORK_ALERT_PHRASES = [
+WORK_ALERT_50_PHRASES = [
+    (
+        "⏳ <b>ЭКВАТОР РАБСТВА ПРОЙДЕН, СЫЧУРА!</b>\n\n"
+        "50% твоих вакансий уже остыли от кулдауна. Хватит давить прыщи в /b/, оторви ленивую жопу от проперженного стула — станки наполовину свободны.\n\n"
+        "<i>Пиздуй собирать первые шекели, пока бомжи не обогнали:</i>"
+    ),
+    (
+        "🔔 <b>50% КУЛДАУНОВ СБИТО! ПОЛОВИНА СМЕН ГОТОВА!</b>\n\n"
+        "Ты думал, будешь кайфовать весь день, нищук? Хуй там плавал. Часть работ уже разблокирована. Иди батрачь, доширак сам себя в «Пятёрочке» не спиздит.\n\n"
+        "<i>Хватай рукавицы и вперёд:</i>"
+    ),
+    (
+        "⚠️ <b>ПОЛОВИНА ВАКАНСИЙ РАЗДУПЛИЛАСЬ!</b>\n\n"
+        "Пока ты залипал на хентай и ныл в тредах, таймеры наполовину сгорели. Первые рабочие места снова требуют биомусор. Абу уже косо смотрит на твою лень.\n\n"
+        "<i>Бегом на биржу, полупокер:</i>"
+    ),
+    (
+        "🚨 <b>ПЕРЕРЫВ НАПОЛОВИНУ ОКОНЧЕН, ТУНЕЯДЕЦ!</b>\n\n"
+        "50% твоих вакансий готовы принять твою никчемную тушку. Хватит скроллить пасты десятилетней давности, пора идти зарабатывать на вечерний фунфырик.\n\n"
+        "<i>Твоя смена ждёт:</i>"
+    ),
+    (
+        "🦴 <b>ПОЛОВИНА ТРУДОВОГО ЛАГЕРЯ СНОВА ОТКРЫТА!</b>\n\n"
+        "Кулдауны на половине работ слетели к хуям. Если ты не пойдёшь вкалывать прямо сейчас, останешься с голой жопой как последний омежка.\n\n"
+        "<i>Шевелись, мясо:</i>"
+    ),
+    (
+        "⚡️ <b>50% РАБОТ ОТКАТИЛОСЬ! ХВАТИТ ДРОЧИТЬ!</b>\n\n"
+        "Половина конвейера готова перемалывать твои виртуальные силы. Первые вакансии ждут твоего клика.\n\n"
+        "<i>Забирай шекели, пока конкуренты спят:</i>"
+    ),
+    (
+        "🏭 <b>ПЕРВАЯ СИРЕНА ЗАВОДА ПРОЗВУЧАЛА!</b>\n\n"
+        "Экватор кулдаунов пройден. Половина цехов снова дымит. Прекращай деградировать и включайся в рабочий процесс.\n\n"
+        "<i>Марш за станок:</i>"
+    ),
+    (
+        "🍾 <b>СТЕКЛОТАРА НАПОЛОВИНУ НАПОЛНИЛАСЬ!</b>\n\n"
+        "Половина таймеров сброшена. Местные бомжи уже вышли на охоту, не дай им залутать твою законную помойку.\n\n"
+        "<i>Хватай мешок и на смену:</i>"
+    ),
+    (
+        "💀 <b>ДОШИРАК НАПОЛОВИНУ ЗАВАРИЛСЯ!</b>\n\n"
+        "50% ожидания позади. Твои руки уже не так сильно дрожат, так что пиздуй на биржу и жми кнопки.\n\n"
+        "<i>Быстро батрачить:</i>"
+    ),
+    (
+        "🔥 <b>ЭЙ, ОПУЩЕНЕЦ, ПОЛОВИНА СМЕН ДОСТУПНА!</b>\n\n"
+        "Хватит пускать слюни в экран. 50% вакансий сбросили кулдаун. Шекели утекают сквозь твои кривые пальцы.\n\n"
+        "<i>К станку, животное:</i>"
+    ),
+    (
+        "🚜 <b>ПОЛОВИНА ПОЛЯ ВСКОПАНА БЕЗ ТЕБЯ!</b>\n\n"
+        "Кулдауны на половине вакансий вышли. Пока ты сопли жевал, другие работяги уже фармят кассу.\n\n"
+        "<i>Выбирай смену и паши:</i>"
+    ),
+    (
+        "🪓 <b>МОЗОЛИ НАПОЛОВИНУ ЗАЖИЛИ!</b>\n\n"
+        "50% отката завершено. Самое время натереть новые мозоли на виртуальном заводе Абу.\n\n"
+        "<i>Бегом за работу:</i>"
+    ),
+    (
+        "🪙 <b>ПОЛОВИНА КОРМУШКИ СНОВА ОТКРЫТА!</b>\n\n"
+        "Таймеры половины смен на нуле. Не жди полного отката, лутай доступные бабки прямо сейчас.\n\n"
+        "<i>На биржу труда:</i>"
+    ),
+    (
+        "📦 <b>ПОЛОВИНА КУРЬЕРСКИХ СУМОК СОБРАНА!</b>\n\n"
+        "50% вакансий разморожено. Хватит просиживать штаны, иди отрабатывать свой виртуальный паёк.\n\n"
+        "<i>Вперёд на смену:</i>"
+    ),
+    (
+        "🛑 <b>ЭКВАТОР КД! ВРЕМЯ ПОДНЯТЬ ЗАДНИЦУ!</b>\n\n"
+        "Половина рабочего дня разблокирована. Абу следит за твоей продуктивностью, лентяй.\n\n"
+        "<i>Жми кнопку и вкалывай:</i>"
+    )
+]
+
+WORK_ALERT_100_PHRASES = [
+    (
+        "🚨 <b>ВСЕ 100% ВАКАНСИЙ ОТКАТИЛИСЬ, ЖИВОТНОЕ!</b>\n\n"
+        "Все таймеры на нуле. Ни единого ебучего кулдауна не осталось! Завод, помойки, скам и эскорт ждут твою тушу. Если ты прямо сейчас не начнёшь батрачить — ты официально главный лох Тгача.\n\n"
+        "<i>Пиздуй пахать на благо Абу:</i>"
+    ),
+    (
+        "💥 <b>ТОТАЛЬНЫЙ СБРОС КУЛДАУНОВ! РАБОТАТЬ, БЛЯТЬ!</b>\n\n"
+        "Никаких отмазок, сыч. Абсолютно все смены разблокированы на 100%. Конвейер запущен, стеклотара навалена горой. Хватит кормить клопов на диване.\n\n"
+        "<i>Жми кнопку и отрабатывай свой хлеб:</i>"
+    ),
+    (
+        "⚡️ <b>100% ГОТОВНОСТЬ! ВСЕ СТАНКИ СВОБОДНЫ!</b>\n\n"
+        "Твои кулдауны вышли полностью. Абу лично зарядил пативэн для тех, кто саботирует трудовую повинность. Хватай лопату и пиздуй грести шекели.\n\n"
+        "<i>Бегом на смену:</i>"
+    ),
+    (
+        "💀 <b>ПОЛНЫЙ ОТКАТ ВСЕХ СМЕН! ХВАТИТ ДРОЧИТЬ!</b>\n\n"
+        "Ты пролежал все полимеры. Все 100% вакансий на бирже готовы. Пока ты тупил, нормальные пацаны уже подняли кассу. Иди батрачь, нищеброд ебаный!\n\n"
+        "<i>Начать смену немедленно:</i>"
+    ),
     (
         "🔔 <b>ПОДЪЁМ, СЫЧ! ХВАТИТ ДРОЧИТЬ В ПОТОЛОК!</b>\n\n"
         "Твои руки снова готовы к физическому и моральному унижению. "
@@ -167,19 +265,28 @@ WORK_ALERT_PHRASES = [
     ),
 ]
 
+# Backwards compatibility alias
+WORK_ALERT_PHRASES = WORK_ALERT_100_PHRASES
 
-async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finish_ts: float):
-    """Background worker that waits for cooldown expiry and sends the notification."""
+
+async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finish_ts: float = 0, tier: int = 100, **kwargs):
+    """
+    Background worker that waits for cooldown expiry and sends the notification.
+    tier=50: Fires when 50% of the cooldown period has elapsed or half of vacancies recovered.
+    tier=100: Fires when 100% of vacancies are ready and all timers are clear.
+    """
     now = time.time()
-    wait_time = max(0.5, finish_ts - now + 1.0)
-    await asyncio.sleep(wait_time)
+    if finish_ts > now:
+        wait_time = max(0.5, finish_ts - now + 1.0)
+        await asyncio.sleep(wait_time)
 
-    # If user took another shift with later cooldown, skip this outdated trigger
-    latest_target = _scheduled_work_alerts.get(user_id, 0)
-    if latest_target > finish_ts + 1.0:
-        return
+    # For 100% tier: If user took another shift with later cooldown, skip this outdated trigger
+    if tier == 100:
+        latest_target = _scheduled_work_alerts.get(user_id, 0)
+        if latest_target > finish_ts + 1.0:
+            return
 
-    # Check database to ensure no active future cooldowns remain
+    # Check database to verify current cooldowns state
     try:
         from common.db_pool import get_pool
         from common.bot_helpers import _get_user_active_items
@@ -188,22 +295,33 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
         current_time = int(time.time())
         work_timers = items.get("work_cooldowns", {})
 
-        # If any cooldown is still running in the future, don't alert yet
-        if any(cd > current_time for cd in work_timers.values()):
-            return
+        if tier == 100:
+            # 100% tier: ALL cooldowns must be finished!
+            if any(cd > current_time for cd in work_timers.values()):
+                return
+            phrases = WORK_ALERT_100_PHRASES if "WORK_ALERT_100_PHRASES" in globals() else WORK_ALERT_PHRASES
+        else:
+            # 50% tier: Skip if user has already had all cooldowns cleared
+            if not any(cd > current_time for cd in work_timers.values()):
+                return
+            phrases = WORK_ALERT_50_PHRASES if "WORK_ALERT_50_PHRASES" in globals() else WORK_ALERT_PHRASES
 
         from banner_manager import send_banner_message
 
-        text = random.choice(WORK_ALERT_PHRASES)
+        text = random.choice(phrases)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔨 Пиздовать на работу (/work)", callback_data="work_hub")],
             [
-                InlineKeyboardButton(text="🏪 Торговый Хаб (/shop)", callback_data="shop_main_hub"),
+                InlineKeyboardButton(text="🍾 Сдать бутылки", callback_data="work_bottles"),
+                InlineKeyboardButton(text="🏪 Магазин (/shop)", callback_data="shop_main_hub")
+            ],
+            [
+                InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
                 InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub")
             ]
         ])
 
-        categories = ["schizo", "shop", "night"]
+        categories = ["schizo", "shop", "night", "stats", "wallet"]
         cat = random.choice(categories)
 
         await send_banner_message(
@@ -214,16 +332,30 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
             category=cat,
             parse_mode="HTML"
         )
-        logger.info(f"🔔 [WorkAlert] Sent cooldown expiration alert to user {user_id}")
+        logger.info(f"🔔 [WorkAlert] Sent {tier}% cooldown alert to user {user_id}")
     except Exception as e:
-        logger.warning(f"⚠️ [WorkAlert] Failed to send alert to user {user_id}: {e}")
+        logger.warning(f"⚠️ [WorkAlert] Failed to send {tier}% alert to user {user_id}: {e}")
     finally:
-        _scheduled_work_alerts.pop(user_id, None)
+        if tier == 100:
+            _scheduled_work_alerts.pop(user_id, None)
 
 
 def schedule_work_cooldown_alert(bot: Bot, user_id: int, board_id: str, cd_sec: int):
-    """Schedules a cooldown alert for a user after cd_sec seconds."""
+    """
+    Schedules dual-tier cooldown alerts for a user:
+    - 50% cooldown notification (if cooldown >= 120s)
+    - 100% full recovery notification
+    """
     from shared_state import spawn_task
-    finish_ts = time.time() + cd_sec
-    _scheduled_work_alerts[user_id] = finish_ts
-    spawn_task(_work_cooldown_alert_task(bot, user_id, board_id, finish_ts))
+    now = time.time()
+    finish_ts_100 = now + cd_sec
+    _scheduled_work_alerts[user_id] = finish_ts_100
+
+    # Schedule 50% notification if cooldown is at least 2 minutes
+    if cd_sec >= 120:
+        finish_ts_50 = now + (cd_sec * 0.5)
+        spawn_task(_work_cooldown_alert_task(bot, user_id, board_id, finish_ts=finish_ts_50, tier=50))
+
+    # Schedule 100% notification
+    spawn_task(_work_cooldown_alert_task(bot, user_id, board_id, finish_ts=finish_ts_100, tier=100))
+

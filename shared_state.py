@@ -64,7 +64,7 @@ BEST_CHANNEL_ID = int(os.getenv("BEST_CHANNEL_ID", -1002827087363))
 LIKES_THRESHOLD = 3
 AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 4
 ENABLE_MULTILANG = False
-QUICK_QUOTE_POST_DISTANCE = 330
+QUICK_QUOTE_POST_DISTANCE = 300
 PRIORITY_DELIVERY_ENABLED = BOT_PRIORITY_DELIVERY
 DELIVERY_INITIAL_CHUNK_SIZE = BOT_DELIVERY_INITIAL_CHUNK_SIZE
 DELIVERY_MAX_CHUNK_SIZE = BOT_DELIVERY_MAX_CHUNK_SIZE
@@ -293,6 +293,15 @@ def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, d
 
 _DAILY_SHOP_PURCHASES: dict[tuple[int, str, str], int] = defaultdict(int)
 
+CANONICAL_SHOP_ITEM_ALIASES = {
+    "trash": "lootbox_trash",
+    "trash_lootbox": "lootbox_trash",
+    "gold": "lootbox_gold",
+    "gold_safe": "lootbox_gold",
+    "whale": "lootbox_whale",
+    "whale_safe": "lootbox_whale",
+}
+
 SHOP_DAILY_LIMITS = {
     "mute": 6,
     "partyvan": 2,
@@ -303,32 +312,84 @@ SHOP_DAILY_LIMITS = {
     # Лутбоксы: лимит для сдерживания ботоводов (62k транзакций за 12ч = неприемлемо)
     "lootbox_trash": 100,
     "trash_lootbox": 100,
+    "trash": 100,
     "lootbox_gold": 40,
     "gold_safe": 40,
+    "gold": 40,
 }
 
 def get_user_daily_shop_buys(user_id: int, item: str) -> int:
     """Возвращает число покупок данного товара пользователем за текущие сутки UTC."""
+    canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return _DAILY_SHOP_PURCHASES[(user_id, item, today_str)]
+    cnt = _DAILY_SHOP_PURCHASES.get((user_id, canonical_item, today_str), 0)
+    if item != canonical_item and (user_id, item, today_str) in _DAILY_SHOP_PURCHASES:
+        cnt = max(cnt, _DAILY_SHOP_PURCHASES[(user_id, item, today_str)])
+    return cnt
 
 def check_shop_purchase_limit(user_id: int, item: str) -> tuple[bool, int, int]:
     """
     Проверяет, не превышен ли суточный лимит покупок.
     Возвращает (is_allowed, current_count, max_limit).
     """
-    limit = SHOP_DAILY_LIMITS.get(item)
+    canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
+    limit = SHOP_DAILY_LIMITS.get(canonical_item, SHOP_DAILY_LIMITS.get(item))
     if limit is None:
         return True, 0, 0
-    current = get_user_daily_shop_buys(user_id, item)
+    current = get_user_daily_shop_buys(user_id, canonical_item)
     if current >= limit:
         return False, current, limit
     return True, current, limit
 
 def record_shop_purchase(user_id: int, item: str):
-    """Фиксирует покупку товара в суточный счетчик."""
+    """Фиксирует покупку товара в суточный счетчик (in-memory и персистентно в SQLite)."""
+    canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    _DAILY_SHOP_PURCHASES[(user_id, item, today_str)] += 1
+    _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)] += 1
+    if item != canonical_item:
+        _DAILY_SHOP_PURCHASES[(user_id, item, today_str)] = _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)]
+    try:
+        loop = asyncio.get_running_loop()
+        if loop and loop.is_running():
+            from common.database import record_user_daily_limit
+            loop.create_task(record_user_daily_limit(None, user_id, canonical_item, today_str, increment=1))
+    except (RuntimeError, Exception):
+        pass
+
+async def record_shop_purchase_async(db, user_id: int, item: str) -> int:
+    """Асинхронно фиксирует покупку в памяти и в SQLite (UserDailyLimits)."""
+    canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)] += 1
+    if item != canonical_item:
+        _DAILY_SHOP_PURCHASES[(user_id, item, today_str)] = _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)]
+    from common.database import record_user_daily_limit
+    return await record_user_daily_limit(db, user_id, canonical_item, today_str, increment=1)
+
+async def get_user_daily_shop_buys_async(db, user_id: int, item: str) -> int:
+    """Возвращает число покупок с синхронизацией из SQLite (UserDailyLimits)."""
+    canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from common.database import get_user_daily_limit
+    db_cnt = await get_user_daily_limit(db, user_id, canonical_item, today_str)
+    mem_cnt = get_user_daily_shop_buys(user_id, canonical_item)
+    final_cnt = max(mem_cnt, db_cnt)
+    _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)] = final_cnt
+    if item != canonical_item:
+        _DAILY_SHOP_PURCHASES[(user_id, item, today_str)] = final_cnt
+    return final_cnt
+
+async def check_shop_purchase_limit_async(db, user_id: int, item: str) -> tuple[bool, int, int]:
+    """Асинхронно проверяет суточный лимит покупок с проверкой БД."""
+    canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
+    limit = SHOP_DAILY_LIMITS.get(canonical_item, SHOP_DAILY_LIMITS.get(item))
+    if limit is None:
+        return True, 0, 0
+    current = await get_user_daily_shop_buys_async(db, user_id, canonical_item)
+    if current >= limit:
+        return False, current, limit
+    return True, current, limit
+
 
 _ATTACK_WINDOW_SEC = 3 * 3600 # 3 hours
 _MAX_TARGETS_PER_WINDOW = 2

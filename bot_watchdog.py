@@ -290,7 +290,10 @@ def _start_child() -> subprocess.Popen:
         f"[{_now()}] START BOT CHILD\n"
         "======================================================\n"
     )
-    print(banner, end="", flush=True)
+    try:
+        print(banner, end="", flush=True)
+    except Exception:
+        pass
     stdout_fh = STDOUT_LOG.open("a", encoding="utf-8", buffering=1)
     stdout_fh.write(banner)
     child = subprocess.Popen(

@@ -708,20 +708,22 @@ class TestAdversarialR2DirectReplyStormAndConcurrency:
             )
         assert mock_process_post.call_count == 1
 
-        # 2. 9 more replies within 8 seconds from spammer -> all blocked
+        # 2. 9 more replies within 8 seconds from spammer -> 1 rejection voice sent offline, rest debounced
         for i in range(2, 11):
             with patch("time.time", return_value=t0 + (i * 0.5)):
                 await register_post_and_maybe_trigger_cyberchad_intervention(
                     mock_bot, board_id, spammer_id, f"Спам реплай {i}", post_num=500 + i, reply_to_post=500
                 )
-        assert mock_process_post.call_count == 1
+        assert mock_summarize.call_count == 1  # Gemini NEVER called for spammed requests
+        assert mock_process_post.call_count == 2  # 1st normal roast + 1 rejection voice
 
         # 3. Clean user replying at t0 + 3.0s -> triggers immediately!
         with patch("time.time", return_value=t0 + 3.0):
             await register_post_and_maybe_trigger_cyberchad_intervention(
                 mock_bot, board_id, victim_id, "Обычный ответ от другого", post_num=520, reply_to_post=500
             )
-        assert mock_process_post.call_count == 2
+        assert mock_summarize.call_count == 2  # Gemini called for clean user
+        assert mock_process_post.call_count == 3
 
     @pytest.mark.asyncio
     async def test_build_reply_chain_context_cyclic_and_deep_tree_safety(self):

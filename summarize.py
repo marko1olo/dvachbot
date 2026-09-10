@@ -167,10 +167,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         # Безопасный лимит выходных токенов: для Gemini None (без урезания), для Groq 1024 (вместо 6000!)
         model_max_tokens = None if provider == "gemini" else 1024
 
-        # Защита Groq от 413 Payload Too Large: обрезаем входной дамп до 8000 символов
+        # Защита Groq от 413 Payload Too Large: обрезаем входной дамп до 3500 символов
         effective_dump = text_dump
-        if provider == "groq" and len(effective_dump) > 8000:
-            effective_dump = effective_dump[-8000:]
+        if provider == "groq" and len(effective_dump) > 3500:
+            effective_dump = effective_dump[-3500:]
 
         messages = [
             {"role": "system", "content": system_instruction},
@@ -217,11 +217,12 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")
                     break
                 if "401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower():
-                    logger.error(f"❌ {provider} key {api_key[:12]}... is unauthorized (401). Removing from pool.")
+                    logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} returned 401 unauthorized. Setting 15m cooldown instead of removing.")
+                    _key_cooldowns[(provider, api_key)] = time.time() + 900.0
                     if provider == "gemini":
-                        google_pool.remove_token(api_key)
+                        google_pool.penalize_token(api_key, 900.0)
                     else:
-                        groq_pool.remove_token(api_key)
+                        groq_pool.penalize_token(api_key, 900.0)
                     await asyncio.sleep(2.5)
                     continue  # try next key
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():

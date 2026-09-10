@@ -26,11 +26,13 @@ def escape_html(text: str) -> str:
     if not text:
         return text
     return (
-        text.replace("&", "&amp;")
+        text.replace("\x00", "")
+        .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
+
 
 
 def convert_site_tags_to_telegram(text: str) -> str:

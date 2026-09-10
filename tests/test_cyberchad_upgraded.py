@@ -132,14 +132,13 @@ class TestCyberchadSystemPrompt:
         assert "блок 2" in prompt_lower
         assert "блок 3" in prompt_lower
         assert "блок 4" in prompt_lower
-        assert "блок 5" in prompt_lower
 
         # Thought and schema checks
         assert "thought" in prompt_lower
         assert "реферальн" in prompt_lower
 
-        # 1-5 sentences length rule
-        assert "1 до 5" in prompt_lower or "1-5" in prompt_lower
+        # 1-4 sentences length rule
+        assert "1 до 4" in prompt_lower or "1-4" in prompt_lower
 
 
 class TestCyberchadNameRegex:
@@ -176,6 +175,35 @@ class TestCyberchadNameRegex:
 
 class TestCyberchadContextBuilder:
     """Tests explicit blocks 1-6 context generation without dossier bloat."""
+
+    @pytest.mark.asyncio
+    async def test_build_cyberchad_context_datetime_timestamp_does_not_crash(self):
+        from datetime import datetime, timezone
+        from ai_manager import build_cyberchad_context, messages_storage, storage_lock
+
+        async with storage_lock:
+            messages_storage[9991] = {
+                "board_id": "b",
+                "author_id": 777,
+                "timestamp": datetime.now(timezone.utc),
+                "content": {"type": "text", "text": "прошлый пост юзера с datetime timestamp"}
+            }
+            messages_storage[9992] = {
+                "board_id": "b",
+                "author_id": 777,
+                "timestamp": "2026-09-10 12:00:00",
+                "content": {"type": "text", "text": "прошлый пост юзера с строковым timestamp"}
+            }
+
+        # Should not raise TypeError: unsupported operand type(s) for -: 'float' and 'datetime.datetime'
+        context = await build_cyberchad_context(
+            board_id="b",
+            target_post_num=9992,
+            author_id=777,
+            limit_board=5,
+            limit_author=5
+        )
+        assert "БЛОК 1" in context
 
     @pytest.mark.asyncio
     async def test_build_cyberchad_context_structure(self):
@@ -284,14 +312,15 @@ class TestSchedulePersonaReplyReplacement:
     @pytest.mark.asyncio
     @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
-    @patch("ai_manager.create_post", new_callable=AsyncMock)
-    @patch("ai_manager.update_post_content", new_callable=AsyncMock)
-    @patch("post_processor.NewPostProcessor.execute", new_callable=AsyncMock)
+    @patch("ai_manager.NewPostProcessor")
     async def test_schedule_persona_reply_invokes_cyberchad(
-        self, mock_post_exec, mock_update, mock_create_post, mock_summarize, mock_synth_meta
+        self, mock_processor_cls, mock_summarize, mock_synth_meta
     ):
         mock_bot = AsyncMock()
-        mock_create_post.return_value = 888
+        mock_instance = AsyncMock()
+        mock_instance.execute.return_value = 888
+        mock_processor_cls.return_value = mock_instance
+
         mock_summarize.return_value = json.dumps({
             "reply": True,
             "text": "Пояснил за твой высер по понятиям борды.",
@@ -316,17 +345,16 @@ class TestSchedulePersonaReplyReplacement:
             is_admin_trigger=True
         )
 
-        # Verify create_post was called with Cyberchad properties
-        assert mock_create_post.call_count == 1
-        create_kwargs = mock_create_post.call_args[1]
-        assert create_kwargs["author_id"] == 0
-        content_arg = create_kwargs["content"]
-        assert content_arg["is_cyberchad"] is True
-        assert content_arg["is_ai_roast"] is True
-        assert content_arg["voice_bytes"] == b"CYBERCHAD_VOICE_PAYLOAD"
-        assert content_arg["caption"] == "🔥 Разъёб от Киберчеда"
+        # Verify NewPostProcessor was constructed with Cyberchad properties
+        assert mock_processor_cls.call_count == 1
+        ctx = mock_processor_cls.call_args[0][0]
+        assert ctx.user_id == 0
+        assert ctx.board_id == "b"
+        assert ctx.reply_to_post == 777
+        assert ctx.content["is_cyberchad"] is True
+        assert ctx.content["is_ai_roast"] is True
+        assert ctx.content["voice_bytes"] == b"CYBERCHAD_VOICE_PAYLOAD"
+        assert ctx.content["caption"] == "🔥 Разъёб от Киберчеда"
 
-        # Verify header formatting
-        assert mock_update.call_count == 1
-        updated_content = mock_update.call_args[0][1]
-        assert "🔥 КИБЕРЧЕД 🔥" in updated_content["header"]
+        # Verify execute was called
+        mock_instance.execute.assert_awaited_once()

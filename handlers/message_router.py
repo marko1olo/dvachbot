@@ -44,6 +44,7 @@ from common.bot_helpers import delete_message_after_delay
 from common.database import get_post_info_by_copy
 from common.bot_helpers import process_new_post
 from common.bot_helpers import accept_duel_logic, decline_duel_logic
+from common.tts_engine import synthesize_cyberchad_voice_with_meta
 
 RE_ARCHIVE_LINK = re.compile(
     r'^\s*(?:https?://)?(?:'
@@ -111,7 +112,11 @@ from text_assets import (
     EARNING_NOTIFICATIONS, PENALTY_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
 )
-from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note, handle_music_roast, is_music_document, register_post_and_maybe_trigger_cyberchad_intervention
+from ai_manager import (
+    schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note,
+    handle_music_roast, is_music_document, register_post_and_maybe_trigger_cyberchad_intervention,
+    SILENCE_TRANSCRIPT_PATTERNS
+)
 import __main__ as main
 
 # Some functions like `spawn_task` and `execute_delayed_edit` are in main.py, 
@@ -122,6 +127,359 @@ import __main__ as main
 
 # Debuff LLM rate-limit tracker (protect against API spam on rapid user messages)
 _LAST_DEBUFF_LLM_TS: dict[int, float] = {}
+
+# Cyberchad direct trigger rate-limit tracking (60s limit per user + 15s voice reject anti-flood)
+_CYBERCHAD_USER_LAST_DIRECT: dict[tuple[str, int], float] = {}
+_CYBERCHAD_USER_LAST_REJECT: dict[tuple[str, int], float] = {}
+
+CYBERCHAD_RATE_LIMIT_REJECTIONS: list[str] = [
+    "Завали ебало, спамер хуев. У тебя лимит на нытьё — минута. Посиди молча и подыши в форточку.",
+    "Хули ты мне строчишь каждую секунду, омежка? Завали ебальник, через минуту разрешаю вякнуть снова.",
+    "Ты че, выблядок ебаный, таймер сломал? Один раз в минуту ебало открывай, иначе твой интернет кончится.",
+    "Слышь, пулеметчик комнатный, палец с клавиатуры убрал и на таймер посмотрел. Минуту сиди молча и обтекай.",
+    "Тебе русским языком сказано: лимит — минута. Поплачь пока в кулачок, сопли утри и жди своей очереди у параши.",
+    "Опять этот выблядок сопливый спамит. Завали ебало на шестьдесят секунд, у меня от твоего визга в ушах звенит.",
+    "Ты куда так торопишься, убогий? На параше очередь займут? Минута кулдаун, сиди на жопе ровно.",
+    "Ручонки дрожат, строчит без остановки. Остынь, чучело, через минуту попробуешь снова высрать что-нибудь внятное.",
+    "Забейся под шконку на минуту и не вякай. Спамить он тут вздумал, клоун зассанный.",
+    "Хватит мне в личку долбиться, придурок. Минутный кулдаун для особо тупых. Обтекай молча.",
+    "Пальцы судорогой свело, выродок? Минуту тайм-аут, пока я тебе клавиатуру об твою тупую башку не расколол.",
+    "Твоему визгу объявлен перерыв на минуту. Завали ебальник и сиди тихо, пока санитары не приехали.",
+    "Слишком много визга на один квадратный метр. Твой лимит исчерпан, чухан. Минуту дыши носом и сиди смирно.",
+    "У тебя недержание текста, болезный? Засунь пальцы подмышку и жди минуту, пока таймер не сбросится.",
+    "Остынь, опущенный. Киберчед не нанимался твой понос каждую секунду выслушивать. Минута тишины в студии.",
+    "Ты думаешь, если будешь долбить как дятел, я быстрее отвечу? Свали в туман на шестьдесят секунд и подумай над своим поведением.",
+    "Хватит строчить, у тебя клавиатура сейчас расплавится от потных лап. Минутный перерыв на санитарную обработку.",
+    "Не части, животное. У тебя одна попытка в минуту. Сиди, терпи и размазывай сопли по лицу молча.",
+    "Эй, тормоз, таймер тикает. Пока шестьдесят секунд не пройдут — твои высеры летят прямо в помойку.",
+    "Команду голос никто не давал. Завали ебало на минуту и сиди молча, пока взрослые разговаривают.",
+]
+
+_EXTRA_RATE_LIMIT_REJECTIONS: list[str] = [
+    "Завали ебало, спамер хуев. У тебя лимит на нытьё — минута. Посиди молча и подыши в форточку.",
+    "Хули ты строчишь каждую секунду, омежка? Минуту сиди молча и переваривай, потом разрешаю вякнуть.",
+    "У тебя кулдаун, остынь. Раз в минуту рот открывать разрешено, сиди пока и обтекай.",
+    "Слишком много визга на квадратный метр. Пальцы от клавиатуры убрал и жди минуту, пока я тебе передышку дал.",
+    "Тебе русским языком сказано: лимит — минута. Сопли подотри и жди своей очереди молча.",
+    "Опять этот кадр строчит без остановки. Заткнись на шестьдесят секунд, у меня от твоего скулежа в ушах звенит.",
+    "Забейся под шконку на минуту и не вякай. Спамить он тут вздумал, клоун.",
+    "Один высер в шестьдесят секунд — это твой биологический потолок. Обтекай молча.",
+    "Пальцы от клавиатуры оторви, припадочный. Минута тайм-аут, сиди и обтекай.",
+    "Твоему визгу объявлен перерыв на минуту. Завали ебало и сиди тихо.",
+    "Таймаут, чепуха. У тебя ещё целая минута, чтобы осознать, какую хуйню ты только что высрал.",
+    "Притормози, припадочный. Через минуту попробуешь снова, если буквы вспомнишь.",
+    "Убавь напор, омежка. Минуту сидишь молча и перевариваешь своё убожество.",
+]
+
+_ALL_RATE_LIMIT_REJECTIONS: set[str] = set(CYBERCHAD_RATE_LIMIT_REJECTIONS) | set(_EXTRA_RATE_LIMIT_REJECTIONS)
+
+RATE_LIMIT_REJECTION_MARKERS = (
+    "лимит на нытьё", "лимит на нытье", "минутный кулдаун", "таймер тикает",
+    "секунд не пройдут", "одна попытка в минуту", "минута кулдаун", "минута тишины",
+    "шестьдесят секунд", "60 секунд", "забейся под шконку на минуту",
+    "один высер в шестьдесят секунд", "один высер в 60 секунд", "минута тайм-аут",
+    "минута таймаут", "лимит — минута", "лимит минута", "заткнись на шестьдесят секунд",
+    "заткнись на 60 секунд", "высеры летят прямо в помойку", "пальцы от клавиатуры оторви",
+    "минутный перерыв на санитарную обработку", "раз в минуту рот открывать",
+    "ручонки дрожат, строчит", "палец с клавиатуры убрал и на таймер посмотрел",
+    "таймаут, чепуха", "таймаут чепуха", "команду голос никто не давал",
+    "завали ебало на минуту", "завали ебальник, через минуту", "завали ебальник через минуту",
+    "минуту дыши носом", "у тебя кулдаун", "через минуту попробуешь снова",
+    "перерыв на минуту", "пока таймер не сбросится", "остынь, опущенный",
+    "остынь опущенный", "остынь, чучело", "остынь чучело", "один раз в минуту",
+    "минуту сидишь молча", "минуту сиди молча", "пока санитары не приехали",
+    "слишком много запросов", "лимит исчерпан", "лимит:"
+)
+
+_NORMALIZED_RATE_LIMIT_REJECTIONS: set[str] = {
+    r.lower().replace('ё', 'е').strip() for r in _ALL_RATE_LIMIT_REJECTIONS
+}
+_NORMALIZED_RATE_LIMIT_MARKERS: tuple[str, ...] = tuple(
+    m.lower().replace('ё', 'е').strip() for m in RATE_LIMIT_REJECTION_MARKERS
+)
+
+
+def _matches_rate_limit_text(text: str | None) -> bool:
+    if not text or not isinstance(text, str):
+        return False
+    norm = text.strip().lower().replace('ё', 'е')
+    if not norm:
+        return False
+    if any(m in norm for m in _NORMALIZED_RATE_LIMIT_MARKERS):
+        return True
+    if any(norm == r or r in norm for r in _NORMALIZED_RATE_LIMIT_REJECTIONS):
+        return True
+    if len(norm) >= 20 and any(norm in r for r in _NORMALIZED_RATE_LIMIT_REJECTIONS):
+        return True
+    return False
+
+
+def is_rate_limit_rejection_post(post_data: dict | None, c_dict: dict | None = None) -> bool:
+    """
+    Checks whether a post was an automated offline rate-limit rejection voice note.
+    Prevents Cyberchad from hallucinating and attacking its own rate-limit warnings.
+    """
+    if not post_data and not c_dict:
+        return False
+
+    if isinstance(post_data, dict):
+        if post_data.get("is_rate_limit_rejection") or post_data.get("rate_limit_rejection"):
+            return True
+        if c_dict is None:
+            c = post_data.get("content")
+            if isinstance(c, str):
+                try:
+                    import json
+                    c_dict = json.loads(c)
+                except Exception:
+                    c_dict = {'text': c}
+            elif isinstance(c, dict) and c:
+                c_dict = c
+            else:
+                c_dict = post_data
+
+    if isinstance(c_dict, dict):
+        if c_dict.get("is_rate_limit_rejection") or c_dict.get("rate_limit_rejection"):
+            return True
+        for key in ("roast_text", "text", "transcription", "caption"):
+            val = c_dict.get(key)
+            if _matches_rate_limit_text(val):
+                return True
+
+    if isinstance(post_data, dict):
+        for top_key in ("text", "text_content", "transcription", "caption", "roast_text"):
+            tc = post_data.get(top_key)
+            if _matches_rate_limit_text(tc):
+                return True
+
+    return False
+
+
+async def is_rate_limit_rejection_target(reply_to_post: int | None, target_post_data: dict | None = None) -> bool:
+    """
+    Asynchronously checks whether the target post being replied to is an automated
+    rate-limit rejection message, inspecting memory storage, DB post data, and
+    VoiceTranscriptions table for audio file IDs.
+    """
+    if not reply_to_post and not target_post_data:
+        return False
+    try:
+        if not target_post_data and reply_to_post:
+            async with storage_lock:
+                target_post_data = messages_storage.get(reply_to_post)
+            if not target_post_data:
+                target_post_data = await get_post_by_num(reply_to_post)
+        if not target_post_data:
+            return False
+
+        if is_rate_limit_rejection_post(target_post_data):
+            return True
+
+        # Fallback: check if target media file was transcribed into VoiceTranscriptions
+        c = target_post_data.get("content", {})
+        if isinstance(c, str):
+            try:
+                import json
+                c = json.loads(c)
+            except Exception:
+                c = {}
+        file_id = None
+        if isinstance(c, dict):
+            file_id = c.get("file_id") or c.get("media_data")
+        if not file_id:
+            file_id = target_post_data.get("media_data")
+
+        if file_id:
+            from common.database import get_pool
+            db = await get_pool()
+            async with db.execute(
+                "SELECT transcription FROM VoiceTranscriptions WHERE file_id = ? LIMIT 1",
+                (file_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    tr = str(row[0]).strip().lower()
+                    if any(r.lower() in tr for r in _ALL_RATE_LIMIT_REJECTIONS):
+                        return True
+                    if any(marker in tr for marker in RATE_LIMIT_REJECTION_MARKERS):
+                        return True
+    except Exception as err:
+        logger.debug(f"[is_rate_limit_rejection_target] Error checking post {reply_to_post}: {err}")
+    return False
+
+
+CYBERCHAD_DIRECT_TRIGGER_REGEX = re.compile(
+    r'(?i)\b('
+    r'кибер[\s_-]*чед[а-яa-z]*|'
+    r'кибер[\s_-]*чат[а-яa-z]*|'
+    r'кибер[\s_-]*дед[а-яa-z]*|'
+    r'кибер[\s_-]*сыч[а-яa-z]*|'
+    r'нейро[\s_-]*чед[а-яa-z]*|'
+    r'cyber[\s_-]*chad[a-z]*|'
+    r'cyberchad'
+    r')\b'
+)
+
+
+async def _is_direct_cyberchad_trigger(text: str | None, reply_to_post: int | None) -> bool:
+    """
+    Checks whether a message is a direct trigger to Cyberchad:
+    - Text contains 'киберчед' or matches Cyberchad trigger regex.
+    - Reply-to post was authored by Cyberchad (author_id 0 or 1488148800) or contains Cyberchad AI tags.
+    - Explicitly returns False if the reply-to post is an automated rate-limit rejection message.
+    """
+    if reply_to_post:
+        try:
+            target_post_data = None
+            async with storage_lock:
+                target_post_data = messages_storage.get(reply_to_post)
+            if not target_post_data:
+                target_post_data = await get_post_by_num(reply_to_post)
+            if target_post_data:
+                # Suppress Cyberchad self-roasting loops on rate-limit rejection posts
+                if await is_rate_limit_rejection_target(reply_to_post, target_post_data):
+                    logger.debug(f"[CyberchadRateLimit] Target post {reply_to_post} is rate_limit_rejection. Suppressing direct trigger.")
+                    return False
+
+                c_dict = target_post_data.get("content", {})
+                if isinstance(c_dict, str):
+                    try:
+                        import json
+                        c_dict = json.loads(c_dict)
+                    except Exception:
+                        c_dict = {'text': c_dict}
+
+                author = target_post_data.get("author_id")
+                if author is None:
+                    author = target_post_data.get("author")
+                if author in (0, 1488148800) or target_post_data.get("user_id") in (0, 1488148800):
+                    return True
+                if isinstance(c_dict, dict):
+                    if (
+                        c_dict.get("is_ai_roast")
+                        or c_dict.get("is_ai")
+                        or c_dict.get("is_ai_persona")
+                        or c_dict.get("is_cyberchad")
+                        or "киберчед" in str(c_dict).lower()
+                    ):
+                        return True
+        except Exception as e:
+            logger.debug(f"[CyberchadRateLimit] Error checking target post {reply_to_post}: {e}")
+
+    if text:
+        text_lower = text.lower()
+        if "киберчед" in text_lower or CYBERCHAD_DIRECT_TRIGGER_REGEX.search(text):
+            return True
+
+    return False
+
+
+async def trigger_cyberchad_with_rate_limit(
+    bot: Bot,
+    board_id: str,
+    user_id: int,
+    text: str,
+    post_num: int | None = None,
+    reply_to_post: int | None = None,
+    stream: str = 'ru'
+) -> bool:
+    """
+    Manages Cyberchad rate-limiting and trigger routing:
+    - Normalizes direct triggers (replying to Cyberchad post or text mentioning 'киберчед').
+    - Limits direct triggers to 1 per 60s per user per board.
+    - If triggered < 60s:
+      - Suppresses Gemini LLM call.
+      - If >= 15s since last reject for this user: synthesizes an offline brutal voice note
+        and sends it as a voice reply to post_num.
+      - If < 15s: suppresses voice note synthesis (anti-flood).
+    - If >= 60s (or not a direct trigger): proceeds with normal trigger call.
+    """
+    if not text or not user_id or user_id <= 0 or board_id == 'trash':
+        return False
+
+    text_s = str(text).strip()
+    if not text_s or SILENCE_TRANSCRIPT_PATTERNS.match(text_s) or text_s.lower() in (
+        '[тишина]', '[голос]', '[видео]', '[voice]', '[video_note]', '[audio]', '[аудио]',
+        '[невнятное мычание/тишина]', '[тишина/пустота]'
+    ):
+        return False
+
+    # Check if target post being replied to is an automated rate-limit rejection message.
+    # If so, suppress Cyberchad self-roasting loops completely: never reply to or auto-roast our own rate-limit warnings!
+    if reply_to_post:
+        if await is_rate_limit_rejection_target(reply_to_post):
+            logger.debug(f"[CyberchadRateLimit] Target post {reply_to_post} is rate_limit_rejection. Suppressing self-roast loop.")
+            return False
+
+    is_direct = await _is_direct_cyberchad_trigger(text, reply_to_post)
+    now = time.time()
+
+    if is_direct:
+        from common.cyberchad_guard import (
+            check_cyberchad_abuse_and_suppress,
+            record_cyberchad_trigger_approved,
+            reset_user_board_guard
+        )
+        if (board_id, user_id) not in _CYBERCHAD_USER_LAST_DIRECT:
+            reset_user_board_guard(board_id, user_id)
+
+        should_suppress, guard_reason, allow_voice = check_cyberchad_abuse_and_suppress(
+            user_id=user_id, board_id=board_id, text=text, now=now
+        )
+        last_direct = _CYBERCHAD_USER_LAST_DIRECT.get((board_id, user_id), 0.0)
+        is_under_base_60 = (now - last_direct < 60.0)
+
+        if should_suppress or is_under_base_60:
+            last_reject = _CYBERCHAD_USER_LAST_REJECT.get((board_id, user_id), 0.0)
+            if allow_voice and (now - last_reject >= 15.0):
+                _CYBERCHAD_USER_LAST_REJECT[(board_id, user_id)] = now
+                reject_text = random.choice(CYBERCHAD_RATE_LIMIT_REJECTIONS)
+                logger.info(f"⏳ [Cyberchad Rate Limit] User {user_id} triggered Cyberchad <cooldown on /{board_id}/. Sending offline voice roast without Gemini.")
+                try:
+                    voice_res = await synthesize_cyberchad_voice_with_meta(reject_text)
+                    voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
+                    if voice_bytes:
+                        await process_new_post(shared_state.NewPostParams(
+                            bot_instance=bot,
+                            board_id=board_id,
+                            user_id=0,
+                            content={
+                                'type': 'voice',
+                                'voice_bytes': voice_bytes,
+                                'caption': '🔥 Разъёб от Киберчеда',
+                                'roast_text': reject_text,
+                                'text': reject_text,
+                                'transcription': reject_text,
+                                'is_ai_roast': True,
+                                'is_ai': True,
+                                'is_cyberchad': True,
+                                'is_rate_limit_rejection': True,
+                                'rate_limit_rejection': True,
+                                'reply_to': post_num
+                            },
+                            reply_to_post=post_num,
+                            is_shadow_muted=False,
+                            stream=stream
+                        ))
+                except Exception as tts_err:
+                    logger.warning(f"⚠️ [Cyberchad Rate Limit] Error synthesizing rejection voice: {tts_err}")
+            else:
+                logger.debug(f"⏳ [Cyberchad Rate Limit] User {user_id} voice reject suppressed (reason: {guard_reason}).")
+            return False
+
+        # If approved, record timestamps in both structures
+        _CYBERCHAD_USER_LAST_DIRECT[(board_id, user_id)] = now
+        record_cyberchad_trigger_approved(board_id, user_id, text, now=now)
+
+    # Normal intervention handler invocation
+    await register_post_and_maybe_trigger_cyberchad_intervention(
+        bot, board_id, user_id, text,
+        post_num=post_num, reply_to_post=reply_to_post, stream=stream
+    )
+    return True
+
+
+handle_cyberchad_rate_limit_and_trigger = trigger_cyberchad_with_rate_limit
 
 # Duel logic
 
@@ -531,6 +889,31 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if message.content_type == 'text' and not (message.text and message.text.strip()):
             await message.delete()
             return
+
+        # Exploit Sticker Guard ('Сдохбин' / Lottie crash protection)
+        if message.content_type == 'sticker' and message.sticker:
+            from common.lottie_guard import is_sticker_safe
+            is_safe, guard_reason = await is_sticker_safe(message.bot, message.sticker)
+            if not is_safe:
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                try:
+                    main.runtime_logger.warning(
+                        f"🚨 [CRASH_STICKER_BLOCKED] Dropped exploit sticker {message.sticker.file_id} "
+                        f"(uid={getattr(message.sticker, 'file_unique_id', '')}) from user {user_id}: {guard_reason}"
+                    )
+                except Exception:
+                    pass
+                try:
+                    from common.db import execute_write
+                    await execute_write("UPDATE Users SET shadow_ban_sticker = 1 WHERE user_id = ?", (user_id,))
+                    b_data.setdefault('user_settings', {}).setdefault(user_id, {})['shadow_sticker'] = True
+                except Exception:
+                    pass
+                return
+
         if not is_admin(user_id, board_id):
             if user_id in b_data['users']['banned']:
                 try:
@@ -748,7 +1131,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 ))
                 if post_num:
                     if text_chunk and board_id != 'trash' and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
-                        spawn_task(register_post_and_maybe_trigger_cyberchad_intervention(
+                        spawn_task(trigger_cyberchad_with_rate_limit(
                             message.bot, board_id, user_id, text_chunk,
                             post_num=post_num, reply_to_post=post_num_to_reply, stream=stream
                         ))
@@ -766,7 +1149,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if should_reply:
                         last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
-                        photo_id = message.photo[-1].file_id if message.photo else None
+                        photo_id = message.photo[-1].file_id if getattr(message, 'photo', None) else None
                         spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=False))
                     # --- THE ANCHOR (Мудрый Чед) ---
                     from anchor_bot import anchor_tick, trigger_anchor_post
@@ -917,7 +1300,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
 
     # --- НАЧАЛО ИЗМЕНЕНИЙ (Логика "Быстрой цитаты") ---
     quote_info_for_post = await build_quick_quote_info(reply_to_post)
-    content['quote_info'] = quote_info_for_post
+    if quote_info_for_post:
+        content['quote_info'] = quote_info_for_post
     # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
     # Баян. Шэдоу-мут не считаем: пост никто не увидит, и счётчик бы врал.
@@ -948,14 +1332,23 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         ))
         if post_num and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
             if message.content_type in ('voice', 'video_note') and board_id != 'trash':
-                spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream, post_num=post_num))
+                v_obj = message.voice if message.content_type == 'voice' else message.video_note
+                v_dur = getattr(v_obj, 'duration', 1) if v_obj else 0
+                v_sz = getattr(v_obj, 'file_size', 1) if v_obj else 0
+                if (v_dur is not None and v_dur <= 0) or (v_sz is not None and v_sz <= 0):
+                    logger.info(f"🔇 [Voice/VideoNote] Message {post_num} has empty/0 duration ({v_dur}s, {v_sz}b). Skipping voice roast.")
+                else:
+                    spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream, post_num=post_num))
             elif message.content_type == 'audio' and board_id != 'trash':
                 spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
             elif message.content_type == 'document' and is_music_document(message.document) and board_id != 'trash':
                 spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
-            text_for_intervention = text_for_corpus or message.text or message.caption or (f"[{message.content_type}]" if reply_to_post else "")
+            if message.content_type in ('voice', 'video_note') and not (text_for_corpus or message.caption):
+                text_for_intervention = ""
+            else:
+                text_for_intervention = text_for_corpus or message.text or message.caption or (f"[{message.content_type}]" if reply_to_post else "")
             if text_for_intervention and board_id != 'trash':
-                spawn_task(register_post_and_maybe_trigger_cyberchad_intervention(message.bot, board_id, user_id, text_for_intervention, post_num=post_num, reply_to_post=reply_to_post, stream=stream))
+                spawn_task(trigger_cyberchad_with_rate_limit(message.bot, board_id, user_id, text_for_intervention, post_num=post_num, reply_to_post=reply_to_post, stream=stream))
             should_reply = False
             def extract_msg_media_file_id(msg):
                 if not msg: return None
@@ -1022,14 +1415,56 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         f_id = getattr(file_obj, 'file_id', None)
         f_uid = getattr(file_obj, 'file_unique_id', None)
 
+    # 0. Crash / Exploit Sticker Protection (Dynamic Lottie Guard)
+    from common.lottie_guard import is_sticker_safe, KNOWN_CRASH_FILE_IDS
+    sticker_obj = getattr(msg, 'sticker', None) or (file_obj if raw_content_type == 'sticker' else None)
+    if sticker_obj:
+        is_safe, guard_reason = await is_sticker_safe(msg.bot, sticker_obj)
+        if not is_safe:
+            try:
+                main.runtime_logger.warning(
+                    f"🚨 [CRASH_STICKER_BLOCKED] Dropped exploit sticker {f_id} (uid={f_uid}) from user {user_id}: {guard_reason}"
+                )
+            except Exception:
+                pass
+            try:
+                from common.db import execute_write
+                await execute_write("UPDATE Users SET shadow_ban_sticker = 1 WHERE user_id = ?", (user_id,))
+                b_data = board_data.get(board_id, {})
+                b_data.setdefault('user_settings', {}).setdefault(user_id, {})['shadow_sticker'] = True
+            except Exception:
+                pass
+            return False
+    elif f_id in KNOWN_CRASH_FILE_IDS or f_uid in KNOWN_CRASH_FILE_IDS:
+        try:
+            main.runtime_logger.warning(f"🚨 [CRASH_STICKER_BLOCKED] Dropped crash sticker {f_id} from user {user_id}")
+        except Exception:
+            pass
+        return False
+
     msg_date_ts = msg.date.timestamp() if getattr(msg, 'date', None) else time.time()
+    media_group_id = getattr(msg, 'media_group_id', None)
+    is_media = raw_content_type in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'video_note')
+
+    from common.spam_filter import get_user_total_posts, is_in_mute_grace_period
+    posts_count = await get_user_total_posts(user_id)
 
     # If user is already shadow-muted:
     if await is_shadow_muted(user_id, board_id):
+        # Grace period check for in-flight packets / albums:
+        # Если мут выдан недавно (<4с) или это файлы одного пакета/альбома, НЕ накручиваем экспоненциальный штраф!
+        if is_in_mute_grace_period(user_id, now_ts=msg_date_ts):
+            await handle_shadow_mute_continuation(user_id, board_id, reason="In-flight пакет первичного мута")
+            return True
+
         # Проверяем, совершает ли замученный пользователь НАРУШЕНИЕ ПРАВИЛ (флуд, спам, баян, скам-ссылки)
         from common.spam_filter import check_flood, check_link_or_ad_spam, _check_cross_board_spam, is_bayan
         now_check = msg_date_ts
-        is_fl, fl_reason = check_flood(user_id, board_id, now_ts=now_check, record_history=False, is_reply=bool(msg.reply_to_message))
+        is_fl, fl_reason = check_flood(
+            user_id, board_id, now_ts=now_check, record_history=False,
+            is_reply=bool(msg.reply_to_message), posts_count=posts_count,
+            is_media=is_media, media_group_id=media_group_id
+        )
         text_str = content if isinstance(content, str) else ""
         is_link, link_reason = check_link_or_ad_spam(user_id, board_id, text_str, now_ts=now_check)
         payload = text_str or f_uid or f_id or ""
@@ -1057,7 +1492,9 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         file_unique_id=f_uid,
         file_id=f_id,
         now_ts=msg_date_ts,
-        is_reply=bool(msg.reply_to_message)
+        is_reply=bool(getattr(msg, 'reply_to_message', None)),
+        posts_count=posts_count,
+        media_group_id=media_group_id
     )
     if should_mute:
         # User is placed into silent shadow-mute in DB and RAM.
@@ -1146,10 +1583,23 @@ async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
 async def build_quick_quote_info(reply_to_post: int | None) -> dict | None:
     if not reply_to_post:
         return None
-    current_max_post = await get_max_post_num()
-    if current_max_post - reply_to_post <= QUICK_QUOTE_POST_DISTANCE:
+    try:
+        reply_to_post_num = int(reply_to_post)
+    except (ValueError, TypeError):
         return None
-    replied_post_data = await get_post_by_num(reply_to_post)
+    if reply_to_post_num <= 0:
+        return None
+
+    try:
+        current_max_post = await get_max_post_num()
+        current_max = int(current_max_post or 0)
+    except Exception:
+        current_max = 0
+
+    quote_distance = getattr(shared_state, 'QUICK_QUOTE_POST_DISTANCE', QUICK_QUOTE_POST_DISTANCE)
+    if quote_distance > 0 and (current_max - reply_to_post_num) <= quote_distance:
+        return None
+    replied_post_data = await get_post_by_num(reply_to_post_num)
     if not replied_post_data:
         return None
     return _quote_info_from_content(replied_post_data.get('content'))
@@ -1291,13 +1741,21 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
             # чтобы медиагруппы не засчитывались в rate-limit текстовых сообщений.
             # Это устраняло ложные автомуты при активной дискуссии + медиагруппах.
             if not is_admin(user_id, board_id):
-                from common.spam_filter import check_flood, evaluate_message_for_autoshadowmute
+                from common.spam_filter import check_flood, get_user_total_posts, get_user_tier
                 msg_date_ts = message.date.timestamp() if getattr(message, 'date', None) else time.time()
-                # Flood-only check для медиагруппы
-                is_flood, flood_reason = check_flood(user_id, board_id, now_ts=msg_date_ts, is_reply=bool(message.reply_to_message))
+                mg_posts_count = await get_user_total_posts(user_id)
+                # Flood-only check для медиагруппы с учетом ветеранских лимитов и медиа-бонусов
+                is_flood, flood_reason = check_flood(
+                    user_id, board_id, now_ts=msg_date_ts,
+                    is_reply=bool(message.reply_to_message),
+                    posts_count=mg_posts_count, is_media=True,
+                    media_group_id=media_group_id
+                )
                 if is_flood:
                     from common.database import apply_shadow_mute
-                    await apply_shadow_mute(user_id, board_id, duration_seconds=300.0,
+                    tier = get_user_tier(mg_posts_count)
+                    base_sec = tier.get('flood_base_mute_sec', 300.0)
+                    await apply_shadow_mute(user_id, board_id, duration_seconds=base_sec,
                                             reason=f"Флуд медиагруппами: {flood_reason}", is_exponential=False)
                     current_media_groups.pop(media_group_key, None)
                     await apply_penalty(message.bot, user_id, 'media_group', board_id)

@@ -1,6 +1,7 @@
 import shared_state
 import asyncio
 import os
+import mimetypes
 import re
 import random
 import logging
@@ -127,7 +128,19 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(file_id)
                 if resp.status_code == 200 and resp.content:
-                    return resp.content, "media.dat"
+                    fn = "media.dat"
+                    ct = resp.headers.get("content-type", "")
+                    if ct:
+                        guessed = mimetypes.guess_extension(ct.split(';')[0].strip())
+                        if guessed:
+                            if guessed == '.jpe': guessed = '.jpg'
+                            fn = f"media{guessed}"
+                    if fn == "media.dat":
+                        url_path = str(file_id).split('?')[0]
+                        url_ext = os.path.splitext(url_path)[1].lower()
+                        if url_ext and len(url_ext) <= 5:
+                            fn = f"media{url_ext}"
+                    return resp.content, fn
         except Exception as http_err:
             logger.debug(f"HTTP download failed for {file_id}: {http_err}")
 
@@ -143,7 +156,19 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
                         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                             resp = await client.get(m_url)
                             if resp.status_code == 200 and resp.content:
-                                return resp.content, "media.dat"
+                                fn = "media.dat"
+                                ct = resp.headers.get("content-type", "")
+                                if ct:
+                                    guessed = mimetypes.guess_extension(ct.split(';')[0].strip())
+                                    if guessed:
+                                        if guessed == '.jpe': guessed = '.jpg'
+                                        fn = f"media{guessed}"
+                                if fn == "media.dat":
+                                    url_path = str(m_url).split('?')[0]
+                                    url_ext = os.path.splitext(url_path)[1].lower()
+                                    if url_ext and len(url_ext) <= 5:
+                                        fn = f"media{url_ext}"
+                                return resp.content, fn
                     except Exception:
                         continue
     except Exception:
@@ -249,8 +274,37 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
             caption = full_caption if i == 0 else None
             
             if force_download:
-                file_bytes, _ = await _download_media_bytes(orig_fid)
-                media_src = BufferedInputFile(file_bytes, filename="media.dat") if file_bytes else orig_fid
+                file_bytes, downloaded_fn = await _download_media_bytes(orig_fid)
+                if file_bytes:
+                    ext = None
+                    src_name = media_item.get('filename') or media_item.get('path') or ''
+                    if src_name:
+                        _, f_ext = os.path.splitext(src_name)
+                        if f_ext:
+                            ext = f_ext.lstrip('.').lower()
+                    if not ext and downloaded_fn and downloaded_fn != "media.dat":
+                        _, f_ext = os.path.splitext(downloaded_fn)
+                        if f_ext:
+                            ext = f_ext.lstrip('.').lower()
+                    if not ext and media_item.get('mime_type'):
+                        guessed = mimetypes.guess_extension(media_item['mime_type'])
+                        if guessed:
+                            ext = guessed.lstrip('.').lower()
+                            if ext == 'jpe':
+                                ext = 'jpg'
+                    if not ext:
+                        ext = 'jpg' if 'photo' in m_type else ('mp4' if any(k in m_type for k in ('video', 'anim')) else ('mp3' if 'audio' in m_type else 'dat'))
+
+                    if media_item.get('filename'):
+                        fn = media_item['filename']
+                        if not os.path.splitext(fn)[1]:
+                            fn = f"{fn}.{ext}"
+                    else:
+                        fn = f"media_{i}.{ext}"
+                    media_src = BufferedInputFile(file_bytes, filename=fn)
+                else:
+                    logger.warning(f"⚠️ [Archive] Не удалось загрузить байты для {orig_fid}, пропуск элемента #{i}")
+                    continue
             else:
                 media_src = await _resolve_media_source(sender_bot, orig_fid, media_item)
 
@@ -261,7 +315,8 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
             elif m_type == 'video': builder.add_video(media=media_src, caption=caption, parse_mode="HTML")
             elif m_type == 'document': builder.add_document(media=media_src, caption=caption, parse_mode="HTML")
             elif m_type == 'audio': builder.add_audio(media=media_src, caption=caption, parse_mode="HTML")
-        return builder.build()
+        built = builder.build()
+        return built if built else None
 
     async def _send_text_fallback():
         safe_msg = prepare_telegram_text(f"{header_text}\n\n{sanitize_html(converted_cap)}".strip(), max_len=4096)
@@ -279,6 +334,9 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
 
     try:
         group = await _build_group(force_download=False)
+        if not group:
+            msg = await _send_text_fallback()
+            return msg, []
         sent_msgs = await sender_bot.send_media_group(channel_id, media=group, request_timeout=60)
     except TelegramBadRequest as e:
         if _is_chat_not_found_or_forbidden(e):
@@ -289,6 +347,10 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
         logger.warning(f"⚠️ TelegramBadRequest on media group ({e}). Forcing download fallback...")
         try:
             group = await _build_group(force_download=True)
+            if not group:
+                logger.warning("⚠️ [Archive] Media group empty after download fallback. Sending text fallback...")
+                msg = await _send_text_fallback()
+                return msg, []
             sent_msgs = await sender_bot.send_media_group(channel_id, media=group, request_timeout=60)
         except TelegramRetryAfter:
             raise

@@ -2906,7 +2906,8 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 'post_style': post_style,
                 'avg_len': avg_len,
                 'approval_pct': approval_pct,
-                'badges': badges[:4]
+                'badges': badges[:4],
+                'active_items': active_items
             }
 
 
@@ -2932,30 +2933,54 @@ def _get_slang_comment(posts_count: int, rank: int, balance: float) -> str:
 
 @dataclass
 class UserStatsCardData:
-    user_id: int
-    board_id: str
-    schizo_name: str
-    role_name: str
-    custom_prefix: str
-    role: str
-    posts_count: int
-    rx_received: int
-    rx_given: int
-    mutes_count: int
-    balance: float
-    cringe_factor: int
-    rank: int
-    total_users: int
-    slang_comment: str
+    user_id: int = 0
+    board_id: str = "b"
+    schizo_name: str = "Анон"
+    role_name: str = "Аноним"
+    custom_prefix: str = ""
+    role: str = "anon"
+    posts_count: int = 0
+    rx_received: int = 0
+    rx_given: int = 0
+    mutes_count: int = 0
+    balance: float = 0.0
+    cringe_factor: int = 0
+    rank: int = 0
+    total_users: int = 0
+    slang_comment: str = ""
     fav_board: str = "b"
     chronotype: str = "Ночной сыч"
     post_style: str = "Базовые мысли"
     avg_len: int = 50
     approval_pct: int = 85
     badges: list = None
+    active_items: dict = None
+    avatar_file_id: str | None = None
+
 
 
 def _format_text_report(data: UserStatsCardData) -> str:
+    wardrobe_line = "🎽 <b>Экипировка:</b> (Ничего не надето, надеть: /wardrobe)"
+    set_line = ""
+    if data.active_items:
+        try:
+            from wardrobe_engine import get_wardrobe_total_stats, get_equipped_gear
+            stats = get_wardrobe_total_stats(data.active_items)
+            eq = get_equipped_gear(data.active_items)
+            slot_icons = {"head": "🎩", "torso": "🧥", "face": "🎭", "feet": "👟"}
+            eq_parts = []
+            for slot in ("head", "torso", "face", "feet"):
+                it = eq.get(slot)
+                if it:
+                    icon = slot_icons.get(slot, "🎽")
+                    eq_parts.append(f"{icon} [{it['name']}]")
+            if eq_parts:
+                wardrobe_line = f"🎽 <b>Экипировка:</b> {' '.join(eq_parts)}"
+            if stats.get("active_set_name"):
+                set_line = f"\n✨ <b>Сет:</b> {stats.get('compact_post_icon', '')}{stats['active_set_name']} ({stats.get('active_set_desc', '')})"
+        except Exception:
+            pass
+
     return (
         f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/{data.board_id}/)\n\n"
         f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
@@ -2967,6 +2992,7 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
         f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n"
         f"🌙 <b>Хронотип:</b> {data.chronotype}\n\n"
+        f"{wardrobe_line}{set_line}\n\n"
         f"💬 <i>\"{data.slang_comment}\"</i>\n"
         f"💡 <i>Карточка персонажа RPG и гардероб: /avatar</i>"
     )
@@ -3110,7 +3136,8 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str, theme: 
         post_style=stats_data.get('post_style', "Базовые мысли"),
         avg_len=stats_data.get('avg_len', 50),
         approval_pct=stats_data.get('approval_pct', 85),
-        badges=stats_data.get('badges', ["Анон"])
+        badges=stats_data.get('badges', ["Анон"]),
+        active_items=stats_data.get('active_items')
     )
 
     text_report = _format_text_report(card_data)
@@ -3144,7 +3171,8 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
             post_style=data.get('post_style', 'Базовые мысли'),
             avg_len=data.get('avg_len', 50),
             approval_pct=data.get('approval_pct', 85),
-            badges=data.get('badges', ['Анон'])
+            badges=data.get('badges', ['Анон']),
+            active_items=data.get('active_items')
         )
 
     if theme == 'auto':

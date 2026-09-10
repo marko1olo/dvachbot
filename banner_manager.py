@@ -276,10 +276,6 @@ def get_banner_file(
         if cached_fid:
             return chosen_file, cached_fid
 
-    cached_fid = _BANNER_CACHE.get(chosen_file)
-    if cached_fid:
-        return chosen_file, cached_fid
-
     # Fallback to local FSInputFile
     local_path = BANNERS_DIR / chosen_file
     if local_path.exists():
@@ -316,11 +312,8 @@ async def send_banner_message(
                 photo=photo_payload
             )
             # Cache file_id from the photo message
-            if photo_msg.photo and fname:
-                fid = photo_msg.photo[-1].file_id
-                if bot_id:
-                    _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
-                _BANNER_CACHE[fname] = fid
+            if photo_msg.photo and fname and bot_id:
+                _BANNER_CACHE[f"{bot_id}:{fname}"] = photo_msg.photo[-1].file_id
                 save_cache()
             # Reply to the photo with the full text
             return await _send_text_with_fallback(
@@ -337,11 +330,8 @@ async def send_banner_message(
             if local_path.exists() and not isinstance(photo_payload, FSInputFile):
                 try:
                     photo_msg = await bot.send_photo(chat_id=chat_id, photo=FSInputFile(str(local_path)))
-                    if photo_msg.photo:
-                        fid = photo_msg.photo[-1].file_id
-                        if bot_id:
-                            _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
-                        _BANNER_CACHE[fname] = fid
+                    if photo_msg.photo and bot_id:
+                        _BANNER_CACHE[f"{bot_id}:{fname}"] = photo_msg.photo[-1].file_id
                         save_cache()
                     return await _send_text_with_fallback(
                         bot=bot,
@@ -365,11 +355,8 @@ async def send_banner_message(
         )
         
         # Cache file_id if this was an initial upload
-        if msg.photo and fname:
-            fid = msg.photo[-1].file_id
-            if bot_id:
-                _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
-            _BANNER_CACHE[fname] = fid
+        if msg.photo and fname and bot_id:
+            _BANNER_CACHE[f"{bot_id}:{fname}"] = msg.photo[-1].file_id
             save_cache()
             
         return msg
@@ -393,11 +380,8 @@ async def send_banner_message(
                         reply_markup=reply_markup,
                         parse_mode=parse_mode
                     )
-                    if msg.photo:
-                        fid = msg.photo[-1].file_id
-                        if bot_id:
-                            _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
-                        _BANNER_CACHE[fname] = fid
+                    if msg.photo and bot_id:
+                        _BANNER_CACHE[f"{bot_id}:{fname}"] = msg.photo[-1].file_id
                         save_cache()
                     return msg
                 except Exception as retry_e:

@@ -26,6 +26,12 @@ if exist bot.stop (
     exit /b 0
 )
 
+if "%WATCHDOG_EXIT%"=="0" (
+    echo.
+    echo [INFO] Bot Supervisor exited cleanly with code 0 (another instance active or stop confirmed).
+    exit /b 0
+)
+
 echo.
 echo [WARNING] Bot Supervisor process exited with code %WATCHDOG_EXIT%.
 echo [INFO] Self-healing restart in 3 seconds...

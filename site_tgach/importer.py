@@ -454,18 +454,30 @@ class ThreadImporter:
             return []
         for file_data in downloaded_versions:
             try:
-                fake_file = MemoryUploadFile(
-                    file_data["buffer"], file_data["name"], file_data["content_type"]
-                )
-
-                if global_bot_pool:
-                    uploader_bot_id, uploader_bot = global_bot_pool.get_next_bot(stream)
-                else:
-                    uploader_bot = self.bot
-                    uploader_bot_id = getattr(self.bot, "id", 0)
-                res = await process_and_upload_image(
-                    fake_file, 50 * 1024 * 1024, uploader_bot, self.channel_id
-                )
+                res = None
+                max_upload_retries = 2 if global_bot_pool else 1
+                for upload_attempt in range(max_upload_retries):
+                    try:
+                        if global_bot_pool:
+                            uploader_bot_id, uploader_bot = global_bot_pool.get_next_bot(stream)
+                        else:
+                            uploader_bot = self.bot
+                            uploader_bot_id = getattr(self.bot, "id", 0)
+                        fake_file = MemoryUploadFile(
+                            file_data["buffer"], file_data["name"], file_data["content_type"]
+                        )
+                        res = await process_and_upload_image(
+                            fake_file, 50 * 1024 * 1024, uploader_bot, self.channel_id
+                        )
+                        if res:
+                            break
+                    except Exception as upload_err:
+                        err_str = str(upload_err).lower()
+                        if "flood" in err_str or "retry after" in err_str or "429" in err_str:
+                            if global_bot_pool and uploader_bot_id:
+                                global_bot_pool.mark_bot_cooldown(uploader_bot_id, 30.0)
+                        if upload_attempt == max_upload_retries - 1:
+                            raise
 
                 if res:
                     fname = res.get("filename") or file_data["name"]

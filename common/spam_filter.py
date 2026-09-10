@@ -64,6 +64,189 @@ MINUTE_FLOOD_LIMIT = 30         # > 30 messages in 60 seconds
 MINUTE_FLOOD_WINDOW = 60.0
 FLOOD_BASE_MUTE_SEC = 300.0     # 5 minutes base shadowmute for fast flood (not 20m!)
 
+# User Tiers and Flood Limits (Послабления и скидки для ветеранов)
+USER_TIERS = {
+    'newbie': {
+        'name': 'Новичок',
+        'min_posts': 0,
+        'burst_limit': 8,
+        'burst_window': 4.0,
+        'rate_limit': 15,
+        'minute_limit': 30,
+        'repeat_bonus': 0,
+        'flood_base_mute_sec': 300.0,
+        'multiplier': 1.0,
+    },
+    'anon': {
+        'name': 'Анон',
+        'min_posts': 20,
+        'burst_limit': 10,
+        'burst_window': 3.8,
+        'rate_limit': 18,
+        'minute_limit': 37,
+        'repeat_bonus': 0,
+        'flood_base_mute_sec': 240.0,
+        'multiplier': 1.25,
+    },
+    'veteran': {
+        'name': 'Ветеран',
+        'min_posts': 100,
+        'burst_limit': 12,
+        'burst_window': 3.5,
+        'rate_limit': 22,
+        'minute_limit': 45,
+        'repeat_bonus': 1,
+        'flood_base_mute_sec': 120.0,
+        'multiplier': 1.5,
+    },
+    'oldfag': {
+        'name': 'Олдфаг',
+        'min_posts': 500,
+        'burst_limit': 14,
+        'burst_window': 3.3,
+        'rate_limit': 26,
+        'minute_limit': 52,
+        'repeat_bonus': 2,
+        'flood_base_mute_sec': 90.0,
+        'multiplier': 1.75,
+    },
+    'ancient': {
+        'name': 'Древний Олдфаг',
+        'min_posts': 2000,
+        'burst_limit': 16,
+        'burst_window': 3.0,
+        'rate_limit': 30,
+        'minute_limit': 60,
+        'repeat_bonus': 2,
+        'flood_base_mute_sec': 60.0,
+        'multiplier': 2.0,
+    },
+}
+
+MEDIA_BURST_BONUS = 6
+MEDIA_RATE_BONUS = 10
+MEDIA_MINUTE_BONUS = 15
+
+# Media Burst & Album Buffering
+MEDIA_BURST_GAP = 3.5          # Max gap between images in rapid series/album
+MEDIA_BURST_MAX_ITEMS = 10     # Max images in standard album buffer
+MEDIA_GROUP_WINDOW = 30.0      # Sliding window for Telegram media_group_id
+MAX_MEDIA_GROUP_ITEMS = 15     # Upper bound to prevent abusive infinite media_group loops
+
+# Seen media groups to treat whole album as 1 post: {user_id: {media_group_id: {'first_ts': float, 'count': int}}}
+_seen_media_groups: Dict[int, Dict[str, dict]] = defaultdict(dict)
+
+# Rapid media burst buffer: {user_id: {'count': int, 'first_ts': float, 'last_ts': float}}
+_user_media_burst_tracker: Dict[int, dict] = defaultdict(lambda: {'count': 0, 'first_ts': 0.0, 'last_ts': 0.0})
+
+# Mute grace period tracker: {user_id: applied_ts}
+_shadow_mute_applied_ts: Dict[int, float] = defaultdict(float)
+MUTE_GRACE_PERIOD_SEC = 4.0
+
+def record_shadow_mute_applied(user_id: int, now_ts: float | None = None):
+    """Records the timestamp when shadow mute was applied to provide grace period for in-flight packets."""
+    _shadow_mute_applied_ts[user_id] = float(now_ts) if now_ts is not None else time.time()
+
+def is_in_mute_grace_period(user_id: int, now_ts: float | None = None) -> bool:
+    """Returns True if message arrived during grace period of initial mute (preventing compounding)."""
+    applied_ts = _shadow_mute_applied_ts.get(user_id, 0.0)
+    if not applied_ts:
+        return False
+    now = float(now_ts) if now_ts is not None else time.time()
+    return 0.0 <= (now - applied_ts) < MUTE_GRACE_PERIOD_SEC
+
+def get_user_tier(posts_count: int = 0) -> dict:
+    """Returns the tier configuration based on user's post count."""
+    try:
+        count = max(0, int(posts_count or 0))
+    except (ValueError, TypeError):
+        count = 0
+    if count >= 2000:
+        return USER_TIERS['ancient']
+    if count >= 500:
+        return USER_TIERS['oldfag']
+    if count >= 100:
+        return USER_TIERS['veteran']
+    if count >= 20:
+        return USER_TIERS['anon']
+    return USER_TIERS['newbie']
+
+def get_veteran_flood_multiplier(posts_count: int = 0, account_age_days: float = 0.0) -> float:
+    """Calculates dynamic flood tolerance multiplier based on user's posts_count and longevity."""
+    tier = get_user_tier(posts_count)
+    mult = tier.get('multiplier', 1.0)
+    if posts_count >= 100 and account_age_days >= 30.0:
+        mult = min(2.0, mult + 0.1)
+    return mult
+
+def reset_media_burst_tracker(user_id: int | None = None):
+    """Resets media burst tracking (for testing or shadowmute recovery)."""
+    if user_id is not None:
+        _user_media_burst_tracker.pop(user_id, None)
+        _seen_media_groups.pop(user_id, None)
+    else:
+        _user_media_burst_tracker.clear()
+        _seen_media_groups.clear()
+
+def register_media_group(user_id: int, media_group_id: str, now_ts: float | None = None):
+    """Explicitly registers an incoming media group for a user."""
+    now = float(now_ts) if now_ts is not None else time.time()
+    _seen_media_groups[user_id][str(media_group_id)] = {'first_ts': now, 'count': 1}
+
+# Fast cache for user posts count: {user_id: (cached_at_ts, posts_count)}
+_user_posts_count_cache: Dict[int, Tuple[float, int]] = {}
+USER_POSTS_CACHE_TTL = 60.0
+
+def set_cached_user_posts(user_id: int, posts_count: int):
+    _user_posts_count_cache[user_id] = (time.time(), int(posts_count or 0))
+
+def get_cached_user_posts(user_id: int) -> int:
+    now = time.time()
+    cached = _user_posts_count_cache.get(user_id)
+    if cached:
+        ts, count = cached
+        if now - ts < USER_POSTS_CACHE_TTL:
+            return count
+    # Fast read-only query on Users table if DB exists
+    try:
+        import os
+        from common.config import DB_NAME
+        if DB_NAME and isinstance(DB_NAME, str) and os.path.exists(DB_NAME):
+            import sqlite3
+            conn = sqlite3.connect(f"file:{DB_NAME}?mode=ro", uri=True, timeout=0.2)
+            try:
+                cur = conn.execute("SELECT COALESCE(MAX(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,))
+                row = cur.fetchone()
+                count = int(row[0]) if row and row[0] is not None else 0
+                _user_posts_count_cache[user_id] = (now, count)
+                return count
+            finally:
+                conn.close()
+    except Exception:
+        pass
+    return 0
+
+async def get_user_total_posts(user_id: int) -> int:
+    now = time.time()
+    cached = _user_posts_count_cache.get(user_id)
+    if cached and (now - cached[0] < USER_POSTS_CACHE_TTL):
+        return cached[1]
+    try:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        async with db.execute("SELECT COALESCE(MAX(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+            count = int(row[0]) if row and row[0] is not None else 0
+            if count == 0:
+                async with db.execute("SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as cur2:
+                    r2 = await cur2.fetchone()
+                    count = int(r2[0]) if r2 and r2[0] is not None else 0
+            _user_posts_count_cache[user_id] = (now, count)
+            return count
+    except Exception:
+        return get_cached_user_posts(user_id)
+
+
 # Cross-board limit
 CROSS_BOARD_WINDOW = 60.0       # 60 seconds
 
@@ -266,7 +449,8 @@ def is_bayan(
     file_unique_id: str | None = None,
     file_id: str | None = None,
     media_hash: str | None = None,
-    now_ts: float | None = None
+    now_ts: float | None = None,
+    media_group_id: str | None = None
 ) -> Tuple[bool, str]:
     """
     Checks whether the current message is a bayan (duplicate text, repeat media, hash match).
@@ -286,14 +470,22 @@ def is_bayan(
 
     # 1. Check if user recently posted this exact fingerprint
     u_tracker = _bayan_tracker[user_id]
-    for ts, prev_fp, _ in u_tracker:
+    for item in u_tracker:
+        ts = item[0]
+        prev_fp = item[1]
+        prev_mg = item[3] if len(item) > 3 else None
+        if media_group_id and prev_mg and prev_mg == str(media_group_id):
+            continue
         if now - ts <= BAYAN_WINDOW_SEC and prev_fp == fp:
             return True, f"Повтор сообщения/медиа (fingerprint: {fp})"
 
     # 2. Check near-duplicate text similarity (Levenstein/diff >= 85%)
     if fp.startswith("text:") and isinstance(content, str) and len(content.strip()) >= 10:
         norm_cur = content.strip().lower()
-        for ts, prev_fp, prev_raw in u_tracker:
+        for item in u_tracker:
+            ts = item[0]
+            prev_fp = item[1]
+            prev_raw = item[2] if len(item) > 2 else None
             if now - ts <= BAYAN_WINDOW_SEC and prev_fp.startswith("text:") and prev_raw:
                 norm_prev = str(prev_raw).strip().lower()
                 l1, l2 = len(norm_cur), len(norm_prev)
@@ -319,7 +511,8 @@ def check_bayan(
     file_id: str | None = None,
     media_hash: str | None = None,
     board_id: str = 'b',
-    now_ts: float | None = None
+    now_ts: float | None = None,
+    media_group_id: str | None = None
 ) -> Tuple[bool, int]:
     """
     Checks if a user is posting duplicate content (bayan).
@@ -344,14 +537,17 @@ def check_bayan(
     while tracker and now - tracker[0][0] > BAYAN_WINDOW_SEC:
         tracker.popleft()
 
-    # Record current message
-    tracker.append((now, fp, content if isinstance(content, str) else None))
+    # Record current message: (timestamp, fingerprint, content, media_group_id)
+    tracker.append((now, fp, content if isinstance(content, str) else None, str(media_group_id) if media_group_id else None))
 
     # Add to board recent fingerprints
     _board_recent_fingerprints[board_id].append((now, fp))
 
-    # Check total matching bayans in the window
-    bayan_count = sum(1 for ts, f, _ in tracker if f == fp)
+    # Check total matching bayans in the window (excluding items within same media group)
+    bayan_count = sum(
+        1 for item in tracker
+        if item[1] == fp and not (media_group_id and len(item) > 3 and item[3] == str(media_group_id))
+    )
     
     if bayan_count >= BAYAN_THRESHOLD:
         last_mute = _bayan_mute_last_ts[user_id]
@@ -374,10 +570,22 @@ def get_bayan_escalation_level(user_id: int) -> int:
     return _bayan_mute_count.get(user_id, 0)
 
 
-def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record_history: bool = True, is_reply: bool = False) -> Tuple[bool, str]:
+def check_flood(
+    user_id: int,
+    board_id: str,
+    now_ts: float | None = None,
+    record_history: bool = True,
+    is_reply: bool = False,
+    posts_count: int | None = None,
+    is_media: bool = False,
+    media_group_id: str | None = None
+) -> Tuple[bool, str]:
     """
     Checks if a user is flooding requests (burst and minute limit).
+    Supports veteran tier limits (posts_count discounts), media bonuses,
+    media burst buffering, and deduplication for media groups/albums.
     Returns (is_flooding: bool, reason: str).
+    Ghost / shadow posts (record_history=False) evaluate flood thresholds without appending to history.
     """
     try:
         from bot_helpers import is_admin
@@ -390,6 +598,48 @@ def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record
         now = float(now_ts) if now_ts is not None else time.time()
     except Exception:
         now = time.time()
+
+    # 1. Handle media groups (albums): subsequent files of the same album within window are NOT new flood messages
+    if media_group_id:
+        mg_str = str(media_group_id)
+        mg_map = _seen_media_groups[user_id]
+        # Prune expired
+        expired = [mg for mg, entry in list(mg_map.items()) if now - (entry['first_ts'] if isinstance(entry, dict) else entry) > MEDIA_GROUP_WINDOW]
+        for mg in expired:
+            mg_map.pop(mg, None)
+
+        mg_entry = mg_map.get(mg_str)
+        if isinstance(mg_entry, dict):
+            if mg_entry.get('count', 0) < MAX_MEDIA_GROUP_ITEMS:
+                mg_entry['count'] += 1
+                # Subsequent message in legitimate media group album -> bypass flood count cleanly!
+                return False, ""
+        elif isinstance(mg_entry, (int, float)):
+            mg_map[mg_str] = {'first_ts': float(mg_entry), 'count': 2}
+            return False, ""
+        else:
+            # First item in this media group
+            mg_map[mg_str] = {'first_ts': now, 'count': 1}
+
+    # 2. Media burst buffering: protects rapid image series / albums without media_group_id
+    if is_media:
+        burst = _user_media_burst_tracker[user_id]
+        if burst['last_ts'] > 0.0 and (now - burst['last_ts'] <= MEDIA_BURST_GAP):
+            burst['count'] += 1
+            burst['last_ts'] = now
+            # Resolve user tier for allowed burst size
+            if posts_count is None:
+                posts_count = get_cached_user_posts(user_id)
+            tier = get_user_tier(posts_count)
+            mult = tier.get('multiplier', 1.0)
+            max_media_allowed = int(MEDIA_BURST_MAX_ITEMS * (1.2 if mult > 1.0 else 1.0))
+            if burst['count'] <= max_media_allowed:
+                # Absorbed into media burst buffer!
+                return False, ""
+        else:
+            burst['count'] = 1
+            burst['first_ts'] = now
+            burst['last_ts'] = now
 
     tracker = _user_request_timestamps[user_id]
 
@@ -414,24 +664,34 @@ def check_flood(user_id: int, board_id: str, now_ts: float | None = None, record
     current_timestamps = [float(ts) for ts in tracker if isinstance(ts, (int, float))]
     current_timestamps.append(now)
 
-    # 1. Burst flood: > 4 messages in 4 seconds
-    burst_limit = 8 if is_reply else BURST_FLOOD_LIMIT
-    burst_window = 10.0 if is_reply else BURST_FLOOD_WINDOW
+    # Resolve tier & limits
+    if posts_count is None:
+        posts_count = get_cached_user_posts(user_id)
+    tier = get_user_tier(posts_count)
+
+    tier_burst = tier['burst_limit']
+    tier_rate = tier['rate_limit']
+    tier_minute = tier['minute_limit']
+
+    # 1. Burst flood: > burst_limit in burst_window
+    mult = tier.get('multiplier', 1.0)
+    burst_limit = int(8 * mult) if is_reply else tier_burst
+    burst_window = 10.0 if is_reply else tier.get('burst_window', BURST_FLOOD_WINDOW)
     burst_count = sum(1 for ts in current_timestamps if now - ts <= burst_window)
     if burst_count > burst_limit:
         if record_history:
             tracker.append(now)
         return True, f"Burst флуд: {burst_count} сообщений за {burst_window}с"
 
-    # 2. Rate flood: > 8 messages in 15 seconds
+    # 2. Rate flood: > tier_rate in RATE_FLOOD_WINDOW
     rate_count = sum(1 for ts in current_timestamps if now - ts <= RATE_FLOOD_WINDOW)
-    if rate_count > RATE_FLOOD_LIMIT:
+    if rate_count > tier_rate:
         if record_history:
             tracker.append(now)
         return True, f"Частый постинг: {rate_count} сообщений за {RATE_FLOOD_WINDOW}с"
 
-    # 3. Minute flood: > 20 messages in 60 seconds
-    if len(current_timestamps) > MINUTE_FLOOD_LIMIT:
+    # 3. Minute flood: > tier_minute in MINUTE_FLOOD_WINDOW
+    if len(current_timestamps) > tier_minute:
         if record_history:
             tracker.append(now)
         return True, f"Минутный флуд: {len(current_timestamps)} сообщений за {MINUTE_FLOOD_WINDOW}с"
@@ -473,7 +733,15 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
     return False, ""
 
 
-def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
+def _check_repeats(
+    user_id: int,
+    b_data: dict,
+    msg_info: tuple[str, str],
+    rules: dict,
+    violations: dict,
+    posts_count: int | None = None,
+    media_group_id: str | None = None
+) -> bool:
     """Check if the user is repeatedly sending the same or highly similar messages."""
     try:
         from site_tgach.admin_config import ADMIN_IDS
@@ -481,10 +749,27 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
             return True
     except Exception:
         pass
+
+    # Media group albums and media bursts are protected from repeat penalties
+    if media_group_id:
+        return True
+
     content, msg_type = msg_info
+    if msg_type in ('photo', 'video', 'document', 'media', 'media_group'):
+        burst = _user_media_burst_tracker.get(user_id)
+        if burst and burst.get('count', 0) > 1:
+            return True
+
     max_repeats = rules.get('max_repeats')
     if not max_repeats or not content:
         return True
+
+    # Scale repeat tolerance for board veterans based on posts_count
+    if posts_count is None:
+        posts_count = get_cached_user_posts(user_id)
+    tier = get_user_tier(posts_count)
+    repeat_bonus = tier.get('repeat_bonus', 0)
+    effective_max_repeats = max_repeats + repeat_bonus
 
     last_items_deque = None
     if msg_type == 'text':
@@ -510,7 +795,7 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
         
         # Consecutive identical items check:
         # e.g., max_repeats = 3 allows up to 3 identical stickers/animations in a row; 4th is blocked.
-        consecutive_limit = max_repeats + 1
+        consecutive_limit = effective_max_repeats + 1
         if len(last_items_deque) >= consecutive_limit:
             tail = [item[1] for item in list(last_items_deque)[-consecutive_limit:]]
             if len(set(tail)) == 1:
@@ -518,8 +803,8 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
                     violations['level'] += 1
                     last_items_deque.clear()
                     return False
-        elif len(last_items_deque) >= max_repeats and msg_type == 'text':
-            contents = [item[1] for item in list(last_items_deque)[-max_repeats:]]
+        elif len(last_items_deque) >= effective_max_repeats and msg_type == 'text':
+            contents = [item[1] for item in list(last_items_deque)[-effective_max_repeats:]]
             def _fast_similar(s1: str, s2: str) -> bool:
                 if s1 == s2: return True
                 l1, l2 = len(s1), len(s2)
@@ -596,14 +881,28 @@ def _check_cross_board_spam(
 check_cross_board_spam = _check_cross_board_spam
 
 
-def check_rate_limit(board_id: str, user_id: int, rules: dict) -> bool:
-    """Sliding window implementation for rate limits."""
+def check_rate_limit(
+    board_id: str,
+    user_id: int,
+    rules: dict,
+    posts_count: int | None = None,
+    media_group_id: str | None = None
+) -> bool:
+    """Sliding window implementation for rate limits with veteran scaling and media group protection."""
     try:
         from bot_helpers import is_admin
         if is_admin(user_id, board_id):
             return True
     except Exception:
         pass
+
+    # Media group albums parts (after the first) do not exhaust rate limit
+    if media_group_id:
+        user_mg = _seen_media_groups.get(user_id, {})
+        mg_entry = user_mg.get(str(media_group_id))
+        if isinstance(mg_entry, dict) and mg_entry.get('count', 0) > 1:
+            return True
+
     now_ts = time.time()
     tracker = _spam_trackers[board_id][user_id]
     
@@ -611,7 +910,13 @@ def check_rate_limit(board_id: str, user_id: int, rules: dict) -> bool:
     tracker[:] = [t for t in tracker if t > now_ts - rules['window_sec']]
     tracker.append(now_ts)
     
-    if len(tracker) >= rules['max_per_window']:
+    if posts_count is None:
+        posts_count = get_cached_user_posts(user_id)
+    tier = get_user_tier(posts_count)
+    mult = tier.get('multiplier', 1.0)
+    effective_max = int(rules['max_per_window'] * mult)
+
+    if len(tracker) >= effective_max:
         tracker.clear()
         return False
     return True
@@ -642,6 +947,60 @@ async def handle_shadow_mute_continuation(
     return False, 0.0
 
 
+async def apply_shadow_mute(
+    user_id: int,
+    board_id: str,
+    duration_seconds: float = 1200.0,
+    reason: str = "",
+    is_exponential: bool = False
+) -> float:
+    """
+    Applies shadow mute, clears the user's timestamp deques _user_request_timestamps[(user_id, board_id)].clear()
+    and _user_request_timestamps[user_id].clear() so queued/in-flight messages from the same packet burst
+    do not immediately re-trigger flood detection, and ensures ghost/shadow posts do not trigger exponential flood mute escalation.
+    """
+    record_shadow_mute_applied(user_id)
+    _user_media_burst_tracker.pop(user_id, None)
+    _seen_media_groups.pop(user_id, None)
+    try:
+        if (user_id, board_id) in _user_request_timestamps:
+            _user_request_timestamps[(user_id, board_id)].clear()
+        else:
+            _user_request_timestamps[(user_id, board_id)].clear()
+    except Exception:
+        pass
+    try:
+        if user_id in _user_request_timestamps:
+            _user_request_timestamps[user_id].clear()
+    except Exception:
+        pass
+
+    # Ensure ghost / shadow posts do not trigger exponential flood mute escalation
+    is_flood_reason = any(w in (reason or "").lower() for w in ("флуд", "flood", "burst", "постинг"))
+    if is_exponential and is_flood_reason:
+        is_exponential = False
+
+    if is_exponential and is_in_mute_grace_period(user_id):
+        is_exponential = False
+
+    orig_fn = _orig_db_apply_shadow_mute or getattr(common.database, "apply_shadow_mute", None)
+    if orig_fn and orig_fn is not apply_shadow_mute:
+        return await orig_fn(
+            user_id, board_id, duration_seconds=duration_seconds, reason=reason, is_exponential=is_exponential
+        )
+    return 0.0
+
+
+# Hook common.database.apply_shadow_mute
+try:
+    import common.database
+    _orig_db_apply_shadow_mute = getattr(common.database, "apply_shadow_mute", None)
+    if _orig_db_apply_shadow_mute:
+        common.database.apply_shadow_mute = apply_shadow_mute
+except Exception:
+    _orig_db_apply_shadow_mute = None
+
+
 async def evaluate_message_for_autoshadowmute(
     user_id: int,
     board_id: str,
@@ -652,7 +1011,9 @@ async def evaluate_message_for_autoshadowmute(
     file_id: str | None = None,
     media_hash: str | None = None,
     now_ts: float | None = None,
-    is_reply: bool = False
+    is_reply: bool = False,
+    posts_count: int | None = None,
+    media_group_id: str | None = None,
 ) -> Tuple[bool, str, float]:
     """
     Comprehensive evaluation of an incoming message for auto-shadowmute:
@@ -673,11 +1034,30 @@ async def evaluate_message_for_autoshadowmute(
     now = now_ts or time.time()
     text_content = content if isinstance(content, str) else (content.get('text') or content.get('caption') if isinstance(content, dict) else None)
 
+    if not media_group_id and isinstance(content, dict):
+        media_group_id = content.get('media_group_id')
+
+    if posts_count is None:
+        posts_count = await get_user_total_posts(user_id)
+    is_media = (
+        raw_content_type in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'video_note')
+        or msg_type in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'video_note')
+        or bool(file_unique_id)
+        or bool(file_id)
+        or bool(media_hash)
+        or bool(media_group_id)
+    )
+
     # 1. Flood check
-    is_flood, flood_reason = check_flood(user_id, board_id, now_ts=now, is_reply=is_reply)
+    is_flood, flood_reason = check_flood(
+        user_id, board_id, now_ts=now, is_reply=is_reply,
+        posts_count=posts_count, is_media=is_media, media_group_id=media_group_id
+    )
     if is_flood:
         from common.database import apply_shadow_mute
-        expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=FLOOD_BASE_MUTE_SEC, reason=flood_reason, is_exponential=False)
+        tier = get_user_tier(posts_count or 0)
+        base_mute = tier.get('flood_base_mute_sec', FLOOD_BASE_MUTE_SEC)
+        expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=base_mute, reason=flood_reason, is_exponential=False)
         return True, flood_reason, expires_at
 
     # 2. Link / Ad / Scam spam check
@@ -706,7 +1086,8 @@ async def evaluate_message_for_autoshadowmute(
         file_id=file_id,
         media_hash=media_hash,
         board_id=board_id,
-        now_ts=now
+        now_ts=now,
+        media_group_id=media_group_id
     )
     if is_bayan_trigger:
         reason = f"3+ баяна за 3 минуты"
@@ -724,7 +1105,9 @@ async def analyze_message_for_spam(
     msg_type: str,
     raw_content_type: str,
     skip_cross_board: bool = False,
-    skip_bayan: bool = False
+    skip_bayan: bool = False,
+    posts_count: int | None = None,
+    media_group_id: str | None = None
 ) -> Tuple[SpamResult, int]:
     """
     Decoupled engine for spam analysis.
@@ -745,7 +1128,7 @@ async def analyze_message_for_spam(
 
     # Bayan check: 3 duplicates in 3 minutes (skipped if already checked in evaluate_message_for_autoshadowmute)
     if content and not skip_bayan:
-        is_bayan_hit, bayan_mute_sec = check_bayan(user_id, content, msg_type or raw_content_type, board_id=board_id)
+        is_bayan_hit, bayan_mute_sec = check_bayan(user_id, content, msg_type or raw_content_type, board_id=board_id, media_group_id=media_group_id)
         if is_bayan_hit:
             return SpamResult.BAYAN_MUTE, bayan_mute_sec
 
@@ -763,7 +1146,10 @@ async def analyze_message_for_spam(
         violations['level'] = 0
         violations['last_reset'] = now
 
-    if not check_rate_limit(board_id, user_id, rules):
+    if posts_count is None:
+        posts_count = await get_user_total_posts(user_id)
+
+    if not check_rate_limit(board_id, user_id, rules, posts_count=posts_count, media_group_id=media_group_id):
         violations['level'] += 1
         return SpamResult.BAN_REQUIRED, violations['level']
         
@@ -794,6 +1180,8 @@ def get_board_spam_stats(board_id: str) -> dict:
         "spam_tracker_items": sum(len(items) for items in _spam_trackers[board_id].values()),
         "image_spam_items": len(image_spam_tracker[board_id]),
         "bayan_tracked_users": len(_bayan_tracker),
+        "media_burst_tracked_users": len(_user_media_burst_tracker),
+        "active_media_groups": sum(len(g) for g in _seen_media_groups.values()),
     }
 
 def acquire_spam_lock(user_id: int):

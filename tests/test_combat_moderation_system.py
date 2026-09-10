@@ -45,34 +45,34 @@ class TestCombatModerationFormulas(unittest.TestCase):
         attacker = 1001
         target = 2001
 
-        # 1st call: 6 hours (21600s), 0% backfire (target has 300 posts -> standard)
+        # 1st call: 3 hours (10800s), 0% backfire (target has 300 posts -> standard)
         with patch('random.random', return_value=0.5):
             dur1, backfire1, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=300)
-            self.assertEqual(dur1, 21600)
+            self.assertEqual(dur1, 10800)
             self.assertFalse(backfire1)
 
         record_combat_attack(attacker, target, "partyvan")
 
-        # 2nd call: 3 hours (10800s), 15% backfire
+        # 2nd call: 1.5 hours (5400s), 15% backfire
         with patch('random.random', return_value=0.5):
             dur2, backfire2, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=300)
-            self.assertEqual(dur2, 10800)
+            self.assertEqual(dur2, 5400)
             self.assertFalse(backfire2)
 
         record_combat_attack(attacker, target, "partyvan")
 
-        # 3rd call: 1.5 hours (5400s), 40% backfire
+        # 3rd call: 45 minutes (2700s), 40% backfire
         with patch('random.random', return_value=0.5):
             dur3, backfire3, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=300)
-            self.assertEqual(dur3, 5400)
+            self.assertEqual(dur3, 2700)
             self.assertFalse(backfire3)
 
         record_combat_attack(attacker, target, "partyvan")
 
-        # 4th call: 1 hour (3600s), 75% backfire
+        # 4th call: 20 minutes (1200s), 75% backfire
         with patch('random.random', return_value=0.9):
             dur4, backfire4, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=300)
-            self.assertEqual(dur4, 3600)
+            self.assertEqual(dur4, 1200)
             self.assertFalse(backfire4)
 
     def test_progressive_shoot_durations(self):
@@ -112,25 +112,25 @@ class TestCombatModerationFormulas(unittest.TestCase):
         attacker = 1003
         target = 2003
 
-        # Base 1st partyvan = 21600s (6h)
+        # Base 1st partyvan = 10800s (3h)
         # posts_count < 50 -> полный отлёт атаки (0s)
         dur_newbie, _, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=40)
         self.assertEqual(dur_newbie, 0)
 
-        # 50 <= posts_count < 250 -> -30% (15120s)
+        # 50 <= posts_count < 250 -> -30% (7560s)
         dur_mid, _, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=100)
-        self.assertEqual(dur_mid, 15120)
+        self.assertEqual(dur_mid, 7560)
 
-        # posts_count >= 250 -> стандартное время без поблажек (21600s)
+        # posts_count >= 250 -> стандартное время без поблажек (10800s)
         dur_exp, _, _ = calculate_combat_duration_and_backfire(attacker, target, "partyvan", target_posts=500)
-        self.assertEqual(dur_exp, 21600)
+        self.assertEqual(dur_exp, 10800)
 
     def test_partyvan_flavor_text(self):
         from combat_moderation_engine import get_partyvan_flavor_text
         self.assertIn("ОМОН", get_partyvan_flavor_text(0))
-        self.assertIn("3 часов", get_partyvan_flavor_text(1))
-        self.assertIn("1.5 часа", get_partyvan_flavor_text(2))
-        self.assertIn("1 час", get_partyvan_flavor_text(3))
+        self.assertIn("1.5 часа", get_partyvan_flavor_text(1))
+        self.assertIn("45 минут", get_partyvan_flavor_text(2))
+        self.assertIn("20 минут", get_partyvan_flavor_text(3))
 
     def test_backfire_trigger(self):
         attacker = 1004

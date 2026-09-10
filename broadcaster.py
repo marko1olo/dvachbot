@@ -382,6 +382,17 @@ class MessageBroadcaster:
         await self._save_copies_to_db()
         await self._remove_blocked_users()
 
+        self._broadcast_downloaded_fb = None
+        if self.post_num:
+            try:
+                async with storage_lock:
+                    if self.post_num in messages_storage and isinstance(messages_storage[self.post_num], dict):
+                        pcontent = messages_storage[self.post_num].get('content')
+                        if isinstance(pcontent, dict) and ('file_id' in pcontent or 'file_id' in messages_storage[self.post_num]):
+                            pcontent.pop('image_bytes', None)
+            except Exception:
+                pass
+
         return DeliveryResults(
             self.all_results,
             remaining_recipients=remaining_recipients_for_later,
@@ -715,7 +726,15 @@ class MessageBroadcaster:
                         pass
                     else:
                         print(f"⚠️ Ошибка сохранения копий для #{self.post_num}: {e}")
-                        
+
+            # Free temporary media buffers so messages_storage doesn't hoard megabytes in RAM
+            self._broadcast_downloaded_fb = None
+            if hasattr(self, 'content') and isinstance(self.content, dict):
+                self.content.pop("image_bytes", None)
+                self.content.pop("voice_bytes", None)
+            if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                self.content_for_common.pop("image_bytes", None)
+                self.content_for_common.pop("voice_bytes", None)
 
     async def _remove_blocked_users(self):
         if self.blocked_users:
@@ -977,10 +996,11 @@ class MessageBroadcaster:
         def _plain_media_source(media_type: str):
             if current_content.get("voice_bytes"):
                 return BufferedInputFile(current_content["voice_bytes"], filename="roast.ogg")
-            if current_content.get("image_bytes"):
+            fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
+            if fb:
                 extensions = {'photo': 'jpg', 'animation': 'gif', 'audio': 'mp3', 'voice': 'ogg'}
                 ext = extensions.get(media_type, 'mp4')
-                return BufferedInputFile(current_content["image_bytes"], filename=f"file.{ext}")
+                return BufferedInputFile(fb, filename=f"file.{ext}")
             return current_content.get("file_id") or current_content.get("image_url")
 
         async def _send_plain_media_fallback(reason: str):
@@ -1348,11 +1368,25 @@ class MessageBroadcaster:
                     try:
                         from archive_manager import _download_media_bytes
                         fid = current_content.get("file_id") or current_content.get("image_url")
-                        if fid and not current_content.get("image_bytes"):
+                        if isinstance(fid, str) and fid.strip().startswith("<"):
+                            main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Rejecting pseudo-string object in file_id: '{fid[:40]}'")
+                            fid = None
+                            current_content["file_id"] = None
+                            if isinstance(send_content, dict):
+                                send_content["file_id"] = None
+                        fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
+                        if fid and not fb:
                             fb, _ = await _download_media_bytes(fid)
                             if fb:
+                                self._broadcast_downloaded_fb = fb
                                 current_content["image_bytes"] = fb
-                        fb = current_content.get("image_bytes")
+                                if isinstance(send_content, dict):
+                                    send_content["image_bytes"] = fb
+                                if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                    self.content_for_common["image_bytes"] = fb
+                                if hasattr(self, 'content') and isinstance(self.content, dict):
+                                    self.content["image_bytes"] = fb
+                        fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
                         if fb:
                             ct = str(current_content.get("type") or "").split('.')[-1].lower()
                             ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else "dat")
@@ -1361,22 +1395,49 @@ class MessageBroadcaster:
                             if len(full_text) <= 1024:
                                 common_kwargs['caption'] = full_text
                                 common_kwargs['parse_mode'] = "HTML"
+                                common_kwargs[ct] = file_source
                                 res = await send_method(**common_kwargs)
                                 self.stats['success'] += 1
-                                # Кэшируем новый валидный file_id для оставшихся получателей в рассылке
+                                # Кэшируем новый валидный file_id для оставшихся получателей в рассылке и последующих слайсов
                                 try:
+                                    new_fid = None
                                     if getattr(res, 'photo', None):
-                                        current_content['file_id'] = res.photo[-1].file_id
+                                        new_fid = res.photo[-1].file_id
                                     elif getattr(res, 'video', None):
-                                        current_content['file_id'] = res.video.file_id
+                                        new_fid = res.video.file_id
                                     elif getattr(res, 'animation', None):
-                                        current_content['file_id'] = res.animation.file_id
+                                        new_fid = res.animation.file_id
                                     elif getattr(res, 'document', None):
-                                        current_content['file_id'] = res.document.file_id
+                                        new_fid = res.document.file_id
                                     elif getattr(res, 'audio', None):
-                                        current_content['file_id'] = res.audio.file_id
+                                        new_fid = res.audio.file_id
                                     elif getattr(res, 'voice', None):
-                                        current_content['file_id'] = res.voice.file_id
+                                        new_fid = res.voice.file_id
+
+                                    if new_fid:
+                                        self._broadcast_downloaded_fb = None
+                                        current_content['file_id'] = new_fid
+                                        current_content.pop('image_bytes', None)
+                                        if isinstance(send_content, dict):
+                                            send_content['file_id'] = new_fid
+                                            send_content.pop('image_bytes', None)
+                                        if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                            self.content_for_common['file_id'] = new_fid
+                                            self.content_for_common.pop('image_bytes', None)
+                                        if hasattr(self, 'content') and isinstance(self.content, dict):
+                                            self.content['file_id'] = new_fid
+                                            self.content.pop('image_bytes', None)
+                                        if self.post_num:
+                                            try:
+                                                async with storage_lock:
+                                                    if self.post_num in messages_storage and isinstance(messages_storage[self.post_num], dict):
+                                                        messages_storage[self.post_num]['file_id'] = new_fid
+                                                        pcontent = messages_storage[self.post_num].get('content')
+                                                        if isinstance(pcontent, dict):
+                                                            pcontent['file_id'] = new_fid
+                                                            pcontent.pop('image_bytes', None)
+                                            except Exception:
+                                                pass
                                 except Exception:
                                     pass
                                 return res
@@ -1384,18 +1445,44 @@ class MessageBroadcaster:
                                 common_kwargs[ct] = file_source
                                 media_msg = await send_method(**common_kwargs)
                                 try:
+                                    new_fid = None
                                     if getattr(media_msg, 'photo', None):
-                                        current_content['file_id'] = media_msg.photo[-1].file_id
+                                        new_fid = media_msg.photo[-1].file_id
                                     elif getattr(media_msg, 'video', None):
-                                        current_content['file_id'] = media_msg.video.file_id
+                                        new_fid = media_msg.video.file_id
                                     elif getattr(media_msg, 'animation', None):
-                                        current_content['file_id'] = media_msg.animation.file_id
+                                        new_fid = media_msg.animation.file_id
                                     elif getattr(media_msg, 'document', None):
-                                        current_content['file_id'] = media_msg.document.file_id
+                                        new_fid = media_msg.document.file_id
                                     elif getattr(media_msg, 'audio', None):
-                                        current_content['file_id'] = media_msg.audio.file_id
+                                        new_fid = media_msg.audio.file_id
                                     elif getattr(media_msg, 'voice', None):
-                                        current_content['file_id'] = media_msg.voice.file_id
+                                        new_fid = media_msg.voice.file_id
+
+                                    if new_fid:
+                                        self._broadcast_downloaded_fb = None
+                                        current_content['file_id'] = new_fid
+                                        current_content.pop('image_bytes', None)
+                                        if isinstance(send_content, dict):
+                                            send_content['file_id'] = new_fid
+                                            send_content.pop('image_bytes', None)
+                                        if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                            self.content_for_common['file_id'] = new_fid
+                                            self.content_for_common.pop('image_bytes', None)
+                                        if hasattr(self, 'content') and isinstance(self.content, dict):
+                                            self.content['file_id'] = new_fid
+                                            self.content.pop('image_bytes', None)
+                                        if self.post_num:
+                                            try:
+                                                async with storage_lock:
+                                                    if self.post_num in messages_storage and isinstance(messages_storage[self.post_num], dict):
+                                                        messages_storage[self.post_num]['file_id'] = new_fid
+                                                        pcontent = messages_storage[self.post_num].get('content')
+                                                        if isinstance(pcontent, dict):
+                                                            pcontent['file_id'] = new_fid
+                                                            pcontent.pop('image_bytes', None)
+                                            except Exception:
+                                                pass
                                 except Exception:
                                     pass
                                 text_parts = split_text(full_text, 4096)

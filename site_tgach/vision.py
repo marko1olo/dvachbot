@@ -47,6 +47,10 @@ _LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
 _GLOBAL_GEMINI_LAST_CALL = 0.0
 _GLOBAL_GROQ_LAST_CALL = 0.0
 _KEY_RATE_LOCK = asyncio.Lock()
+VISION_MODEL_FALLBACKS: dict[str, str] = {
+    "gemini-3.8-flash": "gemini-2.5-flash",
+}
+_MODEL_503_COOLDOWN: dict[str, float] = {}  # model_name -> cooldown timestamp
 
 
 def _env_int(name, default):
@@ -152,6 +156,7 @@ async def _call_gemini_native(
             }
         })
 
+    model_name = VISION_MODEL_FALLBACKS.get(model_name, model_name)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     headers = {
         "Content-Type": "application/json",
@@ -260,7 +265,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 ("gemini-3.1-flash-lite", "gemini"),
                 ("gemini-2.5-flash", "gemini"),
                 ("gemini-3.5-flash-lite", "gemini"),
-                ("gemini-3.8-flash", "gemini"),
+                ("gemini-2.5-flash", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
                 ("qwen/qwen3.6-27b", "groq"),
             ]
@@ -293,7 +298,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             prompt_text = system_prompt + "\nDo NOT generate thinking tags or reasoning. Output only JSON immediately."
 
             async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as http_client:
-                for model_name, provider in models_cascade:
+                for raw_model_name, provider in models_cascade:
+                    model_name = VISION_MODEL_FALLBACKS.get(raw_model_name, raw_model_name)
+                    if time.time() < _MODEL_503_COOLDOWN.get(model_name, 0.0):
+                        logger.debug(f"ℹ️ [VISION] [{source}] Model {model_name} in 503 cooldown, skipping.")
+                        continue
                     if provider == "gemini" and skip_gemini_models:
                         continue
                     if provider == "groq" and skip_groq_models:
@@ -504,7 +513,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     permanent_model_failures += 1
                                 break
                             if "503" in err_str or "504" in err_str or "unavailable" in err_str or "500" in err_str:
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name} for 15m.")
+                                _MODEL_503_COOLDOWN[model_name] = time.time() + 900.0
                                 break
                             if "tokens per day" in err_str or "tpd" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for 1h.")
@@ -525,8 +535,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + 3.0)
                                 available_keys.remove(selected_key)
 
-                                if consecutive_429 >= 2:
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}). Halting {provider} attempts to protect keys from spam.")
+                                if consecutive_429 >= 2 and len(available_keys) == 0:
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}) and no keys remain. Halting {provider} attempts to protect keys from spam.")
                                     async with _KEY_RATE_LOCK:
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + 60.0

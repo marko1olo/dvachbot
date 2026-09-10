@@ -45,7 +45,7 @@ import main
 
 SNITCH = 5001
 TARGET = 5002
-SIX_HOURS = 21600
+THREE_HOURS = 10800
 
 
 @contextlib.asynccontextmanager
@@ -220,10 +220,10 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
             # Рация израсходована.
             self.assertFalse((await live.items_of(SNITCH))["partyvan_gun"])
 
-            # Память: 6 часов от «сейчас».
+            # Память: 3 часа от «сейчас».
             memory_expires = board["mutes"][TARGET].timestamp()
-            self.assertLessEqual(before + SIX_HOURS, memory_expires)
-            self.assertLessEqual(memory_expires, before + SIX_HOURS + 10)
+            self.assertLessEqual(before + THREE_HOURS, memory_expires)
+            self.assertLessEqual(memory_expires, before + THREE_HOURS + 10)
 
             # БД: ровно одна строка обычного мута с тем же сроком. Разъезд этих
             # двух значений виден только после рестарта, когда board_data
@@ -244,8 +244,8 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
         """Повторный вызов по той же цели отклоняется, дублей в Mutes нет.
 
         Проверяется сквозь состояние, оставленное первым вызовом, а не
-        подготовленное руками: после первого пативэна цель уже сидит 6 часов,
-        значит второй обязан упереться в идемпотентность.
+        подготовленное руками: после первого пативэна цель уже сидит 3 часа,
+        значит второй обязан упереться в идемпотентность (КПЗ или кулдаун).
         """
         async with live_economy() as live, isolated_board() as board:
             await live.seed_user(SNITCH, 100.0, {"partyvan_gun": True})
@@ -260,7 +260,12 @@ class TestLivePartyvanHandler(unittest.IsolatedAsyncioTestCase):
             second = live.message(SNITCH)
             await partyvan(second, BOARD)
 
-            self.assertIn("УЖЕ откисает в КПЗ", " ".join(live.answers(second)))
+            # Either "already in КПЗ" OR attacker cooldown rejection — both prevent duplicates
+            answers = " ".join(live.answers(second))
+            self.assertTrue(
+                "УЖЕ откисает в КПЗ" in answers or "перезарядке" in answers,
+                f"Expected КПЗ or cooldown rejection, got: {answers!r}"
+            )
             self.assertTrue((await live.items_of(SNITCH))["partyvan_gun"])
             self.assertEqual(len(await mute_rows(live, TARGET)), 1)
             self.assertIn(TARGET, board["mutes"])

@@ -24,11 +24,11 @@ def test_shift_edge_cases_0_620_10000():
             assert "заблокирована" in msg
             assert f"Требуется стаж: {job['required_shifts']}" in msg
 
-    # 620 shifts: all 16 tiers are unlocked
-    items_620 = {"work_shifts": 620}
+    # 750 shifts: all 21 tiers are unlocked
+    items_750 = {"work_shifts": 750}
     for jid, job in WORK_VACANCIES.items():
-        succ, val, msg, drop = execute_job_action(jid, dict(items_620))
-        assert "заблокирована" not in msg, f"{jid} failed to unlock at 620 shifts"
+        succ, val, msg, drop = execute_job_action(jid, dict(items_750))
+        assert "заблокирована" not in msg, f"{jid} failed to unlock at 750 shifts"
 
     # 10000 shifts: all 16 tiers unlocked, no overflow, shifts increment to 10001
     items_10k = {"work_shifts": 10000}
@@ -188,15 +188,15 @@ def test_item_drops_and_duplicate_inventory_handling():
         assert gun_items[key] is True
 
 
-def test_all_16_vacancies_data_integrity():
+def test_all_21_vacancies_data_integrity():
     vacancies = get_vacancies()
-    assert len(vacancies) == 16
+    assert len(vacancies) == 21
     
     expected_order = [
-        "bottles", "sweeper", "courier", "captcha", "spy", "factory",
-        "it_freelance", "scam", "deputy", "escort_sugar", "crypto_cartel",
-        "infogypsy_cult", "propaganda_troll", "abu_consigliere",
-        "shadow_oligarch", "matrix_architect"
+        "bottles", "sweeper", "courier", "captcha", "cho_security", "spy", "factory",
+        "mod_b", "it_freelance", "scam", "deputy", "cam_model", "escort_sugar", "crypto_cartel",
+        "darknet_courier", "infogypsy_cult", "propaganda_troll", "abu_consigliere",
+        "shadow_oligarch", "matrix_architect", "deep_state_operator"
     ]
     assert list(vacancies.keys()) == expected_order
 
