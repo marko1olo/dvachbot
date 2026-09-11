@@ -1,7 +1,9 @@
 import os
+import re
 import httpx
 import logging
 import asyncio
+import time
 from html.parser import HTMLParser
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool, google_pool
@@ -70,6 +72,36 @@ def _load_google_keys() -> list[str]:
 _key_cooldowns: dict[tuple[str, str], float] = {}
 _provider_cooldowns: dict[str, float] = {}
 
+_PROVIDER_LOCKS: dict[str, asyncio.Lock] = {}
+_PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
+MIN_PROVIDER_INTERVAL: dict[str, float] = {
+    "gemini": 2.5,
+    "groq": 2.5,
+}
+
+def _get_provider_lock(provider: str) -> asyncio.Lock:
+    if provider not in _PROVIDER_LOCKS:
+        _PROVIDER_LOCKS[provider] = asyncio.Lock()
+    return _PROVIDER_LOCKS[provider]
+
+async def _throttle_provider(provider: str) -> None:
+    """
+    Enforces minimum pause between consecutive requests to the same provider across all keys.
+    Prevents API key bans and rapid-fire spam.
+    """
+    in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    if in_test:
+        return
+    lock = _get_provider_lock(provider)
+    async with lock:
+        now = time.time()
+        last_ts = _PROVIDER_LAST_REQUEST_TS.get(provider, 0.0)
+        min_int = MIN_PROVIDER_INTERVAL.get(provider, 2.5)
+        elapsed = now - last_ts
+        if elapsed < min_int:
+            await asyncio.sleep(min_int - elapsed)
+        _PROVIDER_LAST_REQUEST_TS[provider] = time.time()
+
 async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference: str | None = None) -> str:
     """
     Dispatch LLM completion using a cascade of OpenAI-compatible endpoints (Google Gemini & Groq).
@@ -129,20 +161,26 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("qwen/qwen3.6-27b", "groq"),
         ]
 
-    system_instruction = prompt + (
-        "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
-        "ALLOWED tags (ONLY these): <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">.\n"
-        "FORBIDDEN tags (NEVER use): <p>, <div>, <span>, <br>, <hr>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <em>, <strong>, <section>, <article>, and ANY other HTML tag not listed above.\n"
-        "FORBIDDEN formatting: Never use Markdown (no **bold**, no *italic*, no # headings, no - lists, no * lists).\n"
-        "Separate paragraphs with a blank line (two newlines), NOT with <p> tags.\n"
-        "For bullet lists use • character with a newline, NOT <ul>/<li> tags.\n"
-        "Output must be parseable by Telegram Bot API HTML parser."
-    )
+    if model_preference not in ("persona", "persona_gemini"):
+        system_instruction = prompt + (
+            "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
+            "ALLOWED tags (ONLY these): <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">.\n"
+            "FORBIDDEN tags (NEVER use): <p>, <div>, <span>, <br>, <hr>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <em>, <strong>, <section>, <article>, and ANY other HTML tag not listed above.\n"
+            "FORBIDDEN formatting: Never use Markdown (no **bold**, no *italic*, no # headings, no - lists, no * lists).\n"
+            "Separate paragraphs with a blank line (two newlines), NOT with <p> tags.\n"
+            "For bullet lists use • character with a newline, NOT <ul>/<li> tags.\n"
+            "Output must be parseable by Telegram Bot API HTML parser."
+        )
+    else:
+        system_instruction = prompt
 
     import time
     now_ts = time.time()
+    skip_providers: set[str] = set()
 
     for model_name, provider in models_cascade:
+        if provider in skip_providers:
+            continue
         if _provider_cooldowns.get(provider, 0) > now_ts:
             logger.info(f"{provider} is in TPD cooldown ({_provider_cooldowns[provider] - now_ts:.1f}s remaining). Skipping model {model_name}.")
             continue
@@ -164,25 +202,35 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             logger.info(f"All keys for {provider} are in cooldown. Skipping model {model_name}.")
             continue
 
+        # Cap keys tried per model to max 3 healthy keys to prevent endless polling
+        active_keys = active_keys[:3]
+
         # Безопасный лимит выходных токенов: для Gemini None (без урезания), для Groq 1024 (вместо 6000!)
         model_max_tokens = None if provider == "gemini" else 1024
 
-        # Защита Groq от 413 Payload Too Large: обрезаем входной дамп до 3500 символов
+        # Защита Groq от 413 Payload Too Large
+        effective_sys = system_instruction
         effective_dump = text_dump
-        if provider == "groq" and len(effective_dump) > 3500:
-            effective_dump = effective_dump[-3500:]
+        if provider == "groq":
+            if len(effective_sys) > 8000:
+                effective_sys = effective_sys[:7000] + "\n\n[...СОКРАЩЕНИЕ ИНСТРУКЦИИ ДЛЯ СКОРОСТИ...]\nОтвечай строго по правилам и верни валидный JSON."
+            if len(effective_dump) > 3000:
+                effective_dump = effective_dump[-3000:]
 
         messages = [
-            {"role": "system", "content": system_instruction},
+            {"role": "system", "content": effective_sys},
             {"role": "user", "content": effective_dump}
         ]
 
         skip_model = False
         consecutive_429 = 0
+        consecutive_empty = 0
+
         for api_key in active_keys:
-            if skip_model:
+            if skip_model or provider in skip_providers:
                 break
             try:
+                await _throttle_provider(provider)
                 http_client = get_shared_http_client()
                 client = AsyncOpenAI(
                     api_key=api_key if api_key else "dummy", 
@@ -199,42 +247,53 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 if model_max_tokens is not None:
                     create_kwargs["max_tokens"] = model_max_tokens
                 completion = await client.chat.completions.create(**create_kwargs)
-                if completion.choices and len(completion.choices) > 0:
-                    choice = completion.choices[0]
-                    if choice.message is not None:
-                        result = choice.message.content
+                choice = completion.choices[0] if (completion.choices and len(completion.choices) > 0) else None
+                if choice and choice.message is not None:
+                    result = choice.message.content
+                    if result:
+                        result = clean_ai_thinking(result)
                         if result:
-                            result = clean_ai_thinking(result)
-                            if result:
-                                return result
-                            else:
-                                logger.warning(f"Model {model_name} returned empty text after <think> stripping")
-                                raise ValueError("Model returned empty text after <think> stripping")
+                            return result
+                        else:
+                            logger.warning(f"Model {model_name} returned empty text after <think> stripping")
+                            consecutive_empty += 1
+                            if consecutive_empty >= 2:
+                                skip_model = True
+                                break
+                    else:
+                        finish_reason = getattr(choice, "finish_reason", None)
+                        logger.warning(f"⚠️ {provider} model {model_name} returned empty/None content (finish_reason={finish_reason})")
+                        if finish_reason in ("safety", "content_filter"):
+                            logger.warning(f"🛡️ Safety filter triggered for {provider} on model {model_name}. Skipping provider {provider} for this prompt.")
+                            skip_providers.add(provider)
+                            skip_model = True
+                            break
+                        else:
+                            consecutive_empty += 1
+                            if consecutive_empty >= 2:
+                                logger.warning(f"⚠️ Multiple empty responses from {model_name}. Skipping model.")
+                                skip_model = True
+                                break
             except Exception as e:
                 err_str = str(e)
                 logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
                 if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")
                     break
-                if "401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower():
+                if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
+                    logger.warning(f"⚠️ {model_name}: request too large ({provider}). Skipping model to prevent key spam.")
+                    skip_model = True
+                    break
+                if (re.search(r'\b401\b', err_str) or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()) and "413" not in err_str:
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} returned 401 unauthorized. Setting 15m cooldown instead of removing.")
                     _key_cooldowns[(provider, api_key)] = time.time() + 900.0
                     if provider == "gemini":
                         google_pool.penalize_token(api_key, 900.0)
                     else:
                         groq_pool.penalize_token(api_key, 900.0)
-                    await asyncio.sleep(2.5)
+                    in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+                    await asyncio.sleep(0.01 if in_test else 2.5)
                     continue  # try next key
-                if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
-                    logger.warning(f"⚠️ {model_name}: request too large ({provider}). Shrinking by 40% and retrying...")
-                    half_len = int(len(text_dump) * 0.6)
-                    text_dump = text_dump[-half_len:]
-                    effective_dump = text_dump
-                    if provider == "groq":
-                        model_max_tokens = 512
-                    messages[1]["content"] = effective_dump
-                    await asyncio.sleep(2.5)
-                    continue  # retry same key with smaller input
                 if "403" in err_str:
                     # 403 = this specific key/project is banned. Cooldown it and try the NEXT KEY.
                     _key_cooldowns[(provider, api_key)] = time.time() + 3600.0  # 1h cooldown for banned keys
@@ -243,11 +302,13 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     else:
                         groq_pool.ban_token(api_key)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} is 403 BANNED for {model_name}. Trying next key...")
-                    await asyncio.sleep(3.0)
+                    in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+                    await asyncio.sleep(0.01 if in_test else 3.0)
                     continue  # try next key, NOT next model
                 if "tokens per day" in err_str.lower() or "tpd" in err_str.lower():
                     logger.warning(f"⚠️ {provider} daily token limit (TPD) reached for {model_name}. Pausing {provider} for 15m.")
                     _provider_cooldowns[provider] = time.time() + 900.0
+                    skip_providers.add(provider)
                     break
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
                     consecutive_429 += 1
@@ -258,16 +319,20 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         groq_pool.penalize_token(api_key, 120.0)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}.")
                     if consecutive_429 >= 2:
-                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}) for {model_name}. Halting {provider} attempts to protect keys from spam.")
+                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}). Halting {provider} attempts to protect keys from spam.")
+                        _provider_cooldowns[provider] = time.time() + 180.0
+                        skip_providers.add(provider)
                         break
-                    await asyncio.sleep(3.0)
+                    in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+                    await asyncio.sleep(0.01 if in_test else 3.0)
                     continue  # try next key
                 if "timeout" in err_str.lower() or "timed out" in err_str.lower():
                     logger.warning(f"⚠️ {provider} request timed out for {model_name}. Trying next candidate...")
                     break
                 # Any other error: skip model entirely
                 logger.warning(f"⚠️ Unhandled error for {model_name}: {err_str[:80]}. Skipping model.")
-                await asyncio.sleep(0.5)
+                in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+                await asyncio.sleep(0.01 if in_test else 0.5)
                 break
 
 

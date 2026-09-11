@@ -464,7 +464,8 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
                 if pnum:
                     try:
                         from archive_manager import _forward_post_to_realtime_archive
-                        from shared_state import spawn_task, GLOBAL_BOTS
+                        from common.task_manager import spawn_task
+                        from shared_state import GLOBAL_BOTS
                         target_bot = (bots.get(target_board) if bots else None) or (GLOBAL_BOTS.get(target_board) if GLOBAL_BOTS else None) or (bots.get("b") if bots else None)
                         if target_bot:
                             spawn_task(_forward_post_to_realtime_archive(

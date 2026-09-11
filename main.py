@@ -4268,29 +4268,47 @@ BANNERS_PER_PAGE = 10
 # User-facing category labels
 _BANNER_CAT_LABELS = {
     "all": "🎨 Все",
-    "night": "🌙 Ночь",
+    "anime": "🌸 Аниме",
+    "chill": "🍵 Уют",
     "maid": "🎀 Мейд",
-    "schizo": "🧠 Шизо",
     "calm": "☕ Ламповые",
+    "night": "🌙 Ночь",
+    "schizo": "🧠 Шизо",
     "cyberpunk": "🌃 Киберпанк",
     "gothic": "🦇 Готика",
     "retro": "🕹 Ретро",
-    "anime": "🌸 Аниме",
-    "chill": "🍵 Уют",
-    "shop": "🛒 Магазин",
     "roulette": "🎰 Рулетка",
+    "newspaper": "🗞 Газета",
+    "digest": "📰 Дайджест",
+    "stats": "📊 Статы",
+    "wallet": "💰 Казна",
+    "summary": "👓 Саммари",
     "duel": "⚔️ Дуэль",
+    "shop": "🛒 Магазин",
+    "matrix": "💾 Матрица",
+    "games": "🎲 Игры",
+    "cards": "🃏 Карты",
+    "market": "🏷 Базар",
 }
 
 
-async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all"):
-    """Sends a page of banners as a media group + navigation buttons with automatic cache fallback."""
+async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all", sort: str = "alpha", seed: int = 0):
+    """Sends a page of banners as a media group + navigation buttons with automatic cache fallback and sorting."""
     from banner_manager import _CATEGORIZED_BANNERS, get_banner_file, BANNERS_DIR, _BANNER_CACHE, save_cache
 
-    pool = _CATEGORIZED_BANNERS.get(category, _CATEGORIZED_BANNERS.get("all", []))
-    if not pool:
-        pool = _CATEGORIZED_BANNERS.get("all", [])
+    raw_pool = _CATEGORIZED_BANNERS.get(category, _CATEGORIZED_BANNERS.get("all", []))
+    if not raw_pool:
+        raw_pool = _CATEGORIZED_BANNERS.get("all", [])
         category = "all"
+
+    if sort == "rnd":
+        pool = list(raw_pool)
+        effective_seed = seed if seed != 0 else 42
+        random.Random(effective_seed).shuffle(pool)
+    else:
+        pool = sorted(list(raw_pool))
+        sort = "alpha"
+
     total = len(pool)
     if total == 0:
         await bot.send_message(chat_id, "❌ Баннеры не найдены.")
@@ -4304,6 +4322,7 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
     chunk = pool[start:end]
     bot_id = getattr(bot, "id", None)
     cat_label = _BANNER_CAT_LABELS.get(category, category)
+    sort_label = "🎲 Случайно" if sort == "rnd" else "🔤 А-Я"
 
     def _build_media_list(use_local_files: bool = False):
         items = []
@@ -4322,8 +4341,8 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
             caption_text = None
             if i == 0:
                 caption_text = (
-                    f"🖼 <b>Галерея баннеров ТГАЧ</b>  •  {cat_label}\n"
-                    f"📄 <b>{page + 1}</b> / {total_pages}  "
+                    f"🖼 <b>Галерея баннеров ТГАЧ</b> • {cat_label}\n"
+                    f"📊 Режим: <b>{sort_label}</b> • Стр: <b>{page + 1}</b> / {total_pages} "
                     f"({start + 1}–{end} из {total})"
                 )
 
@@ -4346,34 +4365,41 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
     # Row 1: Fast skip + page-by-page navigation
     nav_row = []
     if page >= 5:
-        nav_row.append(InlineKeyboardButton(text="⏪ -5", callback_data=f"bn:{category}:{page - 5}"))
+        nav_row.append(InlineKeyboardButton(text="⏪ -5", callback_data=f"bn:{category}:{page - 5}:{sort}:{seed}"))
     if page > 0:
-        nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"bn:{category}:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"bn:{category}:{page - 1}:{sort}:{seed}"))
     nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="bn_noop"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"bn:{category}:{page + 1}"))
+        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"bn:{category}:{page + 1}:{sort}:{seed}"))
     if page + 5 < total_pages:
-        nav_row.append(InlineKeyboardButton(text="+5 ⏩", callback_data=f"bn:{category}:{page + 5}"))
+        nav_row.append(InlineKeyboardButton(text="+5 ⏩", callback_data=f"bn:{category}:{page + 5}:{sort}:{seed}"))
 
-    # Row 2: Category filter buttons
+    # Row 2: Sort mode toggle + Reshuffle button
+    sort_row = []
+    if sort == "rnd":
+        sort_row.append(InlineKeyboardButton(text="🔤 Сорт: А-Я", callback_data=f"bn:{category}:0:alpha:0"))
+        new_seed = random.randint(1, 999999)
+        sort_row.append(InlineKeyboardButton(text="🔄 Перемешать ещё", callback_data=f"bn:{category}:0:rnd:{new_seed}"))
+    else:
+        new_seed = random.randint(1, 999999)
+        sort_row.append(InlineKeyboardButton(text="🎲 Сорт: Случайно", callback_data=f"bn:{category}:0:rnd:{new_seed}"))
+
+    # Row 3..N: Category filter buttons in rows of 4
     cat_keys = list(_BANNER_CAT_LABELS.keys())
-    cat_row_1 = []
-    cat_row_2 = []
-    for i, ck in enumerate(cat_keys):
+    cat_rows = []
+    curr_cat_row = []
+    for ck in cat_keys:
         label = _BANNER_CAT_LABELS[ck]
         if ck == category:
-            label = f"[{label}]"
-        btn = InlineKeyboardButton(text=label, callback_data=f"bn:{ck}:0")
-        if i < 7:
-            cat_row_1.append(btn)
-        else:
-            cat_row_2.append(btn)
+            label = f"• {label} •"
+        curr_cat_row.append(InlineKeyboardButton(text=label, callback_data=f"bn:{ck}:0:{sort}:{seed}"))
+        if len(curr_cat_row) == 4:
+            cat_rows.append(curr_cat_row)
+            curr_cat_row = []
+    if curr_cat_row:
+        cat_rows.append(curr_cat_row)
 
-    rows = [nav_row]
-    if cat_row_1:
-        rows.append(cat_row_1)
-    if cat_row_2:
-        rows.append(cat_row_2)
+    rows = [nav_row, sort_row] + cat_rows
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
     sent_messages = None
@@ -4419,17 +4445,34 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
 
         await bot.send_message(
             chat_id=chat_id,
-            text=f"🖼 {cat_label}: <b>{page + 1}</b> / {total_pages}  ({total} шт.)",
+            text=f"🖼 {cat_label} (<b>{sort_label}</b>): <b>{page + 1}</b> / {total_pages}  ({total} шт.)",
             reply_markup=kb,
             parse_mode="HTML"
         )
 
 
-@dp.message(Command("banners", "баннеры", "gallery", "галерея", ignore_case=True, ignore_mention=True))
-async def cmd_banners(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@dp.message(Command("banner", "баннер", "banners", "баннеры", "gallery", "галерея", "art", "арт", ignore_case=True, ignore_mention=True))
+async def cmd_banners(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     if not board_id:
         return
-    await _send_banners_page(message.bot, message.chat.id, page=0, category="all")
+    text_parts = (message.text or "").strip().split()
+    category = "all"
+    sort = "alpha"
+    seed = 0
+    if len(text_parts) > 1:
+        arg = text_parts[1].lower()
+        if arg in ("rnd", "random", "рандом", "случайно", "shuffle", "dice"):
+            sort = "rnd"
+            seed = random.randint(1, 999999)
+        elif arg in ("alpha", "az", "abc", "алфавит", "порядок"):
+            sort = "alpha"
+        elif arg in _BANNER_CAT_LABELS or arg in ("start", "all"):
+            category = arg
+            if len(text_parts) > 2 and text_parts[2].lower() in ("rnd", "random", "рандом", "случайно"):
+                sort = "rnd"
+                seed = random.randint(1, 999999)
+
+    await _send_banners_page(message.bot, message.chat.id, page=0, category=category, sort=sort, seed=seed)
     try:
         await message.delete()
     except Exception:
@@ -4442,19 +4485,21 @@ async def cb_banners_page(callback: types.CallbackQuery):
     try:
         category = parts[1] if len(parts) > 1 else "all"
         page = int(parts[2]) if len(parts) > 2 else 0
+        sort = parts[3] if len(parts) > 3 else "alpha"
+        seed = int(parts[4]) if len(parts) > 4 else 0
     except (ValueError, IndexError):
-        category, page = "all", 0
+        category, page, sort, seed = "all", 0, "alpha", 0
     await callback.answer()
     try:
         await callback.message.delete()
     except Exception:
         pass
-    await _send_banners_page(callback.bot, callback.message.chat.id, page=page, category=category)
+    await _send_banners_page(callback.bot, callback.message.chat.id, page=page, category=category, sort=sort, seed=seed)
 
 
 @dp.callback_query(F.data == "bn_noop")
 async def cb_banners_noop(callback: types.CallbackQuery):
-    await callback.answer("⬅️ ▶️ — листать, ⏪ ⏩ — скип на 5 страниц", show_alert=False)
+    await callback.answer("⬅️ ▶️ — листать, ⏪ ⏩ — скип на 5 стр., 🎲 — случайный порядок", show_alert=False)
 
 
 
@@ -10166,6 +10211,10 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
         "shadow_oligarch":   "🚢 Олигарх",
         "matrix_architect":  "🌐 Матрица",
         "deep_state_operator": "👁️ Гос-Куратор",
+        "crypto_wiper":        "📉 Вайпер /po/",
+        "cheburnet_leviathan": "🦈 Левиафан",
+        "zog_chairman":        "👁️ Глава ZOG",
+        "dvach_creator":       "⚡ Демиург Двача",
     }
 
     ready_jobs = []
@@ -10270,8 +10319,11 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
         InlineKeyboardButton(text="🛒 В Магазин (/shop)", callback_data="shop_main_hub"),
         InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")
     ])
+    alerts_off = items.get("work_alerts_disabled", False)
+    alerts_btn_label = "🔕 Уведомления: ВЫКЛ" if alerts_off else "🔔 Уведомления: ВКЛ"
     kb_buttons.append([
-        InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view")
+        InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view"),
+        InlineKeyboardButton(text=alerts_btn_label, callback_data="work_toggle_alerts")
     ])
 
     lines.append("💡 <i>Шмот в гардеробе увеличивает получку и снижает КД!</i>")
@@ -10485,6 +10537,57 @@ async def cb_work_main_hub(callback: types.CallbackQuery, board_id: str | None):
         except Exception:
             pass
     await callback.answer()
+
+
+@dp.callback_query(F.data == "work_toggle_alerts")
+async def cb_work_toggle_alerts(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    async with db_lock:
+        items = await _get_user_active_items(db, user_id, board_id)
+        current = items.get("work_alerts_disabled", False)
+        items["work_alerts_disabled"] = not current
+        await _save_user_active_items(db, user_id, board_id, items)
+    
+    new_state = items["work_alerts_disabled"]
+    toast = "🔕 Уведомления о работе отключены." if new_state else "🔔 Уведомления о работе включены!"
+    await callback.answer(toast, show_alert=True)
+    
+    text, kb = await _build_work_card(user_id, board_id)
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data == "work_alert_toggle_off")
+async def cb_work_alert_toggle_off(callback: types.CallbackQuery, board_id: str | None):
+    board_id = board_id or "b"
+    user_id = callback.from_user.id
+    db = await get_pool()
+    async with db_lock:
+        items = await _get_user_active_items(db, user_id, board_id)
+        items["work_alerts_disabled"] = True
+        await _save_user_active_items(db, user_id, board_id, items)
+    
+    await callback.answer("🔕 Напоминалки о работе отключены! Бот больше не будет писать в ЛС.", show_alert=True)
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption="🔕 <b>Напоминалки о работе отключены.</b>\n<i>Включить обратно можно кнопкой в /work.</i>",
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.edit_text(
+                text="🔕 <b>Напоминалки о работе отключены.</b>\n<i>Включить обратно можно кнопкой в /work.</i>",
+                parse_mode="HTML"
+            )
+    except Exception:
+        pass
 
 
 @dp.callback_query(F.data.in_(["casino_main_hub", "casino_hub"]))
@@ -11038,7 +11141,7 @@ async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: s
         f"🎰 <b>ПОДПОЛЬНОЕ КАЗИНО ТГАЧА</b>\n\n"
         f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n\n"
         f"Выбирай стол и умножай шекели:\n"
-        f"• 🎰 <b>Слоты 777</b> — Джекпот x50, Бриллианты x15, Клубнички x5\n"
+        f"• 🎰 <b>Слоты 777</b> — Джекпот x50, Бриллианты x25, Вишенки x8\n"
         f"• 💰 <b>Монетка 50/50</b> — Орел или Решка с множителем x1.95\n"
         f"• 🃏 <b>Блэкджек 21</b> — Классическая карточная битва против дилера (x2 / x2.5)\n"
         f"• 💀 <b>Русская Рулетка</b> — 1 патрон на 6 камор. Серия выживания до x5.0!\n"
@@ -11648,7 +11751,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             f"🎰 <b>ПОДПОЛЬНОЕ КАЗИНО ТГАЧА</b>\n\n"
             f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n\n"
             f"Выбирай стол и умножай шекели:\n"
-            f"• 🎰 <b>Слоты 777</b> — Джекпот x50, Бриллианты x15, Клубнички x5\n"
+            f"• 🎰 <b>Слоты 777</b> — Джекпот x50, Бриллианты x25, Вишенки x8\n"
             f"• 💰 <b>Монетка 50/50</b> — Орел или Решка с множителем x1.95\n"
             f"• 🃏 <b>Блэкджек 21</b> — Классическая карточная битва против дилера (x2 / x2.5)\n"
             f"• 💀 <b>Русская Рулетка</b> — 1 патрон на 6 камор. Серия выживания до x5.0!\n"

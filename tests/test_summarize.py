@@ -64,9 +64,9 @@ async def test_summarize_fails_all_retries(
 @patch("summarize.AsyncOpenAI")
 @patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key"])
 @patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key"])
-@patch("summarize.groq_pool.remove_token")
-async def test_summarize_401_removes_token(
-    mock_remove_token, mock_groq_tokens, mock_google_tokens, mock_async_openai, mock_httpx_client, mock_httpx_transport
+@patch("summarize.groq_pool.penalize_token")
+async def test_summarize_401_penalizes_token(
+    mock_penalize_token, mock_groq_tokens, mock_google_tokens, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
     mock_async_openai.return_value = mock_client
@@ -75,7 +75,36 @@ async def test_summarize_401_removes_token(
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
 
     assert result == "Нейронка сдохла. Не удалось сгенерировать саммари."
-    mock_remove_token.assert_any_call("groq-key")
+    mock_penalize_token.assert_any_call("groq-key", 900.0)
+
+
+@pytest.mark.asyncio
+@patch("summarize.httpx.AsyncHTTPTransport")
+@patch("summarize.httpx.AsyncClient")
+@patch("summarize.AsyncOpenAI")
+@patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key"])
+@patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key"])
+@patch("summarize.groq_pool.penalize_token")
+async def test_summarize_413_with_6401_tokens_does_not_trigger_401(
+    mock_penalize_token, mock_groq_tokens, mock_google_tokens, mock_async_openai, mock_httpx_client, mock_httpx_transport
+):
+    mock_client = AsyncMock()
+    mock_async_openai.return_value = mock_client
+    mock_completion = MagicMock()
+    mock_completion.choices = [MagicMock()]
+    mock_completion.choices[0].message.content = "Summary after retry."
+
+    # First call fails with 413 containing 6401 tokens, second call succeeds
+    mock_client.chat.completions.create.side_effect = [
+        Exception("Error code: 413 - {'error': {'message': 'Limit 6000, Requested 6401 tokens.'}}"),
+        mock_completion
+    ]
+
+    result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
+
+    assert result == "Summary after retry."
+    # Token must NOT be penalized as 401
+    mock_penalize_token.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,30 @@ ACHIEVEMENTS_CATALOG = {
         "icon": "👁️",
         "category": "work"
     },
+    "ach_work_800": {
+        "id": "ach_work_800",
+        "name": "🎖️ Ветеран Трудового Фронта",
+        "desc": "Закрыть 800 смен на бирже труда.",
+        "reward_cash": 25000,
+        "icon": "🎖️",
+        "category": "work"
+    },
+    "ach_work_1000": {
+        "id": "ach_work_1000",
+        "name": "👑 Бессмертный Стахановец",
+        "desc": "Закрыть 1000 смен на бирже труда.",
+        "reward_cash": 50000,
+        "icon": "👑",
+        "category": "work"
+    },
+    "ach_work_1337": {
+        "id": "ach_work_1337",
+        "name": "⚡ Абсолютный Демиург Завода",
+        "desc": "Закрыть 1337 смен на бирже труда.",
+        "reward_cash": 100000,
+        "icon": "⚡",
+        "category": "work"
+    },
     "ach_set_wasserman": {
         "id": "ach_set_wasserman",
         "name": "🦺 Истинный Онотоле",

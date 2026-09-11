@@ -26,11 +26,11 @@ MAX_ROULETTE_BET = 1_500_000
 
 SLOT_SYMBOLS = [
     ("👑", 50.0, 4),    # 777 Jackpot: 4 weight (x50.0)
-    ("💎", 25.0, 6),    # Diamonds: 6 weight (x25.0)
+    ("💎", 25.0, 7),    # Diamonds: 7 weight (x25.0, boosted frequency)
     ("🍒", 8.0, 9),     # Cherries: 9 weight (x8.0)
-    ("🍋", 4.0, 10),    # Lemons: 10 weight (x4.0)
-    ("🍀", 2.5, 12),    # Clovers: 12 weight (x2.5)
-    ("💀", 0.0, 9),     # Skulls: 9 weight (reduced from 11 for fair RTP)
+    ("🍋", 4.0, 11),    # Lemons: 11 weight (x4.0)
+    ("🍀", 2.5, 13),    # Clovers: 13 weight (x2.5)
+    ("💀", 0.0, 9),     # Skulls: 9 weight
 ]
 
 CASINO_RAID_REASONS = [
@@ -152,9 +152,9 @@ def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, st
     is_tilted = streak >= 5 or balance > 100_000
 
     # Adjust weights if player is on a hot streak or is a highroller (>100k)
-    # Mild anti-streak tilt: keep crown jackpot achievable (~1/3,500 instead of harsh 1/13,000 tilt)
+    # Balanced anti-streak tilt: keep crown jackpot achievable and maintain high diamond/crown visual frequency
     if is_tilted:
-        weights = [3, 5, 8, 9, 11, 10]
+        weights = [3, 6, 9, 11, 13, 10]
     else:
         weights = [s[2] for s in SLOT_SYMBOLS]
 
@@ -172,7 +172,7 @@ def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, st
             if reel1 == sym:
                 if sym == "👑":
                     if user_id: record_win_streak(user_id, True)
-                    return reels, 60.0, "🔥 ДЖЕКПОТ! ТРИ КОРОНЫ 777! 🔥"
+                    return reels, 50.0, "🔥 ДЖЕКПОТ! ТРИ КОРОНЫ 777! 🔥"
                 elif sym == "💀":
                     if user_id: record_win_streak(user_id, False)
                     return reels, 0.0, "💀 ТРИ ЧЕРЕПА! Полный провал!"
@@ -184,10 +184,10 @@ def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, st
         matched_sym = reel1 if reel1 == reel2 or reel1 == reel3 else reel2
         if matched_sym == "👑":
             if user_id: record_win_streak(user_id, True)
-            return reels, 4.0, "👑 Пара Корон! Отличный занос x4.0!"
+            return reels, 4.5, "👑 Пара Корон! Отличный занос x4.5!"
         elif matched_sym == "💎":
             if user_id: record_win_streak(user_id, True)
-            return reels, 2.5, "💎 Пара Бриллиантов! Выигрыш x2.5!"
+            return reels, 2.8, "💎 Пара Бриллиантов! Выигрыш x2.8!"
         elif matched_sym != "💀":
             if user_id: record_win_streak(user_id, True)
             return reels, 1.8, f"🎉 Пара совпадений ({matched_sym})! x1.8"

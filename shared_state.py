@@ -10,6 +10,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
 from common.db_pool import LazyLock
+from common.task_manager import spawn_task
+
 
 RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
@@ -641,8 +643,6 @@ async def enqueue_board_message(board_id: str, item: dict) -> bool:
     """
     queue = message_queues.get(board_id)
     if queue is None:
-        print(f"⛔ enqueue_board_message: неизвестная доска '{board_id}', "
-              f"сообщение #{item.get('post_num') if isinstance(item, dict) else '?'} не поставлено в очередь.")
         runtime_logger.error(
             "enqueue_unknown_board board=%s post=%s known=%s",
             board_id,

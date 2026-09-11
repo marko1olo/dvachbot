@@ -551,9 +551,9 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if "timeout" in err_str or "timed out" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} timed out for key ...{selected_key[-6:]}. Trying next model candidate...")
                                 break
-                            if "401" in err_str or "invalid api key" in err_str or "unauthorized" in err_str:
-                                logger.error(f"❌ [VISION] [{source}] {provider} key {selected_key[:12]}... unauthorized (401). Removing from pool.")
-                                pool.ban_token(selected_key)
+                            if (re.search(r'\b401\b', err_str) or "invalid api key" in err_str or "unauthorized" in err_str) and "413" not in err_str:
+                                logger.error(f"❌ [VISION] [{source}] {provider} key {selected_key[:12]}... unauthorized (401). Penalizing token.")
+                                pool.penalize_token(selected_key, 900.0)
                                 available_keys.remove(selected_key)
                                 continue
                             if provider == "gemini" and ("403" in err_str or "permission_denied" in err_str):

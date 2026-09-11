@@ -816,7 +816,7 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-URL_PATTERN = re.compile(r'(?<!["\'=])(https?://[^\s<>"\'`\]]+)')
+URL_PATTERN = re.compile(r'(?<!["\'=])(https?://[^\s<>"\'`\]]+)', re.IGNORECASE)
 
 
 def _clean_url_and_suffix(full: str):
@@ -885,7 +885,7 @@ BBCODE_REPLACEMENTS = [
 ]
 POST_LINK_PATTERN_CROSS = re.compile(r"&gt;&gt;/([a-z0-9]+)/(\d+)")
 POST_LINK_PATTERN = re.compile(r"&gt;&gt;(\d+)")
-BTN_PATTERN = re.compile(r"\[btn=(https?://[^\]]+)\](.*?)\[/btn\]", re.DOTALL)
+BTN_PATTERN = re.compile(r"\[btn=(https?://[^\]]+)\](.*?)\[/btn\]", re.DOTALL | re.IGNORECASE)
 SIZE_PATTERN = re.compile(r"\[size=(\d+)\](.*?)\[/size\]", re.DOTALL)
 GLITCH_PATTERN = re.compile(r"\[glitch\](.*?)\[/glitch\]", re.DOTALL)
 NEWLINE_PATTERN = re.compile(r"&lt;br\s*/?&gt;", re.IGNORECASE)
@@ -3106,7 +3106,7 @@ async def check_post_cooldown(request: Request, user: dict):
                     detail=f"Подожди {int(limit_seconds - elapsed) + 1} сек.",
                 )
         except (ValueError, TypeError):
-            import traceback; traceback.print_exc()
+            logger.warning("Corrupt last_post_time in rate limiter, resetting")
     await backend.set(key, str(time.time()), expire=limit_seconds)
 
 

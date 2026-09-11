@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 # Tracks the latest scheduled notification timestamp per user: {user_id: target_finish_ts}
 _scheduled_work_alerts: Dict[int, float] = {}
+# Rate limit: minimum 1 hour between alerts sent to the same user to prevent spam
+_last_work_alert_sent: Dict[int, float] = {}
+WORK_ALERT_MIN_INTERVAL = 3600  # 1 hour minimum between DM alerts per user
 
 WORK_ALERT_50_PHRASES = [
     (
@@ -272,7 +275,7 @@ WORK_ALERT_PHRASES = WORK_ALERT_100_PHRASES
 async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finish_ts: float = 0, tier: int = 100, **kwargs):
     """
     Background worker that waits for cooldown expiry and sends the notification.
-    tier=50: Fires when 50% of the cooldown period has elapsed or half of vacancies recovered.
+    tier=50: Fires when 50% of the cooldown period has elapsed (kept for backward compatibility).
     tier=100: Fires when 100% of vacancies are ready and all timers are clear.
     """
     now = time.time()
@@ -286,13 +289,24 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
         if latest_target > finish_ts + 1.0:
             return
 
-    # Check database to verify current cooldowns state
+    # Check database to verify current cooldowns state and user settings
     try:
         from common.db_pool import get_pool
         from common.bot_helpers import _get_user_active_items
         db = await get_pool()
         items = await _get_user_active_items(db, user_id, board_id)
-        current_time = int(time.time())
+
+        # 1. Respect user opt-out: if disabled, never send DM alerts
+        if items.get("work_alerts_disabled"):
+            return
+
+        # 2. Anti-spam throttle: prevent sending more than once every WORK_ALERT_MIN_INTERVAL
+        now_ts = time.time()
+        last_sent = _last_work_alert_sent.get(user_id, 0)
+        if (now_ts - last_sent) < WORK_ALERT_MIN_INTERVAL:
+            return
+
+        current_time = int(now_ts)
         work_timers = items.get("work_cooldowns", {})
 
         if tier == 100:
@@ -318,6 +332,9 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
             [
                 InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
                 InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub")
+            ],
+            [
+                InlineKeyboardButton(text="🔕 Завалить ебало (отключить напоминалки)", callback_data="work_alert_toggle_off")
             ]
         ])
 
@@ -332,6 +349,7 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
             category=cat,
             parse_mode="HTML"
         )
+        _last_work_alert_sent[user_id] = now_ts
         logger.info(f"🔔 [WorkAlert] Sent {tier}% cooldown alert to user {user_id}")
     except Exception as e:
         logger.warning(f"⚠️ [WorkAlert] Failed to send {tier}% alert to user {user_id}: {e}")
@@ -342,20 +360,14 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
 
 def schedule_work_cooldown_alert(bot: Bot, user_id: int, board_id: str, cd_sec: int):
     """
-    Schedules dual-tier cooldown alerts for a user:
-    - 50% cooldown notification (if cooldown >= 120s)
-    - 100% full recovery notification
+    Schedules cooldown alert for a user when ALL shifts are ready.
+    Eliminated annoying 50% tier spam to prevent blowing up user DMs.
     """
-    from shared_state import spawn_task
+    from common.task_manager import spawn_task
     now = time.time()
     finish_ts_100 = now + cd_sec
     _scheduled_work_alerts[user_id] = finish_ts_100
 
-    # Schedule 50% notification if cooldown is at least 2 minutes
-    if cd_sec >= 120:
-        finish_ts_50 = now + (cd_sec * 0.5)
-        spawn_task(_work_cooldown_alert_task(bot, user_id, board_id, finish_ts=finish_ts_50, tier=50))
-
-    # Schedule 100% notification
+    # Schedule 100% notification (only when job actually becomes ready)
     spawn_task(_work_cooldown_alert_task(bot, user_id, board_id, finish_ts=finish_ts_100, tier=100))
 

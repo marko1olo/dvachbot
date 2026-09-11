@@ -1980,7 +1980,13 @@ async def site_posts_broadcaster():
                             if enqueued:
                                 await mark_broadcast_posts_sent([post_num])
                             else:
-                                runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
+                                # Воркер доски не запущен (race/crash). Пост уже в messages_storage.
+                                # Маркируем sent чтобы не зациклить повторные записи в storage каждые 5с.
+                                runtime_logger.warning(
+                                    f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} "
+                                    f"(no active worker queue) — marking sent, post is in messages_storage"
+                                )
+                                await mark_broadcast_posts_sent([post_num])
                             
                             if (content.get('archive_allowed') or not content.get('archive_skip')) and not is_shadow_muted:
                                 bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')

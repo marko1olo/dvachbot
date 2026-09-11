@@ -96,6 +96,7 @@ async def run_tests():
         await db.commit()
 
         # Step A: Donor drops 1000 shekels
+        drop_engine._user_drop_cooldowns.pop(donor_id, None)
         ok, msg, drop_rec = await drop_engine.create_money_drop(
             donor_id=donor_id,
             donor_name="DonorAnon",
@@ -103,6 +104,7 @@ async def run_tests():
             amount=1000,
             db_lock=db_lock,
             db_conn=db,
+            check_cooldown=False,
         )
         assert ok, f"Drop creation failed: {msg}"
         assert drop_rec is not None

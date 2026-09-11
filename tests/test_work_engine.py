@@ -11,13 +11,14 @@ import main
 
 
 def test_work_vacancies_structure():
-    assert len(WORK_VACANCIES) == 21, f"Expected 21 vacancies, found {len(WORK_VACANCIES)}"
+    assert len(WORK_VACANCIES) == 25, f"Expected 25 vacancies, found {len(WORK_VACANCIES)}"
     
     expected_keys = [
-        "bottles", "sweeper", "courier", "captcha", "cho_security", "spy", "factory",
+        "bottles", "sweeper", "courier", "captcha", "cho_security", "spy", "crypto_wiper", "factory",
         "mod_b", "it_freelance", "scam", "deputy", "cam_model", "escort_sugar", "crypto_cartel",
         "darknet_courier", "infogypsy_cult", "propaganda_troll", "abu_consigliere",
-        "shadow_oligarch", "matrix_architect", "deep_state_operator"
+        "shadow_oligarch", "matrix_architect", "deep_state_operator",
+        "cheburnet_leviathan", "zog_chairman", "dvach_creator"
     ]
     for k in expected_keys:
         assert k in WORK_VACANCIES, f"Missing job key: {k}"
@@ -410,12 +411,12 @@ async def test_build_work_card_length_under_1024_all_tiers():
             assert f"{shifts} смен" in caption
 
             # 2. Keyboard structure assertion
-            # 11 rows of vacancies (10 rows of 2 + 1 row of 1) + 4 rows side hustles + 2 rows nav = 17 rows
-            assert len(markup.inline_keyboard) == 17
+            # 13 rows of vacancies (12 rows of 2 + 1 row of 1) + 4 rows side hustles + 2 rows nav = 19 rows
+            assert len(markup.inline_keyboard) == 19
 
             # 3. Check badge states on vacancy buttons
-            all_buttons = [btn for row in markup.inline_keyboard[:11] for btn in row]
-            assert len(all_buttons) == 21
+            all_buttons = [btn for row in markup.inline_keyboard[:13] for btn in row]
+            assert len(all_buttons) == 25
 
             for btn in all_buttons:
                 job_key = btn.callback_data.replace("work_do_", "")

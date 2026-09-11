@@ -27,7 +27,9 @@ from shared_state import *
 from shared_state import _drop_post_copy_maps_unlocked, _trim_post_copy_maps_unlocked, _trim_messages_storage_unlocked
 from utils import split_text
 import html
+import logging
 import __main__ as main
+runtime_logger = getattr(main, 'runtime_logger', None) or logging.getLogger('runtime')
 
 DELIVERY_MAX_CHUNK_SIZE = BOT_DELIVERY_MAX_CHUNK_SIZE
 
@@ -511,7 +513,7 @@ class MessageBroadcaster:
             has_raw_media = (
                 bool(self.content.get("image_bytes") or self.content.get("voice_bytes")) or
                 (self.content.get("type") == "media_group" and any(
-                    not isinstance(item.get("media") or item.get("file_id"), str)
+                    isinstance(item, dict) and not isinstance(item.get("media") or item.get("file_id"), str)
                     for item in (self.content.get("media") or [])
                 ))
             )
@@ -764,7 +766,7 @@ class MessageBroadcaster:
                 timeout=timeout_sec,
             )
         except asyncio.TimeoutError as exc:
-            main.runtime_logger.warning(
+            runtime_logger.warning(
                 "delivery_recipient_timeout %s",
                 json.dumps(
                     {
@@ -802,7 +804,7 @@ class MessageBroadcaster:
                     return res
                 except TelegramForbiddenError:
                     self.blocked_users.add(uid)
-                    self.stats['blocked'] += 1
+                    self.stats['blocks'] += 1
                     return None
                 except TelegramRetryAfter:
                     raise
@@ -810,7 +812,7 @@ class MessageBroadcaster:
                     self.stats['errors'] += 1
                     return None
                 except Exception as e:
-                    main.runtime_logger.warning(f"Hide check send error for {uid}: {e}")
+                    runtime_logger.warning(f"Hide check send error for {uid}: {e}")
                     self.stats['errors'] += 1
                     return None
                     
@@ -835,7 +837,7 @@ class MessageBroadcaster:
                         quote_info=send_content.get('quote_info')
                     )
             except Exception as exc:
-                main.runtime_logger.warning(
+                runtime_logger.warning(
                     "lie_media_replacement_failed %s",
                     json.dumps(
                         {
@@ -893,44 +895,6 @@ class MessageBroadcaster:
         has_spoiler = u_set['nsfw']
         max_attempts = 5
 
-        async def _send_text_fallback(reason: str):
-            fallback_text = full_text
-            media_url = current_content.get("image_url")
-            if media_url and str(media_url) not in fallback_text:
-                fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
-            if not self.media_url_fallback_logged:
-                main.runtime_logger.warning(
-                    "delivery_media_url_text_fallback %s",
-                    json.dumps(
-                        {
-                            "board_id": self.board_id,
-                            "post_num": self.post_num,
-                            "phase": self.delivery_phase,
-                            "type": str(current_content.get("type")),
-                            "reason": reason,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
-                self.media_url_fallback_logged = True
-            sent_msgs = []
-            parts = split_text(fallback_text, 4096)
-            for i, part in enumerate(parts):
-                m = await self.bot_instance.send_message(
-                    chat_id=uid,
-                    text=part,
-                    parse_mode="HTML",
-                    reply_to_message_id=reply_to_mid if i == 0 else None,
-                    reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
-                    disable_notification=is_sage,
-                    link_preview_options=LinkPreviewOptions(is_disabled=True),
-                    request_timeout=request_timeout,
-                )
-                sent_msgs.append(m)
-            self.stats['success'] += 1
-            return sent_msgs
-
         def _telegram_parse_error(err_low: str) -> bool:
             return (
                 "can't parse entities" in err_low
@@ -952,7 +916,7 @@ class MessageBroadcaster:
         def _log_plain_fallback(reason: str) -> None:
             if self.html_plain_fallback_logged:
                 return
-            main.runtime_logger.warning(
+            runtime_logger.warning(
                 "delivery_html_plain_fallback %s",
                 json.dumps(
                     {
@@ -980,15 +944,88 @@ class MessageBroadcaster:
             parts = split_text(fallback_text, 4096)
             target_reply_id = reply_to_id if reply_to_id is not None else reply_to_mid
             for i, part in enumerate(parts):
-                m = await self.bot_instance.send_message(
-                    chat_id=uid,
-                    text=part,
-                    reply_to_message_id=target_reply_id if i == 0 else None,
-                    reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
-                    disable_notification=is_sage,
-                    link_preview_options=LinkPreviewOptions(is_disabled=True),
-                    request_timeout=request_timeout,
+                try:
+                    m = await self.bot_instance.send_message(
+                        chat_id=uid,
+                        text=part,
+                        reply_to_message_id=target_reply_id if i == 0 else None,
+                        reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
+                        disable_notification=is_sage,
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        request_timeout=request_timeout,
+                    )
+                except TelegramBadRequest as tb_err:
+                    if "message to be replied not found" in tb_err.message.lower() and target_reply_id:
+                        target_reply_id = None
+                        m = await self.bot_instance.send_message(
+                            chat_id=uid,
+                            text=part,
+                            reply_to_message_id=None,
+                            reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
+                            disable_notification=is_sage,
+                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                            request_timeout=request_timeout,
+                        )
+                    else:
+                        raise
+                sent_msgs.append(m)
+            self.stats['success'] += 1
+            return sent_msgs
+
+        async def _send_text_fallback(reason: str):
+            fallback_text = full_text
+            media_url = current_content.get("image_url")
+            if media_url and str(media_url) not in fallback_text:
+                fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
+            if not self.media_url_fallback_logged:
+                runtime_logger.warning(
+                    "delivery_media_url_text_fallback %s",
+                    json.dumps(
+                        {
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
+                            "type": str(current_content.get("type")),
+                            "reason": reason,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 )
+                self.media_url_fallback_logged = True
+            sent_msgs = []
+            parts = split_text(fallback_text, 4096)
+            cur_reply_id = reply_to_mid
+            for i, part in enumerate(parts):
+                try:
+                    m = await self.bot_instance.send_message(
+                        chat_id=uid,
+                        text=part,
+                        parse_mode="HTML",
+                        reply_to_message_id=cur_reply_id if i == 0 else None,
+                        reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
+                        disable_notification=is_sage,
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        request_timeout=request_timeout,
+                    )
+                except TelegramBadRequest as tb_err:
+                    err_low = tb_err.message.lower()
+                    if "message to be replied not found" in err_low and cur_reply_id:
+                        cur_reply_id = None
+                        m = await self.bot_instance.send_message(
+                            chat_id=uid,
+                            text=part,
+                            parse_mode="HTML",
+                            reply_to_message_id=None,
+                            reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
+                            disable_notification=is_sage,
+                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                            request_timeout=request_timeout,
+                        )
+                    elif _telegram_parse_error(err_low):
+                        return await _send_plain_text_parts("text_fallback_parse_error", _plain_delivery_text(), reply_to_id=cur_reply_id)
+                    else:
+                        raise
                 sent_msgs.append(m)
             self.stats['success'] += 1
             return sent_msgs
@@ -1001,7 +1038,10 @@ class MessageBroadcaster:
                 extensions = {'photo': 'jpg', 'animation': 'gif', 'audio': 'mp3', 'voice': 'ogg'}
                 ext = extensions.get(media_type, 'mp4')
                 return BufferedInputFile(fb, filename=f"file.{ext}")
-            return current_content.get("file_id") or current_content.get("image_url")
+            src = current_content.get("file_id") or current_content.get("image_url")
+            if isinstance(src, str) and (src.strip().startswith('<') or not src.strip()):
+                return None
+            return src
 
         async def _send_plain_media_fallback(reason: str):
             plain_text = _plain_delivery_text()
@@ -1043,10 +1083,20 @@ class MessageBroadcaster:
                 can_fit_caption = len(plain_text) <= 1024
                 caption_for_group = plain_text if can_fit_caption else None
                 for idx, item in enumerate(current_content.get('media') or []):
-                    media_src = item.get('media') or item.get('file_id')
-                    if not media_src:
-                        continue
-                    m_type = str(item.get('type') or '').split('.')[-1].lower()
+                    if not isinstance(item, dict):
+                        if isinstance(item, str) and item.strip() and not item.strip().startswith('<'):
+                            media_src = item
+                            m_type = 'photo'
+                        else:
+                            continue
+                    else:
+                        media_src = item.get('media') or item.get('file_id')
+                        if not media_src:
+                            continue
+                        if isinstance(media_src, str) and (media_src.strip().startswith('<') or not media_src.strip()):
+                            continue
+                        m_type = str(item.get('type') or '').split('.')[-1].lower() or 'photo'
+
                     cap = caption_for_group if idx == 0 else None
                     if m_type == 'photo':
                         media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, has_spoiler=has_spoiler))
@@ -1056,15 +1106,58 @@ class MessageBroadcaster:
                         media_group_build.append(InputMediaDocument(media=media_src, caption=cap))
                     elif m_type == 'audio':
                         media_group_build.append(InputMediaAudio(media=media_src, caption=cap))
-                if not media_group_build:
+
+                media_group_build = media_group_build[:10]
+                if len(media_group_build) == 1:
+                    single_item = media_group_build[0]
+                    single_src = single_item.media
+                    single_type = 'photo' if isinstance(single_item, InputMediaPhoto) else (
+                        'video' if isinstance(single_item, InputMediaVideo) else (
+                            'document' if isinstance(single_item, InputMediaDocument) else 'audio'
+                        )
+                    )
+                    send_method = getattr(self.bot_instance, f"send_{single_type}")
+                    common_single_kwargs = {
+                        'chat_id': uid,
+                        'reply_to_message_id': reply_to_mid,
+                        'reply_markup': self.final_keyboard,
+                        'disable_notification': is_sage,
+                        'request_timeout': request_timeout,
+                    }
+                    if has_spoiler and single_type in ['photo', 'video']:
+                        common_single_kwargs['has_spoiler'] = True
+                    try:
+                        if len(plain_text) <= 1024:
+                            common_single_kwargs['caption'] = plain_text
+                            common_single_kwargs[single_type] = single_src
+                            res = await send_method(**common_single_kwargs)
+                        else:
+                            common_single_kwargs[single_type] = single_src
+                            media_msg = await send_method(**common_single_kwargs)
+                            await _send_plain_text_parts(
+                                reason,
+                                plain_text,
+                                reply_to_id=media_msg.message_id,
+                                include_keyboard=False,
+                            )
+                            res = media_msg
+                        self.stats['success'] += 1
+                        return res
+                    except TelegramBadRequest:
+                        return await _send_plain_text_parts(reason, plain_text)
+                elif len(media_group_build) < 1:
                     return await _send_plain_text_parts(reason, plain_text)
-                res = await self.bot_instance.send_media_group(
-                    chat_id=uid,
-                    media=media_group_build,
-                    reply_to_message_id=reply_to_mid,
-                    disable_notification=is_sage,
-                    request_timeout=request_timeout,
-                )
+                try:
+                    res = await self.bot_instance.send_media_group(
+                        chat_id=uid,
+                        media=media_group_build,
+                        reply_to_message_id=reply_to_mid,
+                        disable_notification=is_sage,
+                        request_timeout=request_timeout,
+                    )
+                except TelegramBadRequest as mg_err:
+                    runtime_logger.warning(f"⚠️ Media group plain fallback failed for user {uid}: {mg_err}")
+                    return await _send_plain_text_parts("media_group_plain_failed", plain_text)
                 _log_plain_fallback(reason)
                 if not can_fit_caption:
                     anchor_msg = res[0] if isinstance(res, list) else res
@@ -1139,9 +1232,8 @@ class MessageBroadcaster:
                         file_source = current_content["file_id"]
                     elif current_content.get("image_url"):
                         file_source = current_content["image_url"]
-                    if not file_source:
-                        self.stats['errors'] += 1
-                        return None
+                    if not file_source or (isinstance(file_source, str) and (file_source.strip().startswith('<') or not file_source.strip())):
+                        return await _send_text_fallback("missing_or_invalid_file_source")
                     if self.media_url_text_fallback and current_content.get("image_url"):
                         return await _send_text_fallback("cached_bad_media_url")
                     if has_spoiler and ct in ['photo', 'video', 'animation']:
@@ -1201,18 +1293,31 @@ class MessageBroadcaster:
                         self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
+                    if getattr(self, 'media_group_fallback_to_text', False):
+                        return await _send_text_fallback("media_group_failed_previous_attempt")
+
                     if not current_content.get('media'):
-                        self.stats['errors'] += 1
-                        return None
+                        return await _send_text_fallback("empty_media_group")
                     
                     can_fit_caption = len(full_text) <= 1024
                     caption_for_group = full_text if can_fit_caption else None
                     
                     media_group_build = []
-                    for idx, item in enumerate(current_content['media']):
-                        media_src = item.get('media') or item.get('file_id')
-                        if not media_src: continue
-                        m_type = str(item.get('type') or '').split('.')[-1].lower()
+                    for idx, item in enumerate(current_content.get('media') or []):
+                        if not isinstance(item, dict):
+                            if isinstance(item, str) and item.strip() and not item.strip().startswith('<'):
+                                media_src = item
+                                m_type = 'photo'
+                            else:
+                                continue
+                        else:
+                            media_src = item.get('media') or item.get('file_id')
+                            if not media_src:
+                                continue
+                            if isinstance(media_src, str) and (media_src.strip().startswith('<') or not media_src.strip()):
+                                continue
+                            m_type = str(item.get('type') or '').split('.')[-1].lower() or 'photo'
+                        
                         cap = caption_for_group if idx == 0 else None
                         
                         if m_type == 'photo':
@@ -1224,51 +1329,128 @@ class MessageBroadcaster:
                         elif m_type == 'audio':
                             media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
                     
-                    if not media_group_build: 
-                        self.stats['errors'] += 1
-                        return None
+                    media_group_build = media_group_build[:10]
+                    if len(media_group_build) == 1:
+                        single_item = media_group_build[0]
+                        single_src = single_item.media
+                        single_type = 'photo' if isinstance(single_item, InputMediaPhoto) else (
+                            'video' if isinstance(single_item, InputMediaVideo) else (
+                                'document' if isinstance(single_item, InputMediaDocument) else 'audio'
+                            )
+                        )
+                        send_method = getattr(self.bot_instance, f"send_{single_type}")
+                        common_single_kwargs = {
+                            'chat_id': uid,
+                            'reply_to_message_id': reply_to_mid,
+                            'reply_markup': self.final_keyboard,
+                            'disable_notification': is_sage,
+                            'request_timeout': request_timeout,
+                        }
+                        if has_spoiler and single_type in ['photo', 'video']:
+                            common_single_kwargs['has_spoiler'] = True
+                        try:
+                            if len(full_text) <= 1024:
+                                common_single_kwargs['caption'] = full_text
+                                common_single_kwargs['parse_mode'] = "HTML"
+                                common_single_kwargs[single_type] = single_src
+                                res = await send_method(**common_single_kwargs)
+                            else:
+                                common_single_kwargs[single_type] = single_src
+                                media_msg = await send_method(**common_single_kwargs)
+                                text_parts = split_text(full_text, 4096)
+                                for part in text_parts:
+                                    await self.bot_instance.send_message(
+                                        chat_id=uid, text=part, parse_mode="HTML",
+                                        reply_to_message_id=media_msg.message_id,
+                                        disable_notification=is_sage,
+                                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                        request_timeout=request_timeout,
+                                    )
+                                res = media_msg
+                            self.stats['success'] += 1
+                            return res
+                        except TelegramBadRequest as single_err:
+                            runtime_logger.warning(f"⚠️ [SINGLE_MEDIA_FALLBACK] Failed to send single media item: {single_err}. Falling back to text.")
+                            self.media_group_fallback_to_text = True
+                            return await _send_text_fallback("single_media_failed_fallback")
+                    elif len(media_group_build) < 1:
+                        runtime_logger.warning(f"⚠️ [MEDIA_GROUP] Post #{self.post_num} has 0 valid media items. Falling back to text to preserve post.")
+                        self.media_group_fallback_to_text = True
+                        return await _send_text_fallback("not_enough_valid_media_in_group")
 
-                    res = await self.bot_instance.send_media_group(
-                        chat_id=uid, media=media_group_build, 
-                        reply_to_message_id=reply_to_mid,
-                        disable_notification=is_sage,
-                        request_timeout=request_timeout,
-                    )
+                    try:
+                        res = await self.bot_instance.send_media_group(
+                            chat_id=uid, media=media_group_build, 
+                            reply_to_message_id=reply_to_mid,
+                            disable_notification=is_sage,
+                            request_timeout=request_timeout,
+                        )
+                    except TelegramBadRequest as mg_err:
+                        err_low = mg_err.message.lower()
+                        if any(bad_id in err_low for bad_id in [
+                            "media_invalid", "wrong remote file identifier", "unserialize",
+                            "invalid file_id", "wrong file identifier", "file_parts_invalid",
+                            "media_type_invalid", "wrong type of the web page content"
+                        ]):
+                            runtime_logger.warning(
+                                f"⚠️ [MEDIA_GROUP_FAILED] Post #{self.post_num} rejected by Telegram: {mg_err.message}. "
+                                f"Switching to resilient text delivery to protect queue and deliver user post."
+                            )
+                            self.media_group_fallback_to_text = True
+                            return await _send_text_fallback("media_group_rejected_fallback")
+                        raise
                     
                     # Cache file_ids from Telegram response so subsequent recipients in the broadcast
                     # send pre-warmed file_id references instead of re-uploading raw bytes.
                     if isinstance(res, list) and self.content.get('media'):
                         for idx, sent_m in enumerate(res):
                             if idx < len(self.content['media']):
+                                item = self.content['media'][idx]
+                                if not isinstance(item, dict):
+                                    continue
                                 fid = None
                                 if getattr(sent_m, 'photo', None): fid = sent_m.photo[-1].file_id
                                 elif getattr(sent_m, 'video', None): fid = sent_m.video.file_id
                                 elif getattr(sent_m, 'document', None): fid = sent_m.document.file_id
                                 elif getattr(sent_m, 'audio', None): fid = sent_m.audio.file_id
-                                if fid:
-                                    self.content['media'][idx]['media'] = fid
-                                    self.content['media'][idx]['file_id'] = fid
+                                if fid and isinstance(fid, str):
+                                    item['media'] = fid
+                                    item['file_id'] = fid
                         if self.content_for_common.get('media'):
                             self.content_for_common['media'] = self.content['media']
                     
                     if not can_fit_caption:
                         anchor_msg = res[0] if isinstance(res, list) else res
+                        anchor_id = getattr(anchor_msg, "message_id", None)
                         text_parts = split_text(full_text, 4096)
                         try:
                             for part in text_parts:
-                                await self.bot_instance.send_message(
-                                    chat_id=uid, text=part, parse_mode="HTML",
-                                    reply_to_message_id=anchor_msg.message_id,
-                                    disable_notification=is_sage,
-                                    disable_web_page_preview=True,
-                                    request_timeout=request_timeout,
-                                )
+                                try:
+                                    await self.bot_instance.send_message(
+                                        chat_id=uid, text=part, parse_mode="HTML",
+                                        reply_to_message_id=anchor_id,
+                                        disable_notification=is_sage,
+                                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                        request_timeout=request_timeout,
+                                    )
+                                except TelegramBadRequest as part_err:
+                                    if "message to be replied not found" in part_err.message.lower() and anchor_id:
+                                        anchor_id = None
+                                        await self.bot_instance.send_message(
+                                            chat_id=uid, text=part, parse_mode="HTML",
+                                            reply_to_message_id=None,
+                                            disable_notification=is_sage,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                            request_timeout=request_timeout,
+                                        )
+                                    else:
+                                        raise
                         except TelegramBadRequest as e:
                             if _telegram_parse_error(e.message.lower()):
                                 await _send_plain_text_parts(
                                     "telegram_rejected_html_after_media_group",
                                     _plain_delivery_text(),
-                                    reply_to_id=anchor_msg.message_id,
+                                    reply_to_id=anchor_id,
                                     include_keyboard=True,
                                 )
                                 return res
@@ -1318,6 +1500,8 @@ class MessageBroadcaster:
                         clean_media_list = []
                         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), connector_owner=True) as head_session:
                             for item in current_content['media']:
+                                if not isinstance(item, dict):
+                                    continue
                                 media_obj = item.get('media') or item.get('file_id')
                                 should_skip = False
                                 if hasattr(media_obj, 'data'):
@@ -1338,14 +1522,18 @@ class MessageBroadcaster:
                                                 print(f"   🗑 Исключена жирная ссылка: {size/1024/1024:.2f} MB")
                                                 continue 
                                     except Exception as head_err:
-                                        main.runtime_logger.debug(f"HEAD check failed for {media_obj}: {head_err}")
+                                        runtime_logger.debug(f"HEAD check failed for {media_obj}: {head_err}")
                                 clean_media_list.append(item)
                         if not clean_media_list:
-                            self.stats['errors'] += 1
-                            return None 
+                            runtime_logger.warning(f"⚠️ [Anti-Fat] All media in post #{self.post_num} too big. Falling back to text.")
+                            self.media_group_fallback_to_text = True
+                            return await _send_text_fallback("all_media_too_big")
                         current_content['media'] = clean_media_list
                         await asyncio.sleep(0.5)
-                        continue 
+                        continue
+                    else:
+                        runtime_logger.warning(f"⚠️ [Anti-Fat] Single media in post #{self.post_num} too big. Falling back to text.")
+                        return await _send_text_fallback("file_too_big")
                 if "message to be replied not found" in err_low:
                     reply_to_mid = None
                     continue 
@@ -1355,8 +1543,8 @@ class MessageBroadcaster:
                     wait_sec = int(re.search(r'\d+', e.message).group()) if re.search(r'\d+', e.message) else 15
                     raise TelegramRetryAfter(method=e.method, message=e.message, retry_after=wait_sec)
                 elif "voice_messages_forbidden" in err_low:
-                    self.stats['errors'] += 1
-                    return None
+                    runtime_logger.info(f"ℹ️ User {uid} has voice messages forbidden. Delivering text fallback.")
+                    return await _send_text_fallback("voice_messages_forbidden")
                 elif any(bad_id_str in err_low for bad_id_str in [
                     "wrong remote file identifier", "unserialize", "wrong padding",
                     "invalid file_id", "wrong file identifier", "media_file_invalid",
@@ -1364,12 +1552,12 @@ class MessageBroadcaster:
                     "file_id_invalid", "wrong type of the web page content",
                     "failed to get http url content", "can't use file of type"
                 ]):
-                    main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID/MEDIA_INVALID] Auto-downloading media buffer for user {uid}: {e}")
+                    runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID/MEDIA_INVALID] Auto-downloading media buffer for user {uid}: {e}")
                     try:
                         from archive_manager import _download_media_bytes
                         fid = current_content.get("file_id") or current_content.get("image_url")
                         if isinstance(fid, str) and fid.strip().startswith("<"):
-                            main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Rejecting pseudo-string object in file_id: '{fid[:40]}'")
+                            runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Rejecting pseudo-string object in file_id: '{fid[:40]}'")
                             fid = None
                             current_content["file_id"] = None
                             if isinstance(send_content, dict):
@@ -1497,22 +1685,25 @@ class MessageBroadcaster:
                                 self.stats['success'] += 1
                                 return media_msg
                     except Exception as dl_err:
-                        main.runtime_logger.warning(f"⚠️ Buffer download fallback failed: {dl_err}")
+                        runtime_logger.warning(f"⚠️ Buffer download fallback failed: {dl_err}")
                     return await _send_plain_media_fallback("bad_file_id")
                 else:
-                    main.runtime_logger.warning(f"⚠️ BadRequest отправки user {uid}: {e}. Attempting plain fallback...")
+                    runtime_logger.warning(f"⚠️ BadRequest отправки user {uid}: {e}. Attempting plain fallback...")
                     fb_res = await _send_plain_media_fallback("bad_request")
                     if fb_res:
                         return fb_res
-                    self.stats['errors'] += 1
-                    return None
+                    runtime_logger.warning(f"⚠️ [ULTIMATE_FALLBACK] User {uid} plain media fallback failed. Sending plain text to preserve post #{self.post_num}.")
+                    return await _send_plain_text_parts("bad_request_ultimate_fallback")
             except TelegramForbiddenError:
                 raise 
             except TelegramRetryAfter:
                 raise
             except TelegramServerError as srv_err:
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
                 self.stats['errors'] += 1
-                main.runtime_logger.warning(f"⚠️ Telegram server error in _send_one for user {uid}: {srv_err}")
+                runtime_logger.warning(f"⚠️ Telegram server error in _send_one for user {uid}: {srv_err}")
                 return None
             except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError) as net_err:
                 self.stats['timeouts'] += 1
@@ -1527,7 +1718,7 @@ class MessageBroadcaster:
                     wait_m = re.search(r'\d+', str(e))
                     wait_s = int(wait_m.group()) if wait_m else 15
                     raise TelegramRetryAfter(method="send", message=str(e), retry_after=wait_s)
-                main.runtime_logger.error(f"Unexpected error in _send_one for user {uid}: {e}", exc_info=True)
+                runtime_logger.error(f"Unexpected error in _send_one for user {uid}: {e}", exc_info=True)
                 self.stats['errors'] += 1
                 return None
         return None

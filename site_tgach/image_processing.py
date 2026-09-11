@@ -171,7 +171,7 @@ def _grimdark_worker(image_bytes: bytes) -> bytes:
             img.save(output, format='JPEG', quality=85)
             return output.getvalue()
     except Exception as e:
-        print(f"⚠️ Grimdark process error: {e}")
+        logger.warning(f"Grimdark process error: {e}")
         return image_bytes
 
 async def apply_grimdark_filter_async(image_bytes: bytes) -> bytes:
@@ -549,7 +549,7 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                         shadow_fid = msg.animation.file_id
                         if msg.animation.thumbnail: shadow_thumb_fid = msg.animation.thumbnail.file_id
             except Exception:
-                import traceback; traceback.print_exc()
+                logger.error("Shadow upload task failed", exc_info=True)
 
             if shadow_fid:
                 await add_file_mirror(file_id, 'tg_shadow', shadow_fid)

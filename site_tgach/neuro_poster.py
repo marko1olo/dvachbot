@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 from common.http_utils import api_retry
 import logging
@@ -234,9 +235,13 @@ class NeuroManager:
                         logger.warning(f"⚠️ Groq Rate Limit via {strategy['name']}. Switching key...")
                         break 
                     
-                    if "401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower():
-                        logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from rotation pool.")
-                        groq_pool.remove_token(api_key)
+                    if (
+                        re.search(r'\b401\b', err_str)
+                        or "unauthorized" in err_str.lower()
+                        or "invalid api key" in err_str.lower()
+                    ) and "413" not in err_str:
+                        logger.warning(f"⚠️ Groq key {api_key[:12]}... is unauthorized (401). Setting 15m cooldown.")
+                        groq_pool.penalize_token(api_key, 900.0)
                         break
 
                     # Если ошибка сети - пробуем следующую стратегию (continue внутри цикла стратегий)

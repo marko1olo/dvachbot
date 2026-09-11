@@ -218,5 +218,84 @@ class TestBannerGalleryAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIn("❌ Ошибка отправки баннеров", sent_text)
 
 
+    async def test_send_banners_page_alpha_vs_random_sorting(self):
+        bot = AsyncMock()
+        bot.id = 888999
+        chat_id = 123456789
+
+        sent_messages = [MagicMock(photo=[MagicMock(file_id=f"fid_{i}")]) for i in range(10)]
+        bot.send_media_group.return_value = sent_messages
+
+        # Test alphabetical sort (default)
+        await _send_banners_page(bot, chat_id=chat_id, page=0, category="all", sort="alpha")
+        self.assertEqual(bot.send_media_group.call_count, 1)
+        media_alpha = bot.send_media_group.call_args.kwargs["media"]
+        self.assertIn("🔤 А-Я", media_alpha[0].caption)
+
+        # Check navigation markup in message
+        self.assertEqual(bot.send_message.call_count, 1)
+        markup = bot.send_message.call_args.kwargs["reply_markup"]
+        sort_btn = markup.inline_keyboard[1][0]
+        self.assertIn("Случайно", sort_btn.text)
+        self.assertIn("rnd", sort_btn.callback_data)
+
+        # Test random sort with seed
+        bot.reset_mock()
+        bot.send_media_group.return_value = sent_messages
+        await _send_banners_page(bot, chat_id=chat_id, page=0, category="all", sort="rnd", seed=12345)
+        self.assertEqual(bot.send_media_group.call_count, 1)
+        media_rnd = bot.send_media_group.call_args.kwargs["media"]
+        self.assertIn("🎲 Случайно", media_rnd[0].caption)
+
+        rnd_markup = bot.send_message.call_args.kwargs["reply_markup"]
+        rnd_sort_btn = rnd_markup.inline_keyboard[1][0]
+        self.assertIn("А-Я", rnd_sort_btn.text)
+        self.assertIn("alpha", rnd_sort_btn.callback_data)
+
+    async def test_cmd_banners_aliases_and_argument_parsing(self):
+        from main import cmd_banners
+        bot = AsyncMock()
+        message = AsyncMock()
+        message.bot = bot
+        message.chat.id = 123456789
+        message.delete = AsyncMock()
+
+        # Test with /banner random
+        message.text = "/banner random"
+        with patch("main._send_banners_page") as mock_send:
+            await cmd_banners(message, board_id="b")
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args.kwargs
+            self.assertEqual(call_kwargs["sort"], "rnd")
+            self.assertEqual(call_kwargs["category"], "all")
+            self.assertGreater(call_kwargs["seed"], 0)
+
+        # Test with /баннер maid
+        message.text = "/баннер maid"
+        with patch("main._send_banners_page") as mock_send:
+            await cmd_banners(message, board_id="b")
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args.kwargs
+            self.assertEqual(call_kwargs["category"], "maid")
+            self.assertEqual(call_kwargs["sort"], "alpha")
+
+        # Test with legacy callback bn:all:2
+        from main import cb_banners_page
+        callback = AsyncMock()
+        callback.bot = bot
+        callback.message.chat.id = 123456789
+        callback.message.delete = AsyncMock()
+        callback.data = "bn:all:2"
+
+        with patch("main._send_banners_page") as mock_send:
+            await cb_banners_page(callback)
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args.kwargs
+            self.assertEqual(call_kwargs["category"], "all")
+            self.assertEqual(call_kwargs["page"], 2)
+            self.assertEqual(call_kwargs["sort"], "alpha")
+
+
 if __name__ == "__main__":
     unittest.main()
+

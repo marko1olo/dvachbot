@@ -134,10 +134,10 @@ async def _safe_groq_json(messages, max_tokens=1024):
                             logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}, switching model immediately.")
                             break
                         elif resp.status_code == 401:
-                            logger.error(
-                                f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool."
+                            logger.warning(
+                                f"⚠️ Groq key {token[:12]}... is unauthorized (401). Setting 15m cooldown."
                             )
-                            groq_pool.remove_token(token)
+                            groq_pool.penalize_token(token, 900.0)
                             break
                         else:
                             logger.warning(
@@ -150,14 +150,15 @@ async def _safe_groq_json(messages, max_tokens=1024):
                 except Exception as e:
                     err_str = str(e).lower()
                     if (
-                        "401" in err_str
+                        (re.search(r'\b401\b', err_str)
                         or "unauthorized" in err_str
-                        or "invalid api key" in err_str
+                        or "invalid api key" in err_str)
+                        and "413" not in err_str
                     ):
-                        logger.error(
-                            f"❌ Groq key {token[:12]}... is unauthorized (401 Exception). Removing from rotation pool."
+                        logger.warning(
+                            f"⚠️ Groq key {token[:12]}... is unauthorized (401 Exception). Setting 15m cooldown."
                         )
-                        groq_pool.remove_token(token)
+                        groq_pool.penalize_token(token, 900.0)
                         break
                     if strategy["proxy"] is not None:
                         logger.warning(f"⚠️ [DeepCheck] Proxy connection failed ({e}), falling back to Direct connection...")

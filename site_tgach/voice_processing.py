@@ -1,11 +1,14 @@
 from common.task_manager import spawn_task
 import hashlib
+import logging
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from fastapi import UploadFile, HTTPException
 from common.database import check_file_deduplication, register_new_file
 # Импортируем нашу прокачанную функцию с "Двойным ударом"
 from site_tgach.image_processing import _upload_mirrors_task
+
+logger = logging.getLogger("voice_processing")
 
 async def process_and_upload_voice(
     file: UploadFile, 
@@ -77,7 +80,7 @@ async def process_and_upload_voice(
                 'filename': filename
             }
         except Exception as e:
-            print(f"⛔ VOICE UPLOAD FAILED: {e}")
+            logger.error(f"Voice upload failed (both voice and document): {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Upload failed")
 
     # 3. Регистрация в БД
@@ -91,7 +94,7 @@ async def process_and_upload_voice(
             None
         )
     except Exception as e:
-        print(f"DB Register error (Voice): {e}")
+        logger.warning(f"DB register error (Voice): {e}")
 
     # 4. Фоновое зеркалирование (С поддержкой больших файлов >19МБ)
     spawn_task(_upload_mirrors_task(
