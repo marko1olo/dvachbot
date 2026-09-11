@@ -71,6 +71,20 @@ def _load_google_keys() -> list[str]:
 
 _key_cooldowns: dict[tuple[str, str], float] = {}
 _provider_cooldowns: dict[str, float] = {}
+_model_cooldowns: dict[str, float] = {}
+
+_CANNED_REFUSAL_MARKERS = (
+    "я не могу предоставить информацию",
+    "я не могу выполнить этот запрос",
+    "я не могу ответить",
+    "телефон доверия",
+    "горячая линия психологической",
+    "совершения самоубийства",
+    "причинении себе вреда",
+    "обратитесь за помощью к специалистам",
+    "i cannot fulfill this request",
+    "as an ai language model",
+)
 
 _PROVIDER_LOCKS: dict[str, asyncio.Lock] = {}
 _PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
@@ -217,8 +231,8 @@ summarize_text_with_hf = dispatch_llm_completion
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference in ("persona", "persona_gemini"):
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
@@ -279,6 +293,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             continue
         if _provider_cooldowns.get(provider, 0) > now_ts:
             logger.info(f"{provider} is in TPD cooldown ({_provider_cooldowns[provider] - now_ts:.1f}s remaining). Skipping model {model_name}.")
+            continue
+        if _model_cooldowns.get(model_name, 0) > now_ts:
+            logger.info(f"Model {model_name} is in 503/high-demand cooldown ({_model_cooldowns[model_name] - now_ts:.1f}s remaining). Skipping.")
             continue
 
         if provider == "gemini":
@@ -342,6 +359,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     )
                     if raw_text:
                         result = clean_ai_thinking(raw_text)
+                        if result and any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS):
+                            logger.warning(f"🛡️ Canned refusal/helpline detected from {model_name}. Skipping model.")
+                            skip_model = True
+                            break
                         if result:
                             return result
                         else:
@@ -384,6 +405,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         result = choice.message.content
                         if result:
                             result = clean_ai_thinking(result)
+                            if result and any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS):
+                                logger.warning(f"🛡️ Canned refusal/helpline detected from {model_name}. Skipping model.")
+                                skip_model = True
+                                break
                             if result:
                                 return result
                             else:
@@ -472,6 +497,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     continue  # try next key
                 if "timeout" in err_str.lower() or "timed out" in err_str.lower():
                     logger.warning(f"⚠️ {provider} request timed out for {model_name}. Trying next candidate...")
+                    break
+                if "503" in err_str or "high demand" in err_str.lower() or "service unavailable" in err_str.lower():
+                    logger.warning(f"⚠️ {provider} model {model_name} returned 503 (high demand). Setting 10m cooldown on model.")
+                    _model_cooldowns[model_name] = time.time() + 600.0
+                    skip_model = True
                     break
                 # Any other error: skip model entirely
                 logger.warning(f"⚠️ Unhandled error for {model_name}: {err_str[:80]}. Skipping model.")
