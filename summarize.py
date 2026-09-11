@@ -337,7 +337,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         api_key=api_key,
                         system_instruction=effective_sys,
                         user_text=effective_dump,
-                        temperature=0.85 if model_preference in ("persona", "persona_gemini") else 0.8,
+                        temperature=1.0 if model_preference in ("persona", "persona_gemini") else 0.8,
                         timeout=15.0,
                     )
                     if raw_text:
@@ -373,7 +373,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     create_kwargs = dict(
                         model=model_name,
                         messages=messages,
-                        temperature=0.85 if model_preference in ("persona", "persona_gemini") else 0.8,
+                        temperature=1.0 if model_preference in ("persona", "persona_gemini") else 0.8,
                         timeout=15.0,
                     )
                     if model_max_tokens is not None:
