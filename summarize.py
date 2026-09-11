@@ -1,5 +1,6 @@
 import os
 import re
+import random
 import httpx
 import logging
 import asyncio
@@ -230,24 +231,57 @@ summarize_text_with_hf = dispatch_llm_completion
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference in ("persona", "persona_gemini"):
-        models_cascade = [
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.7-flash", "gemini"),
+        top_candidates = [
+            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.8-27b", "groq"),
-            ("qwen/qwen3.6-27b", "groq"),
         ]
+        # Weighted random selection of the primary model per request
+        chosen_first = random.choices(
+            top_candidates,
+            weights=[0.40, 0.40, 0.10, 0.10],
+            k=1
+        )[0]
+        # All remaining top candidates become immediate fallbacks (shuffled)
+        remaining_top = [m for m in top_candidates if m != chosen_first]
+        random.shuffle(remaining_top)
+
+        models_cascade = (
+            [chosen_first]
+            + remaining_top
+            + [
+                ("gemini-3.6-flash", "gemini"),
+                ("gemini-3.7-flash", "gemini"),
+                ("qwen/qwen3.8-27b", "groq"),
+                ("qwen/qwen3.6-27b", "groq"),
+            ]
+        )
+        logger.info(
+            f"🎲 [persona] Primary model randomly selected: {chosen_first[0]} ({chosen_first[1]}). "
+            f"Full fallback cascade: {[m[0] for m in models_cascade]}"
+        )
     elif model_preference == "fast":
-        models_cascade = [
+        top_fast = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+        ]
+        chosen_fast = random.choice(top_fast)
+        remaining_fast = [m for m in top_fast if m != chosen_fast]
+        models_cascade = [chosen_fast] + remaining_fast + [
             ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
         ]
     elif model_preference == "gemini":
-        models_cascade = [
+        top_gem = [
+            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+        ]
+        chosen_gem = random.choice(top_gem)
+        remaining_gem = [m for m in top_gem if m != chosen_gem]
+        models_cascade = [chosen_gem] + remaining_gem + [
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
@@ -257,14 +291,18 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [
             ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
         ]
     else:
-        # Default summarization cascade: Lite -> Qwen -> Fallback Flash
+        # Default summarization cascade
         models_cascade = [
+            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
@@ -287,6 +325,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     import time
     now_ts = time.time()
     skip_providers: set[str] = set()
+    provider_safety_count: dict[str, int] = {}
+    persona_temperature = round(random.uniform(0.95, 1.05), 2)
 
     for model_name, provider in models_cascade:
         if provider in skip_providers:
@@ -355,8 +395,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         api_key=api_key,
                         system_instruction=effective_sys,
                         user_text=effective_dump,
-                        temperature=1.0 if model_preference in ("persona", "persona_gemini") else 0.8,
-                        timeout=15.0,
+                        temperature=persona_temperature if model_preference in ("persona", "persona_gemini") else 0.8,
+                        timeout=25.0 if model_preference in ("persona", "persona_gemini") else 15.0,
                     )
                     if raw_text:
                         result = clean_ai_thinking(raw_text)
@@ -375,8 +415,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     else:
                         logger.warning(f"⚠️ {provider} model {model_name} returned empty/None content (finish_reason={finish_reason})")
                         if finish_reason in ("safety", "content_filter"):
-                            logger.warning(f"🛡️ Safety filter triggered for {provider} on model {model_name}. Skipping provider {provider} for this prompt.")
-                            skip_providers.add(provider)
+                            provider_safety_count[provider] = provider_safety_count.get(provider, 0) + 1
+                            logger.warning(f"🛡️ Safety filter triggered for {provider} on model {model_name} (count={provider_safety_count[provider]}). Skipping model {model_name}.")
+                            if provider_safety_count[provider] >= 2:
+                                logger.warning(f"🛡️ Multiple safety filters triggered on {provider}. Skipping provider {provider} for this prompt.")
+                                skip_providers.add(provider)
                             skip_model = True
                             break
                         else:
@@ -395,7 +438,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     create_kwargs = dict(
                         model=model_name,
                         messages=messages,
-                        temperature=1.0 if model_preference in ("persona", "persona_gemini") else 0.8,
+                        temperature=persona_temperature if model_preference in ("persona", "persona_gemini") else 0.8,
                         timeout=15.0,
                     )
                     if model_max_tokens is not None:

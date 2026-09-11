@@ -3201,7 +3201,7 @@ async def build_cyberchad_context(
         transcription_text = c.get('transcription') or (voice_transcriptions_map.get(fid) if fid else None)
         media_meta = media_meta_map.get(fid) if fid else None
 
-        post_body = _format_post_text(c, msg_type, media_meta=media_meta, max_desc_len=700, max_tags_len=300) or ""
+        post_body = _format_post_text(c, msg_type, media_meta=media_meta, max_desc_len=180, max_tags_len=90) or ""
         if transcription_text:
             vt_label = f"[Голосовое: «{transcription_text}»]" if msg_type == 'voice' else f"[Кружочек: «{transcription_text}»]"
             post_body = f"{vt_label} {post_body}".strip()
@@ -3220,7 +3220,7 @@ async def build_cyberchad_context(
 
         rep_to = pdata.get('reply_to_post_num') or c.get('reply_to_post') or c.get('reply_to')
         rep_str = f" [в ответ на >>{rep_to}]" if rep_to else ""
-        board_lines.append(f"• >>{pnum} {sender_str}{rep_str}: {clean_body[:1200]}")
+        board_lines.append(f"• >>{pnum} {sender_str}{rep_str}: {clean_body[:500]}")
 
     block3 = (
         f"=== [БЛОК 3: ИСТОРИЯ ЧАТА (ПОСЛЕДНИЕ {len(board_lines)} СООБЩЕНИЙ В ПОТОКЕ)] ===\n"
