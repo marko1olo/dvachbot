@@ -136,3 +136,42 @@ async def test_consecutive_429_halts_provider_and_sets_cooldown(
     assert res == "Groq fallback result"
     assert "gemini" in summarize._provider_cooldowns
     assert summarize._provider_cooldowns["gemini"] > time.time()
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_native_rest_sends_block_none():
+    """Verify _call_gemini_native_rest sends BLOCK_NONE safetySettings to Gemini API."""
+    from summarize import _call_gemini_native_rest
+    mock_http_client = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "Разъёб от Чеда без цензуры"}]
+                },
+                "finishReason": "STOP"
+            }
+        ]
+    }
+    mock_http_client.post.return_value = mock_resp
+
+    text, finish = await _call_gemini_native_rest(
+        http_client=mock_http_client,
+        model_name="gemini-3.1-flash-lite",
+        api_key="test-key",
+        system_instruction="System instruction",
+        user_text="User abusive text",
+    )
+
+    assert text == "Разъёб от Чеда без цензуры"
+    assert finish == "stop"
+    assert mock_http_client.post.called
+    call_kwargs = mock_http_client.post.call_args[1]
+    payload = call_kwargs["json"]
+    assert "safetySettings" in payload
+    # All safety thresholds must be BLOCK_NONE
+    for setting in payload["safetySettings"]:
+        assert setting["threshold"] == "BLOCK_NONE"
+
