@@ -217,9 +217,10 @@ summarize_text_with_hf = dispatch_llm_completion
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference in ("persona", "persona_gemini"):
         models_cascade = [
+            ("gemini-3.7-flash", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
         ]
@@ -336,7 +337,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         api_key=api_key,
                         system_instruction=effective_sys,
                         user_text=effective_dump,
-                        temperature=0.8,
+                        temperature=0.85 if model_preference in ("persona", "persona_gemini") else 0.8,
                         timeout=15.0,
                     )
                     if raw_text:
@@ -372,7 +373,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     create_kwargs = dict(
                         model=model_name,
                         messages=messages,
-                        temperature=0.8,
+                        temperature=0.85 if model_preference in ("persona", "persona_gemini") else 0.8,
                         timeout=15.0,
                     )
                     if model_max_tokens is not None:
