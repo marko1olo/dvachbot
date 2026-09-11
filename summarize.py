@@ -321,14 +321,15 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         # Безопасный лимит выходных токенов: для Gemini None (без урезания), для Groq 1024 (вместо 6000!)
         model_max_tokens = None if provider == "gemini" else 1024
 
-        # Защита Groq от 413 Payload Too Large
+        # Защита Groq от 413 Payload Too Large (лимит Groq 6000 токенов; русский текст ~3 байта/токен)
         effective_sys = system_instruction
         effective_dump = text_dump
         if provider == "groq":
-            if len(effective_sys) > 8000:
-                effective_sys = effective_sys[:7000] + "\n\n[...СОКРАЩЕНИЕ ИНСТРУКЦИИ ДЛЯ СКОРОСТИ...]\nОтвечай строго по правилам и верни валидный JSON."
-            if len(effective_dump) > 3000:
-                effective_dump = effective_dump[-3000:]
+            if len(effective_sys) > 5000:
+                effective_sys = effective_sys[:4500] + "\n\n[...СОКРАЩЕНИЕ ИНСТРУКЦИИ ДЛЯ СКОРОСТИ...]\nОтвечай строго по правилам и верни валидный JSON."
+            if len(effective_dump) > 6000:
+                # Обязательно сохраняем БЛОК 1 (целевой пост) и БЛОК 2 (родительский пост) в начале!
+                effective_dump = effective_dump[:2500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-3500:]
 
         messages = [
             {"role": "system", "content": effective_sys},

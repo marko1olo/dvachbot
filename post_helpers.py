@@ -408,6 +408,11 @@ _MEDIA_ERROR_TAGS = frozenset({
     'error_no_tags', 'error_too_large', 'unknown', 'none', 'null'
 })
 
+_BANNED_MEDIA_PROMPT_SYMBOLS = frozenset({
+    'black_sun', 'sonnenrad', 'swastika', 'свастика', 'черное солнце', 'чёрное солнце',
+    '14/88', '1488', 'nsdap', 'totenkopf', 'hakenkreuz'
+})
+
 @lru_cache(maxsize=16384)
 def _get_cached_anon_name(author_id: int, stream_lang: str) -> str:
     aid = get_anon_id(author_id, stream=stream_lang)
@@ -440,6 +445,9 @@ def _format_media_context(
         if (d_lower not in _MEDIA_ERROR_TAGS
                 and not d_lower.startswith('error')
                 and 'download_failed' not in d_lower):
+            for sym in _BANNED_MEDIA_PROMPT_SYMBOLS:
+                if sym in d_lower:
+                    d_clean = re.sub(re.escape(sym), 'символ', d_clean, flags=re.IGNORECASE)
             desc = d_clean
 
     # Sanitize tags
@@ -454,7 +462,9 @@ def _format_media_context(
 
         for t in tag_items:
             t_lower = t.lower()
-            if t_lower in _MEDIA_ERROR_TAGS or t_lower.startswith('error') or 'download_failed' in t_lower:
+            if (t_lower in _MEDIA_ERROR_TAGS or t_lower.startswith('error')
+                    or 'download_failed' in t_lower
+                    or t_lower in _BANNED_MEDIA_PROMPT_SYMBOLS):
                 continue
             clean_tags_list.append(t)
 
