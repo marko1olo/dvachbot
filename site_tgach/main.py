@@ -377,6 +377,7 @@ async def update_tor_nodes_task():
     global TOR_EXIT_NODES
     url = "https://check.torproject.org/exit-addresses"
     while True:
+        sleep_duration = 3600
         try:
             transport = AsyncHTTPTransport(local_address="0.0.0.0")
             async with httpx.AsyncClient(
@@ -392,9 +393,13 @@ async def update_tor_nodes_task():
                         logger.info(
                             f"🛡️ TOR BLOCKER: Loaded {len(TOR_EXIT_NODES)} exit nodes."
                         )
+        except (httpx.TransportError, httpx.TimeoutException, httpx.HTTPError) as e:
+            logger.warning(f"Failed to update Tor nodes (network/DNS unavailable): {e}")
+            sleep_duration = 300
         except Exception as e:
             logger.error(f"Failed to update Tor nodes: {e}", exc_info=True)
-        await asyncio.sleep(3600)
+            sleep_duration = 300
+        await asyncio.sleep(sleep_duration)
 
 
 def is_ip_restricted(ip_str: str) -> bool:
@@ -10442,8 +10447,11 @@ async def _proxy_external_url(
             if range_header:
                 request_headers["Range"] = range_header
         resp = await session.get(url, headers=request_headers)
+    except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
+        logger.warning(f"Proxy external file upstream unavailable ({url[:80]}): {e}")
+        raise HTTPException(status_code=404, detail="File unavailable.")
     except Exception as e:
-        logger.error(f"Proxy external file connection error: {e}", exc_info=True)
+        logger.error(f"Proxy external file unexpected error ({url[:80]}): {e}", exc_info=True)
         raise HTTPException(status_code=404, detail="File unavailable.")
 
     if resp.status not in (200, 206):
@@ -10501,6 +10509,10 @@ async def _proxy_external_url(
             async for chunk in resp.content.iter_chunked(64 * 1024):
                 if chunk:
                     yield chunk
+        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
+            logger.warning(f"Proxy external file stream interrupted ({url[:80]}): {e}")
+        except Exception as e:
+            logger.error(f"Proxy external file stream error ({url[:80]}): {e}", exc_info=True)
         finally:
             await close_upstream()
 

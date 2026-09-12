@@ -159,6 +159,7 @@ DOWNLOAD_DATA_TIMEOUT_PER_BOT = 15.0
 DOWNLOAD_TIMEOUT_PER_BOT = 18.0
 DOWNLOAD_TOTAL_TIMEOUT = 30.0
 MAX_FILE_SIZE_BOT_API = 20 * 1024 * 1024  # 20 МБ — жесткий лимит Telegram Bot API
+MAX_TAGGER_FILE_SIZE = 15 * 1024 * 1024  # 15 МБ — практический лимит для быстрого теггера медиа
 
 
 def _remove_temp_file(path: str | None) -> None:
@@ -653,8 +654,8 @@ async def _download_via_bot(bot, file_id: str) -> tuple[bytes | None, str]:
         bot.get_file(file_id), timeout=GET_FILE_TIMEOUT_PER_BOT
     )
     file_size = getattr(f_info, "file_size", 0) or 0
-    if file_size > MAX_FILE_SIZE_BOT_API:
-        logger.debug(f"File {file_id[:15]} is {file_size} bytes (>20MB Bot API limit).")
+    if file_size > MAX_TAGGER_FILE_SIZE:
+        logger.debug(f"File {file_id[:15]} is {file_size} bytes (>{MAX_TAGGER_FILE_SIZE // (1024*1024)}MB safe tagger limit).")
         return None, "file_too_big"
 
     file_path = getattr(f_info, "file_path", None)
@@ -930,8 +931,8 @@ async def tagging_loop():
                     download_target_id, primary_bot=bot
                 )
 
-                # Если превью не удалось скачать для видео, пробуем скачать сам файл видео (если не слишком большой)
-                if not img_bytes and download_target_id != file_id and dl_status not in ("file_too_big",):
+                # Если превью не удалось скачать для видео, пробуем скачать сам файл видео (если не слишком большой и не было таймаута)
+                if not img_bytes and download_target_id != file_id and dl_status not in ("file_too_big", "timeout"):
                     download_target_id = file_id
                     img_bytes, active_bot, dl_status = await download_file_with_fallback(
                         download_target_id, primary_bot=bot
@@ -942,9 +943,9 @@ async def tagging_loop():
                     fail_cnt = (
                         (entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1
                     )
-                    # Если файл перманентно не найден ни одним ботом или слишком большой (>20MB),
+                    # Если файл перманентно не найден ни одним ботом или слишком большой,
                     # не мучаем очередь повторами — сразу помечаем download_failed
-                    is_permanent_fail = dl_status in ("not_found", "file_too_big") or fail_cnt >= 3
+                    is_permanent_fail = dl_status in ("not_found", "file_too_big") or fail_cnt >= 2
                     
                     if is_permanent_fail:
                         reason_msg = f"status='{dl_status}'" if dl_status in ("not_found", "file_too_big") else f"failed {fail_cnt} times"
