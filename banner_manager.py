@@ -362,8 +362,30 @@ async def send_banner_message(
         return msg
     except Exception as e:
         err_text = str(e).lower()
-        # If cached file_id was rejected (wrong file identifier, unparseable, wrong bot token)
-        if fname:
+
+        # 1. If Telegram failed due to unclosed HTML tag in caption, retry photo with plain text caption
+        if "can't parse entities" in err_text and parse_mode:
+            try:
+                import re
+                plain_cap = re.sub(r'<[^>]+>', '', caption) if caption else ""
+                msg = await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_payload,
+                    caption=plain_cap,
+                    reply_markup=reply_markup,
+                    parse_mode=None
+                )
+                return msg
+            except Exception as pe_err:
+                logger.warning(f"[banner_manager] Plain caption photo retry failed for {fname}: {pe_err}")
+
+        # 2. Only evict cached file_id if the file_id itself was rejected
+        is_broken_id = any(term in err_text for term in (
+            "wrong remote file identifier", "wrong file identifier", "can't unserialize",
+            "media_invalid", "file_id_invalid"
+        ))
+
+        if fname and is_broken_id:
             if bot_id and f"{bot_id}:{fname}" in _BANNER_CACHE:
                 _BANNER_CACHE.pop(f"{bot_id}:{fname}", None)
             if fname in _BANNER_CACHE:

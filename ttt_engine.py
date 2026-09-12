@@ -959,6 +959,21 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
                         break
 
         if not found_game_id:
+            # Check if user is already participating in an active game
+            active_game = None
+            for gid, g in list(active_ttt_games.items()):
+                if g.status == "active" and (g.challenger_id == user_id or g.opponent_id == user_id):
+                    active_game = g
+                    break
+            if active_game:
+                whose_turn = "Твой ход! Выбирай клетку на поле ниже." if active_game.current_turn == user_id else "Ход соперника, ожидай..."
+                await message.answer(
+                    f"⚔️ <b>Партия уже идёт!</b> {whose_turn}\n\n" + render_game_text(active_game),
+                    reply_markup=get_ttt_game_keyboard(active_game),
+                    parse_mode="HTML"
+                )
+                return
+
             await message.answer("❌ Нет активных вызовов в крестики-нолики на этой борде.")
             return
 
@@ -967,7 +982,7 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
             await message.answer(err)
             return
 
-        # Update challenge message
+        # Update challenge message in challenger's chat
         if game and game.msg_id:
             try:
                 await message.bot.edit_message_text(
@@ -979,6 +994,17 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
                 )
             except Exception:
                 pass
+
+        # Send interactive game board to the accepting player
+        try:
+            whose_turn = "Ход соперника (❌)" if game.current_turn != user_id else "Твой ход!"
+            await message.answer(
+                f"⚔️ <b>Вызов принят!</b> {whose_turn}\n\n" + render_game_text(game),
+                reply_markup=get_ttt_game_keyboard(game),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
         return
 
     # Handle "/ttt cancel"

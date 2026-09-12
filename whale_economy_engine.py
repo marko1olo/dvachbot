@@ -8,6 +8,7 @@ Milestone 3: Whale Money Sinks & Currency Dilution
 """
 
 import asyncio
+import datetime
 import json
 import math
 import random
@@ -39,6 +40,16 @@ def calculate_whale_safe_price(n: int) -> int:
     if n < 0:
         n = 0
     return int(50000 * (1.5 ** n))
+
+
+def get_next_utc_midnight_ts(current_ts: Optional[int] = None) -> int:
+    """Returns unix timestamp of the upcoming 00:00:00 UTC."""
+    current_dt = datetime.datetime.fromtimestamp(
+        current_ts if current_ts is not None else time.time(),
+        tz=datetime.timezone.utc
+    )
+    next_midnight = (current_dt + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(next_midnight.timestamp())
 
 
 def roll_whale_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, Dict[str, Any], int]:
@@ -191,7 +202,7 @@ async def buy_whale_safe(db: Any, user_id: int, board_id: str = "b") -> Dict[str
             reset_ts = ai.get("whale_safes_reset_ts", 0)
             if now >= reset_ts:
                 ai["whale_safes_opened_today"] = 0
-                ai["whale_safes_reset_ts"] = now + 86400
+                ai["whale_safes_reset_ts"] = get_next_utc_midnight_ts(now)
 
             n = ai.get("whale_safes_opened_today", 0)
             price = calculate_whale_safe_price(n)

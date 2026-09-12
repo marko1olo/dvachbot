@@ -566,3 +566,69 @@ async def test_cb_work_do_drop_keys_handling():
     assert items12.get("shield") is True
 
     await db_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_work_alert_toggle_callbacks():
+    db_conn = await aiosqlite.connect(":memory:")
+    await db_conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS Users (
+            user_id INTEGER,
+            board_id TEXT,
+            balance REAL DEFAULT 0,
+            posts_count INTEGER DEFAULT 0,
+            active_items TEXT DEFAULT '{}',
+            is_verified_b INTEGER DEFAULT 0,
+            last_failed_amount REAL DEFAULT 0,
+            custom_prefix TEXT DEFAULT NULL,
+            prefix_expires_at REAL DEFAULT 0,
+            cursed_until REAL DEFAULT 0,
+            PRIMARY KEY (user_id, board_id)
+        )
+        """
+    )
+    await db_conn.commit()
+
+    user_id = 777001
+    await db_conn.execute(
+        "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, 'b', 1000, '{}')",
+        (user_id,)
+    )
+    await db_conn.commit()
+
+    cb = MagicMock()
+    cb.data = "work_toggle_alerts"
+    cb.from_user.id = user_id
+    cb.answer = AsyncMock()
+    cb.message.photo = None
+    cb.message.edit_text = AsyncMock()
+    cb.message.edit_caption = AsyncMock()
+
+    with patch("main.get_pool", return_value=db_conn):
+        # 1. Toggle ON -> OFF (since default is False, not False -> True)
+        await main.cb_work_toggle_alerts(cb, board_id="b")
+        cb.answer.assert_called_with("🔕 Уведомления о работе отключены.", show_alert=True)
+        async with db_conn.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            data = json.loads(row[0])
+            assert data.get("work_alerts_disabled") is True
+
+        # 2. Toggle back: True -> False
+        await main.cb_work_toggle_alerts(cb, board_id="b")
+        cb.answer.assert_called_with("🔔 Уведомления о работе включены!", show_alert=True)
+        async with db_conn.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            data = json.loads(row[0])
+            assert data.get("work_alerts_disabled") is False
+
+        # 3. Explicit toggle OFF via cb_work_alert_toggle_off
+        await main.cb_work_alert_toggle_off(cb, board_id="b")
+        cb.answer.assert_called_with("🔕 Напоминалки о работе отключены! Бот больше не будет писать в ЛС.", show_alert=True)
+        async with db_conn.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            data = json.loads(row[0])
+            assert data.get("work_alerts_disabled") is True
+
+    await db_conn.close()
+

@@ -10548,7 +10548,8 @@ async def cb_work_toggle_alerts(callback: types.CallbackQuery, board_id: str | N
         items = await _get_user_active_items(db, user_id, board_id)
         current = items.get("work_alerts_disabled", False)
         items["work_alerts_disabled"] = not current
-        await _save_user_active_items(db, user_id, board_id, items)
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
+        await db.commit()
     
     new_state = items["work_alerts_disabled"]
     toast = "🔕 Уведомления о работе отключены." if new_state else "🔔 Уведомления о работе включены!"
@@ -10572,7 +10573,8 @@ async def cb_work_alert_toggle_off(callback: types.CallbackQuery, board_id: str 
     async with db_lock:
         items = await _get_user_active_items(db, user_id, board_id)
         items["work_alerts_disabled"] = True
-        await _save_user_active_items(db, user_id, board_id, items)
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
+        await db.commit()
     
     await callback.answer("🔕 Напоминалки о работе отключены! Бот больше не будет писать в ЛС.", show_alert=True)
     try:
