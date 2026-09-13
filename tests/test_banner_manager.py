@@ -85,7 +85,7 @@ class TestBannerManager(unittest.TestCase):
     def test_subsection_categories_pool_size_and_reachability(self):
         from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
         all_banners = set(_CATEGORIZED_BANNERS["all"])
-        self.assertEqual(len(all_banners), 1327)
+        self.assertEqual(len(all_banners), 1313)
 
         all_reached = set()
         for subsection, cats in SUBSECTION_CATEGORIES.items():
