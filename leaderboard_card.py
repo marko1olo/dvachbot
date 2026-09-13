@@ -471,7 +471,8 @@ def format_leaderboard_text(data: LeaderboardData) -> str:
     else:
         lines.append("👤 <i>Проявляй активность на борде, чтобы попасть в топ!</i>")
 
-    return "\n".join(lines)
+    from common.text_utils import safe_tg_caption
+    return safe_tg_caption("\n".join(lines), max_len=1024)
 
 
 def generate_leaderboard_payload(board_id: str, mode: str = "balance", caller_id: int = 0) -> Tuple[io.BytesIO, str]:

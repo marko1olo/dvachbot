@@ -765,7 +765,7 @@ async def _render_bank_view(
     target: types.Message | types.CallbackQuery,
     text: str,
     kb: InlineKeyboardMarkup,
-    category: str = "wallet"
+    category: str = "bank"
 ):
     """Универсально отображает или обновляет представление Банка."""
     try:
@@ -809,7 +809,7 @@ async def cmd_bank(message: types.Message, board_id: str | None = None, stream: 
     total_principal, total_accrued, deposits = await get_user_bank_summary(db, user_id)
 
     text, kb = build_bank_dashboard_view(wallet_balance, total_principal, total_accrued, deposits)
-    await _render_bank_view(message, text, kb, category="wallet")
+    await _render_bank_view(message, text, kb, category="bank")
 
 
 @bank_router.message(Command("deposit", "вклад", "депозит", ignore_case=True, ignore_mention=True))
@@ -876,7 +876,7 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
         "<i>Нажми на нужный тариф ниже или просто отправь сумму сообщением в чат:</i>"
     )
     kb = build_deposit_tiers_kb()
-    await _render_bank_view(message, text, kb, category="wallet")
+    await _render_bank_view(message, text, kb, category="bank")
 
 
 @bank_router.message(Command("withdraw", "снять", "вывод", ignore_case=True, ignore_mention=True))
@@ -979,7 +979,7 @@ async def cb_bank_hub(callback: types.CallbackQuery, board_id: str | None = None
     total_principal, total_accrued, deposits = await get_user_bank_summary(db, user_id)
 
     text, kb = build_bank_dashboard_view(wallet_balance, total_principal, total_accrued, deposits)
-    await _render_bank_view(callback, text, kb, category="wallet")
+    await _render_bank_view(callback, text, kb, category="bank")
     await callback.answer()
 
 
@@ -994,7 +994,7 @@ async def cb_bank_refresh(callback: types.CallbackQuery, board_id: str | None = 
     total_principal, total_accrued, deposits = await get_user_bank_summary(db, user_id)
 
     text, kb = build_bank_dashboard_view(wallet_balance, total_principal, total_accrued, deposits)
-    await _render_bank_view(callback, text, kb, category="wallet")
+    await _render_bank_view(callback, text, kb, category="bank")
     await callback.answer("🔄 Проценты пересчитаны!", show_alert=False)
 
 
@@ -1011,7 +1011,7 @@ async def cb_bank_deposit_menu(callback: types.CallbackQuery, board_id: str | No
         "<i>Нажми на нужный тариф ниже или напиши сумму сообщением прямо в чат:</i>"
     )
     kb = build_deposit_tiers_kb()
-    await _render_bank_view(callback, text, kb, category="wallet")
+    await _render_bank_view(callback, text, kb, category="bank")
     await callback.answer()
 
 
@@ -1027,7 +1027,7 @@ async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | No
     wallet_balance = await get_user_global_balance(db, user_id)
 
     text, kb = build_deposit_presets_kb(tier_id, wallet_balance)
-    await _render_bank_view(callback, text, kb, category="wallet")
+    await _render_bank_view(callback, text, kb, category="bank")
     await callback.answer()
 
 
@@ -1076,7 +1076,7 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
     ])
-    await _render_bank_view(callback, text, kb, category="wallet")
+    await _render_bank_view(callback, text, kb, category="bank")
     await callback.answer("✅ Вклад успешно открыт!", show_alert=False)
 
 
@@ -1110,7 +1110,7 @@ async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | N
         ])
 
     kb_rows.append([InlineKeyboardButton(text="⬅️ Назад в Банк", callback_data="bank_main_hub")])
-    await _render_bank_view(callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows), category="wallet")
+    await _render_bank_view(callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows), category="bank")
     await callback.answer()
 
 
@@ -1150,7 +1150,7 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
             [InlineKeyboardButton(text="⚠️ Да, снять со штрафом", callback_data=f"bank_withdraw_confirm:{dep_id}")],
             [InlineKeyboardButton(text="❌ Отмена", callback_data="bank_withdraw_menu")],
         ])
-        await _render_bank_view(callback, warn_text, kb, category="wallet")
+        await _render_bank_view(callback, warn_text, kb, category="bank")
         await callback.answer()
         return
 
@@ -1171,7 +1171,7 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
     ])
-    await _render_bank_view(callback, resp, kb, category="wallet")
+    await _render_bank_view(callback, resp, kb, category="bank")
     await callback.answer("✅ Шекели зачислены в кошелек!", show_alert=False)
 
 
@@ -1200,7 +1200,7 @@ async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
     ])
-    await _render_bank_view(callback, resp, kb, category="wallet")
+    await _render_bank_view(callback, resp, kb, category="bank")
     await callback.answer("✅ Досрочный вывод завершен", show_alert=False)
 
 

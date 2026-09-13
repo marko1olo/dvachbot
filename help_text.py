@@ -55,6 +55,7 @@ HELP_HUB_PAGES_RU = {
     ),
     "media": (
         "🖼 <b>Раздел: Медиа, Инвайты и Демотиваторы</b>\n\n"
+        "• <code>/banner</code> (<code>/баннер</code>, <code>/gallery</code>) — <b>Интерактивная галерея баннеров ТГАЧ</b> (1064 арта, 22 категории, сортировка А-Я / Случайно, постраничный просмотр).\n"
         "• <code>/dem Заголовок | Подпись</code> — <b>Генератор демотиваторов!</b> Ответь реплаем на любое фото/картинку, и бот соберёт каноничный постер с чёрной рамкой и шрифтом Impact.\n"
         "• <code>/invite_pic</code> — Сгенерировать стильный постер с QR-кодом для вербовки друзей (7 визуальных стилей: Киберпанк, Демотиватор, Матрица, Аниме, Вейпорвейв и др.).\n"
         "• <code>/invite</code> — Получить порцию отборных текстовых фраз для зазыва анонов.\n"
@@ -127,7 +128,7 @@ HELP_HUB_PAGES_RU = {
         "<b>Профиль/Досье:</b> /passport (/me, /я, /паспорт), /my_wrapped (/wrapped), /dossier, /inv\n"
         "<b>Аналитика & Постеры:</b> /stats_hub (/пульс, /deck), /economy_stats (/econ), /pvp_stats (/война), /drama_stats (/бифы), /memes_stats (/баян)\n"
         "<b>Экономика & PvP:</b> /wallet, /bank, /deposit, /withdraw, /market, /sell, /my_lots, /work, /daily, /shop, /top, /duel, /ttt, /dice_duel, /duel_rr, /drop, /casino\n"
-        "<b>Медиа:</b> /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
+        "<b>Медиа:</b> /banner, /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
         "<b>ИИ:</b> /summarize, /roast, /stats, /tags\n"
         "<b>Интерактив (Reply):</b> /dossier, /rob, /shit, /curse, /partyvan, /deanon, /votemute, /dopros, /fine\n"
         "<b>Настройки:</b> /nsfw, /hide, /togglegif, /token\n"
@@ -201,6 +202,7 @@ HELP_HUB_PAGES_EN = {
     ),
     "media": (
         "🖼 <b>Section: Media, Invites & Demotivators</b>\n\n"
+        "• <code>/banner</code> (<code>/gallery</code>) — <b>Interactive Banner Gallery:</b> 1064 arts across 22 categories, A-Z and random sort, pagination.\n"
         "• <code>/dem Title | Subline</code> — <b>Demotivator generator!</b> Reply to any image to create classic demotivator.\n"
         "• <code>/invite_pic</code> — Graphic poster with QR code (7 visual styles).\n"
         "• <code>/invite</code> — Text invite phrases.\n"

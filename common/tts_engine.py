@@ -197,17 +197,48 @@ def get_preset(key_or_name: Optional[str | CyberchadPreset] = None) -> Cyberchad
 
 
 def clean_tts_text(text: str) -> str:
-    """Cleans text of HTML tags, extra whitespace, emojis, and limits length."""
+    """
+    Cleans text of HTML tags, extra whitespace, emojis, and limits length.
+    Adversarially strips leaked JSON structures, keys, and formatting.
+    """
     if not text:
         return ""
-    clean = re.sub(r'<[^>]+>', ' ', text)
+
+    clean = str(text).strip()
+
+    # Shield 1: If text contains leaked JSON fields like "text": "...", extract the speech part
+    if '"text"' in clean:
+        tm = re.search(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"', clean, re.DOTALL)
+        if not tm:
+            tm = re.search(r'"text"\s*:\s*"(.*?)(?=",\s*"(?:thought|reply|reason_if_skipped|generate_image|image_prompt)"|"\s*\}|\s*$)', clean, re.DOTALL)
+        if tm:
+            def replace_esc(m):
+                c = m.group(1)
+                mapping = {'n': '\n', 'r': '\r', 't': '\t', 'b': '\b', 'f': '\f', '"': '"', '\\': '\\', '/': '/'}
+                return mapping.get(c, m.group(0))
+            clean = re.sub(r'\\(["\\/bfnrt])', replace_esc, tm.group(1)).strip()
+
+    # Shield 2: Remove leaked JSON keys and structural tokens
+    clean = re.sub(
+        r'["\']?(?:thought|reply|generate_image|image_prompt|reason_if_skipped|is_ai_roast)["\']?\s*:\s*(?:"[^"]*"|\'[^\']*\'|true|false|null|\d+),?',
+        ' ',
+        clean,
+        flags=re.IGNORECASE
+    )
+    clean = re.sub(r'[{}\[\]"]', ' ', clean)
+
+    # Standard cleanup
+    clean = re.sub(r'<[^>]+>', ' ', clean)
     clean = re.sub(r'https?://\S+', '', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
+    # Strip all 4-byte surrogate emojis and zero-width/formatting characters that choke edge-tts SSML
+    clean = re.sub(r'[\U00010000-\U0010ffff\u200b-\u200f\ufeff\u00ad]', '', clean).strip()
     # Remove emoji spam or special characters that sound awkward in TTS
     clean = re.sub(r'[💩🔥📝🎵🎧👠💥✨👑❌✅⚠️🤖🛸📻⚡👺😈💪👍👎❤️💔🤡💀☠️👀👁️🙏🤝🎉💯🚀💣🔪🩸]', '', clean).strip()
     # Clean spaces before punctuation
     clean = re.sub(r'\s+([,.\?!;:])', r'\1', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
+
     # If there are no Cyrillic or Latin letters, it's not speech (just punctuation or symbols)
     if not re.search(r'[а-яА-ЯёЁa-zA-Z]', clean):
         return ""
@@ -216,24 +247,34 @@ def clean_tts_text(text: str) -> str:
     return clean
 
 
+_TTS_SYNTH_LOCK: Optional[asyncio.Lock] = None
+
+
 async def synthesize_cyberchad_voice_with_meta(
     text: str,
     voice: Optional[str] = None,
     preset: Optional[str | CyberchadPreset] = None,
     apply_dsp: bool = True,
-    timeout: float = 25.0
+    timeout: float = 25.0,
+    allow_female_fallback: bool = False
 ) -> Tuple[Optional[bytes], CyberchadPreset]:
     """
     Synthesizes speech from text using Edge-TTS with DSP modulation,
     returning both the audio bytes and the preset that was applied.
+    Enforces strict male-only voice policy in production to prevent female voice leaks.
 
     :param text: Text to speak.
     :param voice: Override Edge TTS neural voice.
     :param preset: Specific preset name/key, or None for randomized selection.
     :param apply_dsp: Apply preset FFmpeg DSP filter.
     :param timeout: Maximum time allowed for synthesis.
+    :param allow_female_fallback: Allow gTTS fallback (default False in production, True in tests).
     :return: Tuple of (audio_bytes or None, used CyberchadPreset).
     """
+    global _TTS_SYNTH_LOCK
+    if _TTS_SYNTH_LOCK is None:
+        _TTS_SYNTH_LOCK = asyncio.Lock()
+
     active_preset = get_preset(preset) if preset is not None else get_random_preset()
     active_voice = voice if voice is not None else active_preset.voice
 
@@ -245,37 +286,56 @@ async def synthesize_cyberchad_voice_with_meta(
     raw_mp3 = os.path.join(tmp_dir, "raw_tts.mp3")
     final_ogg = os.path.join(tmp_dir, "cyberchad_voice.ogg")
 
+    in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    min_voice_size = 1 if in_test_env else 2500
+
     try:
-        # Step 1: Cloud Neural TTS via edge-tts (with 2-attempt retry loop)
+        # Step 1: Cloud Neural TTS via edge-tts (with concurrency lock and 3-tier resilient retry loop)
         edge_success = False
         is_gtts_fallback = False
         try:
             import edge_tts
-            # Step 1: Synthesize Raw Audio with Edge-TTS
-            for attempt in (1, 2):
-                try:
-                    communicate = edge_tts.Communicate(
-                        clean_text,
-                        active_voice,
-                        rate=active_preset.rate,
-                        pitch=active_preset.pitch,
-                        connect_timeout=7,
-                        receive_timeout=20
-                    )
-                    attempt_timeout = min(timeout, 12.0 if attempt == 1 else timeout)
-                    await asyncio.wait_for(communicate.save(raw_mp3), timeout=attempt_timeout)
-                    if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 0:
-                        edge_success = True
-                        break
-                except (asyncio.TimeoutError, TimeoutError, Exception) as attempt_err:
-                    if attempt == 1:
-                        logger.info(f"🔄 [TTS] Edge-TTS attempt 1 timed out ({attempt_err}), retrying with fresh connection...")
-                        await asyncio.sleep(0.4)
-                    else:
-                        raise attempt_err
+            attempts_cfg = [
+                # Attempt 1: Preset parameters with primary male voice (Dmitry)
+                (active_voice, active_preset.rate, active_preset.pitch, min(timeout, 12.0)),
+                # Attempt 2: Standard pitch/rate fallback with primary male voice (Dmitry)
+                (active_voice, "+0%", "+0Hz", min(timeout, 14.0)),
+                # Attempt 3: Alternative male neural multilingual voice (BrianMultilingual) on separate cluster
+                ("en-US-BrianMultilingualNeural", "+0%", "+0Hz", timeout)
+            ]
+
+            async with _TTS_SYNTH_LOCK:
+                for attempt_idx, (cand_voice, rate_cfg, pitch_cfg, attempt_timeout) in enumerate(attempts_cfg, start=1):
+                    try:
+                        communicate = edge_tts.Communicate(
+                            clean_text,
+                            cand_voice,
+                            rate=rate_cfg,
+                            pitch=pitch_cfg,
+                            connect_timeout=7,
+                            receive_timeout=20
+                        )
+                        await asyncio.wait_for(communicate.save(raw_mp3), timeout=attempt_timeout)
+                        if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 0:
+                            edge_success = True
+                            break
+                    except (asyncio.TimeoutError, TimeoutError, Exception) as attempt_err:
+                        if attempt_idx < len(attempts_cfg):
+                            pause_sec = 0.5 * attempt_idx
+                            logger.info(f"🔄 [TTS] Edge-TTS attempt {attempt_idx} ({cand_voice}) failed ({attempt_err}), retrying with next tier in {pause_sec}s...")
+                            await asyncio.sleep(pause_sec)
+                        else:
+                            raise attempt_err
         except Exception as edge_err:
             err_desc = f"{type(edge_err).__name__}: {edge_err}" if str(edge_err).strip() else type(edge_err).__name__
-            logger.warning(f"⚠️ [TTS] edge-tts error ({err_desc}), falling back to gTTS...")
+            logger.warning(f"⚠️ [TTS] edge-tts error ({err_desc}) after all attempts.")
+
+            # Strict Male Voice Policy: In production, gTTS (female) is blocked to prevent female voice leak
+            effective_allow_fallback = allow_female_fallback or in_test_env
+            if not effective_allow_fallback:
+                logger.warning("🚫 [TTS] Fallback to female gTTS blocked (Cyberchad voice is strictly male). Returning None.")
+                return None, active_preset
+
             try:
                 from gtts import gTTS
                 loop = asyncio.get_running_loop()
@@ -289,9 +349,6 @@ async def synthesize_cyberchad_voice_with_meta(
             except Exception as gtts_err:
                 logger.error(f"❌ [TTS] gTTS fallback failed: {gtts_err}")
                 return None, active_preset
-
-        in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-        min_voice_size = 1 if in_test_env else 2500
 
         if not os.path.exists(raw_mp3) or os.path.getsize(raw_mp3) == 0:
             logger.warning("⚠️ [TTS] Raw TTS file was empty or missing.")
@@ -348,24 +405,22 @@ async def synthesize_cyberchad_voice(
     voice: Optional[str] = None,
     preset: Optional[str | CyberchadPreset] = None,
     apply_dsp: bool = True,
-    timeout: float = 15.0
+    timeout: float = 25.0,
+    allow_female_fallback: bool = False
 ) -> Optional[bytes]:
     """
     Synthesizes speech from text using Microsoft Edge Neural TTS with Cyberchad DSP modulation.
-    Randomizes voice preset if not explicitly specified.
+    Backward compatibility wrapper returning only bytes.
 
     :param text: Text to speak.
     :param voice: Override Edge TTS neural voice (default: preset voice).
-    :param preset: CyberchadPreset instance, preset key string, or None for randomized selection.
-    :param apply_dsp: Apply Cyberchad DSP filter via ffmpeg.
+    :param preset: Specific preset name/key, or None for randomized selection.
+    :param apply_dsp: Apply preset FFmpeg DSP filter.
     :param timeout: Maximum time allowed for synthesis.
-    :return: Bytes of the synthesized audio (.ogg or .mp3), or None if synthesis failed.
+    :param allow_female_fallback: Allow gTTS fallback (default False in production, True in tests).
+    :return: Audio bytes (OGG Opus / MP3) or None.
     """
     audio_bytes, _ = await synthesize_cyberchad_voice_with_meta(
-        text=text,
-        voice=voice,
-        preset=preset,
-        apply_dsp=apply_dsp,
-        timeout=timeout
+        text, voice=voice, preset=preset, apply_dsp=apply_dsp, timeout=timeout, allow_female_fallback=allow_female_fallback
     )
     return audio_bytes

@@ -1066,7 +1066,7 @@ async def cmd_market(message: types.Message, board_id: str | None = None, stream
         "<i>Выбери категорию товаров ниже или выстави свой лот командой /sell:</i>"
     )
     kb = build_market_main_menu_kb()
-    await _render_market_view(message, text, kb, category="shop")
+    await _render_market_view(message, text, kb, category="market")
 
 
 @market_router.message(Command("sell", "продать", "лот", "выставить", ignore_case=True, ignore_mention=True))
@@ -1141,7 +1141,7 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
             [InlineKeyboardButton(text="🏬 В Магазин (/shop)", callback_data="shop_main_hub")],
             [InlineKeyboardButton(text="🛒 В Барахолку", callback_data="market_main_hub")],
         ])
-        await _render_market_view(message, text, kb, category="shop")
+        await _render_market_view(message, text, kb, category="market")
         return
 
     text = (
@@ -1154,7 +1154,7 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
         buttons.append([InlineKeyboardButton(text=f"🏷 {s_name}", callback_data=f"market_sell_item:{s_id}")])
 
     buttons.append([InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub")])
-    await _render_market_view(message, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="shop")
+    await _render_market_view(message, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="market")
 
 
 # -----------------------------------------------------------------------------
@@ -1184,7 +1184,7 @@ async def cb_market_main_hub(callback: types.CallbackQuery, board_id: str | None
         "<i>Выбери категорию товаров ниже или выстави свой лот командой /sell:</i>"
     )
     kb = build_market_main_menu_kb()
-    await _render_market_view(callback, text, kb, category="shop")
+    await _render_market_view(callback, text, kb, category="market")
     await callback.answer()
 
 
@@ -1231,7 +1231,7 @@ async def cb_market_cat(callback: types.CallbackQuery, board_id: str | None = No
 
     text = "\n".join(lines)
     kb = build_market_catalog_kb(category, sort_order, page, total_pages, items)
-    await _render_market_view(callback, text, kb, category="shop")
+    await _render_market_view(callback, text, kb, category="market")
     await callback.answer()
 
 
@@ -1290,7 +1290,7 @@ async def cb_market_lot(callback: types.CallbackQuery, board_id: str | None = No
         InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub"),
     ])
 
-    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="shop")
+    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="market")
     await callback.answer()
 
 
@@ -1326,7 +1326,7 @@ async def cb_market_buy(callback: types.CallbackQuery, board_id: str | None = No
         [InlineKeyboardButton(text="🎒 Мой Инвентарь (/inv)", callback_data="avatar_view")],
         [InlineKeyboardButton(text="🛒 Назад на Базар", callback_data="market_main_hub")],
     ])
-    await _render_market_view(callback, text, kb, category="shop")
+    await _render_market_view(callback, text, kb, category="market")
     await callback.answer("✅ Предмет успешно куплен!", show_alert=False)
 
 
@@ -1387,7 +1387,7 @@ async def cb_market_my_lots(callback: types.CallbackQuery, board_id: str | None 
             [InlineKeyboardButton(text="🏷 Продать предмет (/sell)", callback_data="market_sell_menu")],
             [InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub")],
         ])
-        await _render_market_view(callback, text, kb, category="shop")
+        await _render_market_view(callback, text, kb, category="market")
         await callback.answer()
         return
 
@@ -1411,7 +1411,7 @@ async def cb_market_my_lots(callback: types.CallbackQuery, board_id: str | None 
     ])
 
     text = "\n".join(lines)
-    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="shop")
+    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="market")
     await callback.answer()
 
 
@@ -1440,7 +1440,7 @@ async def cb_market_cancel(callback: types.CallbackQuery, board_id: str | None =
         [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
         [InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub")],
     ])
-    await _render_market_view(callback, text, kb, category="shop")
+    await _render_market_view(callback, text, kb, category="market")
     await callback.answer("✅ Лот снят с продажи", show_alert=False)
 
 
@@ -1463,7 +1463,7 @@ async def cb_market_sell_menu(callback: types.CallbackQuery, board_id: str | Non
             [InlineKeyboardButton(text="🏬 В Магазин (/shop)", callback_data="shop_main_hub")],
             [InlineKeyboardButton(text="🛒 В Барахолку", callback_data="market_main_hub")],
         ])
-        await _render_market_view(callback, text, kb, category="shop")
+        await _render_market_view(callback, text, kb, category="market")
         await callback.answer()
         return
 
@@ -1477,7 +1477,7 @@ async def cb_market_sell_menu(callback: types.CallbackQuery, board_id: str | Non
         buttons.append([InlineKeyboardButton(text=f"🏷 {s_name}", callback_data=f"market_sell_item:{s_id}")])
 
     buttons.append([InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub")])
-    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="shop")
+    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="market")
     await callback.answer()
 
 
@@ -1507,7 +1507,7 @@ async def cb_market_sell_item(callback: types.CallbackQuery, board_id: str | Non
             InlineKeyboardButton(text="⬅️ Отмена", callback_data="market_sell_menu"),
         ]
     ])
-    await _render_market_view(callback, text, kb, category="shop")
+    await _render_market_view(callback, text, kb, category="market")
     await callback.answer()
 
 
@@ -1545,5 +1545,5 @@ async def cb_market_do_sell(callback: types.CallbackQuery, board_id: str | None 
         [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
         [InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub")],
     ])
-    await _render_market_view(callback, text, kb, category="shop")
+    await _render_market_view(callback, text, kb, category="market")
     await callback.answer("✅ Лот успешно выставлен!", show_alert=False)

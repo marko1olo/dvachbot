@@ -132,7 +132,7 @@ async def cmd_settings(message: types.Message, board_id: str | None, stream: str
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="start",
+        category="settings",
         parse_mode="HTML"
     )
     try:
@@ -1943,7 +1943,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
                     chat_id=callback.message.chat.id,
                     caption=text,
                     reply_markup=kb,
-                    category="start",
+                    category="help",
                     parse_mode="HTML"
                 )
             except Exception as e2:
@@ -1958,7 +1958,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
                 chat_id=callback.message.chat.id,
                 caption=text,
                 reply_markup=kb,
-                category="start",
+                category="help",
                 parse_mode="HTML"
             )
         except Exception:

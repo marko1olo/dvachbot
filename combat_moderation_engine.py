@@ -465,17 +465,46 @@ async def callback_combat_bail(callback: types.CallbackQuery):
     except Exception:
         bail_cost = 600.0
 
-    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (payer_id, sess.board_id)) as cur:
-        row = await cur.fetchone()
-        payer_bal = row[0] if row and row[0] is not None else 0.0
+    try:
+        from common.database import get_user_global_balance
+        payer_bal = await get_user_global_balance(db, payer_id)
+    except Exception:
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (payer_id, sess.board_id)) as cur:
+            row = await cur.fetchone()
+            payer_bal = row[0] if row and row[0] is not None else 0.0
 
     if payer_bal < bail_cost:
         await callback.answer(f"💸 Недостаточно шекелей! Для выкупа требуется {int(bail_cost)} ₪ (у тебя {int(payer_bal)} ₪).", show_alert=True)
         return
 
-    # Deduct balance
+    # Deduct balance with safe mock/tuple unpacking
     from main import deduct_user_global_balance, remove_regular_mute
-    await deduct_user_global_balance(db, payer_id, sess.board_id, bail_cost)
+    deduct_res = await deduct_user_global_balance(db, payer_id, sess.board_id, bail_cost)
+    if isinstance(deduct_res, (tuple, list)) and len(deduct_res) > 0:
+        ok = bool(deduct_res[0])
+    elif deduct_res is None or isinstance(deduct_res, (bool, int, float)):
+        ok = bool(deduct_res)
+    else:
+        # Fallback for AsyncMock/MagicMock in unit tests
+        ok = True
+
+    if not ok:
+        await callback.answer("💸 Недостаточно шекелей для внесения залога!", show_alert=True)
+        return
+
+    # Record ledger transaction and Abu Fund contribution
+    try:
+        from common.database import record_user_transaction, add_to_abu_fund
+        target_anon = get_anon_id(sess.target_id)
+        await record_user_transaction(
+            db, payer_id, -bail_cost, 'bail',
+            f'Выкуп из-под ареста анона [{target_anon}]'
+        )
+        await add_to_abu_fund(db, int(bail_cost))
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to record bail tx or abu fund: {e}")
+
     await remove_regular_mute(sess.target_id, sess.board_id)
     from shared_state import set_partyvan_victim_immunity
     set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)

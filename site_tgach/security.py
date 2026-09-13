@@ -158,6 +158,22 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
             ).hexdigest()
 
             if hmac.compare_digest(calculated_hash, received_hash):
+                # Validate freshness to prevent replay attacks (mandatory auth_date, max 24h = 86400s)
+                auth_date_str = parsed_data.get("auth_date")
+                if not auth_date_str:
+                    logger.warning("TMA initData missing auth_date parameter")
+                    return None
+
+                try:
+                    auth_date = int(auth_date_str)
+                    now = int(time.time())
+                    # Disallow timestamps older than 86400 seconds or drifting more than 60s into future
+                    if (now - auth_date > 86400) or (auth_date > now + 60):
+                        logger.warning("TMA initData expired or invalid time: auth_date=%d, now=%d", auth_date, now)
+                        return None
+                except (ValueError, TypeError):
+                    logger.warning("TMA initData invalid auth_date format: %s", auth_date_str)
+                    return None
                 return parsed_data  # valid — return without "hash" key
 
         logger.warning("TMA initData hash mismatch against all %d known bot tokens", len(tokens))

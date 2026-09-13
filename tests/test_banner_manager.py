@@ -4,6 +4,9 @@ test_banner_manager.py — Unit & Integration Tests for Banner Manager & MediaGr
 """
 
 import sys
+import json
+import time
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +24,7 @@ from banner_manager import (
     _BANNER_CACHE,
     BANNERS_DIR,
     save_cache,
+    flush_cache,
 )
 from main import _send_banners_page, BANNERS_PER_PAGE
 from aiogram.types import FSInputFile, InputMediaPhoto
@@ -77,6 +81,35 @@ class TestBannerManager(unittest.TestCase):
             seen.append(fname)
         # Banners returned for same user should avoid immediate duplicate
         self.assertEqual(len(seen), len(set(seen)), "Expected distinct banners across 5 consecutive calls")
+
+    def test_subsection_categories_pool_size_and_reachability(self):
+        from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
+        all_banners = set(_CATEGORIZED_BANNERS["all"])
+        self.assertEqual(len(all_banners), 1327)
+
+        all_reached = set()
+        for subsection, cats in SUBSECTION_CATEGORIES.items():
+            resolved = resolve_category_candidates(subsection)
+            pool = set()
+            for cat in resolved:
+                pool.update(_CATEGORIZED_BANNERS.get(cat, []))
+            self.assertGreaterEqual(
+                len(pool), 700,
+                f"Subsection '{subsection}' pool too small: {len(pool)} < 700"
+            )
+            all_reached.update(pool)
+
+        self.assertEqual(
+            len(all_reached), len(all_banners),
+            f"Expected 100% reachability (1064 banners), but only {len(all_reached)} were reachable"
+        )
+
+    def test_get_banner_file_for_subsections(self):
+        from banner_manager import SUBSECTION_CATEGORIES
+        for sub in SUBSECTION_CATEGORIES:
+            fname, payload = get_banner_file(category=sub)
+            self.assertTrue(fname, f"Subsection {sub} returned empty banner filename")
+            self.assertTrue((BANNERS_DIR / fname).exists(), f"Banner {fname} does not exist")
 
 
 class TestBannerGalleryAsync(unittest.IsolatedAsyncioTestCase):
@@ -294,6 +327,84 @@ class TestBannerGalleryAsync(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(call_kwargs["category"], "all")
             self.assertEqual(call_kwargs["page"], 2)
             self.assertEqual(call_kwargs["sort"], "alpha")
+
+
+class TestBannerCacheDebounce(unittest.TestCase):
+    """Unit tests for debounced save_cache, flush_cache, and atexit registration."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.test_cache_path = Path(self.tmp_dir.name) / "banners_cache.json"
+        self._orig_cache_file = banner_manager.CACHE_FILE
+        self._orig_cache = banner_manager._BANNER_CACHE.copy()
+        self._orig_last_save = banner_manager._LAST_CACHE_SAVE_TIME
+        self._orig_dirty = banner_manager._CACHE_DIRTY
+        banner_manager.CACHE_FILE = self.test_cache_path
+
+    def tearDown(self):
+        banner_manager.CACHE_FILE = self._orig_cache_file
+        banner_manager._BANNER_CACHE.clear()
+        banner_manager._BANNER_CACHE.update(self._orig_cache)
+        banner_manager._LAST_CACHE_SAVE_TIME = self._orig_last_save
+        banner_manager._CACHE_DIRTY = self._orig_dirty
+        self.tmp_dir.cleanup()
+
+    def test_save_cache_force_true_writes_immediately(self):
+        banner_manager._BANNER_CACHE["force_key.jpg"] = "fid_force_123"
+        result = save_cache(force=True)
+        self.assertTrue(result)
+        self.assertFalse(banner_manager._CACHE_DIRTY)
+        self.assertTrue(self.test_cache_path.exists())
+
+        with open(self.test_cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data.get("force_key.jpg"), "fid_force_123")
+
+    def test_save_cache_debouncing_under_threshold(self):
+        # Initial save to establish cache file on disk and last_save_time
+        banner_manager._BANNER_CACHE["init_key.jpg"] = "fid_init"
+        save_cache(force=True)
+        self.assertFalse(banner_manager._CACHE_DIRTY)
+
+        # Mutate cache and call save_cache(force=False) within 5 seconds
+        banner_manager._BANNER_CACHE["debounced_key.jpg"] = "fid_debounced"
+        result = save_cache(force=False)
+        self.assertFalse(result)  # Disk write was deferred
+        self.assertTrue(banner_manager._CACHE_DIRTY)
+
+        # File on disk still does NOT have the debounced key
+        with open(self.test_cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertNotIn("debounced_key.jpg", data)
+
+    def test_save_cache_writes_after_debounce_interval_elapsed(self):
+        # Initial save
+        save_cache(force=True)
+        banner_manager._BANNER_CACHE["after_interval.jpg"] = "fid_after"
+
+        # Simulate 6.0 seconds elapsed
+        banner_manager._LAST_CACHE_SAVE_TIME = time.time() - 6.0
+        result = save_cache(force=False)
+        self.assertTrue(result)  # Disk write occurred
+        self.assertFalse(banner_manager._CACHE_DIRTY)
+
+        with open(self.test_cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data.get("after_interval.jpg"), "fid_after")
+
+    def test_flush_cache_syncs_dirty_cache(self):
+        save_cache(force=True)
+        banner_manager._BANNER_CACHE["flush_key.jpg"] = "fid_flush"
+        save_cache(force=False)  # Debounced, dirty = True
+        self.assertTrue(banner_manager._CACHE_DIRTY)
+
+        result = flush_cache()
+        self.assertTrue(result)
+        self.assertFalse(banner_manager._CACHE_DIRTY)
+
+        with open(self.test_cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data.get("flush_key.jpg"), "fid_flush")
 
 
 if __name__ == "__main__":

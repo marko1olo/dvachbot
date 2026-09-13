@@ -308,7 +308,12 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 mins = (left % 3600) // 60
                 ans_text = f"⏳ Пульс зашкаливает! Энергетик можно въебать через {hours}ч {mins}м."
             else:
-                work_timers = active_items.get("work_cooldowns", {})
+                from shared_state import get_user_work_cooldowns, set_user_work_cooldown
+                work_timers = active_items.setdefault("work_cooldowns", {})
+                for _job, _ts in get_user_work_cooldowns(user_id).items():
+                    if _ts > work_timers.get(_job, 0):
+                        work_timers[_job] = _ts
+
                 best_job = None
                 best_left = float('inf')
 
@@ -327,6 +332,7 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 else:
                     target_jid, target_title = best_job
                     work_timers[target_jid] = 0
+                    set_user_work_cooldown(user_id, target_jid, 0)
                     active_items["last_overtime"] = now
                     await db.execute(
                         "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "

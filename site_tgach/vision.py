@@ -190,13 +190,19 @@ async def _call_gemini_native(
         last_resp.raise_for_status()
 
     data = last_resp.json()
+    prompt_feedback = data.get("promptFeedback") or {}
+    block_reason = prompt_feedback.get("blockReason")
+    if block_reason:
+        logger.warning(f"⚠️ [VISION] [{source}] Gemini prompt blocked: {block_reason}")
+        return None, "safety"
+
+    for sr in prompt_feedback.get("safetyRatings") or []:
+        if sr.get("blocked") is True:
+            logger.warning(f"⚠️ [VISION] [{source}] Gemini prompt blocked by safety rating: {sr.get('category')}")
+            return None, "safety"
+
     candidates = data.get("candidates") or []
     if not candidates:
-        prompt_feedback = data.get("promptFeedback") or {}
-        block_reason = prompt_feedback.get("blockReason")
-        if block_reason:
-            logger.warning(f"⚠️ [VISION] [{source}] Gemini prompt blocked: {block_reason}")
-            return None, "safety"
         return None, "empty_response"
 
     candidate = candidates[0]
@@ -209,7 +215,12 @@ async def _call_gemini_native(
             text_content += p["text"]
     text_content = text_content.strip() or None
 
-    if finish_reason in ("safety", "content_filter"):
+    for sr in candidate.get("safetyRatings") or []:
+        if sr.get("blocked") is True:
+            logger.warning(f"⚠️ [VISION] [{source}] Gemini candidate blocked by safety rating: {sr.get('category')}")
+            return text_content, "safety"
+
+    if finish_reason in ("safety", "content_filter", "image_safety", "prohibited_content", "blocklist") or (finish_reason == "other" and not text_content):
         return text_content, "safety"
 
     return text_content, finish_reason or "stop"
@@ -437,6 +448,9 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if finish_reason in ("content_filter", "safety"):
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) blocked by safety filter. Switching to next model candidate.")
                                 permanent_model_failures += 1
+                                if provider == "gemini":
+                                    skip_gemini_models = True
+                                    logger.info(f"⏭️ [VISION] [{source}] Gemini safety block detected ({finish_reason}). Skipping all remaining Gemini models.")
                                 break
                             
                             if content:
@@ -497,10 +511,20 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     return json.dumps({"tags": synthesized_tags, "description": extracted_desc}, ensure_ascii=False)
 
                             else:
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) empty response or safety filtered. Trying next model candidate...")
+                                if provider == "gemini" and finish_reason in ("safety", "content_filter", "other"):
+                                    skip_gemini_models = True
+                                    permanent_model_failures += 1
+                                    logger.warning(f"⚠️ [VISION] [{source}] Gemini ({model_name}) empty response due to safety filter ({finish_reason}). Skipping all remaining Gemini models.")
+                                else:
+                                    logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) empty response. Trying next model candidate...")
                                 break
                         except Exception as e:
                             err_str = str(e).lower()
+                            if provider == "gemini" and any(k in err_str for k in ("safety", "content_filter", "prompt blocked", "content blocked")):
+                                logger.warning(f"⚠️ [VISION] [{source}] Gemini safety error ({err_str[:120]}). Skipping all remaining Gemini models.")
+                                skip_gemini_models = True
+                                permanent_model_failures += 1
+                                break
                             if "413" in err_str: return "error_413"
                             if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} not found (404). Skipping model.")
@@ -561,7 +585,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 available_keys.remove(selected_key)
                                 continue
                             
-                            logger.warning(f"⚠️ [VISION] [{source}] {provider} key failed ({model_name}): {e}")
+                            logger.warning(f"⚠️ [VISION] [{source}] {provider} key failed ({model_name}): {type(e).__name__}: {repr(e)}")
                             available_keys.remove(selected_key)
                             continue
 

@@ -2981,7 +2981,7 @@ def _format_text_report(data: UserStatsCardData) -> str:
         except Exception:
             pass
 
-    return (
+    res = (
         f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/{data.board_id}/)\n\n"
         f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
         f"🏅 <b>Ранг борды:</b> #{data.rank} из {data.total_users}\n"
@@ -2996,6 +2996,8 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"💬 <i>\"{data.slang_comment}\"</i>\n"
         f"💡 <i>Карточка персонажа RPG и гардероб: /avatar</i>"
     )
+    from common.text_utils import safe_tg_caption
+    return safe_tg_caption(res, max_len=1024)
 
 CARD_THEMES = {
     'cyber': {

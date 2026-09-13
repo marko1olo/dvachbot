@@ -8,7 +8,7 @@ from pathlib import Path
 
 CATBOX_HASH = os.getenv("CATBOX_USER_HASH", None)
 CATBOX_HASH_DISABLE_SECONDS = 3600
-CATBOX_PAUSE_COOLDOWN = 1800  # 30 minutes cooldown on 412 / storage issues
+CATBOX_PAUSE_COOLDOWN = int(os.getenv("CATBOX_PAUSE_COOLDOWN_SEC", "7200"))  # 2 hours cooldown on 412 / storage issues
 _CATBOX_HASH_DISABLED_UNTIL = 0.0
 _CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
 

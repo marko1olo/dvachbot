@@ -256,6 +256,7 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
     is_bullet = (chamber == 1)
 
     session = active_roulette_sessions.get(user_id, {"streak": 0, "bet": bet})
+    locked_bet = session.get("bet", bet) if user_id in active_roulette_sessions else bet
 
     if is_bullet:
         active_roulette_sessions.pop(user_id, None)
@@ -266,12 +267,68 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
 
     active_roulette_sessions[user_id] = {
         "streak": new_streak,
-        "bet": bet,
+        "bet": locked_bet,
         "current_mult": mult,
         "last_shot": time.time(),
     }
 
     return True, mult, new_streak, f"💨 *ЩЁЛК!* Пустая камора! Серия: {new_streak} (Множитель: x{mult:.2f})"
+
+
+def expire_stale_roulette_sessions(timeout_sec: float = 300.0) -> List[Tuple[int, Dict[str, Any]]]:
+    """
+    Finds and pops all expired roulette sessions older than timeout_sec.
+    Returns list of (user_id, session_data) for auto-cashout.
+    """
+    now = time.time()
+    expired = []
+    for user_id, session in list(active_roulette_sessions.items()):
+        last_shot = session.get("last_shot", 0.0)
+        if now - last_shot >= timeout_sec:
+            active_roulette_sessions.pop(user_id, None)
+            expired.append((user_id, session))
+    return expired
+
+
+def expire_stale_bj_sessions(timeout_sec: float = 300.0) -> List[Tuple[int, Dict[str, Any], str, int]]:
+    """
+    Finds and pops all expired blackjack sessions older than timeout_sec.
+    Auto-resolves each session by standing the player and playing out the dealer.
+    Returns list of (user_id, session_data, outcome_str, payout_amount).
+    """
+    now = time.time()
+    resolved = []
+    for user_id, session in list(active_bj_sessions.items()):
+        created_at = session.get("created_at", session.get("timestamp", 0.0))
+        if now - created_at >= timeout_sec:
+            active_bj_sessions.pop(user_id, None)
+            bet = int(session.get("bet", 0))
+            deck = session.get("deck", [])
+            p_hand = session.get("player_hand", [])
+            d_hand = session.get("dealer_hand", [])
+
+            # Dealer hits until >= 17
+            while calculate_hand(d_hand) < 17 and deck:
+                d_hand.append(deck.pop())
+
+            p_score = calculate_hand(p_hand)
+            d_score = calculate_hand(d_hand)
+
+            if p_score > 21:
+                outcome = "bust"
+                payout = 0
+            elif d_score > 21 or p_score > d_score:
+                outcome = "win"
+                payout = bet * 2
+            elif p_score == d_score:
+                outcome = "push"
+                payout = bet
+            else:
+                outcome = "lose"
+                payout = 0
+
+            resolved.append((user_id, session, outcome, payout))
+    return resolved
 
 
 # -----------------------------------------------------------------------------

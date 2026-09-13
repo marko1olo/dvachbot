@@ -202,14 +202,17 @@ def sanitize_header_filename(filename: str | None) -> str:
 
 
 def get_real_ip(request: Request) -> str:
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if getattr(request, "client", None) and getattr(request.client, "host", None):
-        return request.client.host
+    client_host = getattr(request.client, "host", None) if getattr(request, "client", None) else None
+    # Only trust forwarded headers if connecting from trusted local reverse proxy (nginx/caddy on localhost)
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    if client_host:
+        return client_host
     return "127.0.0.1"
 
 
@@ -890,7 +893,7 @@ BBCODE_REPLACEMENTS = [
 ]
 POST_LINK_PATTERN_CROSS = re.compile(r"&gt;&gt;/([a-z0-9]+)/(\d+)")
 POST_LINK_PATTERN = re.compile(r"&gt;&gt;(\d+)")
-BTN_PATTERN = re.compile(r"\[btn=(https?://[^\]]+)\](.*?)\[/btn\]", re.DOTALL | re.IGNORECASE)
+BTN_PATTERN = re.compile(r"\[btn=([^\]]+)\](.*?)\[/btn\]", re.DOTALL | re.IGNORECASE)
 SIZE_PATTERN = re.compile(r"\[size=(\d+)\](.*?)\[/size\]", re.DOTALL)
 GLITCH_PATTERN = re.compile(r"\[glitch\](.*?)\[/glitch\]", re.DOTALL)
 NEWLINE_PATTERN = re.compile(r"&lt;br\s*/?&gt;", re.IGNORECASE)
@@ -1559,11 +1562,13 @@ class ConnectionManager:
     async def connect(
         self, websocket: WebSocket, board_id: str, mode: str, stream: str
     ):
-        client_ip = websocket.client.host
-        if websocket.headers.get("x-real-ip"):
-            client_ip = websocket.headers.get("x-real-ip")
-        elif websocket.headers.get("x-forwarded-for"):
-            client_ip = websocket.headers.get("x-forwarded-for").split(",")[0].strip()
+        client_host = websocket.client.host if websocket.client else "127.0.0.1"
+        client_ip = client_host
+        if client_host in ("127.0.0.1", "::1", "localhost"):
+            if websocket.headers.get("x-real-ip"):
+                client_ip = websocket.headers.get("x-real-ip").strip()
+            elif websocket.headers.get("x-forwarded-for"):
+                client_ip = websocket.headers.get("x-forwarded-for").split(",")[0].strip()
 
         self.ip_counts[client_ip] += 1
 
@@ -3209,10 +3214,36 @@ def _apply_bbcode_and_effects(text: str) -> str:
         text = pattern.sub(replacement, text)
 
     def btn_replacer(match):
-        url = match.group(1)
-        if url.strip().lower().startswith("javascript:"):
-            url = "#"
-        safe_url = html.escape(html.unescape(url), quote=True)
+        raw_url = match.group(1).strip()
+        # Iteratively decode HTML entities to prevent nested obfuscation (e.g. &amp;#115;)
+        for _ in range(5):
+            unescaped = html.unescape(raw_url)
+            if unescaped == raw_url:
+                break
+            raw_url = unescaped
+
+        # Strip control characters (ASCII 0-31 and 127-159)
+        clean_url = "".join(c for c in raw_url if ord(c) >= 32 and ord(c) != 127).strip()
+
+        # Strict Protocol Whitelist:
+        # 1. http:// or https://
+        # 2. Root-relative path (/path), but strictly forbid protocol-relative URLs (//) or backslashes (/\)
+        is_safe = False
+        if re.match(r'^https?://', clean_url, re.IGNORECASE):
+            is_safe = True
+        elif clean_url.startswith("/") and not clean_url.startswith(("//", "/\\")):
+            is_safe = True
+
+        # Explicitly block dangerous pseudo-schemes anywhere in the protocol portion
+        scheme_prefix = clean_url.split(":", 1)[0].lower() if ":" in clean_url else ""
+        if scheme_prefix in ("javascript", "data", "vbscript", "blob", "file", "about"):
+            is_safe = False
+
+        if not is_safe:
+            safe_url = "#"
+        else:
+            safe_url = html.escape(clean_url, quote=True)
+
         btn_text = match.group(2)
         return (
             f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
@@ -10384,25 +10415,32 @@ async def _proxy_protected_telegram_file(
                 guessed_type = "video/mp4"
             media_type = guessed_type or media_type or "image/jpeg"
 
+        SAFE_INLINE_MEDIA_TYPES = {
+            "image/jpeg", "image/png", "image/webp", "image/gif",
+            "video/mp4", "video/webm", "video/quicktime",
+            "audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/opus",
+        }
+
         headers = {
             "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
             "Cache-Control": "public, max-age=300",
+            "X-Content-Type-Options": "nosniff",
         }
-        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag", "Content-Disposition"):
+        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
             value = resp.headers.get(header_name)
             if value:
                 headers[header_name] = value
-        if filename and "Content-Disposition" not in headers:
-            safe_filename = sanitize_header_filename(filename)
+
+        safe_filename = sanitize_header_filename(filename or os.path.basename(file_path))
+        file_ext = os.path.splitext(safe_filename)[1].lower()
+        is_safe_ext = file_ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav', '.opus')
+        is_safe_mime = media_type in SAFE_INLINE_MEDIA_TYPES
+
+        if is_safe_ext and is_safe_mime:
             headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
-        elif "Content-Disposition" in headers:
-            cd_val = headers["Content-Disposition"]
-            headers["Content-Disposition"] = re.sub(
-                r'(filename=)["\']?([^"\';\r\n]+)["\']?',
-                lambda m: f'{m.group(1)}"{sanitize_header_filename(m.group(2))}"',
-                cd_val,
-            )
+        else:
+            headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
     except Exception:
         await close_upstream()
         raise
@@ -10473,25 +10511,32 @@ async def _proxy_external_url(
         if not media_type or media_type == "application/octet-stream":
             media_type = guessed_type or media_type or "application/octet-stream"
 
+        SAFE_INLINE_MEDIA_TYPES = {
+            "image/jpeg", "image/png", "image/webp", "image/gif",
+            "video/mp4", "video/webm", "video/quicktime",
+            "audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/opus",
+        }
+
         headers = {
             "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
             "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
         }
-        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag", "Content-Disposition"):
+        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
             value = resp.headers.get(header_name)
             if value:
                 headers[header_name] = value
-        if filename and "Content-Disposition" not in headers:
-            safe_filename = sanitize_header_filename(filename)
+
+        safe_filename = sanitize_header_filename(filename or os.path.basename(url.split("?")[0]))
+        file_ext = os.path.splitext(safe_filename)[1].lower()
+        is_safe_ext = file_ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav', '.opus')
+        is_safe_mime = media_type in SAFE_INLINE_MEDIA_TYPES
+
+        if is_safe_ext and is_safe_mime:
             headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
-        elif "Content-Disposition" in headers:
-            cd_val = headers["Content-Disposition"]
-            headers["Content-Disposition"] = re.sub(
-                r'(filename=)["\']?([^"\';\r\n]+)["\']?',
-                lambda m: f'{m.group(1)}"{sanitize_header_filename(m.group(2))}"',
-                cd_val,
-            )
+        else:
+            headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
     except Exception:
         await close_upstream()
         raise
@@ -10805,15 +10850,8 @@ async def get_telegram_file(
         info = await get_cached_file_path(file_id, allow_protected_tokens=True)
         if info:
             path, token = info
-            if not is_ru:
-                # Direct redirect to Telegram CDN for non-RU clients (fast, saves server bandwidth)
-                return RedirectResponse(
-                    url=f"https://api.telegram.org/file/bot{token}/{path}",
-                    status_code=307,
-                    headers=no_cache_headers,
-                )
             try:
-                # Stream proxy through server for Russian clients (Telegram blocked by RKN)
+                # Always proxy through server to prevent bot token leakage in HTTP 307 headers
                 return await _proxy_protected_telegram_file(file_id, path, token, filename, request)
             except HTTPException:
                 logger.warning(f"Telegram proxy failed for {file_id[:10]}, continuing fallback")
@@ -10823,12 +10861,6 @@ async def get_telegram_file(
         info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
         if info_shadow:
             path, token = info_shadow
-            if not is_ru:
-                return RedirectResponse(
-                    url=f"https://api.telegram.org/file/bot{token}/{path}",
-                    status_code=307,
-                    headers=no_cache_headers,
-                )
             try:
                 return await _proxy_protected_telegram_file(shadow_file_id, path, token, filename, request)
             except HTTPException:

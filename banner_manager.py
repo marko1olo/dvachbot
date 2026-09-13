@@ -8,6 +8,8 @@ smart non-repeating Shuffle-Bag rotation (Anti-Repeat), and balanced category po
 import os
 import re
 import json
+import time
+import atexit
 import random
 import logging
 from collections import deque
@@ -138,10 +140,15 @@ _CATEGORIZED_BANNERS: Dict[str, List[str]] = {}
 _CATEGORY_DECKS: Dict[str, deque] = {}
 _USER_RECENT_BANNERS: Dict[int, deque] = {}
 
+_LAST_CACHE_SAVE_TIME: float = 0.0
+_CACHE_DIRTY: bool = False
+_CACHE_DEBOUNCE_INTERVAL: float = 5.0
+
 
 def _init_banners():
     """Initializes banner lists, category pools, and shuffle bags."""
-    global _BANNER_CACHE, _CATEGORIZED_BANNERS, _CATEGORY_DECKS
+    global _BANNER_CACHE, _CATEGORIZED_BANNERS, _CATEGORY_DECKS, _CACHE_DIRTY
+    _CACHE_DIRTY = False
     
     # Load cache from disk
     _BANNER_CACHE.clear()
@@ -210,71 +217,237 @@ def _init_banners():
 _init_banners()
 
 
-def save_cache():
-    """Saves the current file_id cache to disk atomically."""
+def save_cache(force: bool = False) -> bool:
+    """
+    Saves the current file_id cache to disk atomically with debouncing.
+
+    When force=True (used in unit tests, test suites, or explicit sync flush):
+        Immediately writes atomically to disk and sets _CACHE_DIRTY = False.
+    When force=False (called in send_banner_message):
+        If more than 5.0 seconds have elapsed since _LAST_CACHE_SAVE_TIME (or if cache
+        file doesn't exist on disk), writes to disk atomically and sets _CACHE_DIRTY = False;
+        otherwise sets _CACHE_DIRTY = True so it will be flushed on next threshold or shutdown.
+    """
+    global _LAST_CACHE_SAVE_TIME, _CACHE_DIRTY
+    now = time.time()
+
+    if not force:
+        elapsed = now - _LAST_CACHE_SAVE_TIME
+        if CACHE_FILE.exists() and 0 <= elapsed < _CACHE_DEBOUNCE_INTERVAL:
+            _CACHE_DIRTY = True
+            return False
+
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp_file = CACHE_FILE.with_suffix(".tmp")
     try:
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(_BANNER_CACHE, f, ensure_ascii=False, indent=2)
         tmp_file.replace(CACHE_FILE)
+        _LAST_CACHE_SAVE_TIME = now
+        _CACHE_DIRTY = False
+        return True
     except Exception as e:
         logger.warning(f"[banner_manager] Failed to save banner cache: {e}")
+        return False
+
+
+def flush_cache(force: bool = True) -> bool:
+    """Explicit sync flush to ensure all pending cache updates are written to disk."""
+    return save_cache(force=force)
+
+
+def sync_cache(force: bool = True) -> bool:
+    """Alias for flush_cache()."""
+    return flush_cache(force=force)
+
+
+# Register atexit handler so any dirty cache is always written to disk on program exit
+atexit.register(lambda: save_cache(force=True))
+
+
+# Context expansions for bot subsections: allows each command/handler to draw from a rich, balanced pool of categories
+# instead of a tiny repetitive subset. Each section gets 5-6 vibrant categories (~750-1000+ banners pool),
+# ensuring all 1064 sexy anime banners rotate dynamically across the bot.
+SUBSECTION_CATEGORIES: Dict[str, List[str]] = {
+    # Магазин и экипировка
+    "shop": ["shop", "market", "maid", "retro", "chill"],
+    "wardrobe": ["maid", "chill", "shop", "gothic", "night"],
+    "weapons": ["duel", "cyberpunk", "gothic", "shop", "roulette"],
+    "clothes": ["maid", "chill", "shop", "retro", "calm"],
+    "pharma": ["schizo", "cyberpunk", "matrix", "shop", "gothic"],
+    "lootbox": ["games", "cards", "cyberpunk", "roulette", "shop"],
+    "market": ["market", "shop", "cards", "retro", "wallet"],
+    "wiki": ["newspaper", "summary", "retro", "cards", "stats"],
+    "avatar": ["maid", "cyberpunk", "retro", "gothic", "night"],
+    
+    # Казино, игры и дуэли
+    "casino": ["games", "roulette", "cards", "retro", "cyberpunk"],
+    "roulette": ["roulette", "games", "cards", "duel", "cyberpunk"],
+    "blackjack": ["cards", "games", "roulette", "retro", "duel"],
+    "cards": ["cards", "games", "roulette", "retro", "duel"],
+    "slots": ["games", "retro", "roulette", "cyberpunk", "cards"],
+    "coinflip": ["games", "roulette", "duel", "cards", "retro"],
+    "duel": ["duel", "roulette", "games", "cyberpunk", "gothic"],
+    "pvp": ["duel", "roulette", "games", "cyberpunk", "gothic"],
+    "russian_roulette": ["duel", "roulette", "games", "cyberpunk", "gothic"],
+    "dice": ["games", "duel", "roulette", "cards", "retro"],
+    "ttt": ["games", "cyberpunk", "matrix", "retro", "cards"],
+    
+    # Экономика, баланс, работа, дропы
+    "economy": ["wallet", "market", "chill", "retro", "stats"],
+    "wallet": ["wallet", "market", "chill", "retro", "stats"],
+    "inventory": ["wallet", "market", "chill", "retro", "maid"],
+    "bank": ["wallet", "market", "matrix", "stats", "cyberpunk", "retro"],
+    "work": ["wallet", "cyberpunk", "retro", "market", "stats", "chill"],
+    "airdrop": ["wallet", "games", "chill", "maid", "cards"],
+    "ledger": ["stats", "summary", "matrix", "wallet", "retro"],
+    "rates": ["stats", "matrix", "market", "wallet", "retro", "summary"],
+    "daily": ["calm", "chill", "wallet", "maid", "retro"],
+    
+    # Навигация, меню, старт
+    "start": ["cyberpunk", "retro", "maid", "chill", "night", "calm"],
+    "menu": ["cyberpunk", "retro", "maid", "chill", "night", "calm"],
+    "help": ["newspaper", "retro", "summary", "maid", "calm"],
+    "boards": ["newspaper", "summary", "chill", "calm", "retro"],
+    "settings": ["matrix", "cyberpunk", "retro", "schizo", "stats"],
+    
+    # Лента, треды, дайджесты, статистика
+    "threads": ["chill", "calm", "retro", "maid", "night"],
+    "calm": ["calm", "chill", "retro", "night", "maid"],
+    "chill": ["chill", "calm", "retro", "maid", "calm"],
+    "digest": ["digest", "newspaper", "summary", "retro", "stats"],
+    "newspaper": ["newspaper", "digest", "retro", "summary", "stats"],
+    "summary": ["summary", "digest", "newspaper", "stats", "calm"],
+    "stats": ["stats", "summary", "matrix", "retro", "cyberpunk"],
+    
+    # Атмосферные режимы
+    "schizo": ["schizo", "matrix", "gothic", "cyberpunk", "night"],
+    "night": ["night", "gothic", "calm", "cyberpunk", "retro"],
+    "gothic": ["gothic", "night", "duel", "schizo", "cyberpunk"],
+    "cyberpunk": ["cyberpunk", "matrix", "retro", "games", "night"],
+    "anime": ["maid", "chill", "retro", "calm", "night"],
+    "maid": ["maid", "chill", "shop", "retro", "calm"],
+    "retro": ["retro", "games", "cards", "shop", "maid"],
+    "matrix": ["matrix", "cyberpunk", "schizo", "stats", "retro"],
+    "games": ["games", "cards", "roulette", "retro", "cyberpunk"],
+    "achievements": ["cards", "games", "retro", "cyberpunk", "stats"],
+    "motivation": ["calm", "chill", "maid", "night", "retro"],
+}
+
+
+def resolve_category_candidates(
+    category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = None,
+    strict: bool = False
+) -> List[str]:
+    """
+    Resolves a requested category or subsection into a list of available category keys.
+    When strict=False, expands the section into a rich multi-category thematic pool
+    from SUBSECTION_CATEGORIES, ensuring banners rotate dynamically.
+    """
+    if not _CATEGORIZED_BANNERS.get("all"):
+        _init_banners()
+
+    if category is None or category == "":
+        return SUBSECTION_CATEGORIES.get("start", ["start"])
+
+    if isinstance(category, (list, tuple, set)):
+        valid = [c for c in category if c in _CATEGORIZED_BANNERS]
+        return valid if valid else ["start"]
+
+    if isinstance(category, str):
+        cat_clean = category.strip().lower()
+        if "," in cat_clean:
+            parts = [p.strip() for p in cat_clean.split(",") if p.strip() in _CATEGORIZED_BANNERS]
+            return parts if parts else ["start"]
+        if strict:
+            return [cat_clean] if cat_clean in _CATEGORIZED_BANNERS else ["start"]
+        if cat_clean in SUBSECTION_CATEGORIES:
+            valid = [c for c in SUBSECTION_CATEGORIES[cat_clean] if c in _CATEGORIZED_BANNERS]
+            return valid if valid else ([cat_clean] if cat_clean in _CATEGORIZED_BANNERS else ["start"])
+        if cat_clean in _CATEGORIZED_BANNERS:
+            return [cat_clean]
+
+    return ["start"]
 
 
 def get_banner_file(
-    category: Optional[str] = None,
+    category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = None,
     banner_name: Optional[str] = None,
     user_id: Optional[int] = None,
-    bot_id: Optional[int] = None
+    bot_id: Optional[int] = None,
+    strict: bool = False
 ) -> Tuple[str, Union[str, FSInputFile]]:
     """
     Returns (banner_filename, photo_payload).
-    Uses a Shuffle-Bag (Anti-Repeat) algorithm to cycle through all banners evenly.
+    Uses a Shuffle-Bag (Anti-Repeat) algorithm across candidate categories.
     photo_payload is either a cached Telegram file_id (str) or FSInputFile for upload.
     Cached file_ids are scoped per bot_id to ensure cross-bot compatibility.
     """
     if not _CATEGORIZED_BANNERS.get("all"):
         _init_banners()
 
-    cat_key = category if (category and category in _CATEGORIZED_BANNERS) else "start"
-    pool = _CATEGORIZED_BANNERS.get(cat_key, _CATEGORIZED_BANNERS["all"])
-    
-    if not pool:
-        return "", ""
-
     if banner_name:
         chosen_file = banner_name
     else:
-        # Shuffle Bag: Pop from non-repeating deck
-        deck = _CATEGORY_DECKS.get(cat_key)
-        if not deck or len(deck) == 0:
-            shuffled_pool = pool.copy()
-            random.shuffle(shuffled_pool)
-            deck = deque(shuffled_pool)
-            _CATEGORY_DECKS[cat_key] = deck
+        candidates = resolve_category_candidates(category, strict=strict)
+        
+        # Shuffle candidates to balance rotation across all constituent categories
+        shuffled_candidates = candidates.copy()
+        random.shuffle(shuffled_candidates)
+        
+        chosen_file = None
+        for cat_cand in shuffled_candidates:
+            deck = _CATEGORY_DECKS.get(cat_cand)
+            pool = _CATEGORIZED_BANNERS.get(cat_cand, _CATEGORIZED_BANNERS.get("all", []))
+            
+            if not deck or len(deck) == 0:
+                shuffled_pool = pool.copy()
+                random.shuffle(shuffled_pool)
+                deck = deque(shuffled_pool)
+                _CATEGORY_DECKS[cat_cand] = deck
+                
+            if len(deck) == 0:
+                continue
+                
+            candidate_file = deck.popleft()
+            if user_id and user_id in _USER_RECENT_BANNERS and len(pool) > 3:
+                recent = _USER_RECENT_BANNERS[user_id]
+                attempts = 0
+                while candidate_file in recent and attempts < 3 and len(deck) > 0:
+                    deck.append(candidate_file)
+                    candidate_file = deck.popleft()
+                    attempts += 1
+                    
+            chosen_file = candidate_file
+            break
 
-        # Check user recent history if available to avoid immediate repeats
-        chosen_file = deck.popleft()
-        if user_id and user_id in _USER_RECENT_BANNERS and len(pool) > 3:
-            recent = _USER_RECENT_BANNERS[user_id]
-            attempts = 0
-            while chosen_file in recent and attempts < 3 and len(deck) > 0:
-                deck.append(chosen_file)
-                chosen_file = deck.popleft()
-                attempts += 1
+        if not chosen_file:
+            cat_fallback = "start"
+            fallback_deck = _CATEGORY_DECKS.get(cat_fallback)
+            if not fallback_deck or len(fallback_deck) == 0:
+                shuffled_pool = _CATEGORIZED_BANNERS.get(cat_fallback, []).copy()
+                random.shuffle(shuffled_pool)
+                fallback_deck = deque(shuffled_pool)
+                _CATEGORY_DECKS[cat_fallback] = fallback_deck
+            chosen_file = fallback_deck.popleft() if fallback_deck else ""
 
         # Record into user recent history
-        if user_id:
+        if user_id and chosen_file:
             if user_id not in _USER_RECENT_BANNERS:
                 _USER_RECENT_BANNERS[user_id] = deque(maxlen=8)
             _USER_RECENT_BANNERS[user_id].append(chosen_file)
 
-    # Check if we have a cached file_id from Telegram CDN for this specific bot
+    if not chosen_file:
+        return "", ""
+
+    # Check if we have a cached file_id from Telegram CDN (scoped or unscoped)
+    cached_fid = None
     if bot_id:
-        cached_fid = _BANNER_CACHE.get(f"{bot_id}:{chosen_file}")
-        if cached_fid:
-            return chosen_file, cached_fid
+        cached_fid = _BANNER_CACHE.get(f"{bot_id}:{chosen_file}") or _BANNER_CACHE.get(f"{bot_id}_{chosen_file}")
+    if not cached_fid:
+        cached_fid = _BANNER_CACHE.get(chosen_file)
+    if cached_fid:
+        return chosen_file, cached_fid
 
     # Fallback to local FSInputFile
     local_path = BANNERS_DIR / chosen_file
@@ -288,16 +461,23 @@ async def send_banner_message(
     chat_id: int,
     caption: str,
     reply_markup: Optional[types.InlineKeyboardMarkup] = None,
-    category: Optional[str] = "start",
+    category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = "start",
     banner_name: Optional[str] = None,
-    parse_mode: str = "HTML"
+    parse_mode: str = "HTML",
+    strict: bool = False
 ) -> Optional[types.Message]:
     """
     Sends a photo message with banner, caching the file_id automatically per bot.
     Falls back to text message if photo sending fails, and plain text if HTML parsing fails.
     """
     bot_id = getattr(bot, "id", None)
-    fname, photo_payload = get_banner_file(category=category, banner_name=banner_name, user_id=chat_id, bot_id=bot_id)
+    fname, photo_payload = get_banner_file(
+        category=category,
+        banner_name=banner_name,
+        user_id=chat_id,
+        bot_id=bot_id,
+        strict=strict
+    )
     
     # Telegram photo captions are limited to 1024 characters.
     # If no photo available, send as text.

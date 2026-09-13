@@ -213,7 +213,7 @@ def generate_poll_text_display(poll_data: dict) -> str:
     return "\n".join(lines)
 
 
-def strip_thinking_tags(text: str) -> str:
+def _strip_raw_thinking_tags(text: str) -> str:
     """
     Rigorously strips all thinking, reasoning, thought, and reflection blocks,
     including closed tags, unclosed/truncated tags, HTML-escaped tags,
@@ -249,5 +249,97 @@ def strip_thinking_tags(text: str) -> str:
     return text.strip()
 
 
-clean_ai_thinking = strip_thinking_tags
+RE_COT_MARKERS = [
+    # 1. 'Removing "..." to avoid ...' or 'Removing \'...\''
+    re.compile(r'(?is)^\s*[\*\-]?\s*Removing\s+["\'][^"\']*["\'][^\n]*', re.MULTILINE),
+    # 2. '* Let\'s ...' or 'Let\'s adjust / change / make ...'
+    re.compile(r'(?im)^\s*[\*\-]?\s*Let\'?s\b[^\n]*', re.MULTILINE),
+    # 3. '* *New draft:*', '**New draft:**', 'New draft:', '* Draft:', 'Draft 1:'
+    re.compile(r'(?im)^\s*\*+\s*(?:New\s+draft|Draft(?:\s*\d+)?|Final\s+(?:draft|response|verdict|answer|roast))\s*:\s*\*+', re.MULTILINE),
+    re.compile(r'(?im)^\s*(?:New\s+draft|Draft(?:\s*\d+)?|Final\s+(?:draft|response|verdict|answer|roast)|Roast\s+text)\s*:\s*', re.MULTILINE),
+    # 4. 'Thought:', 'Thoughts:', 'Reasoning:', 'Thinking Process:'
+    re.compile(r'(?im)^\s*\*?\s*(?:Thought|Thoughts|Reasoning|Thinking Process|Thinking|Notes?)\s*:\s*[^\n]*', re.MULTILINE),
+    # 5. Standalone English meta-commentary bullets preceding Russian text
+    re.compile(r'(?im)^\s*[\*\-]\s*(?:Removing|Adjusting|Drafting|Let\'s|We need to|The user|I will|Tone:|Target:|Note:|Draft:).*?$', re.MULTILINE),
+]
+
+
+def strip_cot_and_drafts(text: str) -> str:
+    """
+    Rigorously strips LLM Chain-of-Thought artifacts, meta-reasoning comments,
+    and draft revision headers from generated output before synthesis or posting.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+
+    # Run base XML thinking tags removal first
+    s = _strip_raw_thinking_tags(text)
+
+    # Strip known CoT header regexes
+    for pattern in RE_COT_MARKERS:
+        s = pattern.sub('', s)
+
+    # Line-by-line validation: remove any leading non-Cyrillic prompt-engineering lines
+    # if the overall text contains Russian content
+    has_any_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', s))
+    lines = s.split('\n')
+    cleaned_lines = []
+    found_russian_body = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if found_russian_body or not has_any_cyrillic:
+                cleaned_lines.append("")
+            continue
+
+        has_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', stripped))
+
+        if has_any_cyrillic and not found_russian_body:
+            # Check for English meta reasoning before the first Russian sentence
+            if not has_cyrillic and any(kw in stripped.lower() for kw in (
+                "adjust", "removing", "let's", "draft", "thought", "verdict", "style", "tone", "roast", "review"
+            )):
+                continue  # Discard meta line
+            if has_cyrillic:
+                found_russian_body = True
+                cleaned_lines.append(stripped)
+        else:
+            cleaned_lines.append(stripped)
+
+    result = '\n'.join(cleaned_lines).strip()
+    return result if result else s.strip()
+
+
+clean_ai_thinking = strip_cot_and_drafts
+strip_thinking_tags = strip_cot_and_drafts
+
+
+def safe_tg_caption(text: str, max_len: int = 1024) -> str:
+    """
+    Truncates text to ensure it strictly does not exceed Telegram's caption limit (default 1024 chars),
+    preserving valid HTML tags when possible and balancing any open tags.
+    """
+    if not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+
+    cut_len = max(0, max_len - 20)
+    truncated = text[:cut_len]
+    last_lt = truncated.rfind('<')
+    last_gt = truncated.rfind('>')
+    if last_lt > last_gt:
+        truncated = truncated[:last_lt]
+
+    res = clean_html_for_tg(truncated + "...")
+    if len(res) > max_len:
+        plain = clean_html_tags(text)
+        plain_cut = max(0, max_len - 3)
+        res = plain[:plain_cut] + "..."
+
+    if len(res) > max_len:
+        res = res[:max_len]
+
+    return res
 

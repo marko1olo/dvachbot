@@ -312,8 +312,10 @@ async def publish_casino_jackpot_news(
     if not news_channel_id or news_channel_id == 0:
         return False
 
-    # Строгий фильтр: только заносы с множителем не менее 4.0x (отсекаем 1.8x и мелкие совпадения)
-    if multiplier < 4.0:
+    # Строгий фильтр: для слотов только заносы с множителем не менее 4.0x (отсекаем мелкие совпадения)
+    if game_type == "slots" and multiplier < 4.0:
+        return False
+    if multiplier < 4.0 and win_amount < 50_000:
         return False
 
     bot_info = await bot.get_me()
@@ -324,9 +326,11 @@ async def publish_casino_jackpot_news(
 
     game_names = {
         "slots": "Слоты 777 (Однорукий бандит)",
-        "coinflip": "Подбрасывание монетки",
+        "coinflip": "Подбрасывание монетки (50/50)",
         "blackjack": "Блэкджек (21)",
-        "roulette": "Русская рулетка"
+        "roulette": "Русская рулетка",
+        "dice": "PvP Кости (Дайс-Дуэль)",
+        "duel": "PvP Дуэль"
     }
     game_label = game_names.get(game_type, game_type.capitalize())
 

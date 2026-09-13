@@ -15,6 +15,7 @@ import re
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from starlette.requests import Request
+from starlette.responses import Response
 from starlette.datastructures import Headers
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -51,6 +52,16 @@ def mock_country_ru():
     with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_geo:
         mock_geo.return_value = "RU"
         yield mock_geo
+
+
+@pytest.fixture(autouse=True)
+def mock_system_settings_for_tests():
+    """Mock system settings to prevent unmocked DB queries during middleware execution."""
+    with patch("site_tgach.main.get_setting_cached", new_callable=AsyncMock) as mock_setting, \
+         patch("site_tgach.main.get_system_setting", new_callable=AsyncMock) as mock_sys_setting:
+        mock_setting.return_value = ""
+        mock_sys_setting.return_value = ""
+        yield
 
 
 def make_dummy_request(path: str = "/files/test_file", method: str = "GET", headers: dict = None, query: str = ""):
@@ -325,7 +336,7 @@ class TestR2BFastTelegramFallback:
 
     @pytest.mark.asyncio
     async def test_non_ru_client_direct_redirect_to_telegram(self):
-        """Non-RU clients receive direct 307 redirect to Telegram CDN."""
+        """Non-RU clients stream media server-side without leaking bot token."""
         raw_headers = [(b"accept-language", b"en-US,en;q=0.9")]
         scope = {
             "type": "http",
@@ -342,14 +353,17 @@ class TestR2BFastTelegramFallback:
 
         with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_geo, \
              patch("site_tgach.main.get_file_mirrors", new_callable=AsyncMock) as mock_mirrors, \
-             patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_tg:
+             patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_tg, \
+             patch("site_tgach.main._proxy_protected_telegram_file", new_callable=AsyncMock) as mock_proxy:
             mock_geo.return_value = "US"
             mock_mirrors.return_value = {}
             mock_tg.return_value = ("photos/us_file.jpg", "999:BOT_TOKEN")
+            mock_proxy.return_value = Response(content=b"media_bytes", media_type="image/jpeg", status_code=200)
 
             resp = await get_telegram_file(file_id="AgAC_non_ru_test", request=req)
-            assert resp.status_code == 307
-            assert "api.telegram.org" in resp.headers["location"]
+            assert resp.status_code == 200
+            assert resp.headers.get("location") is None or "api.telegram.org" not in resp.headers.get("location", "")
+            mock_proxy.assert_awaited_once_with("AgAC_non_ru_test", "photos/us_file.jpg", "999:BOT_TOKEN", None, req)
 
     @pytest.mark.asyncio
     async def test_fallback_catbox_when_skipped_telegram(self):

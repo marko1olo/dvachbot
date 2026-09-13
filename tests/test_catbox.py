@@ -26,7 +26,7 @@ def test_is_catbox_available_and_cooldown():
     import time
     import site_tgach.catbox as catbox
 
-    assert catbox.CATBOX_PAUSE_COOLDOWN == 1800
+    assert catbox.CATBOX_PAUSE_COOLDOWN == 7200
     catbox._CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
     assert catbox.is_catbox_available() is True
 

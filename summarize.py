@@ -501,9 +501,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         if hasattr(google_pool, "remove_token"):
                             google_pool.remove_token(api_key)
                     else:
-                        groq_pool.penalize_token(api_key, 900.0)
-                        if hasattr(groq_pool, "remove_token"):
-                            groq_pool.remove_token(api_key)
+                        groq_pool.penalize_token(api_key, 300.0)
                     in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
                     await asyncio.sleep(0.01 if in_test else 2.5)
                     continue  # try next key

@@ -233,3 +233,118 @@ class TestVisionCascade:
     async def test_vision_no_tokens_returns_error_exhausted(self, mock_groq_pool, mock_google_pool, mock_gemini_call, mock_prep):
         res = await describe_image("/dummy/path.jpg", source="TEST")
         assert res == "error_api_exhausted"
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
+    @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=["test-groq-key"])
+    async def test_gemini_safety_filter_skips_all_gemini_and_falls_back_to_groq_instantly(
+        self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """When Gemini returns safety, all remaining Gemini models must be skipped immediately and Groq called."""
+        # First Gemini call (gemini-3.1-flash-lite) returns safety
+        mock_gemini_call.return_value = (None, "safety")
+
+        # Groq client returns valid tags/description
+        mock_client = AsyncMock()
+        mock_choice = MagicMock()
+        mock_choice.finish_reason = "stop"
+        mock_choice.message.content = json.dumps({
+            "tags": "1girl, ecchi, swimsuit, anime",
+            "description": "Аниме иллюстрация девушки в купальнике."
+        })
+        mock_client.chat.completions.create.return_value = MagicMock(choices=[mock_choice])
+        mock_openai_cls.return_value = mock_client
+
+        res = await describe_image("/dummy/path.jpg", source="TEST")
+        assert res is not None
+        parsed = json.loads(res)
+        assert "ecchi" in parsed["tags"]
+        assert "купальнике" in parsed["description"]
+
+        # MUST be called exactly once: gemini-2.5-flash and gemini-3.5-flash-lite must NOT be called!
+        assert mock_gemini_call.call_count == 1
+        assert mock_gemini_call.call_args[1]["model_name"] == "gemini-3.1-flash-lite"
+        # Groq must be called immediately
+        assert mock_openai_cls.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_call_gemini_native_prompt_feedback_block_reason_returns_safety(self):
+        """_call_gemini_native detects blockReason='OTHER' in promptFeedback and returns safety."""
+        mock_http_client = AsyncMock()
+        resp_mock = MagicMock()
+        resp_mock.status_code = 200
+        resp_mock.json.return_value = {
+            "candidates": [],
+            "promptFeedback": {
+                "blockReason": "OTHER",
+                "safetyRatings": [{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "probability": "HIGH"}]
+            }
+        }
+        mock_http_client.post.return_value = resp_mock
+
+        content, finish_reason = await _call_gemini_native(
+            http_client=mock_http_client,
+            model_name="gemini-3.1-flash-lite",
+            api_key="test-key",
+            prompt_text="test prompt",
+            images_data=[b"fake_jpeg"],
+        )
+        assert content is None
+        assert finish_reason == "safety"
+
+    @pytest.mark.asyncio
+    async def test_call_gemini_native_finish_reason_other_empty_content_returns_safety(self):
+        """_call_gemini_native treats candidate finishReason='OTHER' without text as safety block."""
+        mock_http_client = AsyncMock()
+        resp_mock = MagicMock()
+        resp_mock.status_code = 200
+        resp_mock.json.return_value = {
+            "candidates": [
+                {
+                    "finishReason": "OTHER",
+                    "content": {"parts": []}
+                }
+            ]
+        }
+        mock_http_client.post.return_value = resp_mock
+
+        content, finish_reason = await _call_gemini_native(
+            http_client=mock_http_client,
+            model_name="gemini-3.1-flash-lite",
+            api_key="test-key",
+            prompt_text="test prompt",
+            images_data=[b"fake_jpeg"],
+        )
+        assert content is None
+        assert finish_reason == "safety"
+
+    @pytest.mark.asyncio
+    async def test_call_gemini_native_safety_rating_blocked_returns_safety(self):
+        """_call_gemini_native detects candidate with blocked safety rating and returns safety."""
+        mock_http_client = AsyncMock()
+        resp_mock = MagicMock()
+        resp_mock.status_code = 200
+        resp_mock.json.return_value = {
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": "text"}]},
+                    "safetyRatings": [
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "probability": "HIGH", "blocked": True}
+                    ]
+                }
+            ]
+        }
+        mock_http_client.post.return_value = resp_mock
+
+        content, finish_reason = await _call_gemini_native(
+            http_client=mock_http_client,
+            model_name="gemini-3.1-flash-lite",
+            api_key="test-key",
+            prompt_text="test prompt",
+            images_data=[b"fake_jpeg"],
+        )
+        assert finish_reason == "safety"

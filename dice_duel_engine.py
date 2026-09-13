@@ -689,6 +689,21 @@ async def _finish_dice_game(
 
         if bot:
             asyncio.create_task(broadcast_dice_announcement(bot, board_id, announcement))
+            if win_payout >= 50000 and winner_id:
+                try:
+                    from news_channel_publisher import publish_casino_jackpot_news
+                    asyncio.create_task(publish_casino_jackpot_news(
+                        bot=bot,
+                        user_id=winner_id,
+                        game_type="dice",
+                        bet_amount=bet,
+                        win_amount=win_payout,
+                        multiplier=round(win_payout / max(1, bet), 2),
+                        symbols=f"{w_vis} vs {l_vis}",
+                        board_id=board_id
+                    ))
+                except Exception:
+                    pass
         return True, "👑 Победа в дайс-дуэли!", game
 
 

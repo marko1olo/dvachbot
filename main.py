@@ -434,6 +434,8 @@ class BoardMiddleware(BaseMiddleware):
             user = data.get('event_from_user')
             if user:
                 uid = user.id
+                if uid > 0:
+                    weekly_active_users.setdefault(board_id, set()).add(uid)
                 b_data = board_data.get(board_id)
                 if b_data:
                     is_user_admin = is_admin(uid, board_id)
@@ -555,21 +557,9 @@ def generate_anon_name(user_id: int, stream: str = 'ru') -> str:
 
 
 def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
-    """Truncate text to fit Telegram's UTF-16 code unit limit.
-    
-    Telegram counts message length in UTF-16 code units:
-    - ASCII chars: 1 unit each
-    - Cyrillic/CJK/most Unicode > U+FFFF: 2 units each
-    - Emoji/surrogate pairs: 2 units each
-    max_utf16=4000 gives ~96 unit headroom under Telegram's 4096 hard limit.
-    """
-    units = 0
-    for i, ch in enumerate(text):
-        cp = ord(ch)
-        units += 2 if cp > 0xFFFF or 0x0400 <= cp <= 0x04FF or 0x4E00 <= cp <= 0x9FFF else 1
-        if units > max_utf16:
-            return text[:i] + "…"
-    return text
+    """Truncate text to fit Telegram's UTF-16 code unit limit while preserving HTML tag balance."""
+    from common.text_chunker import safe_html_truncate
+    return safe_html_truncate(text, max_units=max_utf16)
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
@@ -1737,7 +1727,7 @@ async def _handle_telegram_bad_request(exception: Exception, update) -> None:
         try:
             if "parse entities" in err_msg or "can't parse" in err_msg:
                 await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
-            elif "message is too long" in err_msg:
+            elif "message is too long" in err_msg or "message_too_long" in err_msg:
                 await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
             else:
                 await chat_obj.answer("⚠️ Телега отклонила запрос. Пробуй снова.", parse_mode=None)
@@ -4406,27 +4396,39 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
     try:
         sent_messages = await bot.send_media_group(chat_id=chat_id, media=media)
     except Exception as e:
-        logger.warning(f"[banners] Initial media group send failed: {e}. Retrying with local files and resetting bad file_ids...")
-        # Invalidate cached file_ids for this chunk
-        bot_key_prefix = bot_id if bot_id else getattr(bot, "id", "default")
-        for fn in chunk:
-            if f"{bot_key_prefix}:{fn}" in _BANNER_CACHE:
-                _BANNER_CACHE.pop(f"{bot_key_prefix}:{fn}", None)
-            if bot_id and f"{bot_id}:{fn}" in _BANNER_CACHE:
-                _BANNER_CACHE.pop(f"{bot_id}:{fn}", None)
-            if fn in _BANNER_CACHE:
-                _BANNER_CACHE.pop(fn, None)
-        save_cache()
+        err_text = str(e).lower()
+        is_bad_file_id = any(term in err_text for term in (
+            "wrong remote file identifier", "wrong file identifier",
+            "can't unserialize", "media_invalid", "file_id_invalid",
+            "bad request: wrong type of the web page content",
+        ))
+        logger.warning(f"[banners] Initial media group send failed (bad_file_id={is_bad_file_id}): {e}")
+        # Invalidate cached file_ids ONLY when Telegram explicitly rejects them
+        if is_bad_file_id:
+            bot_key_prefix = bot_id if bot_id else getattr(bot, "id", "default")
+            for fn in chunk:
+                if f"{bot_key_prefix}:{fn}" in _BANNER_CACHE:
+                    _BANNER_CACHE.pop(f"{bot_key_prefix}:{fn}", None)
+                if bot_id and f"{bot_id}:{fn}" in _BANNER_CACHE:
+                    _BANNER_CACHE.pop(f"{bot_id}:{fn}", None)
+                if fn in _BANNER_CACHE:
+                    _BANNER_CACHE.pop(fn, None)
+            save_cache()
 
-        # Re-build using direct FSInputFile
-        fallback_media, valid_fnames = _build_media_list(use_local_files=True)
-        if fallback_media:
-            try:
-                sent_messages = await bot.send_media_group(chat_id=chat_id, media=fallback_media)
-            except Exception as retry_err:
-                logger.error(f"[banners] Fallback media group send also failed: {retry_err}")
-                await bot.send_message(chat_id, f"❌ Ошибка отправки баннеров: {retry_err}")
-                return
+            # Re-build using direct FSInputFile only when file_ids were invalid
+            fallback_media, valid_fnames = _build_media_list(use_local_files=True)
+            if fallback_media:
+                try:
+                    sent_messages = await bot.send_media_group(chat_id=chat_id, media=fallback_media)
+                except Exception as retry_err:
+                    logger.error(f"[banners] Fallback media group send also failed: {retry_err}")
+                    await bot.send_message(chat_id, f"❌ Ошибка отправки баннеров: {retry_err}")
+                    return
+        else:
+            # Transient error (timeout, flood, etc.) — no point rebuilding with local files
+            logger.warning("[banners] Transient send_media_group failure, skipping local-file fallback.")
+            await bot.send_message(chat_id, f"❌ Временная ошибка отправки баннеров, попробуйте позже.")
+            return
 
     if sent_messages:
         # Cache new valid file_ids from successfully delivered media group
@@ -4538,7 +4540,7 @@ async def cmd_wardrobe(message: types.Message, board_id: str | None, stream: str
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="shop",
+        category="wardrobe",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -4560,7 +4562,7 @@ async def cmd_lootbox(message: types.Message, board_id: str | None, stream: str 
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="shop",
+        category="lootbox",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -4789,7 +4791,7 @@ async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_weapons_shop_content(user_id, balance)
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="weapons")
     await callback.answer()
 
 
@@ -4800,7 +4802,7 @@ async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_clothes_shop_content(user_id, balance)
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="clothes")
     await callback.answer()
 
 
@@ -4811,7 +4813,7 @@ async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_pharma_shop_content(user_id, balance)
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="pharma")
     await callback.answer()
 
 
@@ -4823,7 +4825,7 @@ async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
     balance = await get_user_global_balance(db, user_id)
     active_items = await _get_user_active_items(db, user_id, board_id)
     text, kb = _build_lootbox_shop_content(user_id, balance, active_items)
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="lootbox")
     await callback.answer()
 
 
@@ -4904,7 +4906,7 @@ async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str
     balance = await get_user_global_balance(db, user_id)
     active_items = await _get_user_active_items(db, user_id, board_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
-    await _render_shop_subview(callback, text_dr, kb_dr, category="shop")
+    await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
     await callback.answer()
 
 
@@ -4930,7 +4932,7 @@ async def cb_wardrobe_equip(callback: types.CallbackQuery, board_id: str | None)
 
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
-    await _render_shop_subview(callback, text_dr, kb_dr, category="shop")
+    await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
 
 
 @dp.callback_query(F.data.startswith("wardrobe_unequip_"))
@@ -4953,7 +4955,7 @@ async def cb_wardrobe_unequip(callback: types.CallbackQuery, board_id: str | Non
 
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
-    await _render_shop_subview(callback, text_dr, kb_dr, category="shop")
+    await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
 
 
 
@@ -4997,7 +4999,7 @@ async def cmd_wiki_items(message: types.Message, board_id: str | None, stream: s
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="shop",
+        category="wiki",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -5008,7 +5010,7 @@ async def cmd_wiki_items(message: types.Message, board_id: str | None, stream: s
 async def cb_wiki_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     text, kb = _build_wiki_hub_content()
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="wiki")
     await callback.answer()
 
 
@@ -5040,7 +5042,7 @@ async def cb_wiki_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="⚔️ Купить на Черном рынке", callback_data="shop_cat_weapons")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="weapons")
     await callback.answer()
 
 
@@ -5066,7 +5068,7 @@ async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="👗 В Бутик одежды", callback_data="shop_cat_clothes")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="clothes")
     await callback.answer()
 
 
@@ -5096,7 +5098,7 @@ async def cb_wiki_cat_sets(callback: types.CallbackQuery, board_id: str | None):
         [InlineKeyboardButton(text="🎽 В Примерочную", callback_data="wardrobe_dressing_room")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="wardrobe")
     await callback.answer()
 
 
@@ -5118,7 +5120,7 @@ async def cb_wiki_cat_pharma(callback: types.CallbackQuery, board_id: str | None
         [InlineKeyboardButton(text="💊 В Аптеку", callback_data="shop_cat_pharma")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="pharma")
     await callback.answer()
 
 
@@ -5144,7 +5146,7 @@ async def cb_wiki_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="📦 Открыть Кейсы", callback_data="shop_cat_lootbox")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="lootbox")
     await callback.answer()
 # -----------------------------------------------------------------------------
 # ДОСТИЖЕНИЯ И ТРОФЕИ (/achievements, /ach, /ачивки, /достижения)
@@ -5165,7 +5167,7 @@ async def cmd_achievements(message: types.Message, board_id: str | None, stream:
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="shop",
+        category="achievements",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -5181,7 +5183,7 @@ async def cb_achievements_view(callback: types.CallbackQuery, board_id: str | No
 
     import achievements_engine
     text, kb = achievements_engine.build_achievements_content(user_id, active_items)
-    await _render_shop_subview(callback, text, kb, category="shop")
+    await _render_shop_subview(callback, text, kb, category="achievements")
     await callback.answer()
 
 
@@ -5370,7 +5372,7 @@ async def cmd_inventory(message: types.Message, board_id: str | None, stream: st
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="wallet",
+        category="inventory",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -8715,7 +8717,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
         bot=message.bot,
         chat_id=user_id,
         caption=daily_text,
-        category="calm",
+        category="daily",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -9261,19 +9263,25 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
             await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
             return
 
-        # Проверяем баланс под db_lock
+        # Списание ставки в эскроу при создании вызова
         async with db_lock:
-            bal = await get_user_global_balance(db, user_id)
-        if bal < amount:
-            await message.answer(f"❌ Не хватает шекелей. Ставка {amount:,} ₪, у тебя {int(bal):,} ₪.")
-            return
+            ok, _ = await deduct_user_global_balance(db, user_id, board_id, amount)
+            if not ok:
+                bal = await get_user_global_balance(db, user_id)
+                await message.answer(f"❌ Не хватает шекелей. Ставка {amount:,} ₪, у тебя {int(bal):,} ₪.")
+                return
+            await record_user_transaction(db, user_id, -amount, 'duel', 'Депонирование ставки в дуэли')
 
         # Записываем время последнего вызова
         _duel_cooldowns[user_id] = now
 
-        # Удаляем старый вызов этого анона если был
+        # Если у анона уже был активный вызов — возвращаем ставку старого вызова
         if user_id in _active_duels:
-            _active_duels.pop(user_id, None)
+            old_duel = _active_duels.pop(user_id, None)
+            if old_duel and old_duel.get("escrowed"):
+                async with db_lock:
+                    await add_user_global_balance(db, user_id, old_duel.get("board_id", board_id), old_duel["amount"])
+                    await record_user_transaction(db, user_id, old_duel["amount"], 'duel', 'Возврат ставки: замена вызова')
 
     target_id = None
     if message.reply_to_message:
@@ -9311,8 +9319,21 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
             f"⏳ <i>Вызов активен 2 минуты. Любой анон может нажать кнопку ниже:</i>"
         )
 
-    # Отправляем карточку создателю (только кнопка отмены)
-    sent_msg = await message.answer(duel_card_text, reply_markup=kb_duel_own, parse_mode="HTML")
+    kb_duel_card = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚔️ Принять вызов!", callback_data=f"duel_accept:{duel_token}"),
+            InlineKeyboardButton(text="❌ Отменить", callback_data=f"duel_cancel:{duel_token}"),
+        ]
+    ]) if not target_id else kb_duel_own
+
+    # Отправляем карточку вызова
+    try:
+        sent_msg = await message.answer(duel_card_text, reply_markup=kb_duel_card, parse_mode="HTML")
+    except Exception as e:
+        async with db_lock:
+            await add_user_global_balance(db, user_id, board_id, amount)
+            await record_user_transaction(db, user_id, amount, 'duel', 'Возврат ставки: сбой отправки карточки')
+        raise e
 
     # Сохраняем вызов с ID сообщения
     broadcast_msgs = [(sent_msg.chat.id, sent_msg.message_id)]
@@ -9325,6 +9346,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
             "msg_id":   sent_msg.message_id,
             "chat_id":  sent_msg.chat.id,
             "broadcast_msgs": broadcast_msgs,
+            "escrowed": True,
         }
 
     # Если вызов персональный — отправляем персональное ЛС-уведомление конкретно оппоненту
@@ -9406,7 +9428,7 @@ async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
     user_id = callback.from_user.id
     res = await decline_duel_logic(callback.message, challenger_id, user_id=user_id)
     if not res:
-        await callback.answer("⏳ Вызов уже был завершен или отменен.", show_alert=True)
+        await callback.answer("⏳ Вызов уже был завершен или отменить его может только создатель.", show_alert=True)
     else:
         try: await callback.answer()
         except Exception: pass
@@ -9522,6 +9544,16 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
                         updates_to_send.append((duel["chat_id"], duel["msg_id"], ch_id, duel["amount"], rem))
 
     for ch_id, duel in expired_duels:
+        if duel.get("escrowed"):
+            try:
+                db = await get_pool()
+                async with db_lock:
+                    await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
+                    await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: таймаут дуэли')
+                    await db.commit()
+            except Exception as ex:
+                logger.error(f"Failed to refund expired duel bet to {ch_id}: {ex}")
+
         expired_text = (
             f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК!</b>\n\n"
             f"Ни один анон не принял вызов на <code>{duel['amount']:,} ₪</code> за 2 минуты.\n"
@@ -9580,6 +9612,85 @@ async def start_classic_duel_watchdog_loop(bot: Bot):
         except Exception as e:
             runtime_logger.error(f"Error in classic_duel_watchdog_loop: {e}")
         await asyncio.sleep(2.5)
+
+
+async def solo_casino_watchdog_step(bot: Bot | None = None):
+    """
+    Периодическая проверка зависших одиночных сессий казино (рулетка и блэкджек).
+    Если пользователь выжил в рулетке, но не забрал выигрыш в течение 5 минут — авто-кэшаут.
+    Если пользователь вышел из игры в блэкджек — авто-завершение партии с расчётом хода дилера.
+    """
+    # 1. Авто-кэшаут Русской Рулетки
+    async with casino_engine.session_lock:
+        expired_roulette = casino_engine.expire_stale_roulette_sessions(timeout_sec=300.0)
+
+    if expired_roulette:
+        db = await get_pool()
+        for user_id, session in expired_roulette:
+            try:
+                session_bet = int(session.get("bet", 0))
+                mult = float(session.get("current_mult", 1.0))
+                payout = int(session_bet * mult)
+                net_profit = max(0, payout - session_bet)
+                tax_amt, actual_profit = calculate_win_tax(net_profit)
+                actual_payout = session_bet + int(actual_profit)
+                board_id = session.get("board_id", "b")
+
+                async with db_lock:
+                    if tax_amt > 0:
+                        await add_to_abu_fund(db, int(tax_amt))
+                    new_bal = await add_user_global_balance(db, user_id, board_id, actual_payout)
+                    await record_user_transaction(db, user_id, int(actual_profit), 'casino', f'Авто-кэшаут по таймауту в Русской Рулетке (x{mult:.2f})')
+                    casino_engine.record_win_streak(user_id, True)
+                    await db.commit()
+                runtime_logger.info(f"🎰 [Solo Watchdog] Авто-кэшаут рулетки для user {user_id}: +{actual_payout} ₪")
+            except Exception as re_err:
+                runtime_logger.warning(f"⚠️ [Solo Watchdog] Ошибка авто-кэшаута рулетки {user_id}: {re_err}")
+
+    # 2. Авто-завершение Блэкджека
+    async with casino_engine.session_lock:
+        expired_bj = casino_engine.expire_stale_bj_sessions(timeout_sec=300.0)
+
+    if expired_bj:
+        db = await get_pool()
+        for user_id, session, outcome, payout in expired_bj:
+            try:
+                board_id = session.get("board_id", "b")
+                bet = int(session.get("bet", 0))
+                if payout > 0:
+                    profit = max(0, payout - bet)
+                    tax_amt, actual_profit = calculate_win_tax(profit)
+                    actual_payout = bet + int(actual_profit) if outcome == "win" else payout
+                    async with db_lock:
+                        if tax_amt > 0:
+                            await add_to_abu_fund(db, int(tax_amt))
+                        new_bal = await add_user_global_balance(db, user_id, board_id, actual_payout)
+                        desc = f'Авто-завершение Блэкджека ({outcome.upper()})'
+                        await record_user_transaction(db, user_id, int(actual_profit), 'casino', desc)
+                        casino_engine.record_win_streak(user_id, outcome == "win")
+                        await db.commit()
+                else:
+                    async with db_lock:
+                        await add_to_abu_fund(db, bet)
+                        await record_user_transaction(db, user_id, -bet, 'casino', 'Авто-завершение Блэкджека (Поражение)')
+                        casino_engine.record_win_streak(user_id, False)
+                        await db.commit()
+                runtime_logger.info(f"🃏 [Solo Watchdog] Авто-завершение блэкджека для user {user_id}: {outcome} ({payout} ₪)")
+            except Exception as bj_err:
+                runtime_logger.warning(f"⚠️ [Solo Watchdog] Ошибка авто-завершения блэкджека {user_id}: {bj_err}")
+
+
+async def start_solo_casino_watchdog_loop(bot: Bot):
+    """Фоновый цикл авто-кэшаута и очистки одиночных сессий казино."""
+    runtime_logger.info("Solo casino watchdog loop started.")
+    while True:
+        try:
+            await solo_casino_watchdog_step(bot)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            runtime_logger.error(f"Error in solo_casino_watchdog_loop: {e}")
+        await asyncio.sleep(60.0)
 
 
 # =============================================================================
@@ -9822,7 +9933,7 @@ async def cmd_rates(message: types.Message, board_id: str | None = None, stream:
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="wallet",
+        category="rates",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -9831,7 +9942,7 @@ async def cmd_rates(message: types.Message, board_id: str | None = None, stream:
 @dp.callback_query(F.data == "scam_rates")
 async def cb_scam_rates(callback: types.CallbackQuery):
     text, kb = _get_tgach_rates_content()
-    await _render_shop_subview(callback, text, kb, category="wallet")
+    await _render_shop_subview(callback, text, kb, category="rates")
     await callback.answer()
 
 @dp.callback_query(F.data == "scam_history")
@@ -10347,7 +10458,7 @@ async def cmd_work(message: types.Message, board_id: str | None = None, stream: 
             chat_id=message.chat.id,
             caption=text,
             reply_markup=kb,
-            category="wallet",
+            category="work",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -10531,7 +10642,7 @@ async def cb_work_main_hub(callback: types.CallbackQuery, board_id: str | None):
                 chat_id=callback.message.chat.id,
                 caption=text,
                 reply_markup=kb,
-                category="wallet",
+                category="work",
                 parse_mode="HTML"
             )
         except Exception:
@@ -10644,7 +10755,7 @@ async def cb_economy_work(callback: types.CallbackQuery, board_id: str | None):
         chat_id=callback.message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="wallet",
+        category="work",
         parse_mode="HTML"
     )
     await callback.answer()
@@ -10785,7 +10896,7 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
         chat_id=callback.message.chat.id,
         caption=caption,
         reply_markup=kb_again,
-        category="roulette",
+        category="dice",
         parse_mode="HTML"
     )
 
@@ -11156,7 +11267,7 @@ async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: s
         chat_id=message.chat.id,
         caption=caption,
         reply_markup=kb,
-        category="roulette",
+        category="casino",
         parse_mode="HTML"
     )
     try:
@@ -11212,38 +11323,86 @@ async def _show_slots_lobby(bot, chat_id: int, user_id: int, board_id: str, bet:
             except Exception:
                 pass
     from banner_manager import send_banner_message
-    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="slots", parse_mode="HTML")
 
 
-async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int):
+async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
+        cooldown_caption = f"⏳ <b>Барабан еще остывает!</b>\nПодожди <code>{rem}с</code> перед следующим спином."
+        if message_to_edit:
+            try:
+                db = await get_pool()
+                balance = await get_user_global_balance(db, user_id)
+                kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
+                await message_to_edit.edit_caption(caption=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                try:
+                    await message_to_edit.edit_text(text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
         from banner_manager import send_banner_message
         await send_banner_message(
             bot=bot,
             chat_id=chat_id,
-            caption=f"⏳ <b>Барабан еще остывает!</b>\nПодожди <code>{rem}с</code> перед следующим спином.",
-            category="roulette",
+            caption=cooldown_caption,
+            category="slots",
             parse_mode="HTML"
         )
         return
 
     db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    if balance < bet:
+        no_funds_caption = f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку."
+        if message_to_edit:
+            try:
+                kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
+                await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                try:
+                    await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=bot,
+            chat_id=chat_id,
+            caption=no_funds_caption,
+            category="slots",
+            parse_mode="HTML"
+        )
+        return
+
+    # 1-second slot spinning animation in place
+    if message_to_edit:
+        spin_caption = (
+            f"🎰 <b>СЛОТЫ 777: КАЗИНО ТГАЧА</b>\n\n"
+            f"╔═════════════╗\n"
+            f"║  🌀  │  🌀  │  🌀  ║\n"
+            f"╚═════════════╝\n\n"
+            f"<i>🌀 Барабаны крутятся... (ставка {bet} ₪)</i>\n"
+            f"⏳ <i>Ловим удачу за хвост...</i>"
+        )
+        try:
+            await message_to_edit.edit_caption(caption=spin_caption, reply_markup=None, parse_mode="HTML")
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=spin_caption, reply_markup=None, parse_mode="HTML")
+            except Exception:
+                pass
+        await asyncio.sleep(0.9)
+
     tax_note = ""
     rake_note = ""
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
-
         if balance < bet:
-            from banner_manager import send_banner_message
-            await send_banner_message(
-                bot=bot,
-                chat_id=chat_id,
-                caption=f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку.",
-                category="roulette",
-                parse_mode="HTML"
-            )
             return
 
         # VIP Table Rake
@@ -11288,7 +11447,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                 tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
             new_balance = await add_user_global_balance(db, user_id, board_id, actual_profit)
             await record_user_transaction(db, user_id, actual_profit, 'casino', f'Выигрыш в Слоты 777 (ставка {bet} ₪)')
-            if mult >= 4.0 and (mult >= 50.0 or win_amt >= 100000):
+            if mult >= 4.0 and (mult >= 9.0 or win_amt >= 50000):
                 try:
                     from news_channel_publisher import publish_casino_jackpot_news
                     spawn_task(publish_casino_jackpot_news(
@@ -11296,6 +11455,32 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                         bet_amount=bet, win_amount=win_amt, multiplier=mult,
                         symbols=f"[{reels[0]} | {reels[1]} | {reels[2]}]", board_id=board_id
                     ))
+                except Exception:
+                    pass
+
+            if mult >= 25.0 or win_amt >= 50000:
+                try:
+                    from post_processor import process_new_post
+                    import shared_state
+                    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+                    hype_text = (
+                        f"🎰🔥 <b>МЕГА-ЗАНОС В СЛОТАХ 777!</b> 🔥🎰\n\n"
+                        f">барабаны крутнулись, шекели полились рекой!\n"
+                        f"👑 <b>Счастливчик:</b> Анон {anon_tag}\n"
+                        f"🎰 <b>Комбинация:</b> [{reels[0]} │ {reels[1]} │ {reels[2]}] (<b>x{mult:.1f}</b>)\n"
+                        f"💰 <b>Выигрыш:</b> <b>+{win_amt:,} ₪</b>!\n"
+                        f"💸 <i>ОБЭП Абу уже проводит выездную проверку казны!</i>"
+                    )
+                    params = shared_state.NewPostParams(
+                        bot_instance=bot,
+                        board_id=board_id,
+                        user_id=0,
+                        content={'type': 'text', 'text': hype_text, 'is_system_message': True, 'archive_allowed': True},
+                        reply_to_post=None,
+                        is_shadow_muted=False,
+                        stream='ru'
+                    )
+                    spawn_task(process_new_post(params))
                 except Exception:
                     pass
         elif net_change < 0:
@@ -11319,13 +11504,23 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         f"{lootbox_bonus_note}"
         f"{tax_note}"
     )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=bot,
         chat_id=chat_id,
         caption=caption,
         reply_markup=kb,
-        category="roulette",
+        category="slots",
         parse_mode="HTML"
     )
 
@@ -11371,39 +11566,84 @@ async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, b
             except Exception:
                 pass
     from banner_manager import send_banner_message
-    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="coinflip", parse_mode="HTML")
 
 
-async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str):
+async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
+        cooldown_caption = f"⏳ <b>Монетка еще не остыла!</b>\nПодожди <code>{rem}с</code> перед следующим броском."
+        if message_to_edit:
+            try:
+                db = await get_pool()
+                balance = await get_user_global_balance(db, user_id)
+                kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
+                await message_to_edit.edit_caption(caption=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                try:
+                    await message_to_edit.edit_text(text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
         from banner_manager import send_banner_message
         await send_banner_message(
             bot=bot,
             chat_id=chat_id,
-            caption=f"⏳ <b>Монетка еще не остыла!</b>\nПодожди <code>{rem}с</code> перед следующим броском.",
-            category="roulette",
+            caption=cooldown_caption,
+            category="coinflip",
             parse_mode="HTML"
         )
         return
 
     db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    if balance < bet:
+        no_funds_caption = f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
+        if message_to_edit:
+            try:
+                kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
+                await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                try:
+                    await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=bot,
+            chat_id=chat_id,
+            caption=no_funds_caption,
+            category="coinflip",
+            parse_mode="HTML"
+        )
+        return
+
+    # In-place coinflip animation
+    if message_to_edit:
+        flip_caption = (
+            f"💰 <b>МОНЕТКА 50/50: ПОДБРАСЫВАЕМ ШЕКЕЛЬ...</b>\n\n"
+            f"<i>🪙 Монетка взлетает в воздух и крутится...</i>\n"
+            f"✨ <i>Орёл или Решка? Ловим шекель...</i>"
+        )
+        try:
+            await message_to_edit.edit_caption(caption=flip_caption, reply_markup=None, parse_mode="HTML")
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=flip_caption, reply_markup=None, parse_mode="HTML")
+            except Exception:
+                pass
+        await asyncio.sleep(0.7)
+
     ach_note = ""
     tax_note = ""
     rake_note = ""
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
-
         if balance < bet:
-            from banner_manager import send_banner_message
-            await send_banner_message(
-                bot=bot,
-                chat_id=chat_id,
-                caption=f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
-                category="roulette",
-                parse_mode="HTML"
-            )
             return
 
         # VIP Table Rake
@@ -11435,6 +11675,41 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
                 (user_id, board_id, json.dumps(user_items))
             )
+            if win_amt >= 50000:
+                try:
+                    from news_channel_publisher import publish_casino_jackpot_news
+                    spawn_task(publish_casino_jackpot_news(
+                        bot=bot, user_id=user_id, game_type="coinflip",
+                        bet_amount=bet, win_amount=win_amt, multiplier=mult,
+                        symbols=f"[{side_ru}]", board_id=board_id
+                    ))
+                except Exception:
+                    pass
+
+                try:
+                    from post_processor import process_new_post
+                    import shared_state
+                    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+                    chosen_label_txt = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл"] else "👑 РЕШКА"
+                    hype_text = (
+                        f"🪙🔥 <b>МЕГА-ЗАНОС В МОНЕТКЕ 50/50!</b> 🔥🪙\n\n"
+                        f">шекель упал правильной стороной!\n"
+                        f"👤 <b>Игрок:</b> Анон {anon_tag}\n"
+                        f"🎯 <b>Выбор:</b> {chosen_label_txt} (Выпало: {side_ru})\n"
+                        f"💰 <b>Выигрыш:</b> <b>+{win_amt:,} ₪</b>!\n"
+                    )
+                    params = shared_state.NewPostParams(
+                        bot_instance=bot,
+                        board_id=board_id,
+                        user_id=0,
+                        content={'type': 'text', 'text': hype_text, 'is_system_message': True, 'archive_allowed': True},
+                        reply_to_post=None,
+                        is_shadow_muted=False,
+                        stream='ru'
+                    )
+                    spawn_task(process_new_post(params))
+                except Exception:
+                    pass
         elif net_change < 0:
             ok, new_balance = await deduct_user_global_balance(db, user_id, board_id, abs(net_change))
             await record_user_transaction(db, user_id, -abs(net_change), 'casino', f'Проигрыш в Монетку (ставка {bet} ₪)')
@@ -11455,13 +11730,23 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         f"{ach_note}"
         f"{tax_note}"
     )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=bot,
         chat_id=chat_id,
         caption=caption,
         reply_markup=kb,
-        category="roulette",
+        category="coinflip",
         parse_mode="HTML"
     )
 
@@ -11509,7 +11794,7 @@ async def _show_blackjack_lobby(bot, chat_id: int, user_id: int, board_id: str, 
             except Exception:
                 pass
     from banner_manager import send_banner_message
-    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
 
 
 async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int):
@@ -11521,7 +11806,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
             bot=bot,
             chat_id=chat_id,
             caption=f"⏳ <b>Колода еще тасуется!</b>\nПодожди <code>{rem}с</code> перед следующей раздачей.",
-            category="roulette",
+            category="blackjack",
             parse_mode="HTML"
         )
         return
@@ -11535,7 +11820,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
                 bot=bot,
                 chat_id=chat_id,
                 caption=f"❌ <b>Недостаточно средств для игры в Блэкджек!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
-                category="roulette",
+                category="blackjack",
                 parse_mode="HTML"
             )
             return
@@ -11550,7 +11835,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
             from banner_manager import send_banner_message
             caption = f"🚨 <b>ОБЛАВА ЗА КАРТОЧНЫМ СТОЛОМ!</b>\n{raid_notice['reason']}\n\n<i>{raid_notice['quote']}</i>\n\n📉 Ставка <code>-{bet} ₪</code> изъята в Казну Абу.\n💳 Баланс: <code>{int(new_bal)} ₪</code>"
             kb = casino_engine.get_casino_hub_keyboard()
-            await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
             return
 
         # VIP Table Rake
@@ -11568,34 +11853,36 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
     dealer_hand = [deck.pop(), deck.pop()]
 
     player_score = casino_engine.calculate_hand(player_hand)
+    dealer_score = casino_engine.calculate_hand(dealer_hand)
 
-    # Check natural 21
+    # Check natural Blackjack
     if player_score == 21:
-        dealer_score = casino_engine.calculate_hand(dealer_hand)
-        payout = int(bet * 2.5) if dealer_score != 21 else bet
-
-        ach_note = ""
-        profit = payout - bet
-        tax_amt, actual_profit = calculate_win_tax(profit)
-        actual_payout = bet + int(actual_profit)
-        tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу." if tax_amt > 0 else ""
-
+        payout = int(active_bet * 2.5)
         async with db_lock:
-            if tax_amt > 0: await add_to_abu_fund(db, int(tax_amt))
-            new_bal = await add_user_global_balance(db, user_id, board_id, actual_payout)
-            await record_user_transaction(db, user_id, int(actual_profit), 'casino', 'Натуральный Блэкджек 21 (x2.5)')
-            casino_engine.record_win_streak(user_id, True)
+            new_bal = await add_user_global_balance(db, user_id, board_id, payout)
+            await record_user_transaction(db, user_id, payout, 'casino', f'Блэкджек 3:2 (ставка {bet} ₪)')
+            ach_note = ""
             user_items = await _get_user_active_items(db, user_id, board_id)
             from achievements_engine import check_and_unlock_achievement
-            unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_blackjack_21")
+            unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_blackjack_natural")
             if unlocked and ach_info:
-                new_bal = await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
-                ach_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
+                await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
+                ach_note = f"\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
             await db.commit()
 
+        tax_note = ""
+        tax_amt, actual_profit = calculate_win_tax(payout - active_bet)
+        if tax_amt > 0:
+            async with db_lock:
+                await add_to_abu_fund(db, int(tax_amt))
+                await deduct_user_global_balance(db, user_id, board_id, int(tax_amt))
+                new_bal = await get_user_global_balance(db, user_id)
+                await db.commit()
+            tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
+
         caption = (
-            f"🃏 <b>БЛЭКДЖЕК: НАТУРАЛЬНЫЕ 21! 🔥</b>\n\n"
+            f"🃏 <b>БЛЭКДЖЕК 21: НАТУРАЛЬНЫЙ БЛЭКДЖЕК!</b>\n\n"
             f"👤 Твоя рука: {casino_engine.format_hand(player_hand)} (<b>21</b>)\n"
             f"🎩 Дилер: {casino_engine.format_hand(dealer_hand)} (<b>{dealer_score}</b>)\n\n"
             f"🎉 <b>БЛЭКДЖЕК! Выплата 3:2 (+{payout} ₪)!</b>\n"
@@ -11604,7 +11891,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         )
         kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
         from banner_manager import send_banner_message
-        await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+        await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
         return
 
     # Store session
@@ -11616,6 +11903,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
             "dealer_hand": dealer_hand,
             "board_id": board_id,
             "chat_id": chat_id,
+            "created_at": time.time(),
         }
 
     kb = casino_engine.get_blackjack_keyboard(bet, can_double=True)
@@ -11627,7 +11915,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         f"👇 Твой ход: взять карту, остановиться или удвоить ставку?"
     )
     from banner_manager import send_banner_message
-    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
 
 
 @dp.message(Command("rroulette", "гусар", "русская_рулетка", "самострел"))
@@ -11673,10 +11961,10 @@ async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, b
             except Exception:
                 pass
     from banner_manager import send_banner_message
-    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="russian_roulette", parse_mode="HTML")
 
 
-async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int):
+async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
     bet = max(casino_engine.MIN_CASINO_BET, min(casino_engine.MAX_ROULETTE_BET, bet))
     db = await get_pool()
     async with casino_engine.session_lock:
@@ -11688,18 +11976,36 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
                 ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
                 if not ok:
                     balance = await get_user_global_balance(db, user_id)
+                    no_funds_caption = f"❌ <b>Недостаточно средств для Русской Рулетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
+                    if message_to_edit:
+                        try:
+                            kb = casino_engine.get_roulette_lobby_keyboard(bet, balance=int(balance))
+                            await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                            return
+                        except Exception:
+                            try:
+                                await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                                return
+                            except Exception:
+                                pass
                     from banner_manager import send_banner_message
                     await send_banner_message(
                         bot=bot,
                         chat_id=chat_id,
-                        caption=f"❌ <b>Недостаточно средств для Русской Рулетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
-                        category="roulette",
+                        caption=no_funds_caption,
+                        category="duel",
                         parse_mode="HTML"
                     )
                     return
                 await db.commit()
+        else:
+            # Subsequent shots: strictly retain initial session bet
+            bet = session.get("bet", bet)
 
         survived, mult, streak, status = casino_engine.play_russian_roulette_shot(user_id, bet)
+        if survived and user_id in casino_engine.active_roulette_sessions:
+            casino_engine.active_roulette_sessions[user_id]["board_id"] = board_id
+            casino_engine.active_roulette_sessions[user_id]["chat_id"] = chat_id
 
     if not survived:
         async with db_lock:
@@ -11718,8 +12024,18 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
             f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
         )
         kb = casino_engine.get_casino_hub_keyboard()
+        if message_to_edit:
+            try:
+                await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                try:
+                    await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
         from banner_manager import send_banner_message
-        await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+        await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="duel", parse_mode="HTML")
         return
 
     # Survived
@@ -11733,8 +12049,18 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
         f"• Выстрелов подряд: <b>{streak} / 6</b>\n\n"
         f"Рискнешь нажать на спуск еще раз или заберешь деньги?"
     )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
     from banner_manager import send_banner_message
-    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="duel", parse_mode="HTML")
 
 
 @dp.callback_query(F.data.startswith("cas:"))
@@ -11766,10 +12092,10 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 await callback.message.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
             else:
                 from banner_manager import send_banner_message
-                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="casino", parse_mode="HTML")
         except Exception:
             from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="casino", parse_mode="HTML")
         await callback.answer()
         return
 
@@ -11885,7 +12211,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             await callback.answer(f"Ставка: {bet} ₪")
         elif action == "spin":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
-            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet)
+            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
             await callback.answer()
 
     elif section == "coin":
@@ -11896,7 +12222,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             await callback.answer(f"Ставка: {bet} ₪")
         elif side_or_action in ["heads", "tails"]:
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
-            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action)
+            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action, message_to_edit=callback.message)
             await callback.answer()
         elif side_or_action == "preset":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
@@ -11955,7 +12281,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 )
                 kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
                 from banner_manager import send_banner_message
-                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
                 await callback.answer("Перебор!")
                 return
 
@@ -12007,7 +12333,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 )
                 kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
                 from banner_manager import send_banner_message
-                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
                 await callback.answer()
                 return
 
@@ -12070,7 +12396,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             )
             kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
             from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
             await callback.answer()
 
         elif action == "surrender":
@@ -12090,10 +12416,10 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             )
             kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(new_bal))
             from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
             await callback.answer()
 
-    elif section == "roulette":
+    elif section in ("roulette", "rr"):
         action = parts[2] if len(parts) > 2 else ""
         if action == "lobby":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
@@ -12104,7 +12430,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
         bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
 
         if action == "shoot":
-            await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet)
+            await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
             await callback.answer()
         elif action == "cashout":
             async with casino_engine.session_lock:
@@ -12112,11 +12438,15 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             if not session:
                 await callback.answer("Сессия не найдена", show_alert=True)
                 return
-            mult = session.get("current_mult", 1.15)
-            payout = int(bet * mult)
-            net_profit = payout - bet
+            session_bet = int(session.get("bet", 0))
+            if session_bet <= 0:
+                await callback.answer("Некорректная ставка в сессии", show_alert=True)
+                return
+            mult = float(session.get("current_mult", 1.15))
+            payout = int(session_bet * mult)
+            net_profit = payout - session_bet
             tax_amt, actual_profit = calculate_win_tax(net_profit)
-            actual_payout = bet + int(actual_profit)
+            actual_payout = session_bet + int(actual_profit)
             tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу." if tax_amt > 0 else ""
 
             async with db_lock:
@@ -12126,6 +12456,42 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 casino_engine.record_win_streak(user_id, True)
                 await db.commit()
 
+            if mult >= 4.0 or actual_payout >= 50000:
+                try:
+                    from news_channel_publisher import publish_casino_jackpot_news
+                    spawn_task(publish_casino_jackpot_news(
+                        bot=callback.bot, user_id=user_id, game_type="roulette",
+                        bet_amount=session_bet, win_amount=actual_payout, multiplier=mult,
+                        symbols=f"Выжил {session.get('streak', 0)} выстрелов подряд!", board_id=board_id
+                    ))
+                except Exception:
+                    pass
+
+                try:
+                    from post_processor import process_new_post
+                    import shared_state
+                    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+                    hype_text = (
+                        f"💀🔥 <b>БЕЗУМЕЦ ВЫЖИЛ В РУССКОЙ РУЛЕТКЕ!</b> 🔥💀\n\n"
+                        f">анон смотрел в дуло револьвера и не моргнул!\n"
+                        f"👤 <b>Гусар:</b> Анон {anon_tag}\n"
+                        f"🎯 <b>Серия выстрелов:</b> {session.get('streak', 0)} подряд (<b>x{mult:.2f}</b>)\n"
+                        f"💰 <b>Забранный куш:</b> <b>+{actual_payout:,} ₪</b>!\n"
+                        f"🎩 <i>Стальные нервы окупились сполна.</i>"
+                    )
+                    params = shared_state.NewPostParams(
+                        bot_instance=callback.bot,
+                        board_id=board_id,
+                        user_id=0,
+                        content={'type': 'text', 'text': hype_text, 'is_system_message': True, 'archive_allowed': True},
+                        reply_to_post=None,
+                        is_shadow_muted=False,
+                        stream='ru'
+                    )
+                    spawn_task(process_new_post(params))
+                except Exception:
+                    pass
+
             caption = (
                 f"💰 <b>РУССКАЯ РУЛЕТКА: КУШ ЗАБРАН!</b>\n\n"
                 f"🎉 Ты вовремя вышел из игры и забрал выигрыш!\n"
@@ -12134,8 +12500,20 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 f"{tax_note}"
             )
             kb = casino_engine.get_casino_hub_keyboard()
+            if callback.message:
+                try:
+                    await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+                    await callback.answer(f"Забрано +{payout} ₪!")
+                    return
+                except Exception:
+                    try:
+                        await callback.message.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                        await callback.answer(f"Забрано +{payout} ₪!")
+                        return
+                    except Exception:
+                        pass
             from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="russian_roulette", parse_mode="HTML")
             await callback.answer(f"Забрано +{payout} ₪!")
 
 @dp.message(Command("mystats", "my_stats", "statsme", "карта", "деградация", "карточка"))
@@ -13469,7 +13847,7 @@ async def cmd_menu(message: types.Message, board_id: str | None, stream: str = '
         chat_id=message.chat.id,
         caption=text,
         reply_markup=get_quick_menu_keyboard(board_id, stream=stream),
-        category="start",
+        category="menu",
         parse_mode="HTML"
     )
     try:
@@ -13491,7 +13869,7 @@ async def cmd_settings(message: types.Message, board_id: str | None, stream: str
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="start",
+        category="settings",
         parse_mode="HTML"
     )
     try:
@@ -13734,7 +14112,7 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
             [InlineKeyboardButton(text=btn_text, url=site_url)]
         ])
         from banner_manager import get_banner_file
-        fname, photo_payload = get_banner_file(category="calm")
+        fname, photo_payload = get_banner_file(category="motivation")
         from banner_manager import _BANNER_CACHE
         fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
         if not fid and _BANNER_CACHE:
@@ -13828,7 +14206,7 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         ])
         file_id = None
         from banner_manager import get_banner_file, _BANNER_CACHE
-        banner_cat = random.choice(["calm", "maid", "night", "start", "digest"])
+        banner_cat = "motivation"
         fname, photo_payload = get_banner_file(category=banner_cat)
         file_id = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
         if not file_id and _BANNER_CACHE:
@@ -16260,7 +16638,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
         chat_id=message.chat.id,
         caption=start_text,
         reply_markup=get_help_keyboard("main", board_id, stream),
-        category="start",
+        category="help",
         parse_mode="HTML"
     )
     try:
@@ -16281,7 +16659,7 @@ async def cmd_boards(message: types.Message, board_id: str | None, stream: str =
         chat_id=message.chat.id,
         caption=boards_text,
         reply_markup=get_help_keyboard("boards", board_id, stream),
-        category="start",
+        category="boards",
         parse_mode="HTML"
     )
     try:
@@ -16409,7 +16787,7 @@ async def cmd_roll100(message: types.Message, board_id: str | None, stream: str 
             bot=message.bot,
             chat_id=message.chat.id,
             caption=caption,
-            category="roulette",
+            category="dice",
             parse_mode="HTML"
         )
         if sent_msg:
@@ -17684,7 +18062,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
                 chat_id=callback.message.chat.id,
                 caption=start_text,
                 reply_markup=kb,
-                category="start",
+                category="help",
                 parse_mode="HTML"
             )
     elif action == "boards":
@@ -17707,7 +18085,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
                 chat_id=callback.message.chat.id,
                 caption=boards_text,
                 reply_markup=kb,
-                category="start",
+                category="boards",
                 parse_mode="HTML"
             )
     elif action == "invite":
@@ -17716,6 +18094,15 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         await _handle_quick_menu_admin(callback, lang)
     elif action in ["hent", "loli"]:
         await _handle_quick_menu_anime(callback, board_id, action, lang)
+    elif action == "banners":
+        from banner_manager import _send_banners_page
+        await _send_banners_page(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            board_id=board_id,
+            page=0,
+            user_id=user_id
+        )
 @dp.callback_query(F.data.startswith("pers_"))
 async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
 
@@ -18170,7 +18557,7 @@ async def cmd_threads(message: types.Message, board_id: str | None, stream: str 
             chat_id=message.chat.id,
             caption=text,
             reply_markup=keyboard,
-            category="calm",
+            category="threads",
             parse_mode="HTML"
         )
     await message.delete()
@@ -18242,6 +18629,7 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         btn_stats = "📊 Stats"
         btn_personal = "⚙️ Settings"
         btn_token = "🔑 Web Token"
+        btn_banners = "🖼 Banners"
         btn_invite = "📨 Invite"
         btn_help = "ℹ️ Help"
         btn_boards = "🌐 Boards & Channels"
@@ -18261,6 +18649,7 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         btn_stats = "📊 統計"
         btn_personal = "⚙️ 設定"
         btn_token = "🔑 トークン"
+        btn_banners = "🖼 バナー"
         btn_invite = "📨 招待"
         btn_help = "ℹ️ ヘルプ"
         btn_boards = "🌐 板・チャンネル"
@@ -18280,6 +18669,7 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         btn_stats = "📊 Статистика"
         btn_personal = "⚙️ Настройки"
         btn_token = "🔑 Токен сайта"
+        btn_banners = "🖼 Баннеры"
         btn_invite = "📨 Пригласить"
         btn_help = "ℹ️ Помощь"
         btn_boards = "🌐 Борды & Каналы"
@@ -18292,9 +18682,10 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         [InlineKeyboardButton(text=btn_drop, callback_data="cas:menu:drop"), InlineKeyboardButton(text=btn_roll, callback_data="menu_roll")],
         [InlineKeyboardButton(text=btn_hent, callback_data="menu_hent"), InlineKeyboardButton(text=btn_loli, callback_data="menu_loli")],
         [InlineKeyboardButton(text=btn_rates, callback_data="menu_rates"), InlineKeyboardButton(text=btn_stats, callback_data="menu_stats")],
-        [InlineKeyboardButton(text=btn_token, callback_data="menu_token"), InlineKeyboardButton(text=btn_personal, callback_data="menu_personal")],
-        [InlineKeyboardButton(text=btn_invite, callback_data="menu_invite"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")],
-        [InlineKeyboardButton(text=btn_boards, callback_data="menu_boards"), InlineKeyboardButton(text=btn_admin, callback_data="menu_admin")]
+        [InlineKeyboardButton(text=btn_banners, callback_data="menu_banners"), InlineKeyboardButton(text=btn_token, callback_data="menu_token")],
+        [InlineKeyboardButton(text=btn_personal, callback_data="menu_personal"), InlineKeyboardButton(text=btn_invite, callback_data="menu_invite")],
+        [InlineKeyboardButton(text=btn_boards, callback_data="menu_boards"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")],
+        [InlineKeyboardButton(text=btn_admin, callback_data="menu_admin")]
     ])
     return keyboard
 def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') -> tuple[str, InlineKeyboardMarkup]:
@@ -18993,6 +19384,24 @@ async def auto_memory_cleaner():
             except Exception:
                 pass
 
+            # 4.1. Очистка и подрезка message_to_post по актуальным post_to_messages
+            try:
+                async with storage_lock:
+                    valid_post_nums = set(post_to_messages.keys())
+                    stale_msg_keys = [k for k, pnum in message_to_post.items() if pnum not in valid_post_nums]
+                    for k in stale_msg_keys:
+                        message_to_post.pop(k, None)
+                    MAX_CAP = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "20000"))
+                    if len(message_to_post) > MAX_CAP:
+                        excess = len(message_to_post) - MAX_CAP
+                        drop_keys = [k for k, _ in zip(message_to_post, range(excess))]
+                        for k in drop_keys:
+                            message_to_post.pop(k, None)
+                    if stale_msg_keys:
+                        removed["stale_message_to_post"] = len(stale_msg_keys)
+            except Exception:
+                pass
+
             # 5. Очистка временных файлов диска старше 24 часов
             try:
                 import glob
@@ -19080,9 +19489,10 @@ async def weekly_active_refresh_task():
             counts = {}
             for board_id in BOARDS:
                 users = await get_weekly_active_users(board_id, WEEKLY_ACTIVE_DAYS)
-                weekly_active_users[board_id] = users
+                existing = weekly_active_users.get(board_id, set())
+                weekly_active_users[board_id] = existing.union(users)
                 weekly_active_updated_at[board_id] = refreshed_at
-                counts[board_id] = len(users)
+                counts[board_id] = len(weekly_active_users[board_id])
             total = sum(counts.values())
             top = sorted(counts.items(), key=lambda item: item[1], reverse=True)[:5]
             runtime_logger.debug(
@@ -24605,8 +25015,8 @@ async def database_cleanup_task():
                 for key in stale_keys:
                     message_to_post.pop(key, None)
 
-                # Ограничение размера message_to_post (не более 250,000 записей)
-                MAX_MESSAGE_TO_POST = 250000
+                # Ограничение размера message_to_post (не более 20,000 записей)
+                MAX_MESSAGE_TO_POST = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "20000"))
                 if len(message_to_post) > MAX_MESSAGE_TO_POST:
                     excess = len(message_to_post) - MAX_MESSAGE_TO_POST
                     keys_to_drop = [k for k, _ in zip(message_to_post, range(excess))]
@@ -25888,6 +26298,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "dice_duel_watchdog": lambda: dice_duel_engine.start_dice_watchdog_loop(bots.get('ru') or active_bots_list[0]),
         "ttt_watchdog": lambda: ttt_engine.start_ttt_watchdog_loop(bots.get('ru') or active_bots_list[0]),
         "classic_duel_watchdog": lambda: start_classic_duel_watchdog_loop(bots.get('ru') or active_bots_list[0]),
+        "solo_casino_watchdog": lambda: start_solo_casino_watchdog_loop(bots.get('ru') or active_bots_list[0]),
     }
     if ENABLE_REPLY_NOTIFICATIONS:
         tasks_to_run["reply_notifier_task"] = lambda: reply_notifier_task()
@@ -26952,7 +27363,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
                 chat_id=callback.message.chat.id,
                 caption=text,
                 reply_markup=get_help_keyboard(cat, board_id, stream),
-                category="start",
+                category="help",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -27385,7 +27796,7 @@ async def cmd_ledger(message: types.Message, board_id: str | None, stream: str =
         chat_id=message.chat.id,
         caption=text,
         reply_markup=kb,
-        category="wallet",
+        category="ledger",
         parse_mode="HTML"
     )
     try: await message.delete()

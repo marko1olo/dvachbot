@@ -111,6 +111,52 @@ class TestCyberchadTTSEngine:
         assert len(clean) == 1003  # 1000 + "..."
         assert clean.endswith("...")
 
+    def test_clean_tts_text_adversarial_json_leak(self):
+        """Validates that clean_tts_text strips JSON fields, keys, braces, and quotes."""
+        json_leaked = '{"reply": true, "thought": "разъебываю омежку", "text": "Ты жалкий червь, иди помойся!"}'
+        cleaned = clean_tts_text(json_leaked)
+        assert cleaned == "Ты жалкий червь, иди помойся!"
+        assert "thought" not in cleaned
+        assert "reply" not in cleaned
+        assert "{" not in cleaned
+        assert "}" not in cleaned
+
+        broken_json = '"thought": "мысли вслух",\n"text": "Пошел вон из треда!",\n"generate_image": true}'
+        cleaned2 = clean_tts_text(broken_json)
+        assert cleaned2 == "Пошел вон из треда!"
+
+    def test_parse_cyberchad_response_incident_recovery(self):
+        """Validates that parse_cyberchad_response extracts speech text from unbraced JSON without leaking metadata."""
+        from ai_manager import parse_cyberchad_response
+
+        incident_raw = (
+            '"thought": "Разношу бабу за сопливое нытье про хомяка-призрака",\n'
+            '"text": "Эта сопливая омежка притащила сюда свои бабские сопли.",\n'
+            '"reason_if_skipped": "",\n'
+            '"generate_image": true,\n'
+            '"image_prompt": "pathetic crying woman holding plush toy"\n'
+            '}'
+        )
+        parsed = parse_cyberchad_response(incident_raw)
+        assert parsed["reply"] is True
+        assert parsed["text"] == "Эта сопливая омежка притащила сюда свои бабские сопли."
+        assert parsed["thought"] == "Разношу бабу за сопливое нытье про хомяка-призрака"
+        assert parsed["generate_image"] is True
+        assert parsed["image_prompt"] == "pathetic crying woman holding plush toy"
+        assert "thought" not in parsed["text"]
+
+    @pytest.mark.asyncio
+    async def test_synthesize_blocks_female_fallback_in_production(self):
+        """Validates that when not in test env and allow_female_fallback=False, gTTS is strictly blocked."""
+        text = "Тест блокировки женского голоса в продакшене."
+
+        with patch("edge_tts.Communicate", side_effect=RuntimeError("Edge WebSocket Error")):
+            with patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}):
+                with patch("gtts.gTTS") as mock_gtts_cls:
+                    result = await synthesize_cyberchad_voice(text, allow_female_fallback=False)
+                    assert result is None
+                    mock_gtts_cls.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_edge_tts_with_specific_preset(self):
         text = "Разъёб босса качалки."

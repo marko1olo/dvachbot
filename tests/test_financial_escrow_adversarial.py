@@ -87,7 +87,7 @@ def make_mock_bot():
 
 async def pre_seed_achievements(db, user_ids: list[int], board_id: str = "b"):
     """Pre-seed ach_duel_win in Users active_items to prevent achievement bonus money during pure game tests."""
-    items_json = json.dumps({"achievements": ["ach_duel_win"]})
+    items_json = json.dumps({"unlocked_achievements": ["ach_duel_win"], "achievements": ["ach_duel_win"]})
     for uid in user_ids:
         await db.execute(
             "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, 0.0, ?) "
@@ -503,7 +503,7 @@ class TestFinancialBalanceConservation:
 
         # Fix random to make p1 winner or p2 winner deterministically
         with patch("random.choice", return_value=p1):
-            await accept_duel_logic(msg, db, "b", p1)
+            await accept_duel_logic(msg, p1, "b")
 
         final_p1 = await get_user_global_balance(db, p1)
         final_p2 = await get_user_global_balance(db, p2)

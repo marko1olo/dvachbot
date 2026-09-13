@@ -338,15 +338,12 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
             ]
         ])
 
-        categories = ["schizo", "shop", "night", "stats", "wallet"]
-        cat = random.choice(categories)
-
         await send_banner_message(
             bot=bot,
             chat_id=user_id,
             caption=text,
             reply_markup=kb,
-            category=cat,
+            category="work",
             parse_mode="HTML"
         )
         _last_work_alert_sent[user_id] = now_ts

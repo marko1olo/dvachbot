@@ -14,16 +14,17 @@ class TestCatboxAndMirrorWorker:
     """Tests for Catbox availability, cooldown, and mirror worker fallback cascade."""
 
     def test_catbox_cooldown_30m(self):
-        assert CATBOX_PAUSE_COOLDOWN == 1800
+        assert CATBOX_PAUSE_COOLDOWN == 7200
         catbox._CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
         assert is_catbox_available() is True
 
-        catbox._CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + 1800
+        catbox._CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + 7200
         assert is_catbox_available() is False
 
         catbox._CATBOX_GLOBAL_DISABLED_UNTIL = 0.0
 
     @pytest.mark.asyncio
+    @patch("site_tgach.mirror_worker._find_msg_info", new_callable=AsyncMock, return_value=None)
     @patch("site_tgach.mirror_worker.get_file_owner_id", return_value=123)
     @patch("site_tgach.mirror_worker._resolve_file_bot")
     @patch("site_tgach.mirror_worker.get_file_mirrors", return_value={})
@@ -35,7 +36,7 @@ class TestCatboxAndMirrorWorker:
     @patch("site_tgach.mirror_worker.upload_file_to_pixhost", new_callable=AsyncMock)
     async def test_catbox_fallback_to_pixhost_for_small_image(
         self, mock_pixhost, mock_catbox_file, mock_catbox_url,
-        mock_rm_task, mock_add_mirror, mock_mtproto, mock_mirrors, mock_bot_res, mock_owner
+        mock_rm_task, mock_add_mirror, mock_mtproto, mock_mirrors, mock_bot_res, mock_owner, mock_find_msg
     ):
         """When Catbox fails, an image <= 10MB cascades to pixhost and saves as pixhost mirror."""
         mock_bot = AsyncMock()
@@ -57,6 +58,7 @@ class TestCatboxAndMirrorWorker:
 
             with patch("httpx.AsyncClient") as mock_client_cls:
                 mock_client = AsyncMock()
+                mock_client.stream = MagicMock()
                 mock_resp = AsyncMock()
                 mock_resp.status_code = 200
                 mock_resp.aiter_bytes.return_value = [b"chunk"]
@@ -78,6 +80,7 @@ class TestCatboxAndMirrorWorker:
         mock_rm_task.assert_called_once_with(101)
 
     @pytest.mark.asyncio
+    @patch("site_tgach.mirror_worker._find_msg_info", new_callable=AsyncMock, return_value=None)
     @patch("site_tgach.mirror_worker.get_file_owner_id", return_value=123)
     @patch("site_tgach.mirror_worker._resolve_file_bot")
     @patch("site_tgach.mirror_worker.get_file_mirrors", return_value={})
@@ -90,7 +93,7 @@ class TestCatboxAndMirrorWorker:
     @patch("site_tgach.mirror_worker.is_0x0_available", return_value=True)
     async def test_catbox_fallback_to_0x0_for_non_image_file(
         self, mock_0x0_avail, mock_0x0, mock_catbox_file, mock_catbox_url,
-        mock_rm_task, mock_add_mirror, mock_mtproto, mock_mirrors, mock_bot_res, mock_owner
+        mock_rm_task, mock_add_mirror, mock_mtproto, mock_mirrors, mock_bot_res, mock_owner, mock_find_msg
     ):
         """When Catbox fails on a non-image file (e.g. mp4 or zip), it cascades to 0x0.st."""
         mock_bot = AsyncMock()
@@ -111,6 +114,7 @@ class TestCatboxAndMirrorWorker:
 
             with patch("httpx.AsyncClient") as mock_client_cls:
                 mock_client = AsyncMock()
+                mock_client.stream = MagicMock()
                 mock_resp = AsyncMock()
                 mock_resp.status_code = 200
                 mock_resp.aiter_bytes.return_value = [b"chunk"]

@@ -6,7 +6,7 @@ import os
 import re
 import asyncio
 import random
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
 from common.db_pool import LazyLock
@@ -609,7 +609,55 @@ messages_storage = {}
 
 post_to_messages = {}
 
-message_to_post = {}
+class BoundedDict(OrderedDict):
+    """
+    Ordered dictionary with a strict maximum capacity.
+    Operates as an LRU / FIFO bounded cache:
+    - __setitem__: sets key, moves to end (most recent). If len > max_size, evicts oldest in O(1).
+    - update(): updates keys, trims excess.
+    - setdefault(): sets default if key missing, moves to end, trims excess.
+    """
+    def __init__(self, *args, max_size: int = 20000, maxsize: int | None = None, **kwargs):
+        if maxsize is not None:
+            max_size = maxsize
+        elif args and isinstance(args[0], int) and len(args) == 1 and not kwargs:
+            max_size = args[0]
+            args = ()
+        self.max_size = max(1, int(max_size))
+        self.maxsize = self.max_size
+        super().__init__(*args, **kwargs)
+        self._enforce_limit()
+
+    def __setitem__(self, key: Any, value: Any):
+        super().__setitem__(key, value)
+        super().move_to_end(key)
+        if len(self) > self.max_size:
+            self.popitem(last=False)
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        self._enforce_limit()
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        val = super().setdefault(key, default)
+        super().move_to_end(key)
+        if len(self) > self.max_size:
+            self.popitem(last=False)
+        return val
+
+    def _enforce_limit(self):
+        while len(self) > self.max_size:
+            self.popitem(last=False)
+
+    def copy(self):
+        return BoundedDict(self, max_size=self.max_size)
+
+    def __repr__(self):
+        return f"BoundedDict(max_size={self.max_size}, {super().__repr__()})"
+
+
+BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "20000"))
+message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
 
 @dataclass
 class BroadcastConfig:

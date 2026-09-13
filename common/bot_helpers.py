@@ -161,7 +161,8 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
             max_shifts = int(s)
 
         # 2. Achievements
-        for ach in data.get("unlocked_achievements", []):
+        achs = list(data.get("unlocked_achievements", []) or []) + list(data.get("achievements", []) or [])
+        for ach in achs:
             if isinstance(ach, str) and ach:
                 all_achievements.add(ach)
 
@@ -299,9 +300,16 @@ async def _get_user_active_items(db, user_id: int, board_id: str | None = None) 
 
 async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str, user_id: int | None = None):
     import time
+
+    # Handle possible reversed/legacy argument order (message, db, board_id, challenger_id)
+    if not isinstance(challenger_id, (int, float)) or hasattr(challenger_id, "execute"):
+        if isinstance(user_id, (int, float)):
+            challenger_id = int(user_id)
+        user_id = getattr(getattr(message, "from_user", None), "id", None)
+
     db = await get_pool()
     if user_id is None:
-        user_id = message.from_user.id
+        user_id = getattr(getattr(message, "from_user", None), "id", None)
     
     if challenger_id == user_id:
         await message.answer("Нельзя принять собственный вызов, трус.")
@@ -326,6 +334,11 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             duel = _active_duels[challenger_id]
             now = time.time()
             if now - duel.get("ts", 0) > _DUEL_TIMEOUT:
+                if duel.get("escrowed"):
+                    async with db_lock:
+                        await add_user_global_balance(db, challenger_id, duel.get("board_id", board_id), duel.get("amount", 0))
+                        await record_user_transaction(db, challenger_id, duel.get("amount", 0), 'duel', 'Возврат ставки: таймаут дуэли')
+                        await db.commit()
                 _active_duels.pop(challenger_id, None)
                 reject_msg = "⚔️ Эта дуэль уже истекла."
             else:
@@ -334,58 +347,75 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                     reject_msg = f"⚔️ Этот персональный вызов брошен Анону [{get_anon_id(target_id)}]. Ты не можешь его принять!"
                 else:
                     amount = duel.get("amount", 0)
+                    ch_escrowed = bool(duel.get("escrowed", False))
                     async with db_lock:
-                        ch_bal = await get_user_global_balance(db, challenger_id)
-                        op_bal = await get_user_global_balance(db, user_id)
+                        # 1. Verify and escrow challenger stake if not already escrowed
+                        if not ch_escrowed:
+                            ch_bal = await get_user_global_balance(db, challenger_id)
+                            if ch_bal < amount:
+                                _active_duels.pop(challenger_id, None)
+                                reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] уже не потянет ставку — слился."
+                            else:
+                                ok_c, _ = await deduct_user_global_balance(db, challenger_id, board_id, amount)
+                                if not ok_c:
+                                    _active_duels.pop(challenger_id, None)
+                                    reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] уже не потянет ставку — слился."
+                                else:
+                                    ch_escrowed = True
+                                    await record_user_transaction(db, challenger_id, -amount, 'duel', f'Ставка в дуэли против [{get_anon_id(user_id)}]')
 
-                    if ch_bal < amount:
-                        _active_duels.pop(challenger_id, None)
-                        reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] уже не потянет ставку — слился."
-                    elif op_bal < amount:
-                        # Opponent lacks funds; duel remains active in pool for other players
-                        reject_msg = f"❌ У тебя недостаточно шекелей. Нужно {amount:,} ₪, у тебя {int(op_bal):,} ₪."
-                    else:
-                        # Capture broadcast copies for live updating
-                        broadcast_msgs = list(duel.get("broadcast_msgs", []))
-                        _active_duels.pop(challenger_id, None)
+                        if not reject_msg:
+                            # 2. Verify and escrow acceptor stake
+                            op_bal = await get_user_global_balance(db, user_id)
+                            if op_bal < amount:
+                                if not duel.get("escrowed") and ch_escrowed:
+                                    await add_user_global_balance(db, challenger_id, board_id, amount)
+                                reject_msg = f"❌ У тебя недостаточно шекелей. Нужно {amount:,} ₪, у тебя {int(op_bal):,} ₪."
+                            else:
+                                ok_a, _ = await deduct_user_global_balance(db, user_id, board_id, amount)
+                                if not ok_a:
+                                    if not duel.get("escrowed") and ch_escrowed:
+                                        await add_user_global_balance(db, challenger_id, board_id, amount)
+                                    reject_msg = f"❌ У тебя недостаточно шекелей. Нужно {amount:,} ₪."
+                                else:
+                                    await record_user_transaction(db, user_id, -amount, 'duel', f'Ставка в дуэли против [{get_anon_id(challenger_id)}]')
 
-                        winner_id = random.choice([challenger_id, user_id])
-                        loser_id  = challenger_id if winner_id == user_id else user_id
-                        
-                        # 5% Rake to Abu's Fund and payout to winner
-                        rake = max(1, int(amount * 0.05))
-                        net_win = amount - rake
+                                    # Capture broadcast copies for live updating
+                                    broadcast_msgs = list(duel.get("broadcast_msgs", []))
+                                    _active_duels.pop(challenger_id, None)
 
-                        # Атомарное списание у проигравшего и начисление победителю
-                        ok, _ = await deduct_user_global_balance(db, loser_id, board_id, amount)
-                        if ok:
-                            await add_user_global_balance(db, winner_id, board_id, net_win)
-                            await add_to_abu_fund(db, rake)
-                            await record_user_transaction(db, winner_id, net_win, 'duel', f'Победа в дуэли против [{get_anon_id(loser_id)}]')
-                            await record_user_transaction(db, loser_id, -amount, 'duel', f'Поражение в дуэли против [{get_anon_id(winner_id)}]')
-                            
-                            try:
-                                w_items = await _get_user_active_items(db, winner_id, board_id)
-                                from achievements_engine import check_and_unlock_achievement
-                                unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
-                                if unlocked and ach_info:
-                                    await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
-                                    await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
-                                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                                     (json.dumps(w_items), winner_id, board_id))
-                            except Exception:
-                                pass
-                            await db.commit()
+                                    winner_id = random.choice([challenger_id, user_id])
+                                    loser_id  = challenger_id if winner_id == user_id else user_id
+                                    
+                                    # 5% Rake to Abu's Fund and payout to winner
+                                    rake = max(1, int(amount * 0.05))
+                                    net_win = amount - rake
+                                    winner_payout = (amount * 2) - rake
 
-                            duel_result = {
-                                "winner_id": winner_id,
-                                "loser_id": loser_id,
-                                "amount": amount,
-                                "net_win": net_win,
-                                "broadcast_msgs": broadcast_msgs
-                            }
-                        else:
-                            reject_msg = "❌ У одного из участников изменился баланс во время принятия дуэли."
+                                    await add_user_global_balance(db, winner_id, board_id, winner_payout)
+                                    await add_to_abu_fund(db, rake)
+                                    await record_user_transaction(db, winner_id, winner_payout, 'duel', f'Победа в дуэли против [{get_anon_id(loser_id)}]')
+                                    
+                                    try:
+                                        w_items = await _get_user_active_items(db, winner_id, board_id)
+                                        from achievements_engine import check_and_unlock_achievement
+                                        unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
+                                        if unlocked and ach_info:
+                                            await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
+                                            await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
+                                            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                                             (json.dumps(w_items), winner_id, board_id))
+                                    except Exception:
+                                        pass
+                                    await db.commit()
+
+                                    duel_result = {
+                                        "winner_id": winner_id,
+                                        "loser_id": loser_id,
+                                        "amount": amount,
+                                        "net_win": net_win,
+                                        "broadcast_msgs": broadcast_msgs
+                                    }
 
     if reject_msg is not None:
         await message.answer(reject_msg)
@@ -423,6 +453,45 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                 )
             except Exception:
                 pass
+
+    if net_win >= 50000 and bot:
+        try:
+            from news_channel_publisher import publish_casino_jackpot_news
+            asyncio.create_task(publish_casino_jackpot_news(
+                bot=bot,
+                user_id=winner_id,
+                game_type="duel",
+                bet_amount=amount,
+                win_amount=net_win,
+                multiplier=round(net_win / max(1, amount), 2),
+                symbols=f"{w_tag} vs {l_tag}",
+                board_id=board_id
+            ))
+        except Exception:
+            pass
+
+        try:
+            from post_processor import process_new_post
+            import shared_state
+            hype_text = (
+                f"⚔️🔥 <b>МЕГА-ДУЭЛЬ: РАЗНОС НА {amount:,} ₪!</b> 🔥⚔️\n\n"
+                f">два анона сошлись в кровавой схватке 50/50!\n"
+                f"👑 <b>Триумфатор:</b> {w_tag}\n"
+                f"💀 <b>Повержен:</b> {l_tag}\n"
+                f"💰 <b>Куш дуэли:</b> <b>+{net_win:,} ₪</b>!\n"
+            )
+            params = shared_state.NewPostParams(
+                bot_instance=bot,
+                board_id=board_id,
+                user_id=0,
+                content={'type': 'text', 'text': hype_text, 'is_system_message': True, 'archive_allowed': True},
+                reply_to_post=None,
+                is_shadow_muted=False,
+                stream='ru'
+            )
+            asyncio.create_task(process_new_post(params))
+        except Exception:
+            pass
 
     # Отправка плаката и итогов обоим участникам
     try:
@@ -479,6 +548,8 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             try: await bot.send_message(loser_id, duel_text, parse_mode="HTML")
             except Exception: pass
 
+    return duel_result
+
 async def decline_duel_logic(message: types.Message, challenger_id: int, user_id: int | None = None) -> bool:
     if user_id is None:
         user_id = message.from_user.id
@@ -494,7 +565,19 @@ async def decline_duel_logic(message: types.Message, challenger_id: int, user_id
             return False
 
         broadcast_msgs = list(duel.get("broadcast_msgs", []))
+        refund_amount = 0
+        duel_board_id = "b"
+        if duel.get("escrowed"):
+            refund_amount = duel.get("amount", 0)
+            duel_board_id = duel.get("board_id", "b")
         _active_duels.pop(challenger_id, None)
+
+    if refund_amount > 0:
+        db = await get_pool()
+        async with db_lock:
+            await add_user_global_balance(db, challenger_id, duel_board_id, refund_amount)
+            await record_user_transaction(db, challenger_id, refund_amount, 'duel', 'Возврат ставки: отмена дуэли')
+            await db.commit()
 
     bot = getattr(message, "bot", None)
     if bot and broadcast_msgs:

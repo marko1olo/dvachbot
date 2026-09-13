@@ -57,28 +57,36 @@ class TestGetUserIdFromSession(unittest.TestCase):
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
-        """Test that x-real-ip is used if available."""
+        """Test that x-real-ip is used if available from trusted localhost proxy."""
         request = StubRequest(
             headers={"x-real-ip": "1.2.3.4", "x-forwarded-for": "5.6.7.8"},
-            client_host="9.10.11.12"
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_real_ip(request), "1.2.3.4")
 
     def test_x_forwarded_for_fallback(self):
-        """Test that x-forwarded-for is used if x-real-ip is not available."""
+        """Test that x-forwarded-for is used if x-real-ip is not available from trusted localhost proxy."""
         request = StubRequest(
             headers={"x-forwarded-for": "5.6.7.8"},
-            client_host="9.10.11.12"
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_real_ip(request), "5.6.7.8")
 
     def test_x_forwarded_for_multiple_ips(self):
-        """Test that only the first IP from x-forwarded-for is returned."""
+        """Test that only the first IP from x-forwarded-for is returned from trusted localhost proxy."""
         request = StubRequest(
             headers={"x-forwarded-for": "5.6.7.8, 10.0.0.1"},
-            client_host="9.10.11.12"
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_real_ip(request), "5.6.7.8")
+
+    def test_untrusted_client_ignores_spoofed_headers(self):
+        """Test that external untrusted client cannot spoof IP via forwarded headers."""
+        request = StubRequest(
+            headers={"x-real-ip": "1.2.3.4", "x-forwarded-for": "5.6.7.8"},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "9.10.11.12")
 
     def test_client_host_fallback(self):
         """Test that client.host is used if no relevant headers are present."""

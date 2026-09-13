@@ -5536,16 +5536,44 @@ async def get_weekly_active_users(board_id: str, days: int = 7) -> set[int]:
                     uid = row[0]
                     if isinstance(uid, int) and uid > 0:
                         users.add(uid)
-            return users
+            break
         except sqlite3.OperationalError as e:
             if idx == 0 and "is_shadow" in str(e).lower():
                 users.clear()
                 continue
             print(f"get_weekly_active_users error: {e}")
-            return set()
+            break
         except Exception as e:
             print(f"get_weekly_active_users error: {e}")
-            return set()
+            break
+
+    try:
+        async with db.execute(
+            "SELECT DISTINCT user_id FROM UserReplies WHERE board_id = ? AND created_at >= ? AND user_id > 0",
+            (board_id, cutoff)
+        ) as cursor:
+            async for row in cursor:
+                if isinstance(row[0], int) and row[0] > 0:
+                    users.add(row[0])
+    except Exception:
+        pass
+
+    try:
+        async with db.execute(
+            """
+            SELECT DISTINCT ut.user_id 
+            FROM UserTransactions ut
+            JOIN Users u ON u.user_id = ut.user_id
+            WHERE u.board_id = ? AND ut.timestamp >= ? AND ut.user_id > 0
+            """,
+            (board_id, cutoff)
+        ) as cursor:
+            async for row in cursor:
+                if isinstance(row[0], int) and row[0] > 0:
+                    users.add(row[0])
+    except Exception:
+        pass
+
     return users
 async def set_user_stream(user_id: int, board_id: str, stream: str):
     if stream not in ['ru', 'en', 'jp']:

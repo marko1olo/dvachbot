@@ -200,6 +200,20 @@ async def process_and_upload_image(
         '.ogg', '.mp3', '.wav', '.opus'
     }
     ext = os.path.splitext(original_filename)[1].lower()
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(status_code=400, detail="Unsupported or disallowed file extension")
+    
+    ALLOWED_MIME_TYPES = {
+        'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+        'video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska',
+        'audio/ogg', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/opus',
+        'application/ogg', 'application/octet-stream'
+    }
+    ct_clean = (content_type or "").lower().split(";")[0].strip()
+    if ct_clean and ct_clean not in ALLOWED_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Disallowed MIME type")
+    if any(bad in ct_clean for bad in ("svg", "html", "javascript", "script", "xml", "application/x-")):
+        raise HTTPException(status_code=400, detail="Disallowed MIME type")
     
     if hasattr(file, 'size') and isinstance(file.size, int) and file.size > max_size_bytes:
          raise HTTPException(status_code=413, detail="File too large")

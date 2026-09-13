@@ -500,6 +500,8 @@ class MessageBroadcaster:
         remaining_recipients_for_later = set()
         interrupted_reason = None
 
+        consecutive_success_chunks = 0
+
         while queue:
             if phase_deadline is not None:
                 remaining_phase_sec = phase_deadline - time.time()
@@ -593,7 +595,7 @@ class MessageBroadcaster:
                     self.all_results.append((uid, res))
 
             if flood_wait_seconds > 0:
-                wait_real = flood_wait_seconds + 0.5
+                wait_real = flood_wait_seconds + 1.0
                 if phase_deadline is not None and time.time() + wait_real + DELIVERY_PHASE_GUARD_SEC >= phase_deadline:
                     remaining_recipients_for_later.update(queue)
                     queue.clear()
@@ -601,6 +603,7 @@ class MessageBroadcaster:
                     await asyncio.sleep(wait_real)
                     break
                 await asyncio.sleep(wait_real)
+                consecutive_success_chunks = 0
                 CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 2)
             else:
                 # Calibrated pacing targeting 28.0 msg/sec safe ceiling per bot token
@@ -610,8 +613,14 @@ class MessageBroadcaster:
                     await asyncio.sleep(remaining_pace_sleep)
                 else:
                     await asyncio.sleep(0)
-                if not has_429 and CHUNK_SIZE < DELIVERY_MAX_CHUNK_SIZE:
-                    CHUNK_SIZE = min(DELIVERY_MAX_CHUNK_SIZE, CHUNK_SIZE + 1)
+                if has_429:
+                    consecutive_success_chunks = 0
+                    CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 2)
+                else:
+                    consecutive_success_chunks += 1
+                    if consecutive_success_chunks >= 3 and CHUNK_SIZE < DELIVERY_MAX_CHUNK_SIZE:
+                        CHUNK_SIZE = min(DELIVERY_MAX_CHUNK_SIZE, CHUNK_SIZE + 1)
+                        consecutive_success_chunks = 0
 
         return remaining_recipients_for_later, interrupted_reason, phase_budget_sec
 
