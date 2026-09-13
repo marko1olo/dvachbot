@@ -105,27 +105,27 @@ async def test_jackpot_news_filters():
     with patch("news_channel_publisher.get_target_channels", return_value=(-100123, -100123)), \
          patch("news_channel_publisher.send_channel_content", new_callable=AsyncMock, return_value=777) as mock_send:
 
-        # 1. Slots < 4.0x must be rejected
+        # 1. Win < 300k must be rejected
         res_slots_low = await publish_casino_jackpot_news(
             bot=mock_bot, user_id=1, game_type="slots", bet_amount=100000, win_amount=180000, multiplier=1.8
         )
         assert res_slots_low is False
 
-        # 2. Slots >= 4.0x accepted
+        # 2. Slots >= 300k accepted
         res_slots_high = await publish_casino_jackpot_news(
-            bot=mock_bot, user_id=1, game_type="slots", bet_amount=1000, win_amount=9000, multiplier=9.0, symbols="[🍒 | 🍒 | 🍒]"
+            bot=mock_bot, user_id=1, game_type="slots", bet_amount=40000, win_amount=360000, multiplier=9.0, symbols="[🍒 | 🍒 | 🍒]"
         )
         assert res_slots_high is True
 
-        # 3. Dice duel >= 50k accepted
+        # 3. Dice duel >= 300k accepted
         res_dice = await publish_casino_jackpot_news(
-            bot=mock_bot, user_id=2, game_type="dice", bet_amount=30000, win_amount=57000, multiplier=1.9, symbols="⚅ ⚅ vs ⚁ ⚂"
+            bot=mock_bot, user_id=2, game_type="dice", bet_amount=200000, win_amount=380000, multiplier=1.9, symbols="⚅ ⚅ vs ⚁ ⚂"
         )
         assert res_dice is True
 
-        # 4. Russian roulette x4.0+ accepted
+        # 4. Russian roulette >= 300k accepted
         res_rr = await publish_casino_jackpot_news(
-            bot=mock_bot, user_id=3, game_type="roulette", bet_amount=5000, win_amount=27500, multiplier=5.5, symbols="Выжил 4 выстрела!"
+            bot=mock_bot, user_id=3, game_type="roulette", bet_amount=100000, win_amount=550000, multiplier=5.5, symbols="Выжил 4 выстрела!"
         )
         assert res_rr is True
 

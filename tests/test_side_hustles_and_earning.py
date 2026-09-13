@@ -62,10 +62,10 @@ async def test_casino_news_filter_accepts_4x_and_above():
     with patch("news_channel_publisher.get_target_channels", return_value=(-100123456, -100123456)), \
          patch("news_channel_publisher.send_channel_content", new_callable=AsyncMock, return_value=99999) as mock_send:
 
-        # 4.0x win
+        # 4.0x win with >= 300k win amount
         res = await publish_casino_jackpot_news(
             bot=mock_bot, user_id=123, game_type="slots",
-            bet_amount=1000, win_amount=4000, multiplier=4.0, symbols="[🍋 | 🍋 | 🍋]"
+            bet_amount=100000, win_amount=400000, multiplier=4.0, symbols="[🍋 | 🍋 | 🍋]"
         )
         assert res is True
         mock_send.assert_called_once()

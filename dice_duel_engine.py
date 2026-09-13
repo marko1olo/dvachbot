@@ -688,8 +688,10 @@ async def _finish_dice_game(
             )
 
         if bot:
-            asyncio.create_task(broadcast_dice_announcement(bot, board_id, announcement))
-            if win_payout >= 50000 and winner_id:
+            dice_mult = round(win_payout / max(1, bet), 2)
+            if win_payout >= 100000 and dice_mult >= 5.0:
+                asyncio.create_task(broadcast_dice_announcement(bot, board_id, announcement))
+            if win_payout >= 300000 and winner_id:
                 try:
                     from news_channel_publisher import publish_casino_jackpot_news
                     asyncio.create_task(publish_casino_jackpot_news(
@@ -698,7 +700,7 @@ async def _finish_dice_game(
                         game_type="dice",
                         bet_amount=bet,
                         win_amount=win_payout,
-                        multiplier=round(win_payout / max(1, bet), 2),
+                        multiplier=dice_mult,
                         symbols=f"{w_vis} vs {l_vis}",
                         board_id=board_id
                     ))

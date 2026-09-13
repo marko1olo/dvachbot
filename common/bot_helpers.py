@@ -454,7 +454,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             except Exception:
                 pass
 
-    if net_win >= 50000 and bot:
+    if net_win >= 300000 and bot:
         try:
             from news_channel_publisher import publish_casino_jackpot_news
             asyncio.create_task(publish_casino_jackpot_news(
@@ -470,6 +470,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         except Exception:
             pass
 
+    if net_win >= 100000 and (net_win / max(1, amount)) >= 5.0 and bot:
         try:
             from post_processor import process_new_post
             import shared_state

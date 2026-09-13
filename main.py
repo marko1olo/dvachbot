@@ -11447,7 +11447,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                 tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
             new_balance = await add_user_global_balance(db, user_id, board_id, actual_profit)
             await record_user_transaction(db, user_id, actual_profit, 'casino', f'Выигрыш в Слоты 777 (ставка {bet} ₪)')
-            if mult >= 4.0 and (mult >= 9.0 or win_amt >= 50000):
+            if win_amt >= 300000:
                 try:
                     from news_channel_publisher import publish_casino_jackpot_news
                     spawn_task(publish_casino_jackpot_news(
@@ -11458,7 +11458,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                 except Exception:
                     pass
 
-            if mult >= 25.0 or win_amt >= 50000:
+            if win_amt >= 100000 and mult >= 5.0:
                 try:
                     from post_processor import process_new_post
                     import shared_state
@@ -11675,7 +11675,7 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
                 (user_id, board_id, json.dumps(user_items))
             )
-            if win_amt >= 50000:
+            if win_amt >= 300000:
                 try:
                     from news_channel_publisher import publish_casino_jackpot_news
                     spawn_task(publish_casino_jackpot_news(
@@ -11686,6 +11686,7 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
                 except Exception:
                     pass
 
+            if win_amt >= 100000 and mult >= 5.0:
                 try:
                     from post_processor import process_new_post
                     import shared_state
@@ -12456,7 +12457,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 casino_engine.record_win_streak(user_id, True)
                 await db.commit()
 
-            if mult >= 4.0 or actual_payout >= 50000:
+            if actual_payout >= 300000:
                 try:
                     from news_channel_publisher import publish_casino_jackpot_news
                     spawn_task(publish_casino_jackpot_news(
@@ -12467,6 +12468,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 except Exception:
                     pass
 
+            if actual_payout >= 100000 and mult >= 5.0:
                 try:
                     from post_processor import process_new_post
                     import shared_state

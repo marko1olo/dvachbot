@@ -312,10 +312,8 @@ async def publish_casino_jackpot_news(
     if not news_channel_id or news_channel_id == 0:
         return False
 
-    # Строгий фильтр: для слотов только заносы с множителем не менее 4.0x (отсекаем мелкие совпадения)
-    if game_type == "slots" and multiplier < 4.0:
-        return False
-    if multiplier < 4.0 and win_amount < 50_000:
+    # Строгий фильтр: публикация в «Тгач Новости» только для выигрышей от 300 000 ₪ по любой из игр
+    if win_amount < 300_000:
         return False
 
     bot_info = await bot.get_me()
