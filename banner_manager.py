@@ -672,3 +672,9 @@ def get_all_banners_summary() -> Dict[str, Any]:
         "cached_file_ids": len(_BANNER_CACHE),
         "categories": {cat: len(files) for cat, files in _CATEGORIZED_BANNERS.items() if cat != "all"}
     }
+
+
+async def _send_banners_page(*args, **kwargs):
+    """Bridge forwarder to main._send_banners_page for backward compatibility and resilience."""
+    import main
+    return await main._send_banners_page(*args, **kwargs)

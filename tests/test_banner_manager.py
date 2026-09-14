@@ -328,6 +328,24 @@ class TestBannerGalleryAsync(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(call_kwargs["page"], 2)
             self.assertEqual(call_kwargs["sort"], "alpha")
 
+    async def test_quick_menu_banners_click(self):
+        from main import handle_quick_menu_click
+        bot = AsyncMock()
+        callback = AsyncMock()
+        callback.bot = bot
+        callback.message.chat.id = 123456789
+        callback.from_user.id = 597708036
+        callback.data = "menu_banners"
+
+        with patch("main._send_banners_page") as mock_send:
+            await handle_quick_menu_click(callback, state=AsyncMock(), board_id="b", stream="ru")
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args.kwargs
+            self.assertEqual(call_kwargs["bot"], bot)
+            self.assertEqual(call_kwargs["chat_id"], 123456789)
+            self.assertEqual(call_kwargs["page"], 0)
+            self.assertEqual(call_kwargs["category"], "all")
+
 
 class TestBannerCacheDebounce(unittest.TestCase):
     """Unit tests for debounced save_cache, flush_cache, and atexit registration."""

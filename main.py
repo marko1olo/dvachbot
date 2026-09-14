@@ -4292,7 +4292,7 @@ _BANNER_CAT_LABELS = {
 }
 
 
-async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all", sort: str = "alpha", seed: int = 0):
+async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all", sort: str = "alpha", seed: int = 0, **kwargs):
     """Sends a page of banners as a media group + navigation buttons with automatic cache fallback and sorting."""
     from banner_manager import _CATEGORIZED_BANNERS, get_banner_file, BANNERS_DIR, _BANNER_CACHE, save_cache
 
@@ -18103,13 +18103,15 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
     elif action in ["hent", "loli"]:
         await _handle_quick_menu_anime(callback, board_id, action, lang)
     elif action == "banners":
-        from banner_manager import _send_banners_page
+        try:
+            await callback.answer()
+        except Exception:
+            pass
         await _send_banners_page(
             bot=callback.bot,
             chat_id=callback.message.chat.id,
-            board_id=board_id,
             page=0,
-            user_id=user_id
+            category="all"
         )
 @dp.callback_query(F.data.startswith("pers_"))
 async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
