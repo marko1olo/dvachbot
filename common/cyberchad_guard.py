@@ -159,6 +159,9 @@ def check_cyberchad_abuse_and_suppress(
     if history:
         last_t = history[-1]
         elapsed = t_now - last_t
+        # If checked within the same request pipeline execution (<= 0.5s after router approval), do not trip self-limit
+        if 0.0 <= elapsed <= 0.5:
+            return False, "approved_current_pipeline", False
         if elapsed < cooldown:
             last_reject_t = _USER_LAST_REJECT_TS.get(key, 0.0)
             rejects_in_burst = _USER_REJECT_COUNT_WINDOW.get(key, 0)
@@ -178,7 +181,11 @@ def record_cyberchad_trigger_approved(board_id: str, user_id: int, text: str, no
     """Records approved trigger to advance history and prompt memory."""
     t_now = now if now is not None else time.time()
     key = (board_id, user_id)
-    _USER_TRIGGER_HISTORY[key].append(t_now)
+    history = _USER_TRIGGER_HISTORY[key]
+    if history and 0.0 <= (t_now - history[-1]) <= 0.5:
+        # Same request pipeline call, do not duplicate record
+        return
+    history.append(t_now)
     fp = _clean_text_fingerprint(text)
     if fp:
         _USER_RECENT_PROMPTS[key].append(fp)

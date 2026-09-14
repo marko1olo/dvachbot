@@ -1373,10 +1373,12 @@ def build_single_music_roast_prompt(artist: str, title: str, dur_str: str, filen
         "СУТЬ РОАСТА — ИЗДЕВАТЕЛЬСКИЙ РАЗНОС ПЕСНИ И УДАР ПО СЛУШАТЕЛЮ (MOCK):\n"
         "1. ВЕКТОР ДОЁБА К ПЕСНЕ — БЕЙ СТРОГО ПО РЕАЛЬНОМУ ЗВУЧАНИЮ И ЖАНРУ ТРЕКА:\n"
         "   Мы не звукорежиссеры, говори живым двачерским языком, но строго по фактической сути музыки!\n"
+        "   - Внимательно вслушайся в прикрепленное аудио! Определи его РЕАЛЬНЫЙ жанр, инструменты и вокал.\n"
+        "   - Оценивай РЕАЛЬНЫЙ вокал: кто поет (мужской, женский, дуэт, скрим/гроул, фальшивый надрыв, гнусавый бубнеж, или чистый инструментал без слов).\n"
         "   - СТРОЖАЙШИЙ ЗАПРЕТ ВЫДУМЫВАТЬ АВТОТЮН, СИНТЕЗАТОРЫ ИЛИ БИТЫ, ЕСЛИ ИХ НЕТ В ТРЕКЕ!\n"
-        "   - Если это военный марш, гимн или духовой оркестр (как Пиночет, парадный марш) — бей по медным трубам, барабанной дроби, солдафонскому хоровому пафосу и диванному диктатору в семейниках! Никаких синтезаторов!\n"
         "   - Если это рок/метал — разноси гитарный скрежет, кривой чес, гроул и говнарский псевдобунт.\n"
         "   - Если это акустика/бард — разноси расстроенную гитару, дребезг струн и гнусавый хрип.\n"
+        "   - Если это марш или духовой оркестр — разноси медные трубы, барабанный бой и солдафонский пафос.\n"
         "   - И ТОЛЬКО если это реально рэп, попса или клубняк — бей по автотюну, драм-машине и синтезаторам, если они действительно звучат.\n"
         "2. ЭКСТРАПОЛИРУЙ УДАР ПО СЛУШАТЕЛЮ: покажи, что эта песня — прямое зеркало его убогой жизни. Какая песня — такой и человек!\n"
         "3. БЕСПОЩАДНЫЙ РАЗЪЁБ, ЗЛОСТЬ И ИЗДЕВАТЕЛЬСТВО (MOCK): глумись, язви, безжалостно унижай сыча за его позорный вкус и кринжовые претензии под этот трек.\n\n"
@@ -1421,6 +1423,7 @@ def build_batch_music_roast_prompt(tracks_info: list[dict], tone: dict) -> str:
         "СУТЬ РОАСТА — ИЗДЕВАТЕЛЬСКИЙ РАЗНОС ПОДБОРКИ И УДАР ПО СЛУШАТЕЛЮ (MOCK):\n"
         "1. ВЕКТОР ДОЁБА К ТРЕКАМ — БЕЙ СТРОГО ПО РЕАЛЬНОМУ ЗВУЧАНИЮ И ЖАНРУ КАЖДОГО ТРЕКА:\n"
         "   Мы не звукорежиссеры, говори живым двачерским языком, но строго по фактической сути музыки!\n"
+        "   - Внимательно вслушайся в каждый трек: определи его реальные инструменты, вокал и жанр.\n"
         "   - СТРОЖАЙШИЙ ЗАПРЕТ ВЫДУМЫВАТЬ АВТОТЮН, СИНТЕЗАТОРЫ ИЛИ БИТЫ В ЖИВОЙ, МАРШЕВОЙ ИЛИ РОКОВОЙ МУЗЫКЕ!\n"
         "   - Военный марш/гимн — разноси медные трубы, барабанную дробь и солдафонский пафос (никаких синтезаторов!).\n"
         "   - Рок/метал — разноси гитарный скрежет, гроул и говнарский пафос.\n"
@@ -1911,16 +1914,14 @@ async def handle_music_roast_batch(
 
         # 2. Проверка совокупного размера и компрессия через ffmpeg при необходимости
         total_audio_bytes = sum(len(b) for _, b, _ in downloaded_items if b)
-        if total_audio_bytes > 14 * 1024 * 1024:
-            logger.info(f"📦 [Music Batch] Совокупный вес пачки ({total_audio_bytes / 1024 / 1024:.1f}MB > 14MB) — компрессия через ffmpeg")
-            compressed_items = []
-            for meta, b, note in downloaded_items:
-                if b:
-                    cb = compress_audio_for_gemini(b, target_bitrate_kbps=64)
-                    compressed_items.append((meta, cb, note))
-                else:
-                    compressed_items.append((meta, b, note))
-            downloaded_items = compressed_items
+        compressed_items = []
+        for meta, b, note in downloaded_items:
+            if b and (len(b) > 2 * 1024 * 1024 or total_audio_bytes > 5 * 1024 * 1024):
+                cb = compress_audio_for_gemini(b, target_bitrate_kbps=64)
+                compressed_items.append((meta, cb, note))
+            else:
+                compressed_items.append((meta, b, note))
+        downloaded_items = compressed_items
 
         # 3. Выбор уникального пресета музкритика
         preset = get_music_roast_preset()
@@ -1966,13 +1967,22 @@ async def handle_music_roast_batch(
         gemini_payload = {
             "contents": [{"parts": parts}],
             "systemInstruction": {"parts": [{"text": MUSIC_ROAST_SYSTEM_PROMPT}]},
-            "generationConfig": {"temperature": 0.75, "maxOutputTokens": 1400}
+            "generationConfig": {"temperature": 0.75, "maxOutputTokens": 1400},
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
         }
 
         # Таймаут с запасом на мульти-аудио
         max_duration = max([m.get("duration") or 60 for m in tracks_meta_list] or [60])
         gemini_timeout = max(40.0, min(240.0, float(max_duration) * 0.7 + 35.0))
-        models_to_try = ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.5-flash"]
+        models_to_try = [
+            "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash",
+            "gemini-1.5-flash", "gemini-3.8-flash", "gemini-3.5-flash"
+        ]
 
         raw_music_res = None
         active_keys = (google_pool.get_all_active_tokens() if hasattr(google_pool, "get_all_active_tokens") else []) or google_keys
@@ -1992,6 +2002,9 @@ async def handle_music_roast_batch(
                                         raw_music_res = res_parts[0]["text"].strip()
                                         logger.info(f"✅ [Music Gemini] Успешная рецензия через {model_name} (симв: {len(raw_music_res)})")
                                         break
+                                    else:
+                                        cand = gdata.get("candidates", [{}])[0]
+                                        logger.warning(f"⚠️ [Music Gemini] Пустой ответ от {model_name}. finishReason={cand.get('finishReason')}")
                                 elif resp.status_code == 429:
                                     logger.warning(f"⚠️ [Music Gemini] 429 Quota Exceeded for key ...{gkey[-6:]}")
                                     if hasattr(google_pool, "penalize_token"):
@@ -2029,9 +2042,12 @@ async def handle_music_roast_batch(
                 single_roast_text, single_rating = parse_music_roast_response(raw_music_res)
             if not single_roast_text:
                 try:
-                    note_ctx = f"\nФрагмент/текст: «{note}»" if note else ""
+                    note_ctx = f"\nПримечание: «{note}»" if note else ""
                     track_ctx = f"Исполнитель: «{meta['artist']}»\nНазвание трека: «{meta['title']}»\nДлительность: {meta['dur_str']}{note_ctx}"
-                    user_msg = f"Отрецензируй и сокруши личность слушателя трека (подача: {preset['title']}):\n\n{track_ctx}"
+                    user_msg = (
+                        f"Отрецензируй и сокруши личность слушателя трека (подача: {preset['title']}):\n\n{track_ctx}\n\n"
+                        f"ВНИМАНИЕ: Сам аудиофайл не был загружен (только метаданные). Оценивай трек по известному стилю исполнителя, названию и общему культурному контексту, НЕ выдумывая вымышленные секундные эффекты."
+                    )
                     raw_ai_fallback = await summarize_text_with_hf(MUSIC_ROAST_SYSTEM_PROMPT, user_msg, model_preference="persona")
                     if raw_ai_fallback and len(raw_ai_fallback.strip()) > 5:
                         single_roast_text, single_rating = parse_music_roast_response(raw_ai_fallback)
@@ -2050,7 +2066,10 @@ async def handle_music_roast_batch(
                 try:
                     lines = [f"{i}. «{t['artist']} — {t['title']}» ({t['dur_str']})" for i, t in enumerate(tracks_meta_list, 1)]
                     batch_ctx = "\n".join(lines)
-                    user_msg = f"Отрецензируй и сокруши личность слушателя за следующую подборку из {count} треков (подача: {preset['title']}):\n\n{batch_ctx}"
+                    user_msg = (
+                        f"Отрецензируй и сокруши личность слушателя за следующую подборку из {count} треков (подача: {preset['title']}):\n\n{batch_ctx}\n\n"
+                        f"ВНИМАНИЕ: Оценивай треки по известным стилям исполнителей и названиям, НЕ выдумывая вымышленные звуковые эффекты."
+                    )
                     raw_ai_fallback = await summarize_text_with_hf(MUSIC_ROAST_SYSTEM_PROMPT, user_msg, model_preference="persona")
                     if raw_ai_fallback and len(raw_ai_fallback.strip()) > 5:
                         batch_reviews, batch_overall_verdict, batch_overall_rating, batch_score = parse_batch_music_roast_response(raw_ai_fallback, count)
@@ -3785,7 +3804,8 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
     text: str,
     post_num: int | None = None,
     reply_to_post: int | None = None,
-    stream: str = 'ru'
+    stream: str = 'ru',
+    is_rate_checked: bool = False
 ) -> None:
     """
     Отслеживает срачи в чате и прямые реплаи на посты Киберчеда.
@@ -3842,23 +3862,31 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     return
 
                 author = target_post_data.get("author_id")
+                c_dict = target_post_data.get("content", {})
+                if isinstance(c_dict, str):
+                    import json
+                    try: c_dict = json.loads(c_dict)
+                    except Exception: c_dict = {'text': c_dict}
+                
+                is_chad_target = False
+                if isinstance(c_dict, dict):
+                    if (
+                        c_dict.get("is_ai_roast")
+                        or c_dict.get("is_ai")
+                        or c_dict.get("is_ai_persona")
+                        or c_dict.get("is_cyberchad")
+                        or "Киберчед" in str(c_dict)
+                        or "киберчед" in str(c_dict).lower()
+                    ):
+                        is_chad_target = True
+                    target_post_text = c_dict.get('text') or c_dict.get('caption') or ""
+
                 if author in (0, 1488148800):
+                    if not (isinstance(c_dict, dict) and (c_dict.get("is_system_message") or c_dict.get("is_newspaper") or c_dict.get("is_game")) and not c_dict.get("is_cyberchad") and not c_dict.get("is_ai_roast")):
+                        is_chad_target = True
+
+                if is_chad_target:
                     is_direct_reply_to_chad = True
-                else:
-                    c_dict = target_post_data.get("content", {})
-                    if isinstance(c_dict, str):
-                        import json
-                        try: c_dict = json.loads(c_dict)
-                        except Exception: c_dict = {'text': c_dict}
-                    if isinstance(c_dict, dict):
-                        if (
-                            c_dict.get("is_ai_roast")
-                            or c_dict.get("is_ai")
-                            or c_dict.get("is_ai_persona")
-                            or "Киберчед" in str(c_dict)
-                        ):
-                            is_direct_reply_to_chad = True
-                        target_post_text = c_dict.get('text') or c_dict.get('caption') or ""
         except Exception as e:
             logger.debug(f"[Cyberchad] Error checking target post {reply_to_post}: {e}")
 
@@ -3873,58 +3901,58 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
     system_prompt = CYBERCHAD_FIGHT_INTERVENTION_PROMPT
 
     if is_direct_reply_to_chad:
-        from common.cyberchad_guard import (
-            check_cyberchad_abuse_and_suppress,
-            record_cyberchad_trigger_approved,
-            reset_user_board_guard
-        )
-        if (board_id, user_id) not in _LAST_DIRECT_ROAST_USER_TS:
-            reset_user_board_guard(board_id, user_id)
+        if not is_rate_checked:
+            from common.cyberchad_guard import (
+                check_cyberchad_abuse_and_suppress,
+                record_cyberchad_trigger_approved,
+                reset_user_board_guard
+            )
+            if (board_id, user_id) not in _LAST_DIRECT_ROAST_USER_TS:
+                reset_user_board_guard(board_id, user_id)
 
-        should_suppress, guard_reason, allow_voice = check_cyberchad_abuse_and_suppress(
-            user_id=user_id, board_id=board_id, text=text, now=now
-        )
-        last_user_direct = _LAST_DIRECT_ROAST_USER_TS.get((board_id, user_id), 0.0)
-        is_under_base_60 = (now - last_user_direct < 60.0)
+            should_suppress, guard_reason, allow_voice = check_cyberchad_abuse_and_suppress(
+                user_id=user_id, board_id=board_id, text=text, now=now
+            )
+            last_user_direct = _LAST_DIRECT_ROAST_USER_TS.get((board_id, user_id), 0.0)
+            is_under_base_60 = (0.5 < (now - last_user_direct) < 60.0)
 
-        if should_suppress or is_under_base_60:
-            last_reject = _LAST_REJECT_USER_TS.get((board_id, user_id), 0.0)
-            if allow_voice and (now - last_reject >= 15.0):
-                _LAST_REJECT_USER_TS[(board_id, user_id)] = now
-                reject_text = random.choice(CYBERCHAD_RATE_LIMIT_REJECTIONS)
-                logger.info(f"⏳ [Cyberchad Rate Limit] Юзер {user_id} спамит (<cooldown). Отправляем оффлайн-отлуп в ГС без Gemini.")
-                try:
-                    voice_res = await synthesize_cyberchad_voice_with_meta(reject_text)
-                    voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
-                    if voice_bytes:
-                        await process_new_post(shared_state.NewPostParams(
-                            bot_instance=bot,
-                            board_id=board_id,
-                            user_id=0,
-                            content={
-                                'type': 'voice',
-                                'voice_bytes': voice_bytes,
-                                'caption': '🔥 Разъёб от Киберчеда',
-                                'roast_text': reject_text,
-                                'text': reject_text,
-                                'transcription': reject_text,
-                                'is_ai_roast': True,
-                                'is_ai': True,
-                                'is_cyberchad': True,
-                                'is_rate_limit_rejection': True,
-                                'rate_limit_rejection': True,
-                                'reply_to': post_num
-                            },
-                            reply_to_post=post_num,
-                            is_shadow_muted=False,
-                            stream=stream
-                        ))
-                except Exception as tts_err:
-                    logger.warning(f"⚠️ [Cyberchad Rate Limit] Ошибка синтеза отлупа: {tts_err}")
-            return
+            if should_suppress or is_under_base_60:
+                last_reject = _LAST_REJECT_USER_TS.get((board_id, user_id), 0.0)
+                if allow_voice and (now - last_reject >= 15.0):
+                    _LAST_REJECT_USER_TS[(board_id, user_id)] = now
+                    reject_text = random.choice(CYBERCHAD_RATE_LIMIT_REJECTIONS)
+                    logger.info(f"⏳ [Cyberchad Rate Limit] Юзер {user_id} спамит (<cooldown). Отправляем оффлайн-отлуп в ГС без Gemini.")
+                    try:
+                        voice_res = await synthesize_cyberchad_voice_with_meta(reject_text)
+                        voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
+                        if voice_bytes:
+                            await process_new_post(shared_state.NewPostParams(
+                                bot_instance=bot,
+                                board_id=board_id,
+                                user_id=0,
+                                content={
+                                    'type': 'voice',
+                                    'voice_bytes': voice_bytes,
+                                    'caption': '🔥 Разъёб от Киберчеда',
+                                    'roast_text': reject_text,
+                                    'text': reject_text,
+                                    'transcription': reject_text,
+                                    'is_ai_roast': True,
+                                    'is_ai': True,
+                                    'is_cyberchad': True,
+                                    'is_rate_limit_rejection': True,
+                                    'rate_limit_rejection': True,
+                                    'reply_to': post_num
+                                },
+                                reply_to_post=post_num,
+                                is_shadow_muted=False,
+                                stream=stream
+                            ))
+                    except Exception as tts_err:
+                        logger.warning(f"⚠️ [Cyberchad Rate Limit] Ошибка синтеза отлупа: {tts_err}")
+                return
 
-        record_cyberchad_trigger_approved(board_id, user_id, text, now=now)
-
+            record_cyberchad_trigger_approved(board_id, user_id, text, now=now)
 
         should_intervene = True
         is_direct_mode = True
@@ -3998,6 +4026,11 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
         try:
             if is_direct_mode:
                 _LAST_DIRECT_ROAST_USER_TS[(board_id, user_id)] = now_curr
+                try:
+                    from handlers.message_router import _CYBERCHAD_USER_LAST_DIRECT
+                    _CYBERCHAD_USER_LAST_DIRECT[(board_id, user_id)] = now_curr
+                except Exception:
+                    pass
             else:
                 _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION[board_id] = now_curr
 
