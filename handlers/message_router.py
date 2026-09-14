@@ -1340,6 +1340,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             stream=stream
         ))
         if post_num and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
+            is_music = (message.content_type == 'audio') or (message.content_type == 'document' and is_music_document(message.document))
             if message.content_type in ('voice', 'video_note') and board_id != 'trash':
                 v_obj = message.voice if message.content_type == 'voice' else message.video_note
                 v_dur = getattr(v_obj, 'duration', 1) if v_obj else 0
@@ -1348,11 +1349,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     logger.info(f"🔇 [Voice/VideoNote] Message {post_num} has empty/0 duration ({v_dur}s, {v_sz}b). Skipping voice roast.")
                 else:
                     spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream, post_num=post_num))
-            elif message.content_type == 'audio' and board_id != 'trash':
+            elif is_music and board_id != 'trash':
                 spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
-            elif message.content_type == 'document' and is_music_document(message.document) and board_id != 'trash':
-                spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
-            if message.content_type in ('voice', 'video_note') and not (text_for_corpus or message.caption):
+
+            if is_music:
+                text_for_intervention = ""
+            elif message.content_type in ('voice', 'video_note') and not (text_for_corpus or message.caption):
                 text_for_intervention = ""
             else:
                 text_for_intervention = text_for_corpus or message.text or message.caption or (f"[{message.content_type}]" if reply_to_post else "")

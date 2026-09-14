@@ -1572,7 +1572,7 @@ class MessageBroadcaster:
                             if isinstance(send_content, dict):
                                 send_content["file_id"] = None
                         fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
-                        if fid and not fb:
+                        if fid and not fb and not getattr(self, '_broadcast_media_download_failed', False):
                             fb, _ = await _download_media_bytes(fid)
                             if fb:
                                 self._broadcast_downloaded_fb = fb
@@ -1583,6 +1583,15 @@ class MessageBroadcaster:
                                     self.content_for_common["image_bytes"] = fb
                                 if hasattr(self, 'content') and isinstance(self.content, dict):
                                     self.content["image_bytes"] = fb
+                            else:
+                                self._broadcast_media_download_failed = True
+                                current_content["file_id"] = None
+                                if isinstance(send_content, dict):
+                                    send_content["file_id"] = None
+                                if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                    self.content_for_common["file_id"] = None
+                                if hasattr(self, 'content') and isinstance(self.content, dict):
+                                    self.content["file_id"] = None
                         fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
                         if fb:
                             ct = str(current_content.get("type") or "").split('.')[-1].lower()

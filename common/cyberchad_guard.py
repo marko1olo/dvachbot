@@ -190,3 +190,30 @@ def record_cyberchad_trigger_approved(board_id: str, user_id: int, text: str, no
     if fp:
         _USER_RECENT_PROMPTS[key].append(fp)
     _USER_REJECT_COUNT_WINDOW[key] = 0
+
+    if len(_USER_TRIGGER_HISTORY) > 3000:
+        prune_stale_guard_entries(t_now)
+
+
+def prune_stale_guard_entries(now: Optional[float] = None) -> int:
+    """
+    Cleans up in-memory tracking records for inactive users (> 3600s).
+    Keeps memory footprint small even under millions of lifetime interactions.
+    """
+    t_now = now if now is not None else time.time()
+    cutoff = t_now - 3600.0
+    stale_keys = []
+    for key, history in list(_USER_TRIGGER_HISTORY.items()):
+        latest_t = history[-1] if history else 0.0
+        ignore_until = _USER_SHADOW_IGNORE_UNTIL.get(key, 0.0)
+        if latest_t < cutoff and t_now > ignore_until:
+            stale_keys.append(key)
+
+    for k in stale_keys:
+        _USER_TRIGGER_HISTORY.pop(k, None)
+        _USER_RECENT_PROMPTS.pop(k, None)
+        _USER_REJECT_COUNT_WINDOW.pop(k, None)
+        _USER_LAST_REJECT_TS.pop(k, None)
+        _USER_SHADOW_IGNORE_UNTIL.pop(k, None)
+
+    return len(stale_keys)
