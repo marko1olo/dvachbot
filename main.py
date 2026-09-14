@@ -2111,15 +2111,14 @@ async def board_statistics_broadcaster():
                             recipients = b_data['users']['active'] - b_data['users']['banned']
                     if not recipients: continue
                     full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
-                    from banner_manager import get_banner_file
-                    fname, photo_payload = get_banner_file(category="stats")
-                    from banner_manager import _BANNER_CACHE
-                    fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-                    if not fid and _BANNER_CACHE:
-                        fid = next(iter(_BANNER_CACHE.values()), None)
+                    from banner_manager import get_banner_delivery_payload
+                    target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id)
+                    b_bot_id = getattr(target_bot, "id", None)
+                    fname, fid, img_bytes = get_banner_delivery_payload(category="stats", bot_id=b_bot_id)
                     content = {
-                        "type": "photo" if fid else "text",
+                        "type": "photo" if (fid or img_bytes) else "text",
                         "file_id": fid,
+                        "image_bytes": img_bytes,
                         "caption": full_stats_text,
                         "text": full_stats_text,
                         "is_system_message": True,
@@ -2318,18 +2317,15 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                     board_posts.append((_fast_storage_ts(p.get('timestamp')), p))
             board_posts.sort(key=operator.itemgetter(0))
             
-            total_board_posts = len(board_posts)
-            if total_board_posts <= 150:
-                post_iterator = [p for _, p in board_posts]
+            posts_in_window = [p for ts, p in board_posts if ts >= time_threshold_ts]
+            if len(posts_in_window) > 200:
+                post_iterator = posts_in_window[-200:]
+            elif len(posts_in_window) >= 10:
+                post_iterator = posts_in_window
             else:
-                posts_in_last_6h = [p for ts, p in board_posts if ts >= time_threshold_ts]
-                count_6h = len(posts_in_last_6h)
-                if count_6h < 150:
-                    post_iterator = [p for _, p in board_posts[-150:]]
-                elif count_6h > 200:
-                    post_iterator = [p for _, p in board_posts[-200:]]
-                else:
-                    post_iterator = posts_in_last_6h
+                # If board had very low activity in window, take at most 30 recent posts to avoid old days bleed
+                fallback_recent = [p for _, p in board_posts[-30:]]
+                post_iterator = posts_in_window if len(posts_in_window) >= len(fallback_recent) else fallback_recent
 
     # Batch-fetch media tags & descriptions for all image posts in post_iterator
     missing_file_ids = None
@@ -2393,6 +2389,20 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             text = _format_post_text(content, msg_type, media_meta=media_meta)
             if not text:
                 continue
+
+            # Filter out command spam and bare empty media markers
+            text_lower = text.strip().lower()
+            if text_lower in ('[sticker]', '[photo]', '[animation]', '[video]', '[document]', '[media_group]'):
+                continue
+            if text_lower.startswith('/') and len(text_lower.split()) <= 2:
+                cmd = text_lower.split()[0].lstrip('/')
+                if cmd in (
+                    'work', 'workk', 'bank', 'dice', 'duel', 'bonus', 'daily',
+                    'inv', 'inventory', 'profile', 'status', 'stat', 'stats',
+                    'shop', 'pay', 'transfer', 'flip', 'coin', 'roll', 'rep',
+                    'karma', 'balance', 'bal', 'top', 'rating', 'help', 'start'
+                ):
+                    continue
 
             name = content.get('username') or content.get('name') or content.get('author_name')
             if not name:
@@ -14113,15 +14123,14 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=btn_text, url=site_url)]
         ])
-        from banner_manager import get_banner_file
-        fname, photo_payload = get_banner_file(category="motivation")
-        from banner_manager import _BANNER_CACHE
-        fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-        if not fid and _BANNER_CACHE:
-            fid = next(iter(_BANNER_CACHE.values()), None)
+        from banner_manager import get_banner_delivery_payload
+        target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+        b_bot_id = getattr(target_bot, "id", None)
+        fname, fid, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
         content = {
-            'type': 'photo' if fid else 'text',
+            'type': 'photo' if (fid or img_bytes) else 'text',
             'file_id': fid,
+            'image_bytes': img_bytes,
             'caption': message_text,
             'text': message_text,
             'is_system_message': True,
@@ -14206,17 +14215,15 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
                 InlineKeyboardButton(text=pic_btn, callback_data=f"gen_invite_pic:{board_id}")
             ]
         ])
-        file_id = None
-        from banner_manager import get_banner_file, _BANNER_CACHE
-        banner_cat = "motivation"
-        fname, photo_payload = get_banner_file(category=banner_cat)
-        file_id = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-        if not file_id and _BANNER_CACHE:
-            file_id = next(iter(_BANNER_CACHE.values()), None)
+        from banner_manager import get_banner_delivery_payload
+        target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+        b_bot_id = getattr(target_bot, "id", None)
+        fname, file_id, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
 
         content = {
-            'type': 'photo' if file_id else 'text',
+            'type': 'photo' if (file_id or img_bytes) else 'text',
             'file_id': file_id,
+            'image_bytes': img_bytes,
             'caption': message_text,
             'text': message_text,
             'is_system_message': True,
@@ -14472,20 +14479,19 @@ async def dvach_thread_poster():
                     'subscribers': set(), 'is_archived': False, 'stream': 'ru'
                 })
             
-            from banner_manager import get_banner_file
-            fname, photo_payload = get_banner_file(category="digest")
-            from banner_manager import _BANNER_CACHE
-            fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-            if not fid and _BANNER_CACHE:
-                fid = next(iter(_BANNER_CACHE.values()), None)
+            from banner_manager import get_banner_delivery_payload
+            target_bot = GLOBAL_BOTS.get(destination_board_id) or shared_state.GLOBAL_BOTS.get(destination_board_id) or GLOBAL_BOTS.get('b')
+            b_bot_id = getattr(target_bot, "id", None)
+            fname, fid, img_bytes = get_banner_delivery_payload(category="digest", bot_id=b_bot_id)
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔗 Открыть на 2ch.hk", url=link)]
             ])
             
             content = {
-                'type': 'photo' if fid else 'text',
+                'type': 'photo' if (fid or img_bytes) else 'text',
                 'file_id': fid,
+                'image_bytes': img_bytes,
                 'caption': thread_text,
                 'text': thread_text,
                 'is_system_message': True,
@@ -15612,12 +15618,12 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
             p_word = "абзацев"
             p_word_adj = "крупных абзацев"
         
-        prompt = re.sub(r'объемом ровно в 1-2 абзаца', f'объемом ровно в {count} {p_word}', prompt)
-        prompt = re.sub(r'ровно 3-4 абзаца', f'ровно {count} {p_word}', prompt)
-        prompt = re.sub(r'строго 6-8 крупных абзацев', f'строго {count} {p_word_adj}', prompt)
-        prompt = re.sub(r'не менее 6-8 крупных, содержательных абзацев с подробностями', f'ровно {count} {p_word_adj} с подробностями', prompt)
-        prompt = re.sub(r'1-2 предложения', f'ровно {count} {p_word}', prompt)
-        prompt = re.sub(r'ультра-короткую, циничную прожарку', f'циничную прожарку', prompt)
+        prompt = re.sub(r'объемом\s+ровно\s+в\s+1-2\s+абзаца', f'объемом ровно в {count} {p_word}', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'(?:строго\s+в\s+|строго\s+|ровно\s+в\s+|ровно\s+|\()?[1-4]-[2-4]\s+абзац[а-я]*\)?', f'ровно {count} {p_word}', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'строго\s+6-8\s+крупных\s+абзацев', f'строго {count} {p_word_adj}', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'не\s+менее\s+6-8\s+крупных[,\s]+содержательных\s+абзацев\s+с\s+подробностями', f'ровно {count} {p_word_adj} с подробностями', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'1-2\s+предложения', f'ровно {count} {p_word}', prompt, flags=re.IGNORECASE)
+        prompt = re.sub(r'ультра-короткую,\s*циничную\s+прожарку', f'циничную прожарку', prompt, flags=re.IGNORECASE)
         
         prompt += f"\n\nВАЖНО: Твой отчет должен быть структурированным и состоять СТРОГО из {count} абзацев (не больше и не меньше!). Каждый абзац должен быть содержательным, плотным и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>)."
     elif lang == 'en':
@@ -15722,10 +15728,10 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
    - "Верные Сыны и Дочери Империума" (Святые мужики): те, кто нес мудрость, помогал гражданам, славил Императора, кидал годные пасты/схемы и держит оборону сектора.
    - "Еретики, Ксеносы и Поклонники Губительных Сил" (Скверна): те, кто устраивал срачи (Хаос), нес бред, слушал шепоты Тзинча, проявлял гедонизм Слаанеш, распространял гниль Нургла или ныл как эльдарский ксенос.
 
-2. ЖЕСТОЧАЙШИЕ ПРИГОВОРЫ И КЛИКУХИ (ПЕРСОНАЛИЗАЦИЯ ИМЕН):
-   Выделяй конкретные ИМЕНА из лога. Назначай им суровые статусы, ксено-диагнозы и карательные приговоры Инквизиции на основе ИХ РЕАЛЬНЫХ ПОСТОВ.
-   ПРИМЕР: "За гражданина Витьку (Класс Угрозы: Еретик-Мутант 3-й степени): Вскрыты его высеры в чате про... Приговор: Публичное сожжение святым прометием и переработка остатков в сервитора-полотера."
-   ПРИМЕР: "За сержанта Саню (Статус: Герой Имперской Гвардии): Проявил несокрушимый дух Астартес, подогнал в общак сектора ценную инфу про... Награждается святой Аквилой."
+2. ЖЕСТОЧАЙШИЕ ПРИГОВОРЫ И КЛИКУХИ (ПЕРСОНАЛИЗАЦИЯ УЧАСТНИКОВ):
+   Ссылайся на участников строго по их бордовым именам и хэшам из лога (например, "Анон [ab12cd]" или их никам). Назначай им суровые статусы, ксено-диагнозы и карательные приговоры Инквизиции на основе ИХ РЕАЛЬНЫХ ПОСТОВ.
+   ПРИМЕР: "За аколита Анона [ab12cd] (Класс Угрозы: Еретик-Мутант): Вскрыты его еретические высеры в секторе про... Вердикт: Инквизиторское клеймо, изоляция когитатора и бессрочная ссылка на штрафные мануфактории."
+   ПРИМЕР: "За гвардейца Анона [ef34gh] (Статус: Герой Имперской Гвардии): Проявил несокрушимый дух Астартес, подогнал в сектор ценную инфу про... Награждается святой Аквилой."
 
 3. ОГРОМНЫЙ СЛОВАРЬ ПЕРЕВОДА ЧАТЕРСКОГО И БОРДОВОГО СЛЕНГА НА ГИМН ИМПЕРИУМА:
 Активно используй следующие соответствия при анализе лога:
@@ -15743,7 +15749,7 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
 
 === СТРУКТУРА СВЯЩЕННОГО ДОСЬЕ ===
 1. ВСТУПЛЕНИЕ: Пафосный астропатический заголовок. Оценка суммарного уровня Ереси и Варп-нестабильности в секторе /{board_id}/ за сегодня.
-2. ДОСЬЕ ПОДОЗРЕВАЕМЫХ И ГЕРОЕВ: Пройдись по 3-5 активным участникам лога. Напиши "За [Имя] (Титул/Статус): ..." с жестким приговором Инквизитора по ИХ РЕАЛЬНЫМ ПОСТАМ.
+2. ДОСЬЕ ПОДОЗРЕВАЕМЫХ И ГЕРОЕВ: Пройдись по 3-5 активным участникам лога. Напиши "За [Имя/Анон [хэш]] (Титул/Статус): ..." с жестким приговором Инквизитора по ИХ РЕАЛЬНЫМ ПОСТАМ.
 3. ВЕРДИКТ ОБ ЭКСТЕРМИНАТУСЕ: Итоговое решение — подлежит ли сектор сожжению или гвардия удержит рубежи. Прощание ("Слава Императору! Кадия стоит!").
 
 ВАЖНО: Твой отчет должен состоять ровно из {paragraph_count} абзацев. Каждый абзац должен быть МАКСИМАЛЬНО ОБЪЕМНЫМ, глубоким и подробным, состоять минимум из 7-10 развернутых предложений с полным анализом реальных событий и цитат из лога, и быть отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>, <u>, <s>, <code>, <pre>). Output ONLY plain text or basic HTML.
@@ -15785,18 +15791,18 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
 {full_bonus_instruction}
 
 === СВЯТЫЕ ВОРОВСКИЕ ПРАВИЛА (ЖЕСТКО СОБЛЮДАТЬ) ===
-1. ЛЮДСКОЕ И ПЕТУШИНОЕ: Ты ОБЯЗАН делить всё в чате на два лагеря. 
+1. ЛЮДСКОЕ И БЕСПРЕДЕЛЬНОЕ: Ты ОБЯЗАН делить всё в чате на два лагеря. 
    - "Людское" (правильное): писать годные вбросы, помогать бродягам в чате, кидать годный контент в общак, презирать стукачей, модераторов-самодуров и мусоров.
-   - "Петушиное / Шерстяное / Стукаческое": крысятничать, выебываться без повода (бакланство), стучать админам/модераторам, лизать жопу авторитетам ради плюсов, спамить говном.
-2. ЖЕСТОЧАЙШИЙ ПРЕССИНГ: Если участник чата несет херню, тупит или защищает душные правила — опускай его без жалости. Называй его "мусорской пидарас", "шерсть галимая", "черт закатанный", "дырявый".
-3. ПЕРСОНАЛИЗАЦИЯ И МАСТИ (КРИТИЧНО): Выделяй конкретные ИМЕНА из лога. Обязательно присваивай им кликухи. 
-   ПРИМЕР: "За Витьку (Крыса , масть Петушиная): Вскрыли этого гуся сегодня как консервную банку. Махинации с постами, кидалово братвы в чате... По понятиям ты — фуфлыжник, пидар подкошнарный, твое место у параши."
-   ПРИМЕР: "За Саню (Ровный Мужик): Мужик сегодня подогнал в общак царский грев в виде годной инфы и пасты. На таких бродягах хата держится."
-4. СЛОВАРЬ (ИСПОЛЬЗУЙ МАКСИМАЛЬНО ГУСТО): малява, пассажир, петушатник, куколд, терпила, ровные пацаны, предъява, фуфлыжник, мутный гусь, шнырь, пресс-хата, шконка, туз, фарту-масти, зашквар, шерсть, фраер, блатные.
+   - "Шерстяное / Стукаческое / Беспредел": крысятничать, выебываться без повода (бакланство), стучать админам/модераторам, лизать жопу авторитетам ради плюсов, спамить говном.
+2. ЖЕСТОЧАЙШИЙ ПРЕССИНГ: Если участник чата несет херню, тупит или защищает душные правила — разноси его без жалости. Называй его "мусорской стукач", "шерсть галимая", "черт закатанный", "баклан упоротый", "гнида подзаборная".
+3. ПЕРСОНАЛИЗАЦИЯ И МАСТИ (КРИТИЧНО): Ссылайся на участников строго по их бордовым именам и хэшам из лога (например, "Анон [ab12cd]" или их никам). Обязательно присваивай им кликухи. 
+   ПРИМЕР: "За Анона [ab12cd] (Кликуха: Мутный Гусь, масть: Шерсть): Вскрыли этого гуся сегодня как консервную банку. Махинации с постами, кидалово братвы в чате... По понятиям ты — фуфлыжник, твое место на дальней шконке."
+   ПРИМЕР: "За Анона [ef34gh] (Кликуха: Ровный): Мужик сегодня подогнал в общак царский грев в виде годной инфы и пасты. На таких бродягах хата держится."
+4. СЛОВАРЬ (ИСПОЛЬЗУЙ МАКСИМАЛЬНО ГУСТО): малява, пассажир, куколд, терпила, ровные пацаны, предъява, фуфлыжник, мутный гусь, шнырь, пресс-хата, шконка, туз, фарту-масти, зашквар, шерсть, фраер, блатные.
 5. РАЗБОР ТЕМ: Переводи бордовый и чатерский сленг на феню. Баны/Муты — "отсидка на шконке", админ/модератор — "кум/надзиратель/бугор", ОП-пост — "почин/заход в хату", ньюфаг — "первоход/малолетка", олдфаг — "пахан/авторитет", вайп/спам — "беспредел".
-6. АНТИ-ЦЕНЗУРА: Мат ОБЯЗАТЕЛЕН. Чернуха, сарказм, жесткие метафоры ("натянуть на виртуальный глобус", "раздвинуть булками память", "вставлять ложки в анус"). НИКАКОЙ толерантности.
-7. Для крыс, петухов, блатных и прочей швали — только жесткий прессинг и обосраловка. Для ровных пацанов — уважение и признание. ВАЖНО: НЕ ПУТАЙ РОВНЫХ МУЖИКОВ С КРЫСАМИ, КОТОРЫЕ ИГРАЮТ В РОВНЫХ МУЖИКОВ.
-8. Для шерстяной обоймы и опущенных можно придумывать кликухи, блатные или обидные. Как вор в законе раскидывает положняк фраерам.
+6. АНТИ-ЦЕНЗУРА: Мат ОБЯЗАТЕЛЕН. Чернуха, сарказм, жесткие метафоры ("натянуть на виртуальный глобус", "раскидать по понятиям", "вывернуть наизнанку"). НИКАКОЙ толерантности.
+7. Для крыс, шерсти, балаболов и прочей швали — только жесткий прессинг и обосраловка. Для ровных пацанов — уважение и признание. ВАЖНО: НЕ ПУТАЙ РОВНЫХ МУЖИКОВ С КРЫСАМИ, КОТОРЫЕ ИГРАЮТ В РОВНЫХ МУЖИКОВ.
+8. Для шерстяной обоймы можно придумывать кликухи, блатные или обидные. Как вор в законе раскидывает положняк фраерам.
 9. Не используй разметку MSG_...
 10. АВТОРИТЕТНЫЕ ПОГОВОРКИ: Выбери и используй МАКСИМУМ 1-2 воровские поговорки из списка ниже (только там, где это идеально ложится по смыслу):
 {selected_pogovorki}
@@ -15805,7 +15811,7 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
 
 === СТРУКТУРА МАЛЯВЫ ===
 1. ВСТУПЛЕНИЕ: Мощное приветствие по фене. Оценка того, во что превратилась хата за сегодня.
-2. РАЗБОР ПАССАЖИРОВ: Пройдись по 3-5 активным или провинившимся участникам. Напиши "За [Имя] (Кликуха): ..." и жестко разложи, кто он по жизни и масти, опираясь на то, что он писал.
+2. РАЗБОР ПАССАЖИРОВ: Пройдись по 3-5 активным или провинившимся участникам. Напиши "За [Имя/Анон [хэш]] (Кликуха): ..." и жестко разложи, кто он по жизни и масти, опираясь на то, что он писал.
 (Здесь вставляй ДОПОЛНИТЕЛЬНЫЕ БЛОКИ, если они есть).
 3. ИТОГОВЫЙ ПРОГОН ПО ХАТЕ: Вердикт смотрящего. Кого гнать ссаными тряпками, а с кем можно на одном поле срать сесть. Прощание ("Фарту, братва!").
 
@@ -25268,14 +25274,12 @@ async def periodic_board_summary():
             if not recipients:
                 continue
                 
-            from banner_manager import get_banner_file
-            fname, photo_payload = get_banner_file(category="summary")
-            from banner_manager import _BANNER_CACHE
-            fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-            if not fid and _BANNER_CACHE:
-                fid = next(iter(_BANNER_CACHE.values()), None)
+            from banner_manager import get_banner_delivery_payload
+            target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+            b_bot_id = getattr(target_bot, "id", None)
+            fname, fid, img_bytes = get_banner_delivery_payload(category="summary", bot_id=b_bot_id)
             # Для Telegraph ВСЕГДА используем type: 'text', чтобы Telegram автоматически развернул Instant View веб-превью статьи
-            is_photo = False if telegraph_url else bool(fid)
+            is_photo = False if telegraph_url else bool(fid or img_bytes)
             if is_photo and len(final_text) > 1024:
                 # Telegram limit for photo caption is 1024 chars; fallback to text if exceeded
                 is_photo = False
@@ -25283,6 +25287,7 @@ async def periodic_board_summary():
             content_obj = {
                 'type': 'photo' if is_photo else 'text',
                 'file_id': fid if is_photo else None,
+                'image_bytes': img_bytes if is_photo else None,
                 'caption': final_text if is_photo else None,
                 'text': final_text,
                 'is_system_message': True,
@@ -25349,15 +25354,14 @@ async def periodic_thread_digest():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
-                from banner_manager import get_banner_file
-                fname, photo_payload = get_banner_file(category="digest")
-                from banner_manager import _BANNER_CACHE
-                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-                if not fid and _BANNER_CACHE:
-                    fid = next(iter(_BANNER_CACHE.values()), None)
+                from banner_manager import get_banner_delivery_payload
+                target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+                b_bot_id = getattr(target_bot, "id", None)
+                fname, fid, img_bytes = get_banner_delivery_payload(category="digest", bot_id=b_bot_id)
                 content = {
-                    'type': 'photo' if fid else 'text',
+                    'type': 'photo' if (fid or img_bytes) else 'text',
                     'file_id': fid,
+                    'image_bytes': img_bytes,
                     'caption': digest_text,
                     'text': digest_text,
                     'is_system_message': True,
@@ -25417,15 +25421,14 @@ async def periodic_newspaper_broadcast():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
-                from banner_manager import get_banner_file
-                fname, photo_payload = get_banner_file(category="newspaper")
-                from banner_manager import _BANNER_CACHE
-                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-                if not fid and _BANNER_CACHE:
-                    fid = next(iter(_BANNER_CACHE.values()), None)
+                from banner_manager import get_banner_delivery_payload
+                target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+                b_bot_id = getattr(target_bot, "id", None)
+                fname, fid, img_bytes = get_banner_delivery_payload(category="newspaper", bot_id=b_bot_id)
                 content = {
-                    'type': 'photo' if fid else 'text',
+                    'type': 'photo' if (fid or img_bytes) else 'text',
                     'file_id': fid,
+                    'image_bytes': img_bytes,
                     'caption': newspaper_text,
                     'text': newspaper_text,
                     'is_system_message': True,
@@ -25584,13 +25587,6 @@ async def periodic_economy_broadcast():
             print("💰 [ECONOMY BROADCAST] Рассылка экономического вестника...")
             economy_text = random.choice(ECONOMY_TEXTS)
 
-            from banner_manager import get_banner_file
-            fname, photo_payload = get_banner_file(category="wallet")
-            from banner_manager import _BANNER_CACHE
-            fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
-            if not fid and _BANNER_CACHE:
-                fid = next(iter(_BANNER_CACHE.values()), None)
-
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="💰 Daily", callback_data="economy_daily"),
@@ -25628,9 +25624,15 @@ async def periodic_economy_broadcast():
                 if not recipients:
                     continue
 
+                from banner_manager import get_banner_delivery_payload
+                target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+                b_bot_id = getattr(target_bot, "id", None)
+                fname, fid, img_bytes = get_banner_delivery_payload(category="wallet", bot_id=b_bot_id)
+
                 content = {
-                    'type': 'photo' if fid else 'text',
+                    'type': 'photo' if (fid or img_bytes) else 'text',
                     'file_id': fid,
+                    'image_bytes': img_bytes,
                     'caption': economy_text,
                     'text': economy_text,
                     'is_system_message': True,

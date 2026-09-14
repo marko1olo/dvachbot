@@ -1,5 +1,6 @@
 import re
 import html
+import json
 from common.html_utils import escape_html
 
 RE_HTML_TAGS = re.compile(r'<[^>]+>')
@@ -118,7 +119,19 @@ def sanitize_html(text: str) -> str:
 
 def clean_html_for_tg(text: str) -> str:
     if not text: return ''
-    
+
+    # Defensive unwrap if model accidentally output raw JSON
+    trimmed = text.strip()
+    if trimmed.startswith("{") and trimmed.endswith("}"):
+        try:
+            data = json.loads(trimmed)
+            if isinstance(data, dict):
+                extracted = data.get("text") or data.get("summary") or data.get("response") or data.get("content")
+                if extracted and isinstance(extracted, str):
+                    text = extracted
+        except Exception:
+            pass
+
     # First unwrap custom Telegram emoji tags <tg-emoji emoji-id="...">EMOJI</tg-emoji> -> EMOJI
     text = unwrap_tg_emoji(text)
 

@@ -4559,18 +4559,15 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                     board_posts.append((_fast_storage_ts(p.get('timestamp')), p))
             board_posts.sort(key=operator.itemgetter(0))
             
-            total_board_posts = len(board_posts)
-            if total_board_posts <= 150:
-                post_iterator = [p for _, p in board_posts]
+            posts_in_window = [p for ts, p in board_posts if ts >= time_threshold_ts]
+            if len(posts_in_window) > 200:
+                post_iterator = posts_in_window[-200:]
+            elif len(posts_in_window) >= 10:
+                post_iterator = posts_in_window
             else:
-                posts_in_last_6h = [p for ts, p in board_posts if ts >= time_threshold_ts]
-                count_6h = len(posts_in_last_6h)
-                if count_6h < 150:
-                    post_iterator = [p for _, p in board_posts[-150:]]
-                elif count_6h > 200:
-                    post_iterator = [p for _, p in board_posts[-200:]]
-                else:
-                    post_iterator = posts_in_last_6h
+                # If board had very low activity in window, take at most 30 recent posts to avoid old days bleed
+                fallback_recent = [p for _, p in board_posts[-30:]]
+                post_iterator = posts_in_window if len(posts_in_window) >= len(fallback_recent) else fallback_recent
 
     # Batch-fetch media tags & descriptions for all image posts in post_iterator
     missing_file_ids = None
@@ -4634,6 +4631,20 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             text = _format_post_text(content, msg_type, media_meta=media_meta)
             if not text:
                 continue
+
+            # Filter out command spam and bare empty media markers
+            text_lower = text.strip().lower()
+            if text_lower in ('[sticker]', '[photo]', '[animation]', '[video]', '[document]', '[media_group]'):
+                continue
+            if text_lower.startswith('/') and len(text_lower.split()) <= 2:
+                cmd = text_lower.split()[0].lstrip('/')
+                if cmd in (
+                    'work', 'workk', 'bank', 'dice', 'duel', 'bonus', 'daily',
+                    'inv', 'inventory', 'profile', 'status', 'stat', 'stats',
+                    'shop', 'pay', 'transfer', 'flip', 'coin', 'roll', 'rep',
+                    'karma', 'balance', 'bal', 'top', 'rating', 'help', 'start'
+                ):
+                    continue
 
             name = content.get('username') or content.get('name') or content.get('author_name')
             if not name:

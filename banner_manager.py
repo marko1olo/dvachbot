@@ -456,6 +456,39 @@ def get_banner_file(
     return chosen_file, ""
 
 
+def get_banner_delivery_payload(
+    category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = "start",
+    bot_id: Optional[int] = None,
+    banner_name: Optional[str] = None
+) -> Tuple[str, Optional[str], Optional[bytes]]:
+    """
+    Returns (chosen_file, file_id, image_bytes) for delivering a banner in system posts / broadcasters.
+    If a valid cached file_id exists for bot_id (or unscoped), returns (chosen_file, file_id, None).
+    Otherwise reads bytes from the local banners directory and returns (chosen_file, None, image_bytes).
+    """
+    fname, payload = get_banner_file(category=category, bot_id=bot_id, banner_name=banner_name)
+    if isinstance(payload, str) and payload:
+        return fname, payload, None
+
+    img_bytes = None
+    if hasattr(payload, 'path') and os.path.exists(payload.path):
+        try:
+            with open(payload.path, 'rb') as bf:
+                img_bytes = bf.read()
+        except Exception:
+            pass
+    elif fname:
+        local_path = BANNERS_DIR / fname
+        if local_path.exists():
+            try:
+                with open(local_path, 'rb') as bf:
+                    img_bytes = bf.read()
+            except Exception:
+                pass
+
+    return fname, None, img_bytes
+
+
 async def send_banner_message(
     bot: Bot,
     chat_id: int,

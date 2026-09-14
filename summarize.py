@@ -358,18 +358,32 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         # Cap keys tried per model to max 3 healthy keys to prevent endless polling
         active_keys = active_keys[:3]
 
-        # Безопасный лимит выходных токенов: для Gemini None (без урезания), для Groq 1024 (вместо 6000!)
-        model_max_tokens = None if provider == "gemini" else 1024
+        # Безопасный лимит выходных токенов: для Gemini None (без урезания)
+        # Для Groq: для persona 1024 токена, для summary 3500 токенов
+        is_persona = model_preference in ("persona", "persona_gemini")
+        if provider == "gemini":
+            model_max_tokens = None
+        elif is_persona:
+            model_max_tokens = 1024
+        else:
+            model_max_tokens = 3500
 
-        # Защита Groq от 413 Payload Too Large (лимит Groq 6000 токенов; русский текст ~3 байта/токен)
+        # Защита Groq от 413 Payload Too Large
         effective_sys = system_instruction
         effective_dump = text_dump
         if provider == "groq":
-            if len(effective_sys) > 5000:
-                effective_sys = effective_sys[:4500] + "\n\n[...СОКРАЩЕНИЕ ИНСТРУКЦИИ ДЛЯ СКОРОСТИ...]\nОтвечай строго по правилам и верни валидный JSON."
-            if len(effective_dump) > 6000:
-                # Обязательно сохраняем БЛОК 1 (целевой пост) и БЛОК 2 (родительский пост) в начале!
-                effective_dump = effective_dump[:2500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-3500:]
+            if is_persona:
+                if len(effective_sys) > 5000:
+                    effective_sys = effective_sys[:4500] + "\n\n[...СОКРАЩЕНИЕ ИНСТРУКЦИИ ДЛЯ СКОРОСТИ...]\nОтвечай строго по правилам и верни валидный JSON."
+                if len(effective_dump) > 6000:
+                    # Обязательно сохраняем БЛОК 1 (целевой пост) и БЛОК 2 (родительский пост) в начале!
+                    effective_dump = effective_dump[:2500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-3500:]
+            else:
+                if len(effective_sys) > 8000:
+                    effective_sys = effective_sys[:8000]
+                if len(effective_dump) > 40000:
+                    # Для лонгридов саммари сохраняем самые свежие посты в пределах 40k символов (~10k токенов)
+                    effective_dump = effective_dump[-40000:]
 
         messages = [
             {"role": "system", "content": effective_sys},
@@ -776,14 +790,25 @@ def _text_to_telegraph_nodes(html_content: str) -> list:
         
     def walk(child, inline_stack):
         if isinstance(child, str):
-            parts = child.split('\n')
-            for i, part in enumerate(parts):
-                if part:
-                    wrapped = wrap_inlines(part, inline_stack)
-                    if wrapped:
-                        current_block["children"].append(wrapped)
-                if i < len(parts) - 1:
-                    current_block["children"].append({"tag": "br"})
+            # Split into distinct paragraphs on double newlines to form proper Telegraph <p> blocks
+            paragraphs = re.split(r'\n\s*\n', child)
+            for p_idx, para in enumerate(paragraphs):
+                para_clean = para.strip('\r\n')
+                if not para_clean:
+                    continue
+                if current_block["children"] and p_idx > 0:
+                    flush_block()
+                lines = para_clean.split('\n')
+                for i, line in enumerate(lines):
+                    line_clean = line.strip('\r')
+                    if line_clean:
+                        wrapped = wrap_inlines(line_clean, inline_stack)
+                        if wrapped:
+                            current_block["children"].append(wrapped)
+                    if i < len(lines) - 1:
+                        current_block["children"].append({"tag": "br"})
+                if p_idx < len(paragraphs) - 1 and current_block["children"]:
+                    flush_block()
                     
         elif isinstance(child, dict):
             tag = child.get("tag")
@@ -824,6 +849,18 @@ def _create_telegraph_page_blocking(title: str, html_content: str, author: str =
     token = get_telegraph_token()
     if not token:
         raise RuntimeError("API token is required")
+
+    # Defensive check: unwrap accidental raw JSON responses from model
+    trimmed = html_content.strip()
+    if trimmed.startswith("{") and trimmed.endswith("}"):
+        try:
+            data = json.loads(trimmed)
+            if isinstance(data, dict):
+                extracted = data.get("text") or data.get("summary") or data.get("response") or data.get("content")
+                if extracted and isinstance(extracted, str):
+                    html_content = extracted
+        except Exception:
+            pass
         
     # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload, AST nodes take ~3x size)
     if len(html_content) > 18000:
