@@ -1447,6 +1447,9 @@ def build_batch_music_roast_prompt(tracks_info: list[dict], tone: dict) -> str:
     )
 
 
+# Флаг включения/отключения музыкальных роастов Киберчеда (по умолчанию отключены)
+MUSIC_ROASTS_ENABLED: bool = os.getenv("ENABLE_MUSIC_ROASTS", "0").lower() in ("1", "true", "yes")
+
 # Rate limiting: хранит timestamps отправок треков по user_id для защиты от спама
 _music_roast_user_times: dict[int, list[float]] = {}
 _music_roast_seen_mg: set[str] = set()
@@ -1800,7 +1803,7 @@ async def handle_music_roast_batch(
     Строго запрещает цитирование лирики песен.
     Применяет 24 уникальных пресета музкритика с ротацией.
     """
-    if not messages or not bot:
+    if not messages or not bot or not MUSIC_ROASTS_ENABLED:
         return
 
     # Фильтрация валидных музыкальных сообщений
@@ -2252,7 +2255,7 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
     Одиночный обработчик музыкального роаста для обратной совместимости.
     Делегирует исполнение в handle_music_roast_batch с пачкой из 1 сообщения.
     """
-    if not message:
+    if not message or not MUSIC_ROASTS_ENABLED:
         return
     await handle_music_roast_batch(bot, [message], board_id=board_id, stream=stream, post_num=post_num)
 

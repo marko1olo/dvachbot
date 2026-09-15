@@ -115,7 +115,7 @@ from text_assets import (
 from ai_manager import (
     schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note,
     handle_music_roast, is_music_document, register_post_and_maybe_trigger_cyberchad_intervention,
-    SILENCE_TRANSCRIPT_PATTERNS
+    SILENCE_TRANSCRIPT_PATTERNS, MUSIC_ROASTS_ENABLED
 )
 import __main__ as main
 
@@ -1350,7 +1350,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 else:
                     spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream, post_num=post_num))
             elif is_music and board_id != 'trash':
-                spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
+                if MUSIC_ROASTS_ENABLED:
+                    spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
 
             if is_music:
                 text_for_intervention = ""

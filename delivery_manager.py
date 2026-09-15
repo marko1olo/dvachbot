@@ -1564,7 +1564,9 @@ async def _roast_album_tracks_in_batches(bot, audio_msgs, board_id, stream, post
     """
     if not audio_msgs:
         return
-    from ai_manager import handle_music_roast_batch
+    from ai_manager import handle_music_roast_batch, MUSIC_ROASTS_ENABLED
+    if not MUSIC_ROASTS_ENABLED:
+        return
     CHUNK_SIZE = 5
     chunks = [audio_msgs[i:i + CHUNK_SIZE] for i in range(0, len(audio_msgs), CHUNK_SIZE)]
     for idx, chunk in enumerate(chunks):
@@ -1577,7 +1579,9 @@ async def _roast_album_tracks_in_batches(bot, audio_msgs, board_id, stream, post
 
 
 async def _roast_album_tracks_sequentially(bot, audio_msgs, board_id, stream, post_num):
-    from ai_manager import handle_music_roast
+    from ai_manager import handle_music_roast, MUSIC_ROASTS_ENABLED
+    if not MUSIC_ROASTS_ENABLED:
+        return
     for msg in audio_msgs:
         try:
             await handle_music_roast(bot, msg, board_id, stream=stream, post_num=post_num)
@@ -1694,13 +1698,13 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
 
     if first_post_num:
         raw_msgs = group.get('raw_messages') or []
-        from ai_manager import is_music_document
+        from ai_manager import is_music_document, MUSIC_ROASTS_ENABLED
         audio_msgs = [
             m for m in raw_msgs
             if getattr(m, 'audio', None) or (getattr(m, 'document', None) and is_music_document(m.document))
         ]
         is_user_bot = (user_id <= 0) or any(getattr(getattr(m, 'from_user', None), 'is_bot', False) is True for m in raw_msgs)
-        if audio_msgs and not is_user_bot and board_id != 'trash':
+        if audio_msgs and not is_user_bot and board_id != 'trash' and MUSIC_ROASTS_ENABLED:
             spawn_task(_roast_album_tracks_in_batches(bot_instance, audio_msgs, board_id, stream, first_post_num))
 
         first_photo_id = None
@@ -1726,7 +1730,8 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             if (now_t_glob - main._last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
                 should_reply = True
 
-        if should_reply:
+        is_pure_audio_album = bool(audio_msgs and len(audio_msgs) == len(raw_msgs))
+        if should_reply and not (is_pure_audio_album and not original_caption):
             main._last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
             text_chunk = original_caption or "[альбом изображений]"
             spawn_task(main.schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))

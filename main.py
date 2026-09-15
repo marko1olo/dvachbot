@@ -163,7 +163,7 @@ from common.database import (
 )
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.tagging_worker import tagging_loop
-from ai_manager import transcribe_and_roast_voice_note, handle_music_roast
+from ai_manager import transcribe_and_roast_voice_note, handle_music_roast, MUSIC_ROASTS_ENABLED
 from common.db_pool import create_pool, get_pool, db_lock, close_pool, LazyLock, db_transaction, sqlite_wal_checkpoint_task, wal_checkpoint_truncate
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
@@ -24802,7 +24802,8 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             stream=stream
         ))
         if created_num and user_id > 0 and board_id != 'trash' and not getattr(message.from_user, 'is_bot', False):
-            spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=created_num))
+            if MUSIC_ROASTS_ENABLED:
+                spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=created_num))
 
 # Здесь лежала первая из ДВУХ побайтово одинаковых копий
 # periodic_shop_broadcast. Работала только нижняя: имя перекрывалось.
