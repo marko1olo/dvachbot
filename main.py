@@ -25970,25 +25970,32 @@ def _event_loop_stall_watchdog_loop():
                     faulthandler.dump_traceback(file=dump_file, all_threads=True)
                     dump_file.write("=== END EVENT LOOP STALL DUMP ===\n")
                     dump_file.flush()
-                print(
-                    f"🧯 [WATCHDOG] Event loop stall dump written: "
-                    f"lag={lag_sec:.1f}s queues={payload['queues_total']}"
-                )
-            except Exception as exc:
                 try:
-                    print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
+                    os.write(2, (
+                        f"🧯 [WATCHDOG] Event loop stall dump written: "
+                        f"lag={lag_sec:.1f}s queues={payload['queues_total']}\n"
+                    ).encode("utf-8", errors="replace"))
                 except Exception:
                     pass
+            except Exception as exc:
+                try:
+                    os.write(2, f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}\n".encode("utf-8", errors="replace"))
+                except Exception:
+                    pass
+
 
         # CRITICAL AUTO-RESTART: If event loop is deadlocked for >= EVENT_LOOP_AUTO_RESTART_SEC,
         # forcefully terminate the process so the external watchdog/supervisor restarts it immediately!
         if lag_sec >= EVENT_LOOP_AUTO_RESTART_SEC:
-            msg = (
-                f"\n🚨🚨🚨 [WATCHDOG CRITICAL] EVENT LOOP HARD DEADLOCK DETECTED! "
-                f"Lag={lag_sec:.1f}s >= threshold {EVENT_LOOP_AUTO_RESTART_SEC}s. "
-                f"Triggering emergency exit(42) for immediate supervisor restart!\n"
-            )
-            print(msg, flush=True)
+            try:
+                msg_bytes = (
+                    f"\n\U0001f6a8\U0001f6a8\U0001f6a8 [WATCHDOG CRITICAL] EVENT LOOP HARD DEADLOCK DETECTED! "
+                    f"Lag={lag_sec:.1f}s >= threshold {EVENT_LOOP_AUTO_RESTART_SEC}s. "
+                    f"Triggering emergency exit(42) for immediate supervisor restart!\n"
+                ).encode("utf-8", errors="replace")
+                os.write(2, msg_bytes)  # stderr fd — less likely to block than stdout pipe
+            except Exception:
+                pass
             try:
                 with open(BOT_DEADLOCK_DUMP_PATH, "a", encoding="utf-8") as dump_file:
                     dump_file.write(f"\n=== EMERGENCY DEADLOCK AUTO-RESTART ts={now:.3f} lag={lag_sec:.3f}s ===\n")
@@ -25997,14 +26004,11 @@ def _event_loop_stall_watchdog_loop():
                     dump_file.flush()
             except Exception:
                 pass
-            try:
-                sys.stdout.flush()
-                sys.stderr.flush()
-            except Exception:
-                pass
+            # Do NOT flush sys.stdout / sys.stderr here — they block on the frozen pipe.
             os._exit(42)
 
         shutdown_event.wait(5)
+
 
 def start_event_loop_stall_watchdog():
     global event_loop_stall_watchdog_started

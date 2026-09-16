@@ -1,5 +1,6 @@
 import json
 import os
+import queue as _queue_mod
 import re
 import subprocess
 import sys
@@ -15,6 +16,30 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Disable Windows QuickEdit / Select mode on the console input handle so that
+# an accidental mouse click in the terminal window never freezes stdout output
+# (QuickEdit freeze → pipe buffer full → child print() blocks → event loop dead).
+# ---------------------------------------------------------------------------
+def _disable_quickedit() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes, ctypes.wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ENABLE_QUICK_EDIT = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        STD_INPUT_HANDLE = -10
+        handle = kernel32.GetStdHandle(ctypes.wintypes.DWORD(STD_INPUT_HANDLE))
+        mode = ctypes.wintypes.DWORD()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            new_mode = (mode.value & ~ENABLE_QUICK_EDIT) | ENABLE_EXTENDED_FLAGS
+            kernel32.SetConsoleMode(handle, ctypes.wintypes.DWORD(new_mode))
+    except Exception:
+        pass
+
+_disable_quickedit()
 
 
 ROOT = Path(__file__).resolve().parent
@@ -324,25 +349,66 @@ def _stop_requested() -> bool:
     return STOP_REQUEST.exists()
 
 
+def _console_writer_thread(console_queue: "_queue_mod.Queue[str | None]") -> None:
+    """Drains the console_queue and writes to stdout.
+    Runs in its own daemon thread so a frozen console (QuickEdit) never
+    blocks the pipe-reading thread."""
+    while True:
+        try:
+            item = console_queue.get(timeout=2)
+        except _queue_mod.Empty:
+            continue
+        if item is None:
+            break
+        try:
+            sys.stdout.write(item)
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
 def _pump_child_output(process: subprocess.Popen, stdout_fh) -> None:
+    """Read from child's stdout pipe and:
+      - always write to the log file (critical, never skip)
+      - non-blocking enqueue for the console writer thread
+    Keeping these two paths separate means a frozen Windows console
+    (QuickEdit / Select mode) can never fill the pipe and deadlock the child."""
     stream = process.stdout
     if stream is None:
         return
+
+    # Bounded queue: if the console is stuck, we drop lines rather than block.
+    console_queue: _queue_mod.Queue = _queue_mod.Queue(maxsize=2000)
+    writer = threading.Thread(
+        target=_console_writer_thread,
+        args=(console_queue,),
+        name="bot-child-console-writer",
+        daemon=True,
+    )
+    writer.start()
+
     try:
         for line in stream:
+            # Always write to file — this must never be skipped.
             try:
                 stdout_fh.write(line)
             except OSError:
                 import traceback; traceback.print_exc()
+            # Non-blocking console enqueue: drop if queue is full (console frozen).
             try:
-                print(line, end="", flush=True)
-            except Exception:
-                import traceback; traceback.print_exc()
+                console_queue.put_nowait(line)
+            except _queue_mod.Full:
+                pass  # console is frozen/blocked — drop, do not block
     finally:
         try:
             stream.close()
         except OSError:
             import traceback; traceback.print_exc()
+        # Signal console writer to flush and stop.
+        try:
+            console_queue.put_nowait(None)
+        except _queue_mod.Full:
+            pass
 
 
 def _close_child_log(process: subprocess.Popen) -> None:
