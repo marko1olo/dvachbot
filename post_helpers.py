@@ -243,9 +243,9 @@ def apply_shadow_autoreplace(content: dict) -> dict:
             if len(words) <= 12:
                 text_val = SHADOW_WORDS_REGEX.sub(replacer, text_val)
                 text_val = DIE_WORDS_REGEX.sub(die_replacer, text_val)
-                for pattern, replacements in POLITICAL_REPLACEMENTS:
-                    text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
-                modified[key] = text_val
+            for pattern, replacements in POLITICAL_REPLACEMENTS:
+                text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
+            modified[key] = text_val
                 
     return modified
 
@@ -1008,7 +1008,7 @@ def _get_random_header_prefix(lang: str = 'ru') -> str:
         if rand_prefix < 0.034: return "Doomer - "
         if rand_prefix < 0.037: return "Boomer - "
         if rand_prefix < 0.040: return "GigaChad - "
-        if rand_prefix < 0.043: return "Skibidi Brainrot - "
+        if rand_prefix < 0.043: return "Janny - "
         if rand_prefix < 0.046: return "ChatGPT 6 - "
         if rand_prefix < 0.049: return "Claude Fable 5.1 - "
         if rand_prefix < 0.052: return "DeepSeek Bot - "
@@ -1127,7 +1127,10 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
         elif rand < 0.015: circle = "🔵 "
         elif rand < 0.018: circle = "⭕ "
     if board_id == 'int':
-        prefix = _get_random_header_prefix(lang='en')
+        prefix_lang = stream if stream in ('en', 'jp') else 'en'
+        prefix = _get_random_header_prefix(lang=prefix_lang)
+        if stream == 'jp':
+            return f"{circle}{prefix}レス番 {post_num_formatted}"
         return f"{circle}{prefix}Post No.{post_num_formatted}"
     b_data = board_data[board_id]
     if b_data.get('slavaukraine_mode'):
@@ -1159,8 +1162,7 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
         return f"🖥️ Сообщение #{post_num_formatted}"
     if b_data.get('jewish_mode'):
         return f"📜 Казус №{post_num_formatted}"
-    prefix_lang = 'en' if stream == 'en' else 'ru' 
-    prefix = _get_random_header_prefix(lang=prefix_lang)
+    prefix = _get_random_header_prefix(lang=stream)
     if stream == 'en':
         return f"{circle}{prefix}Post No.{post_num_formatted}"
     elif stream == 'jp':

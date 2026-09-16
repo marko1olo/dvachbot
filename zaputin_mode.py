@@ -1011,16 +1011,17 @@ def zaputin_transform(text: str, header: str = None):
         slogan = random.choice(PATRIOTIC_PHRASES)
         transformed_text += f"\n\n<b>{slogan}</b>"
 
-    # Визуальный пост для коротких сообщений (25% шанс)
-    effective_header = header or "Z-СВОДКА ТГАЧ"
-    if len(transformed_text) < 180 and random.random() < 0.25:
-        try:
-            from mode_visuals import create_visual_post
-            clean_text = transformed_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '').strip()
-            image_bytes = create_visual_post(mode='zaputin', text=clean_text, header=effective_header)
-            if image_bytes:
-                return ('image', image_bytes)
-        except Exception:
-            pass
+    # Визуальный пост для коротких сообщений (если передан header)
+    if header:
+        if len(transformed_text) < 180 and random.random() < 0.25:
+            try:
+                from mode_visuals import create_visual_post
+                clean_text = transformed_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '').strip()
+                image_bytes = create_visual_post(mode='zaputin', text=clean_text, header=header)
+                if image_bytes:
+                    return ('image', image_bytes)
+            except Exception:
+                pass
+        return ('text', transformed_text)
 
-    return ('text', transformed_text)
+    return transformed_text

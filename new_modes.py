@@ -12,6 +12,11 @@ from typing import Mapping, Sequence
 # Импорт выделенного процедурного движка Абу
 from abu_engine import (
     transform_abu_mode,
+    generate_bugurt,
+    generate_deanon,
+    generate_opushchenie,
+    generate_psychiatry,
+    generate_abu_voice,
     _ABU_BOARDS,
     _ABU_LEXICON,
     _ABU_REACTIONS_IN_THREAD,

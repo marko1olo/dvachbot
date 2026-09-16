@@ -295,6 +295,7 @@ from new_modes import (
     JEWISH_PHRASES_START, JEWISH_PHRASES_END, jewish_transform,
     RUS_PHRASES_START, RUS_PHRASES_END, rus_transform,
     ABU_PHRASES_START, ABU_PHRASES_END, abu_transform,
+    generate_bugurt, generate_deanon, generate_opushchenie, generate_abu_voice,
 )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
@@ -17440,6 +17441,133 @@ async def cmd_rus(message: types.Message, board_id: str | None, stream: str = 'r
 @dp.message(Command("abu", "dvach", "makaka", "passcode", "абу", "двач", "макака", "пасскод"))
 async def cmd_abu(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'abu_mode', ABU_PHRASES_START, 300, "АБУ В СЕРВЕРНОЙ")
+
+_abu_cmd_cooldowns: dict[int, float] = {}
+
+def _extract_interactive_cmd_text(message: types.Message) -> str:
+    raw = message.text or message.caption or ""
+    parts = raw.split(maxsplit=1)
+    text = parts[1].strip() if len(parts) > 1 else ""
+    if not text and message.reply_to_message:
+        text = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+    return text
+
+@dp.message(Command("bugurt", "бугурт", "pasta", "паста", "greentext", "бугурттред"))
+async def cmd_bugurt(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    now = time.time()
+    if now - _abu_cmd_cooldowns.get(user_id, 0) < 4.0:
+        try: await message.answer("⏳ Не спамь бугуртами, маня. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    _abu_cmd_cooldowns[user_id] = now
+    
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🔥 <b>[ГЕНЕРАТОР БУГУРТОВ]</b>\n"
+                "Напиши текст после команды или ответь командой на пост!\n"
+                "<i>Пример:</i> <code>/bugurt сижу в сычевальне и пью балтику девять</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_bugurt, text)
+    try:
+        await message.answer(result, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"cmd_bugurt send failed: {e}")
+
+@dp.message(Command("deanon", "деанон", "swat", "сват", "сваттинг"))
+async def cmd_deanon(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    now = time.time()
+    if now - _abu_cmd_cooldowns.get(user_id, 0) < 4.0:
+        try: await message.answer("⏳ Не спамь деанонами, омежка. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    _abu_cmd_cooldowns[user_id] = now
+
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🔥 <b>[КАРАТЕЛЬНЫЙ ДЕАНОН]</b>\n"
+                "Напиши цель деанона или ответь на пост жертвы!\n"
+                "<i>Пример:</i> <code>/deanon Аноним с пятого этажа</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_deanon, text)
+    try:
+        await message.answer(result, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"cmd_deanon send failed: {e}")
+
+@dp.message(Command("opushchenie", "опускание", "параша", "петух"))
+async def cmd_opushchenie(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    now = time.time()
+    if now - _abu_cmd_cooldowns.get(user_id, 0) < 4.0:
+        try: await message.answer("⏳ Не спамь приговорами. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    _abu_cmd_cooldowns[user_id] = now
+
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🐓 <b>[АКТ ОПУСКАНИЯ У ПАРАШИ]</b>\n"
+                "Напиши провинность или ответь на пост чухана!\n"
+                "<i>Пример:</i> <code>/параша запостил баян в /b/</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_opushchenie, text)
+    try:
+        await message.answer(result, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"cmd_opushchenie send failed: {e}")
+
+@dp.message(Command("abu_voice", "войс", "нариман", "голос"))
+async def cmd_abu_voice(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    now = time.time()
+    if now - _abu_cmd_cooldowns.get(user_id, 0) < 4.0:
+        try: await message.answer("⏳ Абу сейчас пьет смузи в Дубае. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    _abu_cmd_cooldowns[user_id] = now
+
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🎙️ <b>[ВОЙС НАРИМАНА ИЗ ДУБАЯ]</b>\n"
+                "Напиши текст для Абу или ответь на тред!\n"
+                "<i>Пример:</i> <code>/войс Абу, где мой пасскод?</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_abu_voice, text)
+    try:
+        await message.answer(result, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"cmd_abu_voice send failed: {e}")
+
 
 @dp.message(Command("stop"))
 async def cmd_stop(message: types.Message, board_id: str | None, stream: str = 'ru'):
