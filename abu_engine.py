@@ -73,7 +73,7 @@ _ABU_LEXICON: dict[str, list[str]] = {
     'комнате': ['в сычевальне', 'в бункере', 'в пещере ноулайфера'],
     'улица': ['агрессивная внешняя среда', 'место обитания быдла', 'открытый космос без вайфая', 'улица полная гопников'],
     'улицу': ['агрессивную внешнюю среду', 'улицу к быдлу', 'открытый мир'],
-    'магазин': ['Пятерочка у дома', 'Красное&Белое', 'ларек с шавухой', 'бутик Красная Цена', 'Магнит'],
+    'магазин': ['Пятерочка у дома', 'КБ', 'ларек с шавухой', 'бутик Красная Цена', 'Магнит'],
     'магазине': ['Пятерочке', 'КБшке', 'ларьке с шавухой'],
     'интернет': ['сосач', 'двачик', 'мейлрушная помойка', 'борда', 'архивач', 'темная сеть'],
     'сайт': ['сосач 2ch.hk', 'двачик', 'мейлрушная помойка', 'архивач'],
@@ -248,8 +248,7 @@ _HUMILIATION_INSERTS = [
 
 def _mutate_text(text: str) -> str:
     """Глубокая контекстная замена слов по гигантскому словарю с процедурными унижениями."""
-    clean = html.escape(re.sub(r'<[^>]+>', '', text))
-    res = clean
+    res = text.strip()
     sorted_keys = sorted(_ABU_LEXICON.keys(), key=len, reverse=True)
     for key in sorted_keys:
         pattern = r'\b' + re.escape(key) + r'\b'
@@ -259,7 +258,8 @@ def _mutate_text(text: str) -> str:
     words = res.split()
     if len(words) >= 4 and random.random() < 0.35:
         res = res.strip() + random.choice(_HUMILIATION_INSERTS)
-    return res
+    # Экранируем спецсимволы Telegram HTML (&, <, >), чтобы текст юзера не ломал теги разметки
+    return res.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 # 1. 5-АКТНЫЙ ПРОЦЕДУРНЫЙ БУГУРТ С ДЕРЕВОМ ОТВЕТОВ (30%)
@@ -272,9 +272,15 @@ def _format_procedural_bugurt(text: str) -> str:
     sentences = [s.strip() for s in re.split(r'[.!?\n]+', text) if s.strip()]
     middle = []
     for s in sentences[:4]:
+        if len(s) > 200:
+            s = s[:200] + "..."
         mutated = _mutate_text(s)
         clean = mutated.strip().upper()
+        # Восстанавливаем нижний регистр HTML-сущностей Telegram после .upper()
+        clean = re.sub(r'&(AMP|LT|GT);', lambda m: f"&{m.group(1).lower()};", clean, flags=re.IGNORECASE)
         clean = re.sub(r'[.!?]+$', '', clean)
+        if len(clean) > 250:
+            clean = clean[:250] + "..."
         if clean:
             if random.random() < 0.35:
                 tag = random.choice(['(ДВАЧУЮ БАЗУ)', '(САЖА СКРЫЛ)', '(ОП-ХУЙ ДЕТЕКТЕД)', '(ШИЗА ПРОГРЕССИРУЕТ)', '(БАТЯ УЖЕ ГРЕМИТ РЕМНЕМ)'])
@@ -301,7 +307,11 @@ def _format_procedural_bugurt(text: str) -> str:
 
     posts = random.randint(150, 499)
     sage = random.randint(10, 98)
-    footer = f"<code>[2ch.hk{board} | Пост #{p1} | Постов: {posts}/500 | Сажа: +{sage} | Пасскод: Не куплен (Нищий)]</code>"
+    roll = random.randint(10, 99)
+    roll_text = f"🎲 Ролл: {roll}"
+    if roll % 11 == 0:
+        roll_text = f"🎲 РОЛЛ: {roll} (СВЯЩЕННЫЙ ДАБЛ!)"
+    footer = f"<code>[2ch.hk{board} | Пост #{p1} | {roll_text} | Сажа: +{sage}]</code>"
 
     return f"🔥 <b>[КАНОНИЧНЫЙ БУГУРТ-ТРЕД]</b>\n\n{bugurt_body}\n\n<code>{'—'*28}</code>\n{replies_str}\n\n{footer}"
 
@@ -309,7 +319,7 @@ def _format_procedural_bugurt(text: str) -> str:
 # 2. АУТЕНТИЧНЫЙ ГРИНТЕКСТ С ДИАЛОГОМ (18%)
 def _format_greentext_novel(text: str) -> str:
     board = random.choice(_ABU_BOARDS)
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:300])
     num = random.randint(1000000, 9999999)
     year = random.choice([2024, 2025, 2026])
     hour = random.randint(1, 5)
@@ -337,7 +347,7 @@ def _format_greentext_novel(text: str) -> str:
 def _format_thread_mirror(text: str) -> str:
     board = random.choice(_ABU_BOARDS)
     op_id = random.randint(10000000, 99999999)
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:350])
 
     r1_id = op_id + random.randint(1, 4)
     r2_id = op_id + random.randint(5, 9)
@@ -364,7 +374,7 @@ def _format_thread_mirror(text: str) -> str:
 
 # 4. РАСШИФРОВКА ГОЛОСОВУХИ НАРИМАНА ИЗ ДУБАЯ (10%)
 def _format_abu_voice_memo(text: str) -> str:
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:300])
     duration = random.randint(18, 95)
     location = random.choice(["Дубай (Бурдж-Халифа)", "Пхукет (Вилла Абу)", "Бали (Чангу)", "Серверная Mail.ru на М9"])
     memos = [
@@ -384,7 +394,7 @@ def _format_abu_voice_memo(text: str) -> str:
 
 # 5. МЕДИЦИНСКАЯ КАРТА / ДОСЬЕ ИЗ ДУРКИ №7 (8%)
 def _format_psych_dossier(text: str) -> str:
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:350])
     card_no = f"ШИЗО-{random.randint(100,999)}/{random.randint(24,26)}"
     diagnoses = [
         "Острая параноидная двачемания 4 стадии с бредом величия",
@@ -410,7 +420,7 @@ def _format_psych_dossier(text: str) -> str:
 
 # 6. ОФИЦИАЛЬНЫЙ ТИКЕТ НАРИМАНУ НАМАЗОВУ (7%)
 def _format_abu_ticket(text: str) -> str:
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:300])
     ticket_id = random.randint(100000, 999999)
     price = random.choice([500, 888, 1488, 2280, 4990, 9990])
     board = random.choice(_ABU_BOARDS)
@@ -435,7 +445,7 @@ def _format_abu_ticket(text: str) -> str:
 
 # 7. ЧП В СЕРВЕРНОЙ MAIL.RU / АВАРИЙНЫЙ ДАМП (5%)
 def _format_server_incident(text: str) -> str:
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:250])
     incidents = [
         "Макака перегрызла оптику на М9, пинг до /b/ вырос до 4500мс",
         "Нариман споткнулся о провод питания стойки, 5000 тредов улетели в /dev/null",
@@ -461,7 +471,7 @@ def _format_server_incident(text: str) -> str:
 
 # 8. КАПЧА-КАТАСТРОФА v10.4 (4%)
 def _format_captcha_disaster(text: str) -> str:
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:200])
     tasks = [
         "ВЫБЕРИТЕ ВСЕ КРУЖОЧКИ С ПАССКОДОМ НАРИМАНА",
         "НАЙДИТЕ 3 ФОТОГРАФИИ ГОРЯЩЕЙ СЕРВЕРНОЙ MAIL.RU",
@@ -485,14 +495,16 @@ def _format_captcha_disaster(text: str) -> str:
 # 9. КАТАЛОГ БОРДЫ 2CH (3%)
 def _format_board_catalog(text: str) -> str:
     board = random.choice(_ABU_BOARDS)
-    mutated = _mutate_text(text)
+    topic_raw = text[:40].strip() or "Без темы"
+    topic = _mutate_text(topic_raw)
+    mutated = _mutate_text(text[:250])
     thread_num = random.randint(1000000, 9999999)
     posts = random.randint(12, 480)
     files = random.randint(3, 95)
     return (
         f"📑 <b>[КАТАЛОГ ДОСКИ 2CH.HK{board}]</b>\n\n"
         f"📌 <b>ТРЕД #{thread_num}:</b>\n"
-        f"<b>Тема:</b> <code>{mutated[:45]}...</code>\n"
+        f"<b>Тема:</b> <code>{topic}...</code>\n"
         f"<b>ОП-Пост:</b> <i>«{mutated}»</i>\n\n"
         f"📈 <b>Статистика треда:</b>\n"
         f"• Ответов: <b>{posts}/500</b>\n"
@@ -507,7 +519,7 @@ def _format_board_catalog(text: str) -> str:
 def _format_opushchenie(text: str) -> str:
     board = random.choice(_ABU_BOARDS)
     op_id = random.randint(10000000, 99999999)
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:350])
     quotes = [
         "«За высер в треде Аноним лишается человеческого статуса. Ему вручается пробитая миска, гнутая алюминиевая вилка и пожизненное место под шконкой возле параши.»",
         "«Совет старейшин /b/ единогласно постановил: данный автор признан петухом. Каждый входящий в тред обязан сплюнуть в его сторону и вытереть ноги об его лицо.»",
@@ -528,14 +540,16 @@ def _format_opushchenie(text: str) -> str:
 def _format_punitive_deanon(text: str) -> str:
     board = random.choice(_ABU_BOARDS)
     op_id = random.randint(10000000, 99999999)
-    mutated = _mutate_text(text)
+    preview_raw = text[:50].strip() or "высер омежки"
+    preview = _mutate_text(preview_raw)
+    mutated = _mutate_text(text[:250])
     surnames = ["Сычёв", "Омежкин", "Дрочилин", "Чуханов", "Терпилов", "Подшконочный"]
     names = ["Алексей", "Семён", "Антон", "Евгений", "Владислав"]
     age = random.randint(19, 28)
     city = random.choice(["Бирюлёво Западное", "Дно", "Мурино", "Кудрово", "Зажопинск", "Копейск", "Шатура"])
     return (
         f"🔥 <b>[КАРАТЕЛЬНЫЙ ДЕАНОН И СВАТТИНГ // 2CH.HK{board}]</b>\n\n"
-        f"🎯 <b>Цель:</b> <code>Аноним #{op_id}</code> | <i>«{mutated[:60]}...»</i>\n\n"
+        f"🎯 <b>Цель:</b> <code>Аноним #{op_id}</code> | <i>«{preview}...»</i>\n\n"
         f"📁 <b>Материалы пробива по отражению в дверной ручке:</b>\n"
         f"• <b>ФИО:</b> <code>{random.choice(surnames)} {random.choice(names)} Аркадьевич</code> ({age} лвл)\n"
         f"• <b>Адрес конуры:</b> <code>г. {city}, панелька №{random.randint(1, 140)}, кв. {random.randint(1, 90)}</code>\n"
@@ -549,7 +563,7 @@ def _format_punitive_deanon(text: str) -> str:
 # 12. ЖУРНАЛ КАРАТЕЛЬНОЙ ПСИХИАТРИИ / ВЯЗКА ЛАСТОЧКОЙ
 def _format_punitive_psychiatry(text: str) -> str:
     card_no = f"ШИЗО-{random.randint(100,999)}/П6"
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:350])
     actions = [
         "Зафиксирован сырыми простынями к панцирной сетке в позу «ласточка». Вкатили 4 кубика аминазина в вену. Пациент пустил пену и затих.",
         "В припадке шизофазии бился головой о чугунную батарею. Получил два удара резиновой дубинкой по почкам, переведен на строгий режим без штанов.",
@@ -568,7 +582,7 @@ def _format_punitive_psychiatry(text: str) -> str:
 
 # 13. ВОЙС НАРИМАНА: РАСПРАВА НАД БИОМУСОРОМ
 def _format_abu_execution_voice(text: str) -> str:
-    mutated = _mutate_text(text)
+    mutated = _mutate_text(text[:250])
     duration = random.randint(20, 80)
     rants = [
         f"Слышь ты, гнида подзалупная. Ты че, думал, можешь безнаказанно срать в мой /b/? Я твой IP прямо сейчас передал ментам, а тред продал на органы в даркнет. Заноси 10 000 шекелей в кассу сосача до вечера, или твоя мамка получит распечатку твоих поисковых запросов. Пиздуй чистить парашу вилкой, биомусор.",
