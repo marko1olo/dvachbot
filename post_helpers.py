@@ -995,26 +995,54 @@ def _get_random_header_prefix(lang: str = 'ru') -> str:
 
     rand_prefix = random.random()
     if lang == 'en':
-        if rand_prefix < 0.005: return "### ADMIN ### "
-        if rand_prefix < 0.008: return "Me - "
-        if rand_prefix < 0.01: return "Faggot - "
-        if rand_prefix < 0.012: return "### DEGENERATE ### "
-        if rand_prefix < 0.016: return "Biden - "
-        if rand_prefix < 0.021: return "EMPEROR CONAN - "
-        if rand_prefix < 0.023: return "### TRANNY ### "
-        if rand_prefix < 0.05: return "Anon - " # Чаще для английского
+        if rand_prefix < 0.004: return "### ADMIN ### "
+        if rand_prefix < 0.007: return "Moot - "
+        if rand_prefix < 0.010: return "EMPEROR CONAN - "
+        if rand_prefix < 0.013: return "Faggot - "
+        if rand_prefix < 0.016: return "### DEGENERATE ### "
+        if rand_prefix < 0.019: return "### TRANNY ### "
+        if rand_prefix < 0.022: return "### CUCKOLD ### "
+        if rand_prefix < 0.025: return "### SOYBOY ### "
+        if rand_prefix < 0.028: return "Incel - "
+        if rand_prefix < 0.031: return "Coomer - "
+        if rand_prefix < 0.034: return "Doomer - "
+        if rand_prefix < 0.037: return "Boomer - "
+        if rand_prefix < 0.040: return "GigaChad - "
+        if rand_prefix < 0.043: return "Skibidi Brainrot - "
+        if rand_prefix < 0.046: return "ChatGPT 6 - "
+        if rand_prefix < 0.049: return "Claude Fable 5.1 - "
+        if rand_prefix < 0.052: return "DeepSeek Bot - "
+        if rand_prefix < 0.055: return "Trump - "
+        if rand_prefix < 0.058: return "JD Vance - "
+        if rand_prefix < 0.061: return "Epstein - "
+        if rand_prefix < 0.064: return "Zelensky - "
+        if rand_prefix < 0.067: return "Putin - "
+        if rand_prefix < 0.070: return "Ukrop - "
+        if rand_prefix < 0.073: return "Orc Z - "
+        if rand_prefix < 0.076: return "Fed / Glowie - "
+        if rand_prefix < 0.080: return "Me - "
+        if rand_prefix < 0.095: return "Anon - "
+        if rand_prefix < 0.110: return "Anonymous - "
         return ""
     if lang == 'jp':
-        if rand_prefix < 0.005: return "### 管理人 ### " # Kanrinin (Admin)
-        if rand_prefix < 0.008: return "俺 - " # Ore (Me)
-        if rand_prefix < 0.01: return "ホモ - " # Homo (Faggot)
-        if rand_prefix < 0.012: return "### 変質者 ### " # Henshitsu-sha (Degenerate)
-        if rand_prefix < 0.016: return "岸田 - " # Kishida (PM context)
-        if rand_prefix < 0.021: return "コナン皇帝 - " # Emperor Conan
-        if rand_prefix < 0.023: return "### オカマ ### " # Okama (Tranny)
-        if rand_prefix < 0.030: return "お前 - " # Omae (You)
-        if rand_prefix < 0.040: return "暇人 - " # Himajin (Bitard/Neet)
-        if rand_prefix < 0.08: return "名無し - " # Nanashi (Anon) - самый частый
+        if rand_prefix < 0.004: return "### 管理人 ### "
+        if rand_prefix < 0.007: return "コナン皇帝 - "
+        if rand_prefix < 0.010: return "### 変質者 ### "
+        if rand_prefix < 0.013: return "### オカマ ### "
+        if rand_prefix < 0.016: return "### 痴漢 ### "
+        if rand_prefix < 0.019: return "### 引きこもり ### "
+        if rand_prefix < 0.022: return "ホモ - "
+        if rand_prefix < 0.025: return "童貞 - "
+        if rand_prefix < 0.028: return "チー牛 - "
+        if rand_prefix < 0.031: return "キモオタ - "
+        if rand_prefix < 0.034: return "社畜 - "
+        if rand_prefix < 0.037: return "ガイジ - "
+        if rand_prefix < 0.040: return "こどおじ - "
+        if rand_prefix < 0.043: return "石破 - "
+        if rand_prefix < 0.048: return "俺 - "
+        if rand_prefix < 0.053: return "お前 - "
+        if rand_prefix < 0.060: return "暇人 - "
+        if rand_prefix < 0.100: return "名無し - "
         return ""
     if rand_prefix < 0.005: return "### АДМИН ### "
     if rand_prefix < 0.008: return "Абу - "
