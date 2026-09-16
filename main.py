@@ -5836,12 +5836,14 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         # --- 4. PREFIX ---
         elif item == "prefix" or item == "hat_crown":
             prefixes = [
-                "[Скуф]", "[Опущенный]", "[Калоед]", "[Подпивас]",
-                "[Шитпостер]", "[Гой]", "[Мамкин Трейдер]",
-                "[Инцел]", "[Анимешник]", "[Чмо]", "[Вумен ☕️]",
-                "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
+                "[Скуф]", "[Опущенный]", "[Калоед]", "[Гой]",
+                "[Инцел]", "[Анимешник]", "[Чмо]",
+                "[Вайпер Параши]", "[Дырявый]", "[Каловая Масса]",
+                "[Порваха]", "[Обоссанный Скуф]",
+                # Редкие (15%):
+                "[Вумен ☕️]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
             ]
-            chosen = random.choice(prefixes[:10]) if random.random() < 0.85 else random.choice(prefixes[10:])
+            chosen = random.choice(prefixes[:12]) if random.random() < 0.85 else random.choice(prefixes[12:])
             expires = now + 86400
             active_items["equipped_head"] = "hat_crown"
             active_items["owned_hat_crown"] = True

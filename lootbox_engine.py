@@ -101,7 +101,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
                 "🔥 ДЖЕКПОТ! (ЛЕГЕНДАРНЫЙ)",
                 "💰 Пачка шекелей (+350 ₪) + Титул [Король Помойки]!",
                 "Из мусорного пакета выпала пачка шекелей и корона повелителя помоек!",
-                {"grant_title": "[Король Помойки]", "title_days": 30},
+                {"grant_title": "[Король Помойки]", "title_days": 1},
                 350
             )
         elif jp_sub < 0.85:
@@ -164,9 +164,9 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
         else:
             return (
                 "✨ РЕДКИЙ СТАТУС",
-                "🏷️ Титул «Сборщик Стеклотары» (на 30 дней)",
+                "🏷️ Титул «Сборщик Стеклотары» (на 24 часа)",
                 "Почетное звание санитара тредов и собирателя бутылок!",
-                {"grant_title": "[Сборщик Стеклотары]", "title_days": 30},
+                {"grant_title": "[Сборщик Стеклотары]", "title_days": 1},
                 0
             )
 
@@ -273,7 +273,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 "Легендарный куш! Казна Абу опустошена на 3 000 ₪!",
                 {
                     "grant_title": "[Золотой Кит]",
-                    "title_days": 30
+                    "title_days": 1
                 },
                 3000
             )
@@ -309,7 +309,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 "dur_hours": 0,
                 "slot": slot,
                 "grant_title": "[Шекелевый Барон]",
-                "title_days": 30
+                "title_days": 1
             }
         else:
             title = "👗 ЭЛИТНЫЙ ШМОТ (30 ДНЕЙ)"
