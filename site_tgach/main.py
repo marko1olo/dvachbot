@@ -1390,17 +1390,27 @@ async def check_and_punish_site_spam(
 
         file_hashes = []
         import hashlib
+        import asyncio
+        import concurrent.futures
 
-        for img in files:
+        loop = asyncio.get_running_loop()
+
+        async def process_file(img):
             try:
                 await img.seek(0)
                 content = await img.read()
                 await img.seek(0)
                 if content:
-                    h = hashlib.sha256(content).hexdigest()
-                    file_hashes.append(h)
+                    def hash_content():
+                        return hashlib.sha256(content).hexdigest()
+
+                    return await loop.run_in_executor(None, hash_content)
             except Exception:
                 import traceback; traceback.print_exc()
+            return None
+
+        results = await asyncio.gather(*(process_file(img) for img in files))
+        file_hashes = [r for r in results if r is not None]
 
         if file_hashes:
             file_window = SITE_SPAM_RULES.get("files", {}).get("window_sec", 60)
