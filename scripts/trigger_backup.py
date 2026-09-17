@@ -21,7 +21,7 @@ from common.db_pool import close_pool
 async def main():
     token = os.getenv("FILE_UPLOADER_BOT_TOKEN")
     if not token:
-        print("Error: FILE_UPLOADER_BOT_TOKEN is not defined in environment variables.")
+        print("Error: Required bot configuration is missing in environment variables.")
         return
     
     print("Initializing bot...")
