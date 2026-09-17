@@ -1934,12 +1934,12 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
     if all_post_ids:
         try:
             db = await get_pool()
-            placeholders = ','.join('?' for _ in all_post_ids)
-            query = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
-            async with db.execute(query, all_post_ids) as cursor:
+            json_ids = json.dumps(all_post_ids)
+            query = "SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN (SELECT value FROM json_each(?)) GROUP BY target_post_num"
+            async with db.execute(query, (json_ids,)) as cursor:
                 rows = await cursor.fetchall()
-                for target, source in rows:
-                    backlinks_map[target].append(source)
+                for target, sources_json in rows:
+                    backlinks_map[target].extend(json.loads(sources_json))
         except Exception as e:
             print(f"Backlinks fetch error: {e}")
 
