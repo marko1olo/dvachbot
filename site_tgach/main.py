@@ -5744,11 +5744,11 @@ async def roulette_redirect_alias():
 
 @app.get("/{board_id}/")
 async def read_board_index_redirect(board_id: str):
-    if board_id not in BOARD_CONFIG:
-        raise HTTPException(status_code=404)
     """
     Редирект с корня доски сразу на треды.
     """
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404)
     return RedirectResponse(url=f"/{board_id}/threads/")
 
 
@@ -6335,11 +6335,11 @@ async def read_board_chat(
 
 @app.get("/{board_id}/res/")
 async def read_res_root_redirect(board_id: str):
-    if board_id not in BOARD_CONFIG:
-        raise HTTPException(status_code=404)
     """
     Редирект с папки /res/ (если юзер стер номер треда) обратно на доску.
     """
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404)
     return RedirectResponse(url=f"/{board_id}/threads/", status_code=301)
 
 
