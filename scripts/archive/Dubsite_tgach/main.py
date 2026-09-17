@@ -6657,7 +6657,7 @@ async def api_get_thread_ids(data: PostNumsRequest):
     if not data.post_nums: return {}
     return await get_thread_ids_for_posts(list(set(data.post_nums))[:100])
 @app.post("/api/admin/wipe_user")
-async def api_admin_wipe(data: dict = Body(...), user: dict | None = Depends(get_optional_user)):
+async def api_admin_wipe(data: dict = Body(...), user: dict = Depends(get_required_user)):
     if not check_perm(user, 'admin'): raise HTTPException(status_code=403, detail="Нужен ранг Admin")
     pid = data.get("post_num")
     if not pid: raise HTTPException(status_code=400, detail="No post ID")

@@ -11079,7 +11079,7 @@ async def api_get_thread_ids(data: PostNumsRequest):
 
 @app.post("/api/admin/wipe_user")
 async def api_admin_wipe(
-    data: dict = Body(...), user: dict | None = Depends(get_optional_user)
+    data: dict = Body(...), user: dict = Depends(get_required_user)
 ):
     if not check_perm(user, "admin"):
         raise HTTPException(status_code=403, detail="Нужен ранг Admin")
