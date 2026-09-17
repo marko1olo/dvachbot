@@ -1195,7 +1195,9 @@ async def init_db(db=None):
 
 async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
     """
-    Получает существующий API токен или генерирует новый.
+    Генерирует новый API токен и сохраняет его хэш.
+    Так как токены хэшируются (для безопасности), возвращать существующий токен больше нельзя,
+    поэтому всегда генерируется новый, который затем предоставляется пользователю.
     Использует глобальный db_lock и транзакцию IMMEDIATE.
     """
     from common.db_pool import get_pool, db_lock
@@ -1206,26 +1208,20 @@ async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # 1. Проверяем существующий
-                async with db.execute("SELECT api_token FROM Users WHERE user_id = ? AND api_token IS NOT NULL LIMIT 1", (user_id,)) as cursor:
-                    row = await cursor.fetchone()
-                
-                if row and row[0]:
-                    await db.execute("COMMIT")
-                    return row[0]
-                
-                # 2. Генерируем новый (нужна проверка на уникальность)
+                # 1. Генерируем новый (нужна проверка на уникальность)
                 # Важно: проверка уникальности должна быть внутри этой же транзакции или 
                 # мы доверяем генератору. Здесь генератор внешний, но проверку делаем через БД.
                 
                 async def check_if_token_exists(token: str) -> bool:
                     # Используем то же соединение db внутри транзакции
-                    async with db.execute("SELECT 1 FROM Users WHERE api_token = ? LIMIT 1", (token,)) as c:
+                    hashed = hashlib.sha256(token.encode('utf-8')).hexdigest()
+                    async with db.execute("SELECT 1 FROM Users WHERE api_token = ? LIMIT 1", (hashed,)) as c:
                         return await c.fetchone() is not None
                 
                 new_token = await token_generator_func(check_if_token_exists)
+                hashed_new_token = hashlib.sha256(new_token.encode('utf-8')).hexdigest()
                 
-                # 3. Обнуляем старые и пишем новый
+                # 2. Обнуляем старые и пишем новый
                 await db.execute("UPDATE Users SET api_token = NULL WHERE user_id = ?", (user_id,))
                 
                 # Убедимся, что юзер существует
@@ -1234,7 +1230,7 @@ async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
                     (user_id, time.time())
                 )
                 
-                await db.execute("UPDATE Users SET api_token = ? WHERE user_id = ? AND board_id = 'b'", (new_token, user_id))
+                await db.execute("UPDATE Users SET api_token = ? WHERE user_id = ? AND board_id = 'b'", (hashed_new_token, user_id))
                 
                 await db.execute("COMMIT")
                 return new_token
@@ -3753,6 +3749,8 @@ async def mark_broadcast_posts_sent(post_nums: list[int] | tuple[int, ...] | set
 async def get_user_by_token(token: str) -> Optional[dict]:
     """
     Находит пользователя по его API токену.
+    Поддерживает как новые хэшированные токены, так и старые (plain-text),
+    которые автоматически обновляются в БД на хэшированные при первом успешном входе.
     """
     from common.db_pool import get_pool, db_lock
     
@@ -3760,13 +3758,43 @@ async def get_user_by_token(token: str) -> Optional[dict]:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                async with db.execute("SELECT user_id FROM Users WHERE api_token = ? LIMIT 1", (token,)) as cursor:
+                hashed_token = hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+                # Check for either the hashed token OR the plain text token.
+                # Important: To prevent a pass-the-hash attack where an attacker leaks the hashed
+                # token from the DB and sends it as the plain text token, we only allow the
+                # plain text fallback if the input token is NOT already a 64-character hex string.
+                is_hex_hash = len(token) == 64 and all(c in '0123456789abcdefABCDEF' for c in token)
+
+                if not is_hex_hash:
+                    query = "SELECT user_id, api_token FROM Users WHERE api_token = ? OR api_token = ? LIMIT 1"
+                    params = (hashed_token, token)
+                else:
+                    query = "SELECT user_id, api_token FROM Users WHERE api_token = ? LIMIT 1"
+                    params = (hashed_token,)
+
+                async with db.execute(query, params) as cursor:
                     row = await cursor.fetchone()
                     if not row:
                         return None
                     
                     cols = [d[0] for d in cursor.description]
-                    return dict(zip(cols, row))
+                    result = dict(zip(cols, row))
+
+                    # Если нашли пользователя по старому plain-text токену, обновляем токен на хэш
+                    # We also double check that token is not a hash to be absolutely sure.
+                    if result.get('api_token') == token and not is_hex_hash:
+                        await db.execute("BEGIN IMMEDIATE")
+                        try:
+                            await db.execute("UPDATE Users SET api_token = ? WHERE user_id = ?", (hashed_token, result['user_id']))
+                            await db.execute("COMMIT")
+                        except Exception:
+                            try: await db.execute("ROLLBACK")
+                            except: pass
+
+                    # Удаляем api_token из результата, если он там есть, чтобы не возвращать
+                    result.pop('api_token', None)
+                    return result
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
