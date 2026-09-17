@@ -40,20 +40,42 @@ class TestGetUserIdFromSession(unittest.TestCase):
     def test_with_user_no_id_in_session(self):
         request = StubRequest(
             session={'user': {}},
-            headers={"x-real-ip": "1.2.3.4"}
+            headers={"x-real-ip": "1.2.3.4"},
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
 
     def test_without_user_in_session(self):
         request = StubRequest(
             session={},
-            headers={"x-real-ip": "1.2.3.4"}
+            headers={"x-real-ip": "1.2.3.4"},
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
 
     def test_with_user_id_as_string_in_session(self):
         request = StubRequest(session={'user': {'id': 'user_abc'}})
         self.assertEqual(get_user_id_from_session(request), 'user_abc')
+
+    def test_with_fastapi_testclient(self):
+        from fastapi import FastAPI, Request
+        from fastapi.testclient import TestClient
+        from starlette.middleware.sessions import SessionMiddleware
+        import os
+
+        app = FastAPI()
+        app.add_middleware(SessionMiddleware, secret_key="test_secret_key")
+
+        @app.get("/test_user_id")
+        async def test_endpoint(request: Request):
+            request.session['user'] = {'id': 9999}
+            return {"user_id": get_user_id_from_session(request)}
+
+        client = TestClient(app)
+        response = client.get("/test_user_id")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"user_id": "9999"})
+
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
