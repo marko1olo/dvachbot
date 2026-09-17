@@ -36,7 +36,7 @@ Key Components:ware: Determines the user's language stream and caches it.
 This module is designed to be extensible and maintainable, allowing for future enhancements and modifications.
 """
 import asyncio
-from common.thread_manager import get_threads_data, get_thread_info, set_thread_info, delete_thread_data, acquire_thread_lock, get_thread_locks_count, get_active_threads, trim_thread_posts, save_threads_data, initialize_board_threads
+from common.thread_manager import get_threads_data, get_thread_info, set_thread_info, delete_thread_data, get_thread_locks_count, get_active_threads, trim_thread_posts, save_threads_data, initialize_board_threads
 from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker, IMAGE_SPAM_LIMIT, IMAGE_SPAM_WINDOW
 from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type, _site_public_url, _site_file_source
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
