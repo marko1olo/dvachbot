@@ -1,6 +1,6 @@
+import logging
 import sys
 import os
-import logging
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 import os
@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 
 import sys
 import os
-import logging
 
 # Ensure import paths work
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
