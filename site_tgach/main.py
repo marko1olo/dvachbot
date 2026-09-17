@@ -4668,31 +4668,23 @@ async def search_tags_page(
             key=lambda p: (calculate_relevance(p), p.get("timestamp", 0)), reverse=True
         )
 
-        for post in posts:
-            post_id = post.get("id")
-            board_id = post.get("board_id")
-            if not post_id or not board_id:
-                continue
-            content = post.get("content", {})
-            files = content.get("files", [])
-            if not isinstance(files, list):
-                continue
-            for f in files:
-                if not isinstance(f, dict):
-                    continue
-                if f.get("type") in [
-                    "image",
-                    "photo",
-                    "sticker",
-                    "gif",
-                    "video",
-                    "animation",
-                    "video_note",
-                ]:
-                    img_entry = f.copy()
-                    img_entry["parent_post_id"] = post_id
-                    img_entry["parent_board_id"] = board_id
-                    search_images.append(img_entry)
+        ALLOWED_TYPES = {
+            "image",
+            "photo",
+            "sticker",
+            "gif",
+            "video",
+            "animation",
+            "video_note",
+        }
+        search_images = [
+            dict(f, parent_post_id=post_id, parent_board_id=board_id)
+            for post in posts
+            if (post_id := post.get("id")) and (board_id := post.get("board_id"))
+            if isinstance((files := post.get("content", {}).get("files")), list)
+            for f in files
+            if isinstance(f, dict) and f.get("type") in ALLOWED_TYPES
+        ]
 
     if request.headers.get("accept") == "application/json":
         return search_images
