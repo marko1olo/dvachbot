@@ -1,0 +1,26 @@
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''README\.md''',
+    '''data/banners_cache\.json''',
+    '''tests/.*''',
+    '''zaputin_mode\.py''',
+]
+
+[[rules]]
+id = "telegram-bot-api-token"
+description = "Telegram Bot API Token"
+regex = '''(?i)(?:^|[^0-9])([0-9]{8,10}:[a-zA-Z0-9_-]{35})'''
+tags = ["key", "Telegram"]
+
+[[rules]]
+id = "aws-access-token"
+description = "AWS Access Token"
+regex = '''(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}'''
+tags = ["key", "AWS"]
+
+[[rules]]
+id = "sidekiq-secret"
+description = "Sidekiq Secret"
+regex = '''(?i)\b(BUNDLE_ENTERPRISE__CONTRIBSYS__COM|BUNDLE_GEMS__CONTRIBSYS__COM)[=:][ ]*([a-f0-9]{8}:[a-f0-9]{8})\b'''
+tags = ["key", "Sidekiq"]
