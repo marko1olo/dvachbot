@@ -114,20 +114,15 @@ class ThreadImporter:
         )
         try:
             async with db_lock, get_db_connection() as conn:
-                chunk_size = 900
-                for i in range(0, len(self.created_post_ids), chunk_size):
-                    chunk = self.created_post_ids[i : i + chunk_size]
-                    if not chunk:
-                        continue
-                    placeholders = ",".join(["?"] * len(chunk))
-                    await conn.execute(
-                        f"DELETE FROM Posts WHERE post_num IN ({placeholders})", chunk
-                    )
-                    str_chunk = [str(x) for x in chunk]
-                    await conn.execute(
-                        f"DELETE FROM Threads WHERE thread_id IN ({placeholders})",
-                        str_chunk,
-                    )
+                ids_json = json.dumps(self.created_post_ids)
+                str_ids_json = json.dumps([str(x) for x in self.created_post_ids])
+
+                await conn.execute(
+                    "DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (ids_json,)
+                )
+                await conn.execute(
+                    "DELETE FROM Threads WHERE thread_id IN (SELECT value FROM json_each(?))", (str_ids_json,)
+                )
                 await conn.commit()
             logger.info("✅ Rollback выполнен успешно.")
         except Exception as e:
