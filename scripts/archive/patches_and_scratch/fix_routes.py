@@ -1,5 +1,3 @@
-import re
-
 path = r'C:\Users\danat\Desktop\dvachbot\site_tgach\main.py'
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()
