@@ -1661,11 +1661,11 @@ class ConnectionManager:
             "overboard/chat/jp",
         ]
 
-        tasks = []
-        for key in targets:
-            if key in self.active_connections:
-                for conn in self.active_connections[key]:
-                    tasks.append(self._safe_send(conn, message, key))
+        tasks = [
+            self._safe_send(conn, message, key)
+            for key in targets if key in self.active_connections
+            for conn in self.active_connections[key]
+        ]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -1713,9 +1713,7 @@ class ConnectionManager:
                 connections_list = list(connections)
                 for i in range(0, len(connections_list), chunk_size):
                     chunk = connections_list[i : i + chunk_size]
-                    tasks = []
-                    for connection in chunk:
-                        tasks.append(self._safe_send(connection, message_str, k))
+                    tasks = [self._safe_send(connection, message_str, k) for connection in chunk]
                     await asyncio.gather(*tasks)
                     await asyncio.sleep(0.01)
         if "admin_feed" in self.active_connections:
