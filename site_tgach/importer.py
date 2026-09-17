@@ -113,17 +113,20 @@ class ThreadImporter:
             f"⚠️ ROLLBACK: Удаление {len(self.created_post_ids)} созданных постов..."
         )
         try:
+            import sqlite3
             async with db_lock, get_db_connection() as conn:
-                chunk_size = 900
+                # SQLite increased max variable limit from 999 to 32766 in version 3.32.0
+                chunk_size = 32000 if sqlite3.sqlite_version_info >= (3, 32, 0) else 900
+                str_ids = [str(x) for x in self.created_post_ids]
                 for i in range(0, len(self.created_post_ids), chunk_size):
                     chunk = self.created_post_ids[i : i + chunk_size]
                     if not chunk:
                         continue
+                    str_chunk = str_ids[i : i + chunk_size]
                     placeholders = ",".join(["?"] * len(chunk))
                     await conn.execute(
                         f"DELETE FROM Posts WHERE post_num IN ({placeholders})", chunk
                     )
-                    str_chunk = [str(x) for x in chunk]
                     await conn.execute(
                         f"DELETE FROM Threads WHERE thread_id IN ({placeholders})",
                         str_chunk,
