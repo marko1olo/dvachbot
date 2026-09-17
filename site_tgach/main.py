@@ -5996,10 +5996,12 @@ async def api_makaba_posting(
         return JSONResponse({"Error": msg, "Status": "Error"})
 
     form_data = await request.form()
-    files_to_process = [
-        v for k, v in form_data.items()
-        if k.startswith(("image", "file", "video")) and getattr(v, "filename", None)
-    ]
+    files_to_process = []
+    for key in form_data:
+        if key.startswith("image") or key.startswith("file") or key.startswith("video"):
+            file_obj = form_data[key]
+            if getattr(file_obj, "filename", None):
+                files_to_process.append(file_obj)
 
     file_sig = [(f.filename, f.size) for f in files_to_process]
     content_hash = hashlib.sha256(
