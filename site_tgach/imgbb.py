@@ -11,23 +11,20 @@ import itertools
 
 logger = logging.getLogger("imgbb")
 
-# Verified active multi-account rotating pool
-IMGBB_KEY_POOL = [
-    "680574ea1c32adeb15405f2caf0cf899",
-    "8416e733b4e086f2b1a5604ad8b8be72",
-    "1d26080cc4d0cb4fbb655c71d71a4cc8",
-    "bd9ed6c27f06d3ab3f93754b0a4317d7",
-    "b0bcf8a3dbd2689b209844f3ee8fc2d9",
-    "681a89036c6279ebfc3eee2b1680b6e1"
-]
+# Dynamic active multi-account rotating pool
+IMGBB_KEY_POOL = []
 
-# If custom key in .env, prepend it
+_env_keys = os.getenv("IMGBB_API_KEYS")
+if _env_keys:
+    IMGBB_KEY_POOL.extend([k.strip() for k in _env_keys.split(",") if k.strip()])
+
+# If custom singular key in .env, prepend it
 _env_key = os.getenv("IMGBB_API_KEY")
 if _env_key and _env_key not in IMGBB_KEY_POOL:
     IMGBB_KEY_POOL.insert(0, _env_key)
 
-_key_cycler = itertools.cycle(IMGBB_KEY_POOL)
-IMGBB_API_KEY = IMGBB_KEY_POOL[0]
+_key_cycler = itertools.cycle(IMGBB_KEY_POOL) if IMGBB_KEY_POOL else None
+IMGBB_API_KEY = IMGBB_KEY_POOL[0] if IMGBB_KEY_POOL else None
 
 # Per-key cooldown: {key: timestamp_available_again}
 _KEY_COOLDOWN: dict[str, float] = {}
@@ -52,6 +49,8 @@ def _cooldown_key(key: str, duration: float = _KEY_COOLDOWN_DURATION):
 
 def get_next_imgbb_key() -> str | None:
     """Return next available key from pool, skipping cooled-down ones."""
+    if not _key_cycler:
+        return None
     for _ in range(len(IMGBB_KEY_POOL)):
         key = next(_key_cycler)
         if _is_key_available(key):
