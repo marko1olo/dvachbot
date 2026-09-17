@@ -147,6 +147,20 @@ async def get_setting_cached(key: str) -> str:
     return await get_system_setting(key)
 
 
+@alru_cache(maxsize=1000, ttl=30)
+async def get_is_endless_cached(thread_id: str) -> bool:
+    from common.database import get_db_connection
+
+    async with get_db_connection() as conn:
+        row = await (
+            await conn.execute(
+                "SELECT is_endless FROM Threads WHERE thread_id = ?",
+                (thread_id,),
+            )
+        ).fetchone()
+        return bool(row[0]) if row else False
+
+
 import uvicorn
 import aiohttp
 from fastapi import (
@@ -8365,14 +8379,7 @@ async def api_create_post(
         except Exception:
             pass
     elif post_mode == "reply" and thread_op_num:
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT is_endless FROM Threads WHERE thread_id = ?",
-                    (str(thread_op_num),),
-                )
-            ).fetchone()
-            is_endless = bool(row[0]) if row else False
+        is_endless = await get_is_endless_cached(str(thread_op_num))
         if not sage:
             from common.database import update_thread_last_updated
 
