@@ -2034,8 +2034,8 @@ async def custom_access_log_middleware(request: Request, call_next):
     ]
 
     path = request.url.path
-    if any(path.startswith(prefix) for prefix in IGNORED_PREFIXES) or any(
-        x in path for x in ["wp-", ".php", ".xml"]
+    if any(path.startswith(prefix) for prefix in IGNORED_PREFIXES) or (
+        "wp-" in path or ".php" in path or ".xml" in path
     ):
         return await call_next(request)
 
