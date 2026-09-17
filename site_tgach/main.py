@@ -3472,35 +3472,34 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
     all_post_ids = []
 
     for p in posts:
-        all_post_ids.append(p["id"])
-        files = p.get("content", {}).get("files", [])
-        for f in files:
+        pid = p["id"]
+        all_post_ids.append(pid)
+
+        p_content = p.get("content", {})
+        if "poll_data" in p_content:
+            poll_post_ids.append(pid)
+
+        for f in p_content.get("files", []):
             fid = f.get("original_file_id")
-            if fid:
-                all_fids.append(fid)
+            if fid: all_fids.append(fid)
             tid = f.get("thumbnail_file_id")
-            if tid:
-                all_fids.append(tid)
+            if tid: all_fids.append(tid)
 
-        if p.get("latest_replies"):
-            for r in p["latest_replies"]:
-                all_post_ids.append(r["id"])
-                r_files = r.get("content", {}).get("files", [])
-                for rf in r_files:
+        latest_replies = p.get("latest_replies")
+        if latest_replies:
+            for r in latest_replies:
+                rid = r["id"]
+                all_post_ids.append(rid)
+
+                r_content = r.get("content", {})
+                if "poll_data" in r_content:
+                    poll_post_ids.append(rid)
+
+                for rf in r_content.get("files", []):
                     rfid = rf.get("original_file_id")
-                    if rfid:
-                        all_fids.append(rfid)
+                    if rfid: all_fids.append(rfid)
                     rtid = rf.get("thumbnail_file_id")
-                    if rtid:
-                        all_fids.append(rtid)
-
-        if "poll_data" in p.get("content", {}):
-            poll_post_ids.append(p["id"])
-
-        if p.get("latest_replies"):
-            for r in p["latest_replies"]:
-                if "poll_data" in r.get("content", {}):
-                    poll_post_ids.append(r["id"])
+                    if rtid: all_fids.append(rtid)
 
     dupe_map, blur_map, mirror_map = {}, {}, {}
     failed_set = set()
@@ -3987,34 +3986,34 @@ async def enrich_heavy_data(posts: List[dict]):
     all_post_ids = []
 
     for p in posts:
-        all_post_ids.append(p["id"])
-        files = p.get("content", {}).get("files", [])
-        for f in files:
+        pid = p["id"]
+        all_post_ids.append(pid)
+
+        p_content = p.get("content", {})
+        if "poll_data" in p_content:
+            poll_post_ids.append(pid)
+
+        for f in p_content.get("files", []):
             fid = f.get("original_file_id")
-            if fid:
-                all_fids.append(fid)
+            if fid: all_fids.append(fid)
             tid = f.get("thumbnail_file_id")
-            if tid:
-                all_fids.append(tid)
+            if tid: all_fids.append(tid)
 
-        if p.get("latest_replies"):
-            for r in p["latest_replies"]:
-                all_post_ids.append(r["id"])
-                r_files = r.get("content", {}).get("files", [])
-                for rf in r_files:
+        latest_replies = p.get("latest_replies")
+        if latest_replies:
+            for r in latest_replies:
+                rid = r["id"]
+                all_post_ids.append(rid)
+
+                r_content = r.get("content", {})
+                if "poll_data" in r_content:
+                    poll_post_ids.append(rid)
+
+                for rf in r_content.get("files", []):
                     rfid = rf.get("original_file_id")
-                    if rfid:
-                        all_fids.append(rfid)
+                    if rfid: all_fids.append(rfid)
                     rtid = rf.get("thumbnail_file_id")
-                    if rtid:
-                        all_fids.append(rtid)
-
-        if "poll_data" in p.get("content", {}):
-            poll_post_ids.append(p["id"])
-        if p.get("latest_replies"):
-            for r in p["latest_replies"]:
-                if "poll_data" in r.get("content", {}):
-                    poll_post_ids.append(r["id"])
+                    if rtid: all_fids.append(rtid)
 
     # Параллельные запросы
     tasks = []
