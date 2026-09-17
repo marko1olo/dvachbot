@@ -147,6 +147,17 @@ async def get_setting_cached(key: str) -> str:
     return await get_system_setting(key)
 
 
+@alru_cache(maxsize=10000, ttl=300)
+async def get_user_created_at_cached(author_id: int) -> float:
+    async with get_db_connection() as conn:
+        row = await (
+            await conn.execute(
+                "SELECT MIN(created_at) FROM Users WHERE user_id = ?", (author_id,)
+            )
+        ).fetchone()
+        return row[0] if row and row[0] is not None else time.time()
+
+
 import uvicorn
 import aiohttp
 from fastapi import (
@@ -5972,21 +5983,15 @@ async def api_makaba_posting(
     lockdown_val = await get_system_setting("lockdown_enabled")
     if lockdown_val == "true" and not user.get("is_admin"):
         logger.info(f"🛡️ Lockdown check triggered for {author_id}")
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT MIN(created_at) FROM Users WHERE user_id = ?", (author_id,)
-                )
-            ).fetchone()
-            created_at = row[0] if row and row[0] is not None else time.time()
-            if (time.time() - created_at) < 86400 and not user.get("is_admin"):
-                return JSONResponse(
-                    {
-                        "Error": "Lockdown mode active. New users restricted.",
-                        "Status": "Error",
-                    },
-                    status_code=403,
-                )
+        created_at = await get_user_created_at_cached(author_id)
+        if (time.time() - created_at) < 86400 and not user.get("is_admin"):
+            return JSONResponse(
+                {
+                    "Error": "Lockdown mode active. New users restricted.",
+                    "Status": "Error",
+                },
+                status_code=403,
+            )
 
     if await get_user_status(author_id, board) == "banned":
         lang = getattr(request.state, "lang", "ru")
@@ -7810,20 +7815,14 @@ async def api_create_post(
     lockdown_val = await get_system_setting("lockdown_enabled")
     if lockdown_val == "true" and not user.get("is_admin"):
         logger.info(f"🛡️ Lockdown check triggered for {author_id}")
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT MIN(created_at) FROM Users WHERE user_id = ?", (author_id,)
+        created_at = await get_user_created_at_cached(author_id)
+        age_seconds = time.time() - created_at
+        if age_seconds < 86400:
+            if not user.get("is_admin"):
+                hours_left = int((86400 - age_seconds) / 3600)
+                raise HTTPException(
+                    status_code=403, detail=t("err_bunker_mode").format(hours_left)
                 )
-            ).fetchone()
-            created_at = row[0] if row and row[0] is not None else time.time()
-            age_seconds = time.time() - created_at
-            if age_seconds < 86400:
-                if not user.get("is_admin"):
-                    hours_left = int((86400 - age_seconds) / 3600)
-                    raise HTTPException(
-                        status_code=403, detail=t("err_bunker_mode").format(hours_left)
-                    )
     stream = getattr(request.state, "stream", "ru")
     file_sig = [(f.filename, f.size) for f in images or []]
     context_sig = f"{board_id}_{reply_to or 'OP'}"
