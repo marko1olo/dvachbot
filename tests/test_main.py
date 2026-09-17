@@ -40,14 +40,16 @@ class TestGetUserIdFromSession(unittest.TestCase):
     def test_with_user_no_id_in_session(self):
         request = StubRequest(
             session={'user': {}},
-            headers={"x-real-ip": "1.2.3.4"}
+            headers={"x-real-ip": "1.2.3.4"},
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
 
     def test_without_user_in_session(self):
         request = StubRequest(
             session={},
-            headers={"x-real-ip": "1.2.3.4"}
+            headers={"x-real-ip": "1.2.3.4"},
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
 
