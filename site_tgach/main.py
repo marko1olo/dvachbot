@@ -1755,27 +1755,21 @@ async def lifespan(app: FastAPI):
     step_started = startup_mark("sync_boards begin")
     await sync_boards_with_config(BOARD_CONFIG)
     startup_mark("sync_boards done", step_started)
-    step_started = startup_mark("load approved boards begin")
+    step_started = startup_mark("load approved boards and banners begin")
     async with get_db_connection() as conn:
         async with conn.execute(
-            "SELECT board_id, name, description FROM Boards WHERE is_approved = 1"
+            "SELECT board_id, name, description, is_approved, banner_data FROM Boards"
         ) as cursor:
             async for row in cursor:
-                bid, bname, bdesc = row
-                if bid not in BOARD_CONFIG:
+                bid, bname, bdesc, is_approved, bdata = row
+                if is_approved == 1 and bid not in BOARD_CONFIG:
                     BOARD_CONFIG[bid] = {"name": bname, "description": bdesc}
-    startup_mark("load approved boards done", step_started)
-    step_started = startup_mark("load board banners begin")
-    async with get_db_connection() as conn:
-        async with conn.execute("SELECT board_id, banner_data FROM Boards") as cursor:
-            async for row in cursor:
-                bid, bdata = row
                 if bid in BOARD_CONFIG and bdata:
                     try:
                         BOARD_CONFIG[bid]["banner_data"] = json.loads(bdata)
                     except Exception:
                         pass
-    startup_mark("load board banners done", step_started)
+    startup_mark("load approved boards and banners done", step_started)
     if not FILE_UPLOADER_BOT_TOKEN or not FILE_STORAGE_CHANNEL_ID:
         raise ValueError(
             "Missing FILE_UPLOADER_BOT_TOKEN or FILE_STORAGE_CHANNEL_ID in .env"
