@@ -1,0 +1,10 @@
+# .gitleaks.toml
+title = "gitleaks config"
+
+[allowlist]
+paths = [
+    '''README.md''',
+    '''data/banners_cache.json''',
+    '''tests/.*''',
+    '''verification_scripts/.*'''
+]
