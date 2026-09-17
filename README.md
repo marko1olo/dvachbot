@@ -1,307 +1,420 @@
-<div align="center">
-
-# TGACH (dvachbot_cloned)
-
-### *Telegram-Attached Hybrid Imageboard Platform with Real-time WebSocket Synchronization*
-
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-brightgreen?style=for-the-badge&logo=github)](https://marko1olo.github.io/dvachbot/)
-[![Deploy GitHub Pages](https://github.com/marko1olo/dvachbot/actions/workflows/deploy-gh-pages.yml/badge.svg)](https://github.com/marko1olo/dvachbot/actions/workflows/deploy-gh-pages.yml)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
-[![Vanilla JS](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
-[![Jinja2](https://img.shields.io/badge/Jinja2-SSR-B41717?style=for-the-badge&logo=jinja&logoColor=white)](https://jinja.palletsprojects.com/)
-[![Telegram Bot API](https://img.shields.io/badge/Telegram_Bot-API-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-
-<br />
-
-<img src="assets/banner.svg" alt="TGACH Imageboard Banner" width="100%" style="border-radius: 10px;" />
-
-<br />
-
-[Philosophy](#-философия-и-архитектура) • [Features](#-функциональные-возможности) • [Architecture](#-architecture--data-flow) • [Component Matrix](#-file-tree--component-matrix) • [API Reference](#-api-reference-frontend-consumer) • [Original Docs](#-original-developer-documentation)
-
-</div>
-
----
-
-## 🏛 Философия и Архитектура
-
-**TGACH** — гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с возможностями мессенджера Telegram. Проект обеспечивает двустороннюю синхронизацию контента: треды, созданные на сайте, мгновенно транслируются в Telegram-чат, а сообщения из Telegram реплицируются на сайт в реальном времени.
-
-TGACH отвергает тяжелые SPA-фреймворки (React, Vue) в пользу чистого, производительного **Vanilla JavaScript** и **Server-Side Rendering (SSR)** через Jinja2:
-- **Молниеносная загрузка**: Браузер получает готовый HTML от сервера FastAPI.
-- **SEO-оптимизация**: Контент доступен поисковикам без JS-гидратации.
-- **Устойчивость**: Базовый просмотр работает даже при отключенном JavaScript.
-- **Реактивность**: WebSocket-соединение обеспечивает обновление контента без перезагрузки (Live Updates).
-
----
-
-## 📐 Architecture & Data Flow
-
-```mermaid
-flowchart TD
-    subgraph WebClient [Web Client (Vanilla JS)]
-        A[User Form Input] -->|1. HTTP POST| B[FastAPI Endpoint]
-        G[WebSocket Listener] <--|5. Live WS Updates| F[WebSocket Manager]
-    end
-
-    subgraph Server [Backend Core (FastAPI)]
-        B -->|2. Write DB Record| C[(SQLite / PostgreSQL)]
-        C -->|3. Trigger Event| D[Sync Dispatcher]
-        D -->|4. Push Broadcast| F
-    end
-
-    subgraph Telegram [Telegram Integration]
-        D -->|5. Bot API Send| E[Telegram Group / Channel]
-        E -->|6. Webhook Event| H[Bot Webhook Listener]
-        H -->|7. Ingest Telegram Post| C
-    end
-```
-
----
-
-## 📂 File Tree & Component Matrix
+# Gitleaks
 
 ```
-dvachbot_cloned/
-├── Dubsite_tgach/          # Primary imageboard web application instance
-│   ├── static/             # Assets (CSS themes, JS managers, icons, audio)
-│   │   ├── css/            # Theme variables (Cyberpunk, Win95, Shaft, Lain)
-│   │   └── js/             # Vanilla JS singleton managers (WS, Gallery, Form)
-│   └── templates/          # Jinja2 SSR HTML templates
-├── site_tgach/             # Secondary standalone web node
-├── common/                 # Shared database models & API schemas
-├── data/                   # SQLite database storage & media uploads
-├── scripts/                # Database migrations & admin automation
-├── pyproject.toml          # Python project metadata
-└── requirements.txt        # Server dependencies (FastAPI, uvicorn, aiofiles)
+┌─○───┐
+│ │╲  │
+│ │ ○ │
+│ ○ ░ │
+└─░───┘
 ```
 
-| Path | Primary Tech | Role / Component Description |
-| :--- | :--- | :--- |
-| `Dubsite_tgach/static/js/main.js` | Vanilla ES6+ JS | Client orchestrator containing singleton managers (WSManager, GalleryManager, FormManager) |
-| `Dubsite_tgach/static/css/style.css` | CSS3 Variables | Dynamic theme engine supporting 20+ visual themes without re-compilation |
-| `common/` | Python 3.10 | Core data models, Pydantic validation schemas, and database connectors |
-| `site_tgach/` | FastAPI / Jinja2 | Async web server rendering SSR HTML pages and handling WebSocket channels |
-| `scripts/` | Python / Shell | Database maintenance scripts, moderation tools, and backup utilities |
+<p align="left">
+  <p align="left">
+	  <a href="https://github.com/zricethezav/gitleaks/actions/workflows/test.yml">
+		  <img alt="Github Test" src="https://github.com/zricethezav/gitleaks/actions/workflows/test.yml/badge.svg">
+	  </a>
+	  <a href="https://hub.docker.com/r/zricethezav/gitleaks">
+		  <img src="https://img.shields.io/docker/pulls/zricethezav/gitleaks.svg" />
+	  </a>
+	  <a href="https://github.com/zricethezav/gitleaks-action">
+		<img alt="gitleaks badge" src="https://img.shields.io/badge/protected%20by-gitleaks-blue">
+	 </a>
+	  <a href="https://twitter.com/intent/follow?screen_name=zricethezav">
+		  <img src="https://img.shields.io/twitter/follow/zricethezav?label=Follow%20zricethezav&style=social&color=blue" alt="Follow @zricethezav" />
+	  </a>
+  </p>
+</p>
 
----
+### Join our Discord! [![Discord](https://img.shields.io/discord/1102689410522284044.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/8Hzbrnkr7E)
 
-## 🚀 Функциональные возможности
+Gitleaks is a SAST tool for **detecting** and **preventing** hardcoded secrets like passwords, api keys, and tokens in git repos. Gitleaks is an **easy-to-use, all-in-one solution** for detecting secrets, past or present, in your code.
 
-### Для пользователей
-- **Гибридный постинг**: Текст, Изображения, Видео, Аудио, WebM-стикеры, Голосовые сообщения, Кружочки ("Video Notes").
-- **Real-time обновления**: Новые посты и ветки отображаются мгновенно через WebSockets.
-- **Продвинутый медиа-плеер**: Кастомный аудио-плеер с визуализацией волны (Waveform), галерея с поддержкой Pinch-to-zoom и Double Tap.
-- **Персонализация UX**: 20+ визуальных тем (Shaft, Cyberpunk, Win95, Nord, Discord, Lain), кастомные аватарки-идентиконы.
-- **Интерактив**: Система эмодзи-реакций, голосования (Polls), анонимные сообщения ("Бутылочная почта").
+```
+➜  ~/code(master) gitleaks detect --source . -v
 
-### Для администрации
-- **Wipe System**: Экстренная очистка всех сообщений пользователя в один клик.
-- **Shadow Ban**: Теневая блокировка спамеров без видимого уведомления нарушителя.
-- **Stealth Edit**: Тихое редактирование контента постов без отметки "изменено".
-- **Dashboard**: Системный мониторинг нагрузки (CPU/RAM) и WebSocket-онлайна.
+    ○
+    │╲
+    │ ○
+    ○ ░
+    ░    gitleaks
 
----
 
-## 🛠 Технический стек
-
-| Слой | Технологии |
-| :--- | :--- |
-| **Backend** | Python 3.10+, FastAPI (ASGI), asyncio, aiofiles, Jinja2 |
-| **Database** | SQLite (WAL mode) / PostgreSQL compatibility |
-| **Frontend** | HTML5, CSS3 Variables (Zero-Tailwind), Vanilla ES6+ JS (Singleton Managers) |
-| **Protocol** | WebSockets, HTTP REST API, Telegram Bot API Webhooks |
-
----
-
-## 📡 API Reference (Frontend Consumer)
-
-### Public Endpoints
-- `POST /api/post/{board_id}` — Создание треда или ответа (multipart/form-data)
-- `GET /api/threads/{board_id}?page=X` — Пагинация тредов борды
-- `GET /api/chat/{board_id}` — Загрузка истории сообщений
-- `POST /api/react` — Отправка реакций (эмодзи)
-- `POST /api/poll/vote` — Участие в опросах
-
-### Admin Endpoints (Auth Required)
-- `POST /api/admin/delete_post` — Удаление поста
-- `POST /api/admin/shadow_ban` — Установка теневого бана
-- `POST /api/admin/wipe_user` — Массовое удаление постов пользователя
-- `POST /api/admin/stealth_edit` — Скрытое редактирование текста
-
----
-
-## 📄 Original Developer Documentation
-
-The text below represents 100% of the original pre-agent developer documentation preserved verbatim from repository initial commit history:
-
-```markdown
-TGACH (Telegram-Attached Imageboard)
-
-TGACH — это гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с современными возможностями мессенджеров (Telegram). Проект обеспечивает бесшовную синхронизацию контента: треды, созданные на сайте, мгновенно появляются в Telegram-чате, а сообщения из Telegram реплицируются на сайт в реальном времени.
-
-Оглавление:
-- Философия и Архитектура
-- Функциональные возможности
-- Технический стек
-- Структура Фронтенда (Deep Dive)
-- Модульная архитектура JS
-- Система темизации (CSS Variables)
-- Адаптивность и Mobile-First
-- API Reference (Frontend Consumer)
-- Администрирование и Модерация
-- Установка и Запуск
-- Руководство по разработке (Contributing)
+Finding:     "export BUNDLE_ENTERPRISE__CONTRIBSYS__COM=cafebabe:deadbeef",
+Secret:      cafebabe:deadbeef
+RuleID:      sidekiq-secret
+Entropy:     2.609850
+File:        cmd/generate/config/rules/sidekiq.go
+Line:        23
+Commit:      cd5226711335c68be1e720b318b7bc3135a30eb2
+Author:      John
+Email:       john@users.noreply.github.com
+Date:        2022-08-03T12:31:40Z
+Fingerprint: cd5226711335c68be1e720b318b7bc3135a30eb2:cmd/generate/config/rules/sidekiq.go:sidekiq-secret:23
 ```
 
----
+## Getting Started
 
----
+Gitleaks can be installed using Homebrew, Docker, or Go. Gitleaks is also available in binary form for many popular platforms and OS types on the [releases page](https://github.com/zricethezav/gitleaks/releases). In addition, Gitleaks can be implemented as a pre-commit hook directly in your repo or as a GitHub action using [Gitleaks-Action](https://github.com/gitleaks/gitleaks-action).
 
-<details>
-<summary><b>🇷🇺 Краткое описание на русском</b></summary>
+### Installing
 
-### TGACH — Имиджборд с интеграцией в Telegram
+```bash
+# MacOS
+brew install gitleaks
 
-**TGACH (dvachbot_cloned)** — гибридная веб-платформа для анонимного общения, сочетающая классический формат имиджборда с функционалом мессенджера Telegram.
+# Docker (DockerHub)
+docker pull zricethezav/gitleaks:latest
+docker run -v ${path_to_host_folder_to_scan}:/path zricethezav/gitleaks:latest [COMMAND] --source="/path" [OPTIONS]
 
-#### Основные свойства:
-- **Двусторонняя WebSocket-синхронизация**: Сообщения и треды с веб-сайта мгновенно реплицируются в Telegram-группу, а ответы из Telegram дублируются на сайт.
-- **Высокая скорость и лёгкость**: Отказ от тяжелых SPA (React/Vue) в пользу чистого Vanilla JS и Server-Side Rendering (SSR) на Jinja2 и FastAPI.
-- **Поддержка любых медиафайлов**: Изображения, видеозаписи, голосовые сообщения, аудиофайлы с отрисовкой осциллограммы (Waveform), "круглые видео" и WebM-стикеры.
-- **Развитая модерация**: Инструменты теневого бана (Shadow Ban), мгновенной очистки постов (Wipe), рассылки системных алеров и стелс-редактирования.
-- **20+ встроенных тем**: Гибкая CSS-темизация (Cyberpunk, Win95, Lain, Shaft, Nord и др.).
-</details>
+# Docker (ghcr.io)
+docker pull ghcr.io/gitleaks/gitleaks:latest
+docker run -v ${path_to_host_folder_to_scan}:/path ghcr.io/gitleaks/gitleaks:latest [COMMAND] --source="/path" [OPTIONS]
 
-## System Overview
-- **Telegram Bot Daemon**: Handles real-time interactions via Telegram.
-- **Web/API Backend**: A FastAPI application managing the web frontend, external API requests, and media uploads.
-- **Database**: A shared SQLite database (`dvach_bot.db`) acting as the connective tissue between the bot and the backend.
-
-## Key Features
-- **Message Delivery Queue**: Ensures safe dispatch of messages respecting rate limits (`delivery_manager.py`).
-- **LLM Integrations**: Provides persona replies and summarization features (`ai_manager.py`).
-- **Automated Image Moderation**: Asynchronously hashes and classifies media content (`vision.py`, `tagging_worker.py`).
-- **Full-Text Search**: Uses `fts5` for robust post searching.
-
-## External Integrations
-- Telegram Bot API
-- Telegram MTProto (pyrogram & tgcrypto)
-- Groq API, Gemini API
-- Image Hosts: ImgBB, PixHost, Catbox, FreeImage
-- Telegraph API
-
-
----
-
-
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/dvachbot_cyberpunk.jpg" width="100%" alt="dvachbot & TGACH Retro-Terminal Imageboard Engine"/>
-
-</div>
-
----
-
-## 📻 Low-Level Imageboard Ingestion & Atkinson Dithering Core
-
-dvachbot captures live anonymous imageboard threads, quantizes high-resolution media into 1-bit monochrome retro-buffers, and streams them into Telegram channels without main-thread blocking:
-
-```mermaid
-graph LR
-    A[Imageboard JSON Stream] -->|Async aiohttp Worker| B[Media Ingestion Ring Buffer]
-    B -->|Pillow / NumPy Matrix| C[Atkinson 1-Bit Dithering Quantizer]
-    C -->|Monochrome PNG / WebP| D[Telegram Dispatch Queue]
-    D -->|Token Bucket Rate Limiter 30 msg/s| E[Telegram Channel / Bot API]
-    B -->|Thread Metadata Index| F[(SQLite WAL Storage / 5000ms Busy Timeout)]
+# From Source
+git clone https://github.com/gitleaks/gitleaks.git
+cd gitleaks
+make build
 ```
 
-### ⚡ 1. Atkinson 1-Bit Error Diffusion Quantizer (NumPy)
+### GitHub Action
 
-Unlike Floyd-Steinberg dithering which diffuses 100% of quantization errors (causing noisy grain), the Atkinson kernel diffuses exactly $\frac{6}{8} = 75\%$ of error across 6 spatial neighbors, preserving crisp retro-monochrome edges:
+Check out the official [Gitleaks GitHub Action](https://github.com/gitleaks/gitleaks-action)
 
-```python
-import numpy as np
-from PIL import Image
-
-def atkinson_quantize(img: Image.Image) -> Image.Image:
-    # Convert to grayscale 16-bit integer array to prevent underflow
-    arr = np.array(img.convert('L'), dtype=np.int16)
-    height, width = arr.shape
-    
-    for y in range(height):
-        for x in range(width):
-            old_val = arr[y, x]
-            new_val = 255 if old_val > 127 else 0
-            arr[y, x] = new_val
-            
-            # Error calculation
-            err = (old_val - new_val) >> 3  # 1/8 error bitshift
-            
-            # 6-Neighbor spatial diffusion kernel:
-            #   (x+1, y), (x+2, y), (x-1, y+1), (x, y+1), (x+1, y+1), (x, y+2)
-            if x + 1 < width: arr[y, x + 1] += err
-            if x + 2 < width: arr[y, x + 2] += err
-            if y + 1 < height:
-                if x - 1 >= 0: arr[y + 1, x - 1] += err
-                arr[y + 1, x] += err
-                if x + 1 < width: arr[y + 1, x + 1] += err
-            if y + 2 < height:
-                arr[y + 2, x] += err
-                
-    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode='L')
+```
+name: gitleaks
+on: [pull_request, push, workflow_dispatch]
+jobs:
+  scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE}} # Only required for Organizations, not personal accounts.
 ```
 
----
+### Pre-Commit
 
-### 🗄️ 2. SQLite WAL Ring-Buffer Configuration
+1. Install pre-commit from https://pre-commit.com/#install
+2. Create a `.pre-commit-config.yaml` file at the root of your repository with the following content:
 
-```sql
--- Zero-Locking Concurrency Tuning
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 5000;
-PRAGMA cache_size = -64000; -- 64MB memory cache
+   ```
+   repos:
+     - repo: https://github.com/gitleaks/gitleaks
+       rev: v8.16.1
+       hooks:
+         - id: gitleaks
+   ```
 
-CREATE TABLE IF NOT EXISTS thread_archive (
-    thread_num BIGINT PRIMARY KEY,
-    board_code VARCHAR(16) NOT NULL,
-    post_count INT DEFAULT 1,
-    last_modified_timestamp BIGINT NOT NULL,
-    dithered_thumbnail_blob BLOB
-);
-CREATE INDEX IF NOT EXISTS idx_board_timestamp ON thread_archive (board_code, last_modified_timestamp DESC);
+   for a [native execution of GitLeaks](https://github.com/zricethezav/gitleaks/releases) or use the [`gitleaks-docker` pre-commit ID](https://github.com/zricethezav/gitleaks/blob/master/.pre-commit-hooks.yaml) for executing GitLeaks using the [official Docker images](#docker)
+
+3. Auto-update the config to the latest repos' versions by executing `pre-commit autoupdate`
+4. Install with `pre-commit install`
+5. Now you're all set!
+
+```
+➜ git commit -m "this commit contains a secret"
+Detect hardcoded secrets.................................................Failed
 ```
 
-## 🌐 Connected Ecosystem & Sister Projects
+Note: to disable the gitleaks pre-commit hook you can prepend `SKIP=gitleaks` to the commit command
+and it will skip running gitleaks
 
-Part of the **Адольф Петушков (Adolf Petushkov)** open-source engineering ecosystem:
+```
+➜ SKIP=gitleaks git commit -m "skip gitleaks check"
+Detect hardcoded secrets................................................Skipped
+```
 
-| Project | Domain | Live Demo & Description |
-| :--- | :--- | :--- |
-| 🦷 **[DENTE CRM](https://github.com/marko1olo/dental-crm)** | Clinical AI | [Live Demo](https://marko1olo.github.io/dental-crm/) — Enterprise FDI odontogram, ICD-10 diagnostics & 3D DICOM |
-| 📡 **[StomChat](https://github.com/marko1olo/stomchat)** | Clinical AI | [Live Demo](https://marko1olo.github.io/stomchat/) — Omni-channel dental operator chat dispatcher (WA/TG) & telemetry |
-| 🤖 **[Avito Dental AI](https://github.com/marko1olo/avito-dental-ai-bot)** | Clinical AI | [Live Demo](https://marko1olo.github.io/avito-dental-ai-bot/) — Zero-hallucination lead intake bot with deterministic veto layer |
-| 🛡️ **[AgentRouter](https://github.com/marko1olo/agentrouter-setup-guide)** | Dev Tools | [Live Demo](https://marko1olo.github.io/agentrouter-setup-guide/) — Claude Code CLI WAF bypass proxy, homoglyph sanitizer & config matrix |
-| 📊 **[Token Audit](https://github.com/marko1olo/token-audit)** | Dev Tools | [Live Demo](https://marko1olo.github.io/token-audit/) — Real-time LLM token cost waterfall & cyberpunk chronicles |
-| 🎛️ **[Nexus Media](https://github.com/marko1olo/nexus-media-engine)** | Audio DSP | [Live Demo](https://marko1olo.github.io/nexus-media-engine/) — Real-time Web Audio DSP, 60 FPS FFT visualizer & ambilight |
-| 📻 **[dvachbot](https://github.com/marko1olo/dvachbot)** | Media Pipeline | [Live Demo](https://marko1olo.github.io/dvachbot/) — Async imageboard stream transcoder & Telegram publisher |
-| 🌊 **[Hecton-8](https://github.com/marko1olo/Hecton8)** | Game Engine | [Live Demo](https://marko1olo.github.io/Hecton8/) — NASA-punk deep sea noir submarine engine on Unity 6000 (0B GC) |
-| 🏢 **[Gigahrush](https://github.com/marko1olo/gigahrush)** | Game Engine | [Live Demo](https://marko1olo.github.io/gigahrush/) — 2.5D DDA raycasting, cellular gas physics & Samosbor Web CLI |
-| 🌌 **[Starcluster](https://github.com/Jirnyak/starcluster)** | Deep Tech | [Live Demo](https://jirnyak.github.io/starcluster/) — 10,000-star N-body gravitational simulation & Keplerian economy |
-| 🧲 **[OOMMF](https://github.com/Jirnyak/oommf)** | Deep Tech | [Live Demo](https://jirnyak.github.io/oommf/) — Landau-Lifshitz-Gilbert 3D micromagnetic vector lattice |
-| 🍏 **[Macromac](https://github.com/Jirnyak/macromac)** | Automation | [Live Demo](https://jirnyak.github.io/macromac/) — macOS HID event injection, JSON macro schemas & CoreGraphics |
+## Usage
 
-### 👨‍💻 Author & Lead Architect
-**Адольф Петушков (Adolf Petushkov)** — Game Engine Internals, Autonomous AI Systems, Zero-GC High-Concurrency Architecture.  
-GitHub: [@marko1olo](https://github.com/marko1olo)
+```
+Usage:
+  gitleaks [command]
+
+Available Commands:
+  completion  generate the autocompletion script for the specified shell
+  detect      detect secrets in code
+  help        Help about any command
+  protect     protect secrets in code
+  version     display gitleaks version
+
+Flags:
+  -b, --baseline-path string       path to baseline with issues that can be ignored
+  -c, --config string              config file path
+                                   order of precedence:
+                                   1. --config/-c
+                                   2. env var GITLEAKS_CONFIG
+                                   3. (--source/-s)/.gitleaks.toml
+                                   If none of the three options are used, then gitleaks will use the default config
+      --exit-code int              exit code when leaks have been encountered (default 1)
+  -h, --help                       help for gitleaks
+  -l, --log-level string           log level (trace, debug, info, warn, error, fatal) (default "info")
+      --max-target-megabytes int   files larger than this will be skipped
+      --no-color                   turn off color for verbose output
+      --no-banner                  suppress banner
+      --redact                     redact secrets from logs and stdout
+  -f, --report-format string       output format (json, csv, junit, sarif) (default "json")
+  -r, --report-path string         report file
+  -s, --source string              path to source (default ".")
+  -v, --verbose                    show verbose output from scan
+
+Use "gitleaks [command] --help" for more information about a command.
+```
+
+### Commands
+
+There are two commands you will use to detect secrets; `detect` and `protect`.
+
+#### Detect
+
+The `detect` command is used to scan repos, directories, and files. This command can be used on developer machines and in CI environments.
+
+When running `detect` on a git repository, gitleaks will parse the output of a `git log -p` command (you can see how this executed
+[here](https://github.com/zricethezav/gitleaks/blob/7240e16769b92d2a1b137c17d6bf9d55a8562899/git/git.go#L17-L25)).
+[`git log -p` generates patches](https://git-scm.com/docs/git-log#_generating_patch_text_with_p) which gitleaks will use to detect secrets.
+You can configure what commits `git log` will range over by using the `--log-opts` flag. `--log-opts` accepts any option for `git log -p`.
+For example, if you wanted to run gitleaks on a range of commits you could use the following command: `gitleaks detect --source . --log-opts="--all commitA..commitB"`.
+See the `git log` [documentation](https://git-scm.com/docs/git-log) for more information.
+
+You can scan files and directories by using the `--no-git` option.
+
+If you want to run only specific rules you can do so by using the `--enable-rule` option (with a rule ID as a parameter), this flag can be used multiple times. For example: `--enable-rule=atlassian-api-token` will only apply that rule. You can find a list of rules [here](config/gitleaks.toml).
+
+#### Protect
+
+The `protect` command is used to scan uncommitted changes in a git repo. This command should be used on developer machines in accordance with
+[shifting left on security](https://cloud.google.com/architecture/devops/devops-tech-shifting-left-on-security).
+When running `protect` on a git repository, gitleaks will parse the output of a `git diff` command (you can see how this executed
+[here](https://github.com/zricethezav/gitleaks/blob/7240e16769b92d2a1b137c17d6bf9d55a8562899/git/git.go#L48-L49)). You can set the
+`--staged` flag to check for changes in commits that have been `git add`ed. The `--staged` flag should be used when running Gitleaks
+as a pre-commit.
+
+**NOTE**: the `protect` command can only be used on git repos, running `protect` on files or directories will result in an error message.
+
+### Creating a baseline
+
+When scanning large repositories or repositories with a long history, it can be convenient to use a baseline. When using a baseline,
+gitleaks will ignore any old findings that are present in the baseline. A baseline can be any gitleaks report. To create a gitleaks report, run gitleaks with the `--report-path` parameter.
+
+```
+gitleaks detect --report-path gitleaks-report.json # This will save the report in a file called gitleaks-report.json
+```
+
+Once as baseline is created it can be applied when running the detect command again:
+
+```
+gitleaks detect --baseline-path gitleaks-report.json --report-path findings.json
+```
+
+After running the detect command with the --baseline-path parameter, report output (findings.json) will only contain new issues.
+
+### Verify Findings
+
+You can verify a finding found by gitleaks using a `git log` command.
+Example output:
+
+```
+Finding:     aws_secret="AKIAIMNOJVGFDXXXE4OA"
+RuleID:      aws-access-token
+Secret       AKIAIMNOJVGFDXXXE4OA
+Entropy:     3.65
+File:        checks_test.go
+Line:        37
+Commit:      ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29
+Author:      Zachary Rice
+Email:       z@email.com
+Date:        2018-01-28T17:39:00Z
+Fingerprint: ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29:checks_test.go:aws-access-token:37
+```
+
+We can use the following format to verify the leak:
+
+```
+git log -L {StartLine,EndLine}:{File} {Commit}
+```
+
+So in this example it would look like:
+
+```
+git log -L 37,37:checks_test.go ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29
+```
+
+Which gives us:
+
+```
+commit ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29
+Author: zricethezav <thisispublicanyways@gmail.com>
+Date:   Sun Jan 28 17:39:00 2018 -0500
+
+    [update] entropy check
+
+diff --git a/checks_test.go b/checks_test.go
+--- a/checks_test.go
++++ b/checks_test.go
+@@ -28,0 +37,1 @@
++               "aws_secret= \"AKIAIMNOJVGFDXXXE4OA\"":          true,
+
+```
+
+## Pre-Commit hook
+
+You can run Gitleaks as a pre-commit hook by copying the example `pre-commit.py` script into
+your `.git/hooks/` directory.
+
+## Configuration
+
+Gitleaks offers a configuration format you can follow to write your own secret detection rules:
+
+```toml
+# Title for the gitleaks configuration file.
+title = "Gitleaks title"
+
+# Extend the base (this) configuration. When you extend a configuration
+# the base rules take precedence over the extended rules. I.e., if there are
+# duplicate rules in both the base configuration and the extended configuration
+# the base rules will override the extended rules.
+# Another thing to know with extending configurations is you can chain together
+# multiple configuration files to a depth of 2. Allowlist arrays are appended
+# and can contain duplicates.
+# useDefault and path can NOT be used at the same time. Choose one.
+[extend]
+# useDefault will extend the base configuration with the default gitleaks config:
+# https://github.com/zricethezav/gitleaks/blob/master/config/gitleaks.toml
+useDefault = true
+# or you can supply a path to a configuration. Path is relative to where gitleaks
+# was invoked, not the location of the base config.
+path = "common_config.toml"
+
+# An array of tables that contain information that define instructions
+# on how to detect secrets
+[[rules]]
+
+# Unique identifier for this rule
+id = "awesome-rule-1"
+
+# Short human readable description of the rule.
+description = "awesome rule 1"
+
+# Golang regular expression used to detect secrets. Note Golang's regex engine
+# does not support lookaheads.
+regex = '''one-go-style-regex-for-this-rule'''
+
+# Golang regular expression used to match paths. This can be used as a standalone rule or it can be used
+# in conjunction with a valid `regex` entry.
+path = '''a-file-path-regex'''
+
+# Array of strings used for metadata and reporting purposes.
+tags = ["tag","another tag"]
+
+# Int used to extract secret from regex match and used as the group that will have
+# its entropy checked if `entropy` is set.
+secretGroup = 3
+
+# Float representing the minimum shannon entropy a regex group must have to be considered a secret.
+entropy = 3.5
+
+# Keywords are used for pre-regex check filtering. Rules that contain
+# keywords will perform a quick string compare check to make sure the
+# keyword(s) are in the content being scanned. Ideally these values should
+# either be part of the idenitifer or unique strings specific to the rule's regex
+# (introduced in v8.6.0)
+keywords = [
+  "auth",
+  "password",
+  "token",
+]
+
+# You can include an allowlist table for a single rule to reduce false positives or ignore commits
+# with known/rotated secrets
+[rules.allowlist]
+description = "ignore commit A"
+commits = [ "commit-A", "commit-B"]
+paths = [
+  '''go\.mod''',
+  '''go\.sum'''
+]
+# note: (rule) regexTarget defaults to check the _Secret_ in the finding.
+# if regexTarget is not specified then _Secret_ will be used.
+# Acceptable values for regexTarget are "match" and "line"
+regexTarget = "match"
+regexes = [
+  '''process''',
+  '''getenv''',
+]
+# note: stopwords targets the extracted secret, not the entire regex match
+# like 'regexes' does. (stopwords introduced in 8.8.0)
+stopwords = [
+  '''client''',
+  '''endpoint''',
+]
 
 
----
+# This is a global allowlist which has a higher order of precedence than rule-specific allowlists.
+# If a commit listed in the `commits` field below is encountered then that commit will be skipped and no
+# secrets will be detected for said commit. The same logic applies for regexes and paths.
+[allowlist]
+description = "global allow list"
+commits = [ "commit-A", "commit-B", "commit-C"]
+paths = [
+  '''gitleaks\.toml''',
+  '''(.*?)(jpg|gif|doc)'''
+]
 
-### 👥 Синдикат Разработки
+# note: (global) regexTarget defaults to check the _Secret_ in the finding.
+# if regexTarget is not specified then _Secret_ will be used.
+# Acceptable values for regexTarget are "match" and "line"
+regexTarget = "match"
 
-Разработано и поддерживается **Жирняком** и **Адольфом Петушковым**.
+regexes = [
+  '''219-09-9999''',
+  '''078-05-1120''',
+  '''(9[0-9]{2}|666)-\d{2}-\d{4}''',
+]
+# note: stopwords targets the extracted secret, not the entire regex match
+# like 'regexes' does. (stopwords introduced in 8.8.0)
+stopwords = [
+  '''client''',
+  '''endpoint''',
+]
+```
+
+Refer to the default [gitleaks config](https://github.com/zricethezav/gitleaks/blob/master/config/gitleaks.toml) for examples or follow the [contributing guidelines](https://github.com/zricethezav/gitleaks/blob/master/README.md) if you would like to contribute to the default configuration. Additionally, you can check out [this gitleaks blog post](https://blog.gitleaks.io/stop-leaking-secrets-configuration-2-3-aeed293b1fbf) which covers advanced configuration setups.
+
+### Additional Configuration
+
+#### gitleaks:allow
+
+If you are knowingly committing a test secret that gitleaks will catch you can add a `gitleaks:allow` comment to that line which will instruct gitleaks
+to ignore that secret. Ex:
+
+```
+class CustomClass:
+    discord_client_secret = '8dyfuiRyq=vVc3RRr_edRk-fK__JItpZ'  #gitleaks:allow
+
+```
+
+#### .gitleaksignore
+
+You can ignore specific findings by creating a `.gitleaksignore` file at the root of your repo. In release v8.10.0 Gitleaks added a `Fingerprint` value to the Gitleaks report. Each leak, or finding, has a Fingerprint that uniquely identifies a secret. Add this fingerprint to the `.gitleaksignore` file to ignore that specific secret. See Gitleaks' [.gitleaksignore](https://github.com/zricethezav/gitleaks/blob/master/.gitleaksignore) for an example. Note: this feature is experimental and is subject to change in the future.
+
+## Sponsorships
+
+<p align="left">
+	  <a href="https://www.tines.com/?utm_source=oss&utm_medium=sponsorship&utm_campaign=gitleaks">
+		  <img alt="Tines Sponsorship" src="https://user-images.githubusercontent.com/15034943/146411864-4878f936-b4f7-49a0-b625-f9f40c704bfa.png" width=200>
+	  </a>
+  </p>
+
+## Exit Codes
+
+You can always set the exit code when leaks are encountered with the --exit-code flag. Default exit codes below:
+
+```
+0 - no leaks present
+1 - leaks or error encountered
+126 - unknown flag
+```
