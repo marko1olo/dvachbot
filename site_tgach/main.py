@@ -3553,12 +3553,12 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
     if all_post_ids:
         try:
             db = await get_pool()
-            placeholders = ",".join("?" for _ in all_post_ids)
-            query = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
-            async with db.execute(query, all_post_ids) as cursor:
+            json_ids = json.dumps(all_post_ids)
+            query = "SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN (SELECT value FROM json_each(?)) GROUP BY target_post_num"
+            async with db.execute(query, (json_ids,)) as cursor:
                 async for row in cursor:
-                    target, source = row
-                    backlinks_map[target].append(source)
+                    target, sources_json = row
+                    backlinks_map[target].extend(json.loads(sources_json))
         except Exception as e:
             logger.warning(f"Backlinks fetch error: {e}", exc_info=True)
 
@@ -4039,12 +4039,12 @@ async def enrich_heavy_data(posts: List[dict]):
         async def fetch_backlinks_task(ids):
             try:
                 db = await get_pool()
-                placeholders = ",".join("?" for _ in ids)
-                q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
+                json_ids = json.dumps(ids)
+                q = "SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN (SELECT value FROM json_each(?)) GROUP BY target_post_num"
                 res = defaultdict(list)
-                async with db.execute(q, ids) as cursor:
+                async with db.execute(q, (json_ids,)) as cursor:
                     async for row in cursor:
-                        res[row[0]].append(row[1])
+                        res[row[0]].extend(json.loads(row[1]))
                 return res
             except Exception:
                 return {}
