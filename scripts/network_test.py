@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 import os
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 
 import sys
 import os
+import logging
 
 # Ensure import paths work
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -34,7 +36,7 @@ def safe_print_response(prefix: str, value: object) -> None:
 
 async def run_test() -> None:
     if not BOT_TOKEN:
-        print("NETWORK_TEST_BOT_TOKEN or FILE_UPLOADER_BOT_TOKEN is not set.")
+        logging.error("Required bot token is not set.")
         return
 
     print("Starting Telegram network test...")
