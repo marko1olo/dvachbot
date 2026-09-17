@@ -7,7 +7,6 @@ Generates stylized, high-impact invitation cards with random media, vector Tgach
 
 import os
 import io
-import sys
 import json
 import random
 import re
