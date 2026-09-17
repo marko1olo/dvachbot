@@ -84,7 +84,7 @@ targets.forEach(({ name, env }) => {
         totalFailed++;
     }
 
-    // Test 2: Original bug input
+    // Test 2: Original issue input
     const origInput = ">>1234 https://domain.com/b/res/343717.html'>ТГАЧ";
     const res2 = env.formatTextGlobal(origInput, 100, 'b', 100);
     console.log("Input 2:", origInput);
@@ -94,9 +94,9 @@ targets.forEach(({ name, env }) => {
         assert.ok(hrefMatch, "No http href found");
         assert.strictEqual(hrefMatch[1], "https://domain.com/b/res/343717.html");
         assert.ok(res2.endsWith("&gt;ТГАЧ") || res2.endsWith("&#039;&gt;ТГАЧ") || res2.endsWith("&#x27;&gt;ТГАЧ"), "Suffix must follow </a>");
-        console.log("PASS: Original Bug Input");
+        console.log("PASS: Original Issue Input");
     } catch (err) {
-        console.error("FAIL: Original Bug Input -", err.message);
+        console.error("FAIL: Original Issue Input -", err.message);
         totalFailed++;
     }
 
