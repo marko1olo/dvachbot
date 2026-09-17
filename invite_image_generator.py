@@ -12,7 +12,6 @@ import json
 import random
 import re
 import asyncio
-import sqlite3
 import aiohttp
 from typing import Optional, Tuple, Dict, List, Union, Any
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
