@@ -384,7 +384,7 @@ async def update_tor_nodes_task():
         try:
             transport = AsyncHTTPTransport(local_address="0.0.0.0")
             async with httpx.AsyncClient(
-                transport=transport, timeout=30.0, verify=False
+                transport=transport, timeout=30.0, verify=True
             ) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
@@ -811,7 +811,7 @@ BOT_VIOLATIONS = defaultdict(int)
 IP_WHITELIST = set()  # Сюда можно будет добавлять IP через админку (или пока вручную)
 GEO_IP_CLIENT = httpx.AsyncClient(
     timeout=3.0,
-    verify=False,
+    verify=True,
     transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=5),
 )
 # Применяем фильтр к asyncio
@@ -6820,7 +6820,7 @@ async def api_get_meta(url: str):
             transport = AsyncHTTPTransport(local_address="0.0.0.0")
             async with httpx.AsyncClient(
                 timeout=5.0,
-                verify=False,
+                verify=True,
                 proxy=strategy["proxy"],
                 transport=transport,
                 trust_env=True,  # Важно для подхвата системного VPN
@@ -9379,7 +9379,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
     catbox = mirrors.get("catbox")
     if catbox:
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(verify=True, timeout=30.0) as client:
                 resp = await client.get(catbox)
                 if resp.status_code == 200:
                     audio_bytes = resp.content
@@ -9393,7 +9393,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
             path, token = info
             url = f"https://api.telegram.org/file/bot{token}/{path}"
             try:
-                async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                async with httpx.AsyncClient(verify=True, timeout=30.0) as client:
                     resp = await client.get(url)
                     if resp.status_code == 200:
                         audio_bytes = resp.content
@@ -9440,7 +9440,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
         for proxy in [None, PROXY_URL]:
             try:
-                async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=30.0) as client:
+                async with httpx.AsyncClient(proxy=proxy, verify=True, timeout=30.0) as client:
                     resp = await client.post(url, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
@@ -10593,7 +10593,7 @@ async def check_url_alive(url: str) -> bool:
         if now - ts < 600:
             return is_alive
     try:
-        async with httpx.AsyncClient(timeout=1.5, verify=False) as client:
+        async with httpx.AsyncClient(timeout=1.5, verify=True) as client:
             resp = await client.head(url)
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
