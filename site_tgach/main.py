@@ -4039,12 +4039,12 @@ async def enrich_heavy_data(posts: List[dict]):
         async def fetch_backlinks_task(ids):
             try:
                 db = await get_pool()
-                placeholders = ",".join("?" for _ in ids)
-                q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
-                res = defaultdict(list)
-                async with db.execute(q, ids) as cursor:
+                ids_json = json.dumps(ids)
+                q = "SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN (SELECT value FROM json_each(?)) GROUP BY target_post_num"
+                res = {}
+                async with db.execute(q, (ids_json,)) as cursor:
                     async for row in cursor:
-                        res[row[0]].append(row[1])
+                        res[row[0]] = json.loads(row[1])
                 return res
             except Exception:
                 return {}
