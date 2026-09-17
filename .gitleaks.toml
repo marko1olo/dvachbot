@@ -1,0 +1,7 @@
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''README\.md''',
+    '''data/banners_cache\.json''',
+    '''tests/.*''',
+]
