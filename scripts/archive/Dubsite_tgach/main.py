@@ -2938,7 +2938,7 @@ async def honey_pot_troll(request: Request):
         strategy = "xml"
     
     # 1. Если ищет файлы/архивы -> GZIP BOMB
-    elif any(x in path for x in ['.zip', '.tar', '.gz', '.sql', '.dump', '.bak', 'backup', 'admin', '.env', '.old']):
+    elif any(x in path for x in {'.zip', '.tar', '.gz', '.sql', '.dump', '.bak', 'backup', 'admin', '.env', '.old'}):
         strategy = "gzip"
         
     # 2. Если ищет веб-страницу -> HTML DEPTH CHARGE
