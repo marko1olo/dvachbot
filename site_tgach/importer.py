@@ -940,53 +940,67 @@ class ThreadImporter:
                     )
                 await conn.commit()
 
-                for i in range(0, len(prepared_posts), chunk_size):
-                    await conn.execute("BEGIN")
-                    chunk = prepared_posts[i : i + chunk_size]
-                    update_posts_params = []
-                    all_backlink_pairs = []
-                    for p_data in chunk:
-                        new_id = id_map[p_data["old_id"]]
-                        original_text = p_data["text"]
-                        if not original_text:
-                            continue
-                        fixed_text, reply_to_id = (
-                            await self._fix_content_links_and_find_reply(
-                                original_text, id_map
-                            )
+                update_posts_params = []
+                all_backlink_pairs = []
+                for p_data in prepared_posts:
+                    new_id = id_map[p_data["old_id"]]
+                    original_text = p_data["text"]
+                    if not original_text:
+                        continue
+                    fixed_text, reply_to_id = (
+                        await self._fix_content_links_and_find_reply(
+                            original_text, id_map
                         )
-                        if fixed_text != original_text or reply_to_id is not None:
-                            new_content_obj = {
-                                "text": fixed_text,
-                                "files": p_data["files"],
-                                "type": "files" if p_data["files"] else "text",
-                            }
-                            update_posts_params.append((json.dumps(new_content_obj), reply_to_id, new_id))
+                    )
+                    if fixed_text != original_text or reply_to_id is not None:
+                        new_content_obj = {
+                            "text": fixed_text,
+                            "files": p_data["files"],
+                            "type": "files" if p_data["files"] else "text",
+                        }
+                        update_posts_params.append((json.dumps(new_content_obj), reply_to_id, new_id))
 
-                            if reply_to_id:
-                                all_backlink_pairs.append((reply_to_id, new_id))
+                        if reply_to_id:
+                            all_backlink_pairs.append((reply_to_id, new_id))
 
-                            refs = set(re.findall(r">>(\d+)", fixed_text))
-                            for ref in refs:
-                                try:
-                                    target_id = int(ref)
-                                    if target_id != new_id:
-                                        all_backlink_pairs.append((target_id, new_id))
-                                except Exception:
-                                    pass
+                        refs = set(re.findall(r">>(\d+)", fixed_text))
+                        for ref in refs:
+                            try:
+                                target_id = int(ref)
+                                if target_id != new_id:
+                                    all_backlink_pairs.append((target_id, new_id))
+                            except Exception:
+                                pass
 
-                    if update_posts_params:
+                    if len(update_posts_params) >= chunk_size:
+                        await conn.execute("BEGIN")
                         await conn.executemany(
                             "UPDATE posts SET content = ?, reply_to_post_num = ? WHERE post_num = ?",
                             update_posts_params,
                         )
 
+                        if all_backlink_pairs:
+                            await conn.executemany(
+                                "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
+                                all_backlink_pairs,
+                            )
+                            all_backlink_pairs.clear()
+
+                        await conn.commit()
+                        update_posts_params.clear()
+
+                if update_posts_params or all_backlink_pairs:
+                    await conn.execute("BEGIN")
+                    if update_posts_params:
+                        await conn.executemany(
+                            "UPDATE posts SET content = ?, reply_to_post_num = ? WHERE post_num = ?",
+                            update_posts_params,
+                        )
                     if all_backlink_pairs:
                         await conn.executemany(
                             "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
                             all_backlink_pairs,
                         )
-
                     await conn.commit()
 
                 if all_files_for_queue:
