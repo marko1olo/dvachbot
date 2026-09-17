@@ -918,7 +918,7 @@ class ThreadImporter:
                 unique_authors = set(p["author_id"] for p in prepared_posts if p.get("author_id", 0) > 0)
                 user_params = [(uid, target_board, stream) for uid in unique_authors]
                 if user_params:
-                    await conn.executemany("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", user_params)
+                    await conn.executemany("INSERT INTO Users (user_id, board_id, stream) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", user_params)
 
                 from common.config import STORAGE_CHANNELS
 
