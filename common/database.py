@@ -34,8 +34,6 @@ from enum import Enum
 from datetime import datetime, UTC, timezone
 from typing import Optional, Dict, Any, Tuple, List, Union
 from aiogram.types import BufferedInputFile, InputFile
-from async_lru import alru_cache
-
 from common.db_pool import (
     get_pool,
     db_sleep,
@@ -2077,15 +2075,6 @@ async def create_post(
         print(f"⚠️ create_post timeout / lock error: {exc}")
         return None
     return None
-@alru_cache(maxsize=1000, ttl=60)
-async def get_cached_created_at(user_id: int) -> float:
-    """
-    Получает время создания пользователя с кэшированием.
-    """
-    async with get_db_connection() as conn:
-        row = await (await conn.execute("SELECT MIN(created_at) FROM Users WHERE user_id = ?", (user_id,))).fetchone()
-        return row[0] if row and row[0] is not None else time.time()
-
 async def get_user_status(user_id: int, board_id: str) -> Optional[str]:
     """
     Получает статус пользователя.
