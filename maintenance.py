@@ -17,11 +17,11 @@ def run_maintenance():
     try:
         with contextlib.closing(sqlite3.connect(DB_NAME, timeout=15.0)) as con:
             try: con.execute('PRAGMA journal_mode=WAL')
-            except Exception: pass
+            except Exception as e: print(f'Warning: Failed to set PRAGMA: {e}')
             try: con.execute('PRAGMA synchronous=NORMAL')
-            except Exception: pass
+            except Exception as e: print(f'Warning: Failed to set PRAGMA: {e}')
             try: con.execute('PRAGMA busy_timeout=120000')
-            except Exception: pass
+            except Exception as e: print(f'Warning: Failed to set PRAGMA: {e}')
             print("⏳ Запуск VACUUM для сжатия файла базы данных...")
             con.execute("VACUUM;")
             print("✅ VACUUM успешно завершен.")
