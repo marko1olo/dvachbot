@@ -3142,7 +3142,7 @@ def to_makaba_post(post_data: dict, board_id: str) -> dict:
                     "type": 1 if f.get("type") in ["image", "photo"] else 6,
                 }
             )
-    comment = content.get("text", "")
+    comment = content.get("text") or ""
     dt = datetime.fromtimestamp(post_data["timestamp"])
     date_str = dt.strftime("%d/%m/%y %a %H:%M:%S")
     return {
@@ -3313,12 +3313,12 @@ def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -
         return text[:200]
 
     buffer = []
-    op_text = op_post.get("content", {}).get("text", "")
+    op_text = op_post.get("content", {}).get("text") or ""
     if op_text:
         buffer.append(f"OP: {clean(op_text)[:300]}")
     target_replies = replies[-max_posts:]
     for r in target_replies:
-        txt = r.get("content", {}).get("text", "")
+        txt = r.get("content", {}).get("text") or ""
         if txt:
             cleaned = clean(txt)
             if cleaned:
@@ -3799,7 +3799,11 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
             _process_files_list(content)
 
         current_type = content.get("type")
-        has_text = bool(content.get("text", "").strip())
+        raw_text = content.get("text")
+        if raw_text is None:
+            raw_text = ""
+            content["text"] = ""
+        has_text = bool(str(raw_text).strip())
         has_files = bool(content.get("files"))
         if current_type != "poll":
             if has_files:
@@ -5388,7 +5392,7 @@ async def api_admin_recent_posts(user: dict = Depends(get_required_user)):
     posts = await get_recent_posts_global(30)
     result = []
     for p in posts:
-        txt = p.get("content", {}).get("text", "")
+        txt = p.get("content", {}).get("text") or ""
         preview = (txt[:100] + "...") if len(txt) > 100 else txt
         if not preview and p.get("content", {}).get("files"):
             preview = "[Медиа файл]"
@@ -6433,7 +6437,7 @@ async def read_thread(
                 return HTMLResponse(content=cached)
 
     # ... Мета-данные ...
-    raw_text = op_post.get("content", {}).get("text", "")
+    raw_text = op_post.get("content", {}).get("text") or ""
     meta_desc = clean_title_text(raw_text)[:200]
     if not meta_desc:
         meta_desc = f"Тред #{post_num} в разделе /{board_id}/"
@@ -6620,7 +6624,7 @@ async def export_thread_html(board_id: str, post_num: int):
         html.append("</div>")
 
     html.append(
-        f"<div class='post-text'>{op_post.get('content', {}).get('text', '')}</div>"
+        f"<div class='post-text'>{op_post.get('content', {}).get('text') or ''}</div>"
     )
     html.append("</div></div>")
 
@@ -6649,7 +6653,7 @@ async def export_thread_html(board_id: str, post_num: int):
             html.append("</div>")
 
         html.append(
-            f"<div class='post-text'>{post.get('content', {}).get('text', '')}</div>"
+            f"<div class='post-text'>{post.get('content', {}).get('text') or ''}</div>"
         )
         html.append("</div></div>")
 
@@ -8475,7 +8479,7 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
             post_num, raw_content = row
             try:
                 content = json.loads(raw_content)
-                text = content.get("text", "")
+                text = content.get("text") or ""
 
                 if "<img" in text or "<IMG" in text:
                     soup = BeautifulSoup(text, "html.parser")
@@ -9018,7 +9022,7 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
             "post_id": post["id"],
             "board_id": post["board_id"],
             "thread_id": post.get("thread_id"),
-            "text": post["content"].get("text", "")[:200],
+            "text": (post["content"].get("text") or "")[:200],
             "filename": video_file.get("filename", "video.mp4"),
             "is_censored": post["content"].get("is_censored", False),
         }
