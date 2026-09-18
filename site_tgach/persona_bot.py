@@ -132,7 +132,7 @@ async def generate_anon_reply(context_text: str, target_post: str, is_dialogue: 
             print(f"ℹ️ [Cyberchad Engine] Отказ от ответа (reply=False): {parsed.get('reason_if_skipped', 'не указана')}", flush=True)
             return None
 
-        reply = parsed.get("text", "").strip()
+        reply = (parsed.get("text") or "").strip()
         if not reply or len(reply) < 3:
             return None
 

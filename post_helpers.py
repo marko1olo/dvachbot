@@ -330,7 +330,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             print(f"ℹ️ [Auto-Roast] Киберчед отказался от интервенции (reply=False): {parsed.get('reason_if_skipped', 'не указана')}")
             return
 
-        roast_text = parsed.get("text", "").strip()
+        roast_text = (parsed.get("text") or "").strip()
         if not roast_text or len(roast_text) < 5:
             return
 

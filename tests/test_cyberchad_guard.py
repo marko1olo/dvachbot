@@ -50,11 +50,14 @@ def test_copypasta_looping_detection():
     text2 = "киберчед почему ты считаешь себя крутым если ты просто скрипт на питоне в подвале 123?"
 
     record_cyberchad_trigger_approved("b", user_id, text1, now=1000.0)
-    assert is_copypasta_looping("b", user_id, text1) is True
-    assert is_copypasta_looping("b", user_id, text2) is True
+    assert is_copypasta_looping("b", user_id, text1, now=1005.0) is True
+    assert is_copypasta_looping("b", user_id, text2, now=1005.0) is True
+
+    # After 300s TTL, identical prompt is no longer flagged as an active copypasta flood loop
+    assert is_copypasta_looping("b", user_id, text1, now=1350.0) is False
 
     different = "совершенно другая тема про видеокарты и процессоры intel"
-    assert is_copypasta_looping("b", user_id, different) is False
+    assert is_copypasta_looping("b", user_id, different, now=1005.0) is False
 
 def test_progressive_cooldown_escalation():
     user_id = 888
@@ -62,10 +65,10 @@ def test_progressive_cooldown_escalation():
 
     # 1st and 2nd triggers
     record_cyberchad_trigger_approved("b", user_id, "prompt 1", now=t0)
-    assert get_user_progressive_cooldown("b", user_id, t0) == 60.0
+    assert get_user_progressive_cooldown("b", user_id, t0) == 30.0
 
     record_cyberchad_trigger_approved("b", user_id, "prompt 2", now=t0 + 70.0)
-    assert get_user_progressive_cooldown("b", user_id, t0 + 70.0) == 60.0
+    assert get_user_progressive_cooldown("b", user_id, t0 + 70.0) == 30.0
 
     # 3rd trigger escalates to 300s (5 min)
     record_cyberchad_trigger_approved("b", user_id, "prompt 3", now=t0 + 140.0)

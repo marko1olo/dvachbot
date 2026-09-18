@@ -445,7 +445,14 @@ async def trigger_cyberchad_with_rate_limit(
             from common.bot_helpers import _get_user_active_items
             db_am = await get_pool()
             u_items = await _get_user_active_items(db_am, user_id, board_id)
-            has_caller_amulet = bool(u_items.get("cyberchad_amulet_expires", 0) > now or u_items.get("cyberchad_amulet"))
+            am_exp = u_items.get("cyberchad_amulet_expires", 0)
+            am_enabled = u_items.get("cyberchad_amulet_enabled", True)
+            if not am_enabled:
+                has_caller_amulet = False
+            elif am_exp > 0:
+                has_caller_amulet = (am_exp > now)
+            else:
+                has_caller_amulet = bool(u_items.get("cyberchad_amulet"))
             cur = await db_am.execute("SELECT posts_count, is_verified_b FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
             try:
                 row = await cur.fetchone()

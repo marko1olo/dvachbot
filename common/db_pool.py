@@ -65,10 +65,11 @@ def _sync_wal_checkpoint_truncate():
     Гарантирует, что даже при выходе из процесса без вызова close_pool(),
     WAL сбрасывается и сжимается до 0 байт.
     """
-    if not isinstance(DB_NAME, str) or not os.path.exists(DB_NAME):
+    db_path = str(DB_NAME) if DB_NAME else None
+    if not db_path or not os.path.exists(db_path):
         return
     try:
-        conn = sqlite3.connect(DB_NAME, timeout=3.0)
+        conn = sqlite3.connect(db_path, timeout=3.0)
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
         finally:

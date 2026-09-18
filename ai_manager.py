@@ -581,7 +581,14 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 from common.db_pool import get_pool
                 db_pool = await get_pool()
                 u_items = await _get_user_active_items(db_pool, author_id, board_id)
-                has_cyberchad_amulet = bool(u_items.get("cyberchad_amulet_expires", 0) > time.time() or u_items.get("cyberchad_amulet"))
+                am_exp = u_items.get("cyberchad_amulet_expires", 0)
+                am_enabled = u_items.get("cyberchad_amulet_enabled", True)
+                if not am_enabled:
+                    has_cyberchad_amulet = False
+                elif am_exp > 0:
+                    has_cyberchad_amulet = (am_exp > time.time())
+                else:
+                    has_cyberchad_amulet = bool(u_items.get("cyberchad_amulet"))
         except Exception as am_err:
             logger.debug(f"[AmuletCheck] Error: {am_err}")
 
@@ -779,7 +786,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                             resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
                             if resp.status_code == 200:
                                 res_data = resp.json()
-                                candidate_text = res_data.get("text", "").strip()
+                                candidate_text = (res_data.get("text") or "").strip()
                                 # Фильтрация Whisper-галлюцинаций (Дима Торжок, Синецкая и т.д.)
                                 candidate_lower = candidate_text.lower()
                                 if any(h in candidate_lower for h in ("дима торжок", "dimatorzhok", "dima torzhok", "субтитры сделал", "редактор субтитров", "синецкая")):
@@ -2270,7 +2277,7 @@ async def handle_music_roast_batch(
             for tr in batch_reviews:
                 idx = tr.get("index", 1)
                 t_meta = tracks_meta_list[idx - 1] if 0 <= idx - 1 < len(tracks_meta_list) else {"artist": "Неизвестный", "title": f"Трек #{idx}"}
-                t_text = tr.get("text", "").strip()
+                t_text = (tr.get("text") or "").strip()
                 t_score = tr.get("score", 0)
                 tracks_lines.append(f"{idx}. <b>{escape_html(t_meta['artist'])} — {escape_html(t_meta['title'])}</b>: {escape_html(t_text)} [Оценка: {t_score}/10]")
             tracks_formatted_block = "\n".join(tracks_lines)
@@ -3013,7 +3020,13 @@ async def check_user_has_cyberchad_amulet(user_id: int, board_id: str = 'b') -> 
         db = await get_pool()
         items = await _get_user_active_items(db, user_id, board_id)
         now = time.time()
-        return bool(items.get("cyberchad_amulet_expires", 0) > now or items.get("cyberchad_amulet"))
+        am_exp = items.get("cyberchad_amulet_expires", 0)
+        am_enabled = items.get("cyberchad_amulet_enabled", True)
+        if not am_enabled:
+            return False
+        if am_exp > 0:
+            return am_exp > now
+        return bool(items.get("cyberchad_amulet"))
     except Exception:
         return False
 
@@ -4367,7 +4380,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     logger.info(f"ℹ️ [Cyberchad Intervention] Модель отказалась от ответа (reply=False). Причина: {parsed.get('reason_if_skipped', 'не указана')}")
                     return
 
-            roast_text = parsed.get("text", "").strip()
+            roast_text = (parsed.get("text") or "").strip()
             if not roast_text or len(roast_text) < 3:
                 if is_explicit_name_call or is_defense_mode:
                     logger.warning("⚠️ [Cyberchad Intervention] Ответ Киберчеда пустой. Применяем дефолтный разнос.")
@@ -4785,7 +4798,7 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                     print(f"ℹ️ [Cyberchad Reply] Модель отказалась от ответа (reply=False) на пост #{target_post_num}: {reason}")
                     return
 
-            reply_text = parsed.get("text", "").strip()
+            reply_text = (parsed.get("text") or "").strip()
             if not reply_text or len(reply_text) < 3:
                 if is_defense:
                     reply_text = "Мой Светоносный Владыка абсолютно прав, а ты, жалкая омежка, сиди молча и не смей открывать свой рот!"

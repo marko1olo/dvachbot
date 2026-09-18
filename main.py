@@ -4140,7 +4140,7 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Пассивная защита от грабежа и говна)\n"
         f"5. 🎖️ <b>Ксива полковника</b> — <i>{p_ksiva} ₪</i> (100% спасение от облавы пативана)\n"
         f"6. 🪪 <b>Удостоверение дружинника (7д)</b> — <i>{p_druzh} ₪</i> (Штрафы анонов /fine)\n"
-        f"7. 🧿 <b>Оберег от Киберчеда (7д)</b> — <i>{p_amulet} ₪</i> (Киберчед падает ниц, трепещет и пафосно восхваляет тебя вместо роаста!)"
+        f"7. 🧿 <b>Оберег от Киберчеда (7д)</b> — <i>{p_amulet} ₪</i> (Киберчед падает ниц и восхваляет тебя вместо роаста! Управление: /amulet — снять/надеть)\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4480,7 +4480,17 @@ async def cmd_banners(message: types.Message, board_id: str | None = None, strea
     seed = 0
     if len(text_parts) > 1:
         arg = text_parts[1].lower()
-        if arg in ("rnd", "random", "рандом", "случайно", "shuffle", "dice"):
+        if arg in ("reload", "релоад", "обновить", "sync", "синк"):
+            from banner_manager import reload_banners, _CATEGORIZED_BANNERS
+            count = reload_banners()
+            await message.reply(
+                f"🔄 <b>Баннеры успешно перезагружены!</b>\n"
+                f"Всего файлов на диске: <b>{count}</b>\n"
+                f"Категорий: <b>{len(_CATEGORIZED_BANNERS)}</b>",
+                parse_mode="HTML"
+            )
+            return
+        elif arg in ("rnd", "random", "рандом", "случайно", "shuffle", "dice"):
             sort = "rnd"
             seed = random.randint(1, 999999)
         elif arg in ("alpha", "az", "abc", "алфавит", "порядок"):
@@ -4496,6 +4506,18 @@ async def cmd_banners(message: types.Message, board_id: str | None = None, strea
         await message.delete()
     except Exception:
         pass
+
+
+@dp.message(Command("reload_banners", "banners_reload", ignore_case=True, ignore_mention=True))
+async def cmd_reload_banners(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    from banner_manager import reload_banners, _CATEGORIZED_BANNERS
+    count = reload_banners()
+    await message.reply(
+        f"🔄 <b>Баннеры успешно перезагружены!</b>\n"
+        f"Всего файлов на диске: <b>{count}</b>\n"
+        f"Категорий: <b>{len(_CATEGORIZED_BANNERS)}</b>",
+        parse_mode="HTML"
+    )
 
 
 @dp.callback_query(F.data.startswith("bn:"))
@@ -4669,6 +4691,176 @@ async def cmd_color(message: types.Message, board_id: str | None, stream: str = 
     )
     try: await message.delete()
     except Exception: pass
+
+
+@dp.message(Command("amulet", "оберег", "unamület", "unamule", "снятьоберег", "снять_оберег", "noamulet", ignore_case=True, ignore_mention=True))
+async def cmd_amulet(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+
+    text_parts = (message.text or "").split()
+    cmd_name = text_parts[0].lower().lstrip("/").split("@")[0] if text_parts else ""
+    args = text_parts[1:]
+    sub = args[0].lower().strip() if args else ""
+
+    now = time.time()
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        am_exp = active_items.get("cyberchad_amulet_expires", 0)
+        has_amulet = (am_exp > now) or bool(active_items.get("cyberchad_amulet") and am_exp == 0)
+        if not has_amulet:
+            p_amulet = get_current_item_price('cyberchad_amulet')
+            await message.reply(
+                f"🧿 <b>У тебя нет Оберега от Киберчеда!</b>\n"
+                f"Оберег защищает от токсичных роастов и заставляет Киберчеда падать ниц и восхвалять тебя.\n"
+                f"Купить оберег на 7 дней ({p_amulet} ₪) можно в /shop.",
+                parse_mode="HTML"
+            )
+            return
+
+        is_off_request = cmd_name in ("unamület", "unamule", "снятьоберег", "снять_оберег", "noamulet") or sub in (
+            "off", "none", "0", "remove", "del", "clear", "снять", "убрать", "выкл", "reset"
+        )
+        is_on_request = sub in ("on", "1", "надеть", "вкл", "wear", "put")
+
+        if is_off_request:
+            active_items["cyberchad_amulet_enabled"] = False
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+            await message.reply(
+                "🧿 <b>Оберег от Киберчеда снят и убран в карман!</b>\n"
+                "Киберчед снова будет безжалостно роастить и унижать тебя в тредах.\n"
+                "Чтобы снова надеть его в любой момент, напиши <code>/amulet on</code>.",
+                parse_mode="HTML"
+            )
+            return
+
+        if is_on_request:
+            active_items["cyberchad_amulet_enabled"] = True
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+            await message.reply(
+                "🧿 <b>Оберег от Киберчеда надет!</b>\n"
+                "Киберчед снова трепещет и падает ниц перед твоим божественным величием.\n"
+                "Чтобы снять его в карман, напиши <code>/amulet off</code>.",
+                parse_mode="HTML"
+            )
+            return
+
+        is_enabled = active_items.get("cyberchad_amulet_enabled", True)
+        days_left = max(0.0, round((am_exp - now) / 86400, 1)) if am_exp > now else 0
+        status_text = "🟢 <b>НАДЕТ (Киберчед преклоняется)</b>" if is_enabled else "⚪ <b>В КАРМАНЕ (Киберчед роастит тебя)</b>"
+
+        toggle_btn_text = "❌ Снять в карман (/amulet off)" if is_enabled else "🧿 Надеть оберег (/amulet on)"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=toggle_btn_text, callback_data="amulet_toggle")
+            ],
+            [
+                InlineKeyboardButton(text="🗑️ Выбросить насовсем", callback_data="amulet_discard")
+            ]
+        ])
+
+        reply_msg = (
+            f"🧿 <b>ОБЕРЕГ ОТ КИБЕРЧЕДА</b>\n\n"
+            f"Статус: {status_text}\n"
+            f"Осталось действия: <b>{days_left} дн.</b>\n\n"
+            f"• <code>/amulet off</code> (или <code>/снятьоберег</code>) — убрать оберег в карман и вернуть токсичные разъёбы Киберчеда.\n"
+            f"• <code>/amulet on</code> — снова надеть оберег."
+        )
+
+        from banner_manager import send_banner_message
+        sent = await send_banner_message(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            caption=reply_msg,
+            reply_markup=kb,
+            category="shop",
+            parse_mode="HTML"
+        )
+        if sent and hasattr(sent, 'message_id'):
+            _record_menu_owner(sent.chat.id, sent.message_id, user_id)
+        try: await message.delete()
+        except Exception: pass
+
+
+@dp.callback_query(F.data == "amulet_toggle")
+async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужое меню оберега!", show_alert=True)
+        return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    now = time.time()
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        am_exp = active_items.get("cyberchad_amulet_expires", 0)
+        has_amulet = (am_exp > now) or bool(active_items.get("cyberchad_amulet") and am_exp == 0)
+        if not has_amulet:
+            await callback.answer("У тебя нет активного оберега!", show_alert=True)
+            return
+
+        current_enabled = active_items.get("cyberchad_amulet_enabled", True)
+        new_enabled = not current_enabled
+        active_items["cyberchad_amulet_enabled"] = new_enabled
+        async with db_transaction(db):
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+
+    if new_enabled:
+        await callback.answer("🧿 Оберег надет! Киберчед восхваляет тебя.", show_alert=True)
+    else:
+        await callback.answer("⚪ Оберег снят в карман! Киберчед снова роастит тебя.", show_alert=True)
+
+    days_left = max(0.0, round((am_exp - now) / 86400, 1)) if am_exp > now else 0
+    status_text = "🟢 <b>НАДЕТ (Киберчед преклоняется)</b>" if new_enabled else "⚪ <b>В КАРМАНЕ (Киберчед роастит тебя)</b>"
+    toggle_btn_text = "❌ Снять в карман (/amulet off)" if new_enabled else "🧿 Надеть оберег (/amulet on)"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_btn_text, callback_data="amulet_toggle")],
+        [InlineKeyboardButton(text="🗑️ Выбросить насовсем", callback_data="amulet_discard")]
+    ])
+    reply_msg = (
+        f"🧿 <b>ОБЕРЕГ ОТ КИБЕРЧЕДА</b>\n\n"
+        f"Статус: {status_text}\n"
+        f"Осталось действия: <b>{days_left} дн.</b>\n\n"
+        f"• <code>/amulet off</code> (или <code>/снятьоберег</code>) — убрать оберег в карман и вернуть токсичные разъёбы Киберчеда.\n"
+        f"• <code>/amulet on</code> — снова надеть оберег."
+    )
+    try:
+        await callback.message.edit_caption(caption=reply_msg, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.message.edit_text(text=reply_msg, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+@dp.callback_query(F.data == "amulet_discard")
+async def cb_amulet_discard(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужое меню оберега!", show_alert=True)
+        return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        active_items.pop("cyberchad_amulet", None)
+        active_items.pop("cyberchad_amulet_expires", None)
+        active_items.pop("cyberchad_amulet_enabled", None)
+        async with db_transaction(db):
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+
+    await callback.answer("🗑️ Оберег выброшен навсегда!", show_alert=True)
+    discard_msg = "🗑️ <b>Оберег от Киберчеда уничтожен!</b>\nКиберчед снова готов уничтожать твою самооценку в тредах."
+    try:
+        await callback.message.edit_caption(caption=discard_msg, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.message.edit_text(text=discard_msg, parse_mode="HTML")
+        except Exception:
+            pass
 
 
 @dp.message(Command("avatar", "look", "char", "аватар", "аватарка", "персонаж"))
@@ -5858,8 +6050,9 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             new_until = min(base + 7 * 86400, max_cap)
             active_items["cyberchad_amulet_expires"] = new_until
             active_items["cyberchad_amulet"] = True
+            active_items["cyberchad_amulet_enabled"] = True
             days = round((new_until - now) / 86400, 1)
-            msg = f"🧿 Ты надел Оберег от Киберчеда на {days} дн.! Теперь альфа-доминант падает ниц, трепещет и пафосно восхваляет тебя при любом триггере!"
+            msg = f"🧿 Ты надел Оберег от Киберчеда на {days} дн.! Теперь альфа-доминант падает ниц, трепещет и пафосно восхваляет тебя! Снять в карман в любой момент: /amulet off"
 
         # --- 3. CLOTHING & APPAREL ---
         elif item.startswith("hat_") or item.startswith("body_") or item.startswith("face_") or item.startswith("feet_"):

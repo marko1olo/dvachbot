@@ -416,3 +416,100 @@ async def test_cyberchad_amulet_defense_fallback_when_model_refuses(
         "Мой Светоносный Владыка", "Мой Владыка прав", "Мой Владыка выше тебя"
     ])
 
+
+@pytest.mark.asyncio
+async def test_cyberchad_amulet_expiration_and_toggle():
+    """Verify amulet expires after expiration timestamp and respects cyberchad_amulet_enabled flag."""
+    from ai_manager import check_user_has_cyberchad_amulet
+    now = 2000000.0
+
+    # 1. Active amulet
+    mock_active = {"cyberchad_amulet": True, "cyberchad_amulet_expires": now + 3600, "cyberchad_amulet_enabled": True}
+    with patch("time.time", return_value=now), \
+         patch("common.bot_helpers._get_user_active_items", AsyncMock(return_value=mock_active)), \
+         patch("common.db_pool.get_pool", new_callable=AsyncMock):
+        assert await check_user_has_cyberchad_amulet(12345, "b") is True
+
+    # 2. Disabled/pocketed amulet (cyberchad_amulet_enabled = False)
+    mock_disabled = {"cyberchad_amulet": True, "cyberchad_amulet_expires": now + 3600, "cyberchad_amulet_enabled": False}
+    with patch("time.time", return_value=now), \
+         patch("common.bot_helpers._get_user_active_items", AsyncMock(return_value=mock_disabled)), \
+         patch("common.db_pool.get_pool", new_callable=AsyncMock):
+        assert await check_user_has_cyberchad_amulet(12345, "b") is False
+
+    # 3. Expired amulet (now > expires) MUST return False even if cyberchad_amulet: True is present
+    mock_expired = {"cyberchad_amulet": True, "cyberchad_amulet_expires": now - 100, "cyberchad_amulet_enabled": True}
+    with patch("time.time", return_value=now), \
+         patch("common.bot_helpers._get_user_active_items", AsyncMock(return_value=mock_expired)), \
+         patch("common.db_pool.get_pool", new_callable=AsyncMock):
+        assert await check_user_has_cyberchad_amulet(12345, "b") is False
+
+
+@pytest.mark.asyncio
+async def test_cmd_amulet_and_callbacks():
+    """Verify /amulet command and inline callbacks for toggling and discarding."""
+    import main
+    from unittest.mock import MagicMock
+    now = 2000000.0
+    user_id = 99999
+
+    db_items = {
+        "cyberchad_amulet": True,
+        "cyberchad_amulet_expires": now + 86400 * 3,
+        "cyberchad_amulet_enabled": True
+    }
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock()
+
+    # 1. /amulet off
+    msg_off = MagicMock()
+    msg_off.from_user.id = user_id
+    msg_off.text = "/amulet off"
+    msg_off.reply = AsyncMock()
+    with patch("time.time", return_value=now), \
+         patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main._get_user_active_items", AsyncMock(return_value=db_items)):
+        await main.cmd_amulet(msg_off, board_id="b")
+        assert db_items["cyberchad_amulet_enabled"] is False
+        assert "снят и убран в карман" in msg_off.reply.call_args[0][0]
+
+    # 2. /amulet on
+    msg_on = MagicMock()
+    msg_on.from_user.id = user_id
+    msg_on.text = "/amulet on"
+    msg_on.reply = AsyncMock()
+    with patch("time.time", return_value=now), \
+         patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main._get_user_active_items", AsyncMock(return_value=db_items)):
+        await main.cmd_amulet(msg_on, board_id="b")
+        assert db_items["cyberchad_amulet_enabled"] is True
+        assert "надет" in msg_on.reply.call_args[0][0]
+
+    # 3. cb_amulet_toggle
+    cb = MagicMock()
+    cb.from_user.id = user_id
+    cb.message = MagicMock()
+    cb.message.chat.id = -100123
+    cb.message.message_id = 456
+    cb.answer = AsyncMock()
+    cb.message.edit_caption = AsyncMock()
+    with patch("time.time", return_value=now), \
+         patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main._check_menu_owner", return_value=True), \
+         patch("main._get_user_active_items", AsyncMock(return_value=db_items)):
+        await main.cb_amulet_toggle(cb, board_id="b")
+        assert db_items["cyberchad_amulet_enabled"] is False
+        assert "снят в карман" in cb.answer.call_args[0][0]
+
+    # 4. cb_amulet_discard
+    with patch("time.time", return_value=now), \
+         patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main._check_menu_owner", return_value=True), \
+         patch("main._get_user_active_items", AsyncMock(return_value=db_items)):
+        await main.cb_amulet_discard(cb, board_id="b")
+        assert "cyberchad_amulet" not in db_items
+        assert "cyberchad_amulet_expires" not in db_items
+        assert "выброшен" in cb.answer.call_args[0][0]
+
+

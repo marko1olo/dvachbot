@@ -68,18 +68,28 @@ def is_malicious_bait_or_jailbreak(text: str) -> Tuple[bool, str]:
     return False, ""
 
 
-def is_copypasta_looping(board_id: str, user_id: int, text: str) -> bool:
+def is_copypasta_looping(board_id: str, user_id: int, text: str, now: Optional[float] = None) -> bool:
     """Detects if user is sending identical or nearly identical copypasta prompts."""
     fp = _clean_text_fingerprint(text)
-    if len(fp) < 15:
+    # Short commands or invocations (e.g. 'киберчед поясни') are not copypasta abuse.
+    # Only flag substantial prompt repetitions (>= 30 characters).
+    if len(fp) < 30:
         return False
+    t_now = now if now is not None else time.time()
     recent = _USER_RECENT_PROMPTS.get((board_id, user_id))
     if not recent:
         return False
-    for past_fp in recent:
+    for item in recent:
+        if isinstance(item, tuple):
+            past_ts, past_fp = item
+        else:
+            past_ts, past_fp = 0.0, item
+        # Prompts older than 5 minutes (300s) cannot constitute an active flood loop
+        if past_ts > 0 and (t_now - past_ts) > 300.0:
+            continue
         if fp == past_fp:
             return True
-        # If 80%+ prefix matches on a 40+ char prompt, it's copypasta with minor mutation
+        # If 85%+ prefix matches on a 40+ char prompt within 5 minutes, it's copypasta
         if len(fp) >= 40 and len(past_fp) >= 40:
             common_len = 0
             for c1, c2 in zip(fp, past_fp):
@@ -87,7 +97,7 @@ def is_copypasta_looping(board_id: str, user_id: int, text: str) -> bool:
                     common_len += 1
                 else:
                     break
-            if common_len >= min(len(fp), len(past_fp)) * 0.8:
+            if common_len >= min(len(fp), len(past_fp)) * 0.85:
                 return True
     return False
 
@@ -150,7 +160,7 @@ def check_cyberchad_abuse_and_suppress(
         return True, "malicious_bait_blocked", False
 
     # 3. Check copypasta looping
-    if is_copypasta_looping(board_id, user_id, text):
+    if is_copypasta_looping(board_id, user_id, text, now=t_now):
         _USER_SHADOW_IGNORE_UNTIL[key] = t_now + 600.0
         logger.info(f"🔇 [Cyberchad Abuse Guard] Copypasta looping detected from user {user_id} on /{board_id}/. Imposed 10m shadow silence.")
         return True, "copypasta_loop_blocked", False
@@ -190,7 +200,7 @@ def record_cyberchad_trigger_approved(board_id: str, user_id: int, text: str, no
     history.append(t_now)
     fp = _clean_text_fingerprint(text)
     if fp:
-        _USER_RECENT_PROMPTS[key].append(fp)
+        _USER_RECENT_PROMPTS[key].append((t_now, fp))
     _USER_REJECT_COUNT_WINDOW[key] = 0
 
     if len(_USER_TRIGGER_HISTORY) > 3000:

@@ -194,15 +194,41 @@ def _init_banners():
         except Exception as e:
             logger.warning(f"[banner_manager] Failed to load banner_categories.json: {e}")
 
-    if not loaded_from_file:
-        for fname in all_files:
+    # Dynamic categorization for any banners not yet in saved_categories (e.g. freshly dropped banners)
+    all_categorized: Set[str] = set()
+    for cat, cat_list in _CATEGORIZED_BANNERS.items():
+        if cat not in ("all", "start"):
+            all_categorized.update(cat_list)
+    uncategorized = [fn for fn in all_files if fn not in all_categorized]
+    files_to_categorize = all_files if not loaded_from_file else uncategorized
+
+    if files_to_categorize:
+        for fname in files_to_categorize:
             fn_lower = fname.lower()
+            matched_any = False
             for cat, keywords in CATEGORY_PATTERNS.items():
                 if cat == "start":
                     continue
                 if any(kw in fn_lower for kw in keywords):
                     if fname not in _CATEGORIZED_BANNERS[cat]:
                         _CATEGORIZED_BANNERS[cat].append(fname)
+                        matched_any = True
+            # If banner didn't match specific keywords, distribute to versatile baseline pools (anime, calm, chill)
+            if not matched_any:
+                for fallback_cat in ("anime", "chill", "calm"):
+                    if fallback_cat in _CATEGORIZED_BANNERS and fname not in _CATEGORIZED_BANNERS[fallback_cat]:
+                        _CATEGORIZED_BANNERS[fallback_cat].append(fname)
+
+        if loaded_from_file and uncategorized:
+            try:
+                CATEGORIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+                tmp_cat_file = CATEGORIES_FILE.with_suffix(".tmp")
+                with open(tmp_cat_file, "w", encoding="utf-8") as f:
+                    json.dump(_CATEGORIZED_BANNERS, f, ensure_ascii=False, indent=2)
+                tmp_cat_file.replace(CATEGORIES_FILE)
+                logger.info(f"[banner_manager] Dynamically categorized and persisted {len(uncategorized)} new banners into banner_categories.json")
+            except Exception as e:
+                logger.warning(f"[banner_manager] Failed to persist new banner categories: {e}")
 
     # Ensure no empty categories and populate initial shuffle decks
     _CATEGORY_DECKS.clear()
@@ -212,6 +238,12 @@ def _init_banners():
         deck = _CATEGORIZED_BANNERS[cat].copy()
         random.shuffle(deck)
         _CATEGORY_DECKS[cat] = deque(deck)
+
+
+def reload_banners() -> int:
+    """Forces rescanning of banners directory and updating category decks."""
+    _init_banners()
+    return len(_CATEGORIZED_BANNERS.get("all", []))
 
 
 _init_banners()

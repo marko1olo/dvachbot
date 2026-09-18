@@ -240,6 +240,27 @@ class TestCommandDispatch(unittest.IsolatedAsyncioTestCase):
             self.assertIn("ТОРГОВЫЙ ХАБ", kwargs["caption"].upper())
             self.assertEqual(kwargs["category"], "shop")
 
+    # 2b. /amulet command dispatch
+    async def test_dispatch_amulet(self):
+        # 1. No amulet -> shop prompt
+        msg_no = create_mock_message(user_id=self.user_id, text="/amulet")
+        msg_no.reply = AsyncMock()
+        with patch("main.get_pool", return_value=self.db_conn):
+            await main.cmd_amulet(msg_no, board_id="b", stream="ru")
+            self.assertTrue(msg_no.reply.called)
+            self.assertIn("У тебя нет Оберега от Киберчеда", msg_no.reply.call_args[0][0])
+
+        # 2. Has amulet -> banner menu
+        now = time.time()
+        active_items = {"cyberchad_amulet": True, "cyberchad_amulet_expires": now + 86400, "cyberchad_amulet_enabled": True}
+        await self.db_conn.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), self.user_id))
+        msg_has = create_mock_message(user_id=self.user_id, text="/amulet")
+        with patch("main.get_pool", return_value=self.db_conn), \
+             patch("banner_manager.send_banner_message", new_callable=AsyncMock) as mock_banner:
+            await main.cmd_amulet(msg_has, board_id="b", stream="ru")
+            self.assertTrue(mock_banner.called)
+            self.assertIn("ОБЕРЕГ ОТ КИБЕРЧЕДА", mock_banner.call_args[1]["caption"])
+
     # 3. /wallet command dispatch
     async def test_dispatch_wallet(self):
         msg = create_mock_message(user_id=self.user_id, text="/wallet")

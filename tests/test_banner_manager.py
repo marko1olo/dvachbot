@@ -424,6 +424,21 @@ class TestBannerCacheDebounce(unittest.TestCase):
             data = json.load(f)
         self.assertEqual(data.get("flush_key.jpg"), "fid_flush")
 
+    def test_reload_banners_and_dynamic_categorization(self):
+        # Create a mock temporary banner file in BANNERS_DIR
+        test_banner = BANNERS_DIR / "test_cyberpunk_neon_temp_banner.jpg"
+        test_banner.write_text("fake image data")
+        try:
+            total = banner_manager.reload_banners()
+            self.assertIn("test_cyberpunk_neon_temp_banner.jpg", _CATEGORIZED_BANNERS["all"])
+            self.assertIn("test_cyberpunk_neon_temp_banner.jpg", _CATEGORIZED_BANNERS["start"])
+            self.assertIn("test_cyberpunk_neon_temp_banner.jpg", _CATEGORIZED_BANNERS["cyberpunk"])
+            self.assertIn("test_cyberpunk_neon_temp_banner.jpg", _CATEGORIZED_BANNERS["night"])
+        finally:
+            if test_banner.exists():
+                test_banner.unlink()
+            banner_manager.reload_banners()
+
 
 if __name__ == "__main__":
     unittest.main()
