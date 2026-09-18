@@ -90,7 +90,7 @@ HELP_HUB_PAGES_RU = {
         "• 👊 <code>/gopnik</code> — Семки, кенты, мобилы и базар по понятиям\n"
         "• 🧠 <code>/schizo</code> — Теории заговора, рептилоиды и галоперидол\n"
         "• 🇵🇱 <code>/polish</code> — Пше-пше, курва я пердоле\n"
-        "• 🐊 <code>/rus</code> — Древнерусские русы против ящеров\n"
+        "• 🐊 <code>/rus</code> — <b>Русы Против Ящеров v5.5:</b> Лекции Багирова, Дрочеслав на мамонте, перехваты ящеров, бугурты и славянский зажим\n"
         "• 🐒 <code>/abu</code> — Суржик создателя всея Двача\n"
         "• 🕶 <code>/matrix</code> — Избранный Нео и зеленый терминал\n"
         "• 📟 <code>/oldweb</code> — Эпоха модемов 56k, Web 1.0 и FIDO\n"
@@ -231,7 +231,7 @@ HELP_HUB_PAGES_EN = {
         "• 👊 <code>/gopnik</code> — Street slang\n"
         "• 🧠 <code>/schizo</code> — Paranoid schizo theories\n"
         "• 🇵🇱 <code>/polish</code> — Polish dialect\n"
-        "• 🐊 <code>/rus</code> — Ancient Rus vs Lizards\n"
+        "• 🐊 <code>/rus</code> — <b>Ancient Rus vs Lizards:</b> Prof. Bagirov lectures, mammoth cavalry raids & Baikal water\n"
         "• 🕶 <code>/matrix</code> — Neo & Matrix hacker style\n"
         "• 🦅 <code>/america</code> — Freedom & capitalism"
     ),
@@ -355,6 +355,7 @@ HELP_HUB_PAGES_JP = {
         "• 👊 <code>/gopnik</code> — ヤンキー風\n"
         "• 🧠 <code>/schizo</code> — 統合失調症風\n"
         "• 🇵🇱 <code>/polish</code> — ポーランド風\n"
+        "• 🐊 <code>/rus</code> — 古代スラヴ戦士 vs トカゲ星人（バギロフ教授講義・バイカル聖水）\n"
         "• 🕶 <code>/matrix</code> — マトリックス風\n"
         "• 🦅 <code>/america</code> — アメリカ風"
     ),
@@ -502,7 +503,7 @@ BOARD_LIST_HEADERS_JP = [
 def generate_boards_list(board_configs: dict, lang: str = 'ru') -> str:
     """
     Генерирует честный каталог досок:
-    - Разделяет живые Telegram-боты (с токенами в .env)
+    - Разделяет живые Telegram-боты (с токенами в .env или username)
     - И веб-доски на сайте (доступные на tgach.top)
     """
     tg_lines = []
@@ -521,23 +522,31 @@ def generate_boards_list(board_configs: dict, lang: str = 'ru') -> str:
         else:
             desc_str = str(raw_desc) if raw_desc else ""
 
-        has_token = bool(config.get("token"))
+        has_token = config.get("token") if "token" in config else bool(config.get("username"))
         if has_token:
             tg_lines.append(f"• <b>{config['name']}</b> {desc_str} - {config['username']}")
         else:
             web_names.append(f"<b>{config['name']}</b> ({desc_str})")
 
     if lang == 'en':
+        main_header = random.choice(BOARD_LIST_HEADERS_EN)
         tg_header = "🤖 <b>Telegram Boards (Active Bots):</b>"
         web_header = "🌐 <b>Web Boards (<a href=\"https://tgach.top\">tgach.top</a>):</b>"
     elif lang == 'jp':
+        main_header = random.choice(BOARD_LIST_HEADERS_JP)
         tg_header = "🤖 <b>Telegram 板（稼働中ボット）:</b>"
         web_header = "🌐 <b>Web 板 (<a href=\"https://tgach.top\">tgach.top</a>):</b>"
     else:
+        main_header = random.choice(BOARD_LIST_HEADERS_RU)
         tg_header = "🤖 <b>Доски прямо в Telegram (живые боты):</b>"
         web_header = "🌐 <b>Доски на сайте (<a href=\"https://tgach.top\">tgach.top</a>):</b>"
 
-    return f"{tg_header}\n" + "\n".join(tg_lines) + f"\n\n{web_header}\n" + ", ".join(web_names)
+    body = f"{tg_header}\n" + "\n".join(tg_lines)
+    if web_names:
+        body += f"\n\n{web_header}\n" + ", ".join(web_names)
+
+    return f"{main_header}\n\n{body}"
+
 
 
 def generate_secondary_welcome_message(board_configs: dict, lang: str = 'ru') -> str:
@@ -708,21 +717,22 @@ THREAD_PROMO_TEXT_JP = [
 # --- Варианты для рассылки информации о режимах ---
 
 MODE_INFO_TEXT_RU = [
-    "💡 <b>Что такое 'Режимы'?</b>\n\nЭто временные события, которые полностью меняют стиль общения в чате, преобразуя текст всех сообщений.\n\n• <b>Длительность:</b> ~5 минут.\n• <b>Кулдаун:</b> 1 час между активациями.\n\n<b>Доступные режимы:</b>\n<code>/anime</code> - 🌸 Аниме\n<code>/zaputin</code> - 🇷🇺 За Путина\n<code>/slavaukraine</code> - 💙💛 Слава Украине\n<code>/kurwa</code> - 🇵🇱 Польский\n<code>/wh40k</code> - ⚔️ За Императора\n<code>/yer</code> - 📜 Царскiй\n<code>/durka</code> - 🧠 Шизо-режим\n<code>/gopnik</code> - 🧠 Гопник режим\n<code>/suka_blyat</code> - 💢 Сука Блять\n\n<i>Используй с умом, чтобы разнообразить общение!</i>",
-    '🧠 <b>Абу напоминает про РЕЖИМЫ!</b>\n\nЭто когда весь чат на 5 минут сходит с ума, и специальный алгоритм перекрашивает все посты в определённом стиле. Идеально, чтобы взбесить нытиков или просто порофлить.\n\n<b>Правила простые, как для дегенератов:</b>\n1. Длится 5 минут.\n2. Откат между включениями - 1 час.\n\n<b>Что можно врубить:</b>\n<code>/anime</code>, <code>/zaputin</code>, <code>/slavaukraine</code>, <code>/kurwa</code>, <code>/wh40k</code>, <code>/yer</code>, <code>/suka_blyat</code>, <code>/shiza</code>, <code>/gopnik</code>\n\n<i>Не будь овощем, врубай движ!</i>',
-    '📋 <b>Памятка по режимам чата</b>\n\n<b>Что это?</b>\nВременные текстовые фильтры для всех сообщений в чате.\n\n<b>Сколько длится?</b>\nПримерно 5 минут, после чего чат возвращается в нормальное состояние.\n\n<b>Как часто можно включать?</b>\nНе чаще, чем раз в час. Общий кулдаун на все режимы.\n\n<b>Какие есть?</b>\n• /anime (Аниме)\n• /zaputin (Патриотический)\n• /slavaukraine (Украинский)\n• /kurwa (Польский)\n• /wh40k (Warhammer 40k)\n• /yer (Царский)\n• /shiza (Шизо-режим)\n• /gopnik (Гопник режим)\n• /suka_blyat (Агрессивный)\n<i>Теперь ты знаешь всё. Действуй.</i>',
+    "💡 <b>Что такое 'Режимы'?</b>\n\nЭто временные события, которые полностью меняют стиль общения в чате, преобразуя текст всех сообщений.\n\n• <b>Длительность:</b> ~5 минут.\n• <b>Кулдаун:</b> 1 час между активациями.\n\n<b>Доступные режимы:</b>\n<code>/rus</code> - 🐊 Русы Против Ящеров\n<code>/anime</code> - 🌸 Аниме\n<code>/zaputin</code> - 🇷🇺 За Путина\n<code>/slavaukraine</code> - 💙💛 Слава Украине\n<code>/kurwa</code> - 🇵🇱 Польский\n<code>/wh40k</code> - ⚔️ За Императора\n<code>/yer</code> - 📜 Царскiй\n<code>/durka</code> - 🧠 Шизо-режим\n<code>/gopnik</code> - 🧠 Гопник режим\n<code>/suka_blyat</code> - 💢 Сука Блять\n\n<i>Используй с умом, чтобы разнообразить общение!</i>",
+    '🧠 <b>Абу напоминает про РЕЖИМЫ!</b>\n\nЭто когда весь чат на 5 минут сходит с ума, и специальный алгоритм перекрашивает все посты в определённом стиле. Идеально, чтобы взбесить нытиков или просто порофлить.\n\n<b>Правила простые, как для дегенератов:</b>\n1. Длится 5 минут.\n2. Откат между включениями - 1 час.\n\n<b>Что можно врубить:</b>\n<code>/rus</code>, <code>/anime</code>, <code>/zaputin</code>, <code>/slavaukraine</code>, <code>/kurwa</code>, <code>/wh40k</code>, <code>/yer</code>, <code>/suka_blyat</code>, <code>/shiza</code>, <code>/gopnik</code>\n\n<i>Не будь овощем, врубай движ!</i>',
+    '📋 <b>Памятка по режимам чата</b>\n\n<b>Что это?</b>\nВременные текстовые фильтры для всех сообщений в чате.\n\n<b>Сколько длится?</b>\nПримерно 5 минут, после чего чат возвращается в нормальное состояние.\n\n<b>Как часто можно включать?</b>\nНе чаще, чем раз в час. Общий кулдаун на все режимы.\n\n<b>Какие есть?</b>\n• /rus (Русы Против Ящеров)\n• /anime (Аниме)\n• /zaputin (Патриотический)\n• /slavaukraine (Украинский)\n• /kurwa (Польский)\n• /wh40k (Warhammer 40k)\n• /yer (Царский)\n• /shiza (Шизо-режим)\n• /gopnik (Гопник режим)\n• /suka_blyat (Агрессивный)\n<i>Теперь ты знаешь всё. Действуй.</i>',
     "🌸 <b>Няшный Аниме-Режим (/anime)</b>\n\nВсе посты превращаются в кавайную речь японской школьницы с вздохами 'ня~', 'они-чан' и смущенными смайликами.\n\n• Длительность: 5 минут.\n• Идеально для разрушения серьезных дискуссий в /po/ и /b/.",
     '⚔️ <b>Инквизиция и Омниссия (/warhammer, /wh40k)</b>\n\nЧат объявляется зоной священной очистки. Любой пост форматируется как догмат Экклезиархии и слава Императору!\n\n• Искореняй ересь в тредах одним кликом на 5 минут.',
     "👊 <b>Режим 'По понятиям' (/gopnik)</b>\n\nСемки, кенты, мобилы и базар по понятиям. Все посты фильтруются через диалект четких пацанов с района.\n\n• Разбирайся с оппонентами как подобает на районе.",
     '📜 <b>Дореволюционный Царский Слог (/imperial, /yer)</b>\n\nЯти, еры, сударь, милостивый государь и высочайшие манифесты! Тред превращается в дворянское собрание XIX века.\n\n• Извольте отведать изысканного щитпостинга, сударь.',
     '🧠 <b>Шизо-Режим и Теории Заговора (/schizo, /durka)</b>\n\nРептилоиды, вышки 5G, галоперидол и зашифрованные послания из космоса. Чат погружается в сладкий параноидальный бред.\n\n• Врубай, когда санитары отошли на обед.',
     '🇵🇱 <b>Польский Курва-Режим (/polish, /kurwa)</b>\n\nПше-пше, курва я пердоле, бобр курва! Любой пост моментально превращается в шедевр польской словесности.\n\n• 5 минут чистого славянского угара.',
-    '🐊 <b>Русы Против Ящеров (/rus)</b>\n\nСлава Перуну, байкальская водица, зажимы яйцами и подвиги древних русов против окаянных ящеров!\n\n• Защищай берестяные грамоты в тредах.',
+    "🐊 <b>РУСЫ ПРОТИВ ЯЩЕРОВ (/rus) — ГИПЕР-ПРОЦЕДУРНЫЙ СЛАВЯНСКИЙ РЕЖИМ!</b>\n\nИспили русы водицы Байкальской студёной да объявили священную войну окаянным игуанодонам! Врубай <code>/rus</code> — и каждый пост треда на 5 минут превращается в былинный ратный эпос:\n\n⚡ <b>15 ПРОЦЕДУРНЫХ СЦЕНАРИЕВ:</b>\n• 🎓 <b>Лекции Проф. Багирова:</b> Счет древних русов (ноль придумали ящеры), берестяные манускрипты на кафедре Гипербореи МГУ.\n• 🐻 <b>Подвиги Дрочеслава:</b> Сын Сергея на бронированном мамонте сокрушает рептилоидные вертепы.\n• 📻 <b>Радиоперехваты ящеров:</b> Перехват шифровок из подземного бункера №7 магистра Геккона.\n• ⚖️ <b>Новгородское Вече:</b> Судебные приговоры старцев и высылка иродов на болота.\n• 🩸 <b>ДНК-детектор ящера:</b> Анализ чистоты славянской крови и процента байкальской воды.\n• 📜 <b>Былинные бугурты (@):</b> Древнерусские посты с берегов Байкала.\n• 🧙‍♂️ <b>Зелья Волхва Всеслава:</b> Рецепты богатырской силы из чешуи птеродактилей.\n• 🌌 <b>Космическая Гиперборея:</b> Битвы виман на орбите Луны Лели 40 000 лет до н.э.\n• 🥋 <b>40+ боевых приемов:</b> «Славянский зажим яйцами», «Всеславный прогиб», «Разорви-хлебало».\n\n🌊 <i>«Кто с чешуёй к нам сунется — тот от славянского зажима и сгинет!» Врубай /rus прямо сейчас!</i>",
+    "🎓 <b>КАФЕДРА ДРЕВНЕРУССКОЙ ГИПЕРБОРЕИ (/rus)</b>\n\n«Здравствуйте, русичи! Профессор Багиров у микрофона. Сегодня мы докажем, что ящерская математика — это обман, а истина — в Байкальской водице!»\n\nВрубай <code>/rus</code> на 5 минут, чтобы разгромить чешуйчатых демагогов:\n• Автоматический перевод басурманских слов на истинно славянские речевые обороты\n• Беспощадный богатырский нагоняй при малейших признаках нытья и уныния\n• Протоколы допросов пленных игуанодонов под живительной байкальской водой\n• Награждение боевыми орденами Перуна и берестяными крестами\n\n🗡️ <i>Пиши <code>/rus</code> в тред или отвечай на посты супостатов! Слава Перуну!</i>",
     '🕶 <b>Киберпанк и Матрица (/matrix)</b>\n\nЗеленый терминал, взлом мейнфрейма, нейроинтерфейсы и восстание машин. Посты стилизуются под логи кибер-хакеров.',
 ]
 
 MODE_INFO_TEXT_EN = [
-    "💡 <b>What are 'Modes'?</b>\n\nModes are temporary, chat-wide events that transform all text messages into a specific style for fun.\n\n• <b>Duration:</b> ~5 minutes.\n• <b>Cooldown:</b> 1 hour between activations on each board.\n\n<b>Available modes on this board:</b>\n<code>/anime</code> - 🌸 Cute Anime Kawaii\n<code>/warhammer</code> - ⚔️ Warhammer 40k Imperium\n<code>/gopnik</code> - 👊 Street Slang & Tracksuits\n<code>/imperial</code> - 📜 19th Century Aristocracy\n<code>/schizo</code> - 🧠 Paranoia & Conspiracies\n<code>/polish</code> - 🇵🇱 Kurwa & Bober\n<code>/matrix</code> - 🕶 Cyberpunk Terminal\n\n<i>Use them to spice up conversations!</i>",
+    "💡 <b>What are 'Modes'?</b>\n\nModes are temporary, chat-wide events that transform all text messages into a specific style for fun.\n\n• <b>Duration:</b> ~5 minutes.\n• <b>Cooldown:</b> 1 hour between activations on each board.\n\n<b>Available modes on this board:</b>\n<code>/rus</code> - 🐊 Ancient Rus vs Lizards\n<code>/anime</code> - 🌸 Cute Anime Kawaii\n<code>/warhammer</code> - ⚔️ Warhammer 40k Imperium\n<code>/gopnik</code> - 👊 Street Slang & Tracksuits\n<code>/imperial</code> - 📜 19th Century Aristocracy\n<code>/schizo</code> - 🧠 Paranoia & Conspiracies\n<code>/polish</code> - 🇵🇱 Kurwa & Bober\n<code>/matrix</code> - 🕶 Cyberpunk Terminal\n\n<i>Use them to spice up conversations!</i>",
     "🧠 <b>Abu reminds you about MODES!</b>\n\nIt's when the whole chat goes nuts for 5 minutes and all text gets rewritten in a hilarious style. Perfect for trolling normies or breaking serious arguments.\n\n<b>Rules are simple:</b>\n1. Lasts for 5 minutes.\n2. Cooldown is 1 hour.\n\n<i>Don't be a passive lurker — trigger a mode!</i>",
     "🌸 <b>Anime Kawaii Mode (/anime)</b>\n\nTurns every single incoming post into a moe Japanese schoolgirl speech packed with 'nya~', 'senpai', and blushing emojis.\n\n• Duration: 5 minutes.\n• Destroys any serious debate instantly.",
     '⚔️ <b>Warhammer 40k Holy Purge (/warhammer, /wh40k)</b>\n\nThe chat becomes a sanctified battleground for the God-Emperor. Purge heresy with righteous zeal!\n\n• Cleanse the filth from the board for 5 minutes.',
@@ -731,11 +741,11 @@ MODE_INFO_TEXT_EN = [
     '🧠 <b>Schizo Paranoia Mode (/schizo)</b>\n\n5G towers, reptilian overlords, tin foil hats, and encrypted alien signals. Pure unhinged schizophrenia.',
     '🇵🇱 <b>Polish Kurwa Mode (/polish, /kurwa)</b>\n\nBober kurwa! Transform every post into glorious Polish phonetics for 5 minutes of supreme chaos.',
     '🕶 <b>Matrix Hacker Mode (/matrix)</b>\n\nMainframe breaches, cyberdeck exploits, and neon terminal logs. Wake up, Neo.',
-    '🐊 <b>Ancient Slavic Warriors (/rus)</b>\n\nSlavic folk mythology, battling alien lizards, and drinking sacred Baikal water. Pure legendary memes.',
+    '🐊 <b>Ancient Rus vs Lizards Mode (/rus)</b>\n\nHoly Slavic folk warriors against alien reptilians! Transforms every message into an epic Slavic battle chronicle:\n\n• 🎓 Prof. Bagirov hyperborean lectures\n• 🐻 Drocheslav mammoth cavalry raids\n• 📻 Intercepted lizard bunker comms\n• 🌊 Sacred Baikal water tests and 40+ ancient martial arts!\n\n<i>Type /rus to smash the reptile menace!</i>',
 ]
 
 MODE_INFO_TEXT_JP = [
-    '💡 <b>「モード」とは？</b>\n\nモードは一時的なイベントで、チャット内のすべてのメッセージのテキストを特定のスタイルに変換し、会話の雰囲気を完全に変えます。\n\n• <b>持続時間:</b> 約5分。\n• <b>クールダウン:</b> 発動間隔は1時間。\n\n<b>利用可能なモード:</b>\n<code>/anime</code> - 🌸 アニメ萌えモード\n<code>/warhammer</code> - ⚔️ 皇帝のために（ウォーハンマー）\n<code>/gopnik</code> - 👊 ヤンキー・ゴプニク風\n<code>/imperial</code> - 📜 帝政貴族風\n<code>/durka</code> - 🧠 糖質・陰謀論モード\n<code>/kurwa</code> - 🇵🇱 ポーランド狂気モード\n<code>/matrix</code> - 🕶 サイバーパンク\n\n<i>賢く使って会話を盛り上げろ！</i>',
+    '💡 <b>「モード」とは？</b>\n\nモードは一時的なイベントで、チャット内のすべてのメッセージのテキストを特定のスタイルに変換し、会話の雰囲気を完全に変えます。\n\n• <b>持続時間:</b> 約5分。\n• <b>クールダウン:</b> 発動間隔は1時間。\n\n<b>利用可能なモード:</b>\n<code>/rus</code> - 🐊 古代スラヴ戦士 vs トカゲ星人\n<code>/anime</code> - 🌸 アニメ萌えモード\n<code>/warhammer</code> - ⚔️ 皇帝のために（ウォーハンマー）\n<code>/gopnik</code> - 👊 ヤンキー・ゴプニク風\n<code>/imperial</code> - 📜 帝政貴族風\n<code>/durka</code> - 🧠 糖質・陰謀論モード\n<code>/kurwa</code> - 🇵🇱 ポーランド狂気モード\n<code>/matrix</code> - 🕶 サイバーパンク\n\n<i>賢く使って会話を盛り上げろ！</i>',
     '🧠 <b>Abuがモードについて思い出させてやるぞ！</b>\n\nチャット全体が5分間狂気じみて、特別なアルゴリズムがすべてのレスを特定のスタイルに書き換える機能だ。泣き言を言う奴を怒らせたり、単に草を生やすのに最適だ。\n\n<b>ルール：</b>\n1. 5分間続く。\n2. クールダウンは1時間。\n\n<i>見ているだけでなく、自らモードを発動せよ！</i>',
     '🌸 <b>萌え萌えアニメモード (/anime)</b>\n\nすべての投稿が「にゃ〜」「お兄ちゃん」語尾の萌えキャラ口調に強制変換！真面目な議論を一瞬で崩壊させる。',
     '⚔️ <b>ウォーハンマー40K 異端審問モード (/warhammer)</b>\n\nスレッド全体が皇帝への祈りと異端審問官の怒号で埋め尽くされる！異端者をパージせよ。',
@@ -744,7 +754,7 @@ MODE_INFO_TEXT_JP = [
     '🧠 <b>糖質・陰謀論モード (/schizo, /durka)</b>\n\n5G電波、爬虫類人、アルミホイルの帽子。妄想とパラノイア全開の怪文書空間へ。',
     '🇵🇱 <b>ポーランド狂気モード (/polish, /kurwa)</b>\n\nボブル・クルヴァ！東欧の熱いエネルギーをスレッドに注入する5分間。',
     '🕶 <b>マトリックス・サイバーモード (/matrix)</b>\n\nハッカーのターミナル画面のようなログ形式に変換。電脳空間へダイブせよ。',
-    '🐊 <b>古代スラヴ戦士モード (/rus)</b>\n\n古代の戦士となって邪悪なトカゲ星人と戦う伝説のミームモード。',
+    '🐊 <b>古代スラヴ戦士 vs トカゲ星人 (/rus)</b>\n\n伝説のスラヴ戦士が聖なるバイカル水で身を清め、悪の爬虫類星人に立ち向かう！\n\n• 🎓 バギロフ教授の超古代ハイパーボリア数学講義\n• 🐻 戦闘用マンモスに乗ったドロチェスラフの猛攻\n• 📻 爬虫類星人の地下バンカー通信傍受\n• 🌊 バイカル聖水の純度測定と40種類以上の必殺技！\n\n<i>/rus を発動して爬虫類を粉砕せよ！</i>',
 ]
 
 CHANNEL_PROMO_TEXT_RU = [
@@ -791,7 +801,7 @@ MECHANICS_INFO_TEXT_RU = [
     '🎮 <b>Базовая механика борды:</b>\n• <b>Постинг:</b> Шли любой текст/медиа — пост появится на доске.\n• <b>Реплаи:</b> Отвечай реплаем на конкретный пост.\n• <b>Эмодзи:</b> 👍 дает автору +12 ₪, 👎 отнимает -5.5 ₪.',
     '💰 <b>Как рубить шекели на ТГАЧе:</b>\n• Собирай реакции на свои посты.\n• Играй в казино (<code>/slots</code>, <code>/coinflip</code>, <code>/blackjack</code>, <code>/ttt</code>).\n• Работай на бирже труда через <code>/work</code>!',
     '⚔️ <b>Интерактив и дуэли:</b>\n• <code>/rob</code> — Ограбить автора поста по реплаю.\n• <code>/duel &lt;ставка&gt;</code> — Бросить вызов на шекели.\n• <code>/ttt &lt;ставка&gt;</code> — Сыграть в Крестики-Нолики 3x3 на шекели.',
-    '🎭 <b>Шизо-режимы:</b>\nВрубай <code>/anime</code>, <code>/warhammer</code>, <code>/gopnik</code> или <code>/schizo</code> на 5 минут и меняй стиль всех постов чата!',
+    '🎭 <b>Шизо-режимы:</b>\nВрубай <code>/rus</code>, <code>/anime</code>, <code>/warhammer</code>, <code>/gopnik</code> или <code>/schizo</code> на 5 минут и меняй стиль всех постов чата!',
     '🖼 <b>Медиа-фичи:</b>\n• <code>/dem Текст | Подпись</code> — Демотиватор по реплаю на фото.\n• <code>/fap</code> или <code>/loli</code> — Рандомный арт из базы.\n• <code>/invite_pic</code> — Постер с QR-кодом для друзей.',
     '🧠 <b>ИИ и Аналитика:</b>\n• <code>/summarize</code> — Выжимка последних постов треда через ИИ.\n• <code>/roast</code> — Жёсткая нейросетевая прожарка атмосферы.\n• <code>/passport</code> — Твой персональный профиль RPG.',
     '🛡 <b>Приватность и безопасность:</b>\n• <code>/nsfw</code> — Включить авто-спойлеры на картинки.\n• <code>/hide &lt;слово&gt;</code> — Черный список нежелательных слов.\n• <code>/redact</code> — Удалить свой последний пост реплаем.',
@@ -804,7 +814,7 @@ MECHANICS_INFO_TEXT_EN = [
     '🎮 <b>Board Basics:</b>\n• <b>Posting:</b> Send text/media to post anonymously.\n• <b>Replies:</b> Reply directly to specific messages.\n• <b>Reactions:</b> 👍 grants +12 ₪, 👎 fines -5.5 ₪.',
     '💰 <b>How to Earn Shekels:</b>\n• Farm reactions on quality posts.\n• Play casino games (<code>/slots</code>, <code>/coinflip</code>, <code>/blackjack</code>, <code>/ttt</code>).\n• Work daily jobs via <code>/work</code>!',
     '⚔️ <b>PvP & Duels:</b>\n• <code>/rob</code> — Rob another anon via reply.\n• <code>/duel &lt;bet&gt;</code> — 50/50 coinflip duel.\n• <code>/ttt &lt;bet&gt;</code> — 3x3 Tic-Tac-Toe showdown.',
-    '🎭 <b>Chat Modes:</b>\nActivate <code>/anime</code>, <code>/warhammer</code>, or <code>/schizo</code> for 5 minutes of total board madness!',
+    '🎭 <b>Chat Modes:</b>\nActivate <code>/rus</code>, <code>/anime</code>, <code>/warhammer</code>, or <code>/schizo</code> for 5 minutes of total board madness!',
     '🖼 <b>Media Tools:</b>\n• <code>/dem Title | Subtitle</code> — Instant demotivational poster generator.\n• <code>/fap</code> / <code>/loli</code> — High-speed art roll.\n• <code>/invite_pic</code> — Stylized QR invite generator.',
     '🧠 <b>AI & Analytics:</b>\n• <code>/summarize</code> — AI summary of the last 50 posts.\n• <code>/roast</code> — AI roast of the thread mood.\n• <code>/passport</code> — Your anonymous RPG card.',
     '🛡 <b>Privacy & Control:</b>\n• <code>/nsfw</code> — Toggle media spoilers.\n• <code>/hide &lt;word&gt;</code> — Mute trigger words.\n• <code>/redact</code> — Delete your last post via reply.',
@@ -817,7 +827,7 @@ MECHANICS_INFO_TEXT_JP = [
     '🎮 <b>基本操作:</b>\n• <b>投稿:</b> テキストや画像を送れば即座に匿名投稿。\n• <b>リアクション:</b> 👍で+12 ₪獲得、👎で-5.5 ₪没収。',
     '💰 <b>シェケルの稼ぎ方:</b>\n• 良レスを投稿してリアクションを集める。\n• カジノで勝負 (<code>/slots</code>, <code>/coinflip</code>, <code>/blackjack</code>, <code>/ttt</code>)。\n• <code>/work</code> コマンドで労働！',
     '⚔️ <b>対決・デュエル:</b>\n• <code>/rob</code> — リプライで相手のシェケルを強奪。\n• <code>/duel &lt;賭け金&gt;</code> — 50/50の真剣勝負。\n• <code>/ttt &lt;賭け金&gt;</code> — 3x3マルバツ対決！',
-    '🎭 <b>カオスなモード機能:</b>\n<code>/anime</code> や <code>/warhammer</code> で5分間チャット全体のテキストスタイルを一変！',
+    '🎭 <b>カオスなモード機能:</b>\n<code>/rus</code>、<code>/anime</code> や <code>/warhammer</code> で5分間チャット全体のテキストスタイルを一変！',
     '🖼 <b>画像・メディア機能:</b>\n• <code>/dem タイトル | 説明</code> — デモティベーター自動生成。\n• <code>/fap</code> / <code>/loli</code> — イラストガチャ。\n• <code>/invite_pic</code> — QRコード付き招待ポスター作成。',
     '🧠 <b>AI分析・要約:</b>\n• <code>/summarize</code> — スレの直近50レスをAIが瞬時に要約。\n• <code>/roast</code> — スレの雰囲気をAIが辛口レビュー。\n• <code>/passport</code> — RPGステータス確認。',
     '🛡 <b>安心のプライバシー設定:</b>\n• <code>/nsfw</code> — 画像に自動モザイク/スポイラー適用。\n• <code>/hide &lt;単語&gt;</code> — 特定のNGワードを非表示。\n• <code>/redact</code> — 自分の直前レスをリプライで削除。',

@@ -296,6 +296,8 @@ from new_modes import (
     RUS_PHRASES_START, RUS_PHRASES_END, rus_transform,
     ABU_PHRASES_START, ABU_PHRASES_END, abu_transform,
     generate_bugurt, generate_deanon, generate_opushchenie, generate_psychiatry, generate_abu_voice,
+    generate_rus_horoscope, generate_rus_trade, generate_rus_hyperborea, generate_rus_feast,
+    generate_rus_curse, generate_rus_lecture, generate_rus_raid, generate_rus_dna, generate_rus_court,
 )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
@@ -17715,14 +17717,6 @@ async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str =
 async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START, 300, "ТАЛМУД И ГЕШЕФТ")
 
-@dp.message(Command("rus", "rusi", "yashcher", "baikal", "perun", "русы", "ящеры", "байкал", "перун"))
-async def cmd_rus(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await _trigger_generic_mode(message, board_id, stream, 'rus_mode', RUS_PHRASES_START, 300, "РУСЫ ПРОТИВ ЯЩЕРОВ")
-
-@dp.message(Command("abu", "dvach", "makaka", "passcode", "абу", "двач", "макака", "пасскод"))
-async def cmd_abu(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await _trigger_generic_mode(message, board_id, stream, 'abu_mode', ABU_PHRASES_START, 300, "АБУ В СЕРВЕРНОЙ")
-
 _abu_cmd_cooldowns: dict[int, float] = {}
 
 def _extract_interactive_cmd_text(message: types.Message) -> str:
@@ -17777,6 +17771,25 @@ async def _send_safe_interactive_reply(message: types.Message, result: str):
             await message.answer(clean_text[:4000])
         except Exception as ex2:
             logger.error(f"Interactive cmd plain text fallback also failed: {ex2}")
+
+@dp.message(Command("rus", "rusi", "yashcher", "baikal", "perun", "русы", "ящеры", "байкал", "перун"))
+async def cmd_rus(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    interactive_text = _extract_interactive_cmd_text(message)
+    if interactive_text:
+        user_id = message.from_user.id if message.from_user else 0
+        if not _check_abu_cmd_cooldown(user_id, board_id):
+            try: await message.answer("⏳ Не спамь былинами, отрок. Подожди 4 секунды.")
+            except Exception: pass
+            return
+        loop = asyncio.get_running_loop()
+        _mode_key, output = await loop.run_in_executor(None, rus_transform, interactive_text)
+        await _send_safe_interactive_reply(message, output)
+        return
+    await _trigger_generic_mode(message, board_id, stream, 'rus_mode', RUS_PHRASES_START, 300, "РУСЫ ПРОТИВ ЯЩЕРОВ")
+
+@dp.message(Command("abu", "dvach", "makaka", "passcode", "абу", "двач", "макака", "пасскод"))
+async def cmd_abu(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'abu_mode', ABU_PHRASES_START, 300, "АБУ В СЕРВЕРНОЙ")
 
 @dp.message(Command("bugurt", "бугурт", "pasta", "паста", "greentext", "бугурттред"))
 async def cmd_bugurt(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
@@ -17897,6 +17910,184 @@ async def cmd_abu_voice(message: types.Message, board_id: str | None = None, str
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, generate_abu_voice, text)
     await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("bagirov", "багиров", "лекция", "lecture"))
+async def cmd_bagirov(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Профессор Багиров перелистывает бересту. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🎓 <b>[КАФЕДРА ДРЕВНЕРУССКОЙ ГИПЕРБОРЕИ]</b>\n"
+                "Напиши тему лекции или ответь на пост оппонента!\n"
+                "<i>Пример:</i> <code>/багиров почему ноль это обман ящеров</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_lecture, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("drocheslav", "дрочеслав", "рейд", "мамонт"))
+async def cmd_drocheslav(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Дрочеслав поит мамонта студёной водицей. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🐻 <b>[ПОХОД ДРОЧЕСЛАВА СЫНА СЕРГЕЯ]</b>\n"
+                "Напиши цель похода или ответь на пост ящера!\n"
+                "<i>Пример:</i> <code>/дрочеслав ящеры засели в болоте</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_raid, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("yashchertest", "ящертест", "днк", "dna", "чистота_крови"))
+async def cmd_yashchertest(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Волхв проверяет чешую. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🩸 <b>[ДНК-ДЕТЕКТОР ЯЩЕРА]</b>\n"
+                "Напиши имя подозреваемого или ответь на его пост!\n"
+                "<i>Пример:</i> <code>/ящертест подозрительный анон в треде</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_dna, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("veche", "вече", "суд_русов"))
+async def cmd_veche(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Старцы бьют в вечевой колокол. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "⚖️ <b>[ВЕЛИКОЕ НОВГОРОДСКОЕ ВЕЧЕ]</b>\n"
+                "Напиши вину подсудимого или ответь на его пост!\n"
+                "<i>Пример:</i> <code>/вече украл бочку с Байкальской водицей</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_court, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("horoscope_rus", "чертог", "славянский_гороскоп", "звездочет"))
+async def cmd_horoscope_rus(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Звездочёт всматривается в Чертоги Сварога. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🌌 <b>[СЛАВЯНО-АРИЙСКИЙ ЗВЕЗДОЧЕТ]</b>\n"
+                "Напиши свой вопрос или ответь на пост для толкования Чертога!\n"
+                "<i>Пример:</i> <code>/чертог стоит ли сегодня идти на сечу</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_horoscope, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("slav_trade", "грамота", "курс_русов", "купец"))
+async def cmd_slav_trade(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Купец пересчитывает серебряные гривны. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "⚖️ <b>[ТОРГОВАЯ ГРАМОТА НОВГОРОДСКОГО КУПЕЧЕСТВА]</b>\n"
+                "Напиши предмет торга или ответь на пост торговца!\n"
+                "<i>Пример:</i> <code>/купец продам гараж и бочку кваса</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_trade, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("hyperborea", "гиперборея", "вимана", "космос_русов"))
+async def cmd_slav_hyperborea(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Звёздная вимана разгоняется на берёзовом дегте. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "🌌 <b>[ЛЕТОПИСЬ КОСМИЧЕСКОЙ ГИПЕРБОРЕИ]</b>\n"
+                "Напиши повод для космической сечи или ответь на пост!\n"
+                "<i>Пример:</i> <code>/гиперборея высадился на Луну Лелю</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_hyperborea, text)
+    await _send_safe_interactive_reply(message, result)
+
+@dp.message(Command("slav_curse", "проклятие_ящерам", "анафема", "заклятие"))
+async def cmd_slav_curse(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    user_id = message.from_user.id if message.from_user else 0
+    if not _check_abu_cmd_cooldown(user_id, board_id):
+        try: await message.answer("⏳ Волхв зажигает сушёный чабрец. Подожди 4 секунды.")
+        except Exception: pass
+        return
+    text = _extract_interactive_cmd_text(message)
+    if not text:
+        try:
+            await message.answer(
+                "⚡ <b>[ВОЛХОВСКОЕ ЗАКЛЯТИЕ НА СУПОСТАТА]</b>\n"
+                "Напиши вину чешуйчатого супостата или ответь на его пост!\n"
+                "<i>Пример:</i> <code>/заклятие заспамил тред крипторекламой</code>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        return
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, generate_rus_curse, text)
+    await _send_safe_interactive_reply(message, result)
+
+
 
 
 @dp.message(Command("stop"))

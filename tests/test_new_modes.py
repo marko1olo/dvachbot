@@ -78,6 +78,49 @@ class TestNewModes(unittest.TestCase):
         t10 = rus_engine.generate_whining_rebuke(p, cm, 99)
         self.assertIn("ТОСКА", t10)
 
+        # 11. Slavic Horoscope
+        t11 = rus_engine.generate_slavic_horoscope(p, rune)
+        self.assertIn("СЛАВЯНО-АРИЙСКИЙ ЗВЕЗДОЧЕТ", t11)
+        self.assertIn("ЧЕРТОГ", t11)
+
+        # 12. Trade Pact
+        t12 = rus_engine.generate_slavic_trade_pact(p, 95)
+        self.assertIn("ТОРГОВАЯ ГРАМОТА", t12)
+        self.assertIn("КУПЕЧЕСТВ", t12)
+
+        # 13. Hyperborean Chronicle
+        t13 = rus_engine.generate_hyperborean_chronicle(p, cm)
+        self.assertIn("ГИПЕРБОРЕИ", t13)
+
+        # 14. Slavic Feast Protocol
+        t14 = rus_engine.generate_slavic_feast_protocol(p, cm)
+        self.assertIn("КНЯЖЕСКОГО ПИРА", t14)
+
+        # 15. Slavic Curse Formula
+        t15 = rus_engine.generate_slavic_curse_formula(p, rune)
+        self.assertIn("ЗАКЛЯТИЕ", t15)
+
+    def test_rus_interactive_helpers(self):
+        import rus_engine
+        h1 = rus_engine.generate_rus_horoscope("юзер")
+        self.assertIn("ЗВЕЗДОЧЕТ", h1)
+        h2 = rus_engine.generate_rus_trade("сделка")
+        self.assertIn("ГРАМОТА", h2)
+        h3 = rus_engine.generate_rus_hyperborea("космос")
+        self.assertIn("ГИПЕРБОРЕ", h3)
+        h4 = rus_engine.generate_rus_feast("пир")
+        self.assertIn("ПИР", h4)
+        h5 = rus_engine.generate_rus_curse("враг")
+        self.assertIn("ЗАКЛЯТИЕ", h5)
+        h6 = rus_engine.generate_rus_lecture("наука")
+        self.assertIn("БАГИРОВ", h6)
+        h7 = rus_engine.generate_rus_raid("поход")
+        self.assertIn("ДРОЧЕСЛАВ", h7)
+        h8 = rus_engine.generate_rus_dna("тест")
+        self.assertIn("КРОВ", h8)
+        h9 = rus_engine.generate_rus_court("вече")
+        self.assertIn("ВЕЧЕ", h9)
+
     def test_abu_transform(self):
         mode, text = abu_transform("привет двач. как дела?")
         self.assertEqual(mode, "text")

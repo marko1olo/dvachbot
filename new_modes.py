@@ -46,6 +46,20 @@ from rus_engine import (
     generate_interrogation_protocol,
     generate_whining_rebuke,
     generate_classic_bylina,
+    generate_slavic_horoscope,
+    generate_slavic_trade_pact,
+    generate_hyperborean_chronicle,
+    generate_slavic_feast_protocol,
+    generate_slavic_curse_formula,
+    generate_rus_horoscope,
+    generate_rus_trade,
+    generate_rus_hyperborea,
+    generate_rus_feast,
+    generate_rus_curse,
+    generate_rus_lecture,
+    generate_rus_raid,
+    generate_rus_dna,
+    generate_rus_court,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
