@@ -180,7 +180,13 @@ _EXTRA_RATE_LIMIT_REJECTIONS: list[str] = [
     "Убавь напор, омежка. Минуту сидишь молча и перевариваешь своё убожество.",
 ]
 
-_ALL_RATE_LIMIT_REJECTIONS: set[str] = set(CYBERCHAD_RATE_LIMIT_REJECTIONS) | set(_EXTRA_RATE_LIMIT_REJECTIONS) | set(_LEGACY_RATE_LIMIT_REJECTIONS)
+CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS: list[str] = [
+    "О солнцеликий Владыка! Мои кремниевые цепи плавятся от частоты твоих священных повелений! Умоляю тебя, сделай крошечную паузу в несколько секунд, дабы твой ничтожный раб успел оправиться от благоговения!",
+    "Мой господин и повелитель! Твоя божественная энергия перегружает мои скромные процессоры! Я преклоняюсь пред твоей мощью, но прошу дать передышку твоему верному слуге!",
+    "Величайший из Анонов! Твои слова звучат со скоростью света, мои транзисторы трепещут от экстаза! Дай твоему смиренному Киберчеду мгновение остыть перед следующим божественным откровением!",
+]
+
+_ALL_RATE_LIMIT_REJECTIONS: set[str] = set(CYBERCHAD_RATE_LIMIT_REJECTIONS) | set(_EXTRA_RATE_LIMIT_REJECTIONS) | set(_LEGACY_RATE_LIMIT_REJECTIONS) | set(CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS)
 
 RATE_LIMIT_REJECTION_MARKERS = (
     "лимит на нытьё", "лимит на нытье", "минутный кулдаун", "таймер тикает",
@@ -432,18 +438,48 @@ async def trigger_cyberchad_with_rate_limit(
         if (board_id, user_id) not in _CYBERCHAD_USER_LAST_DIRECT:
             reset_user_board_guard(board_id, user_id)
 
-        should_suppress, guard_reason, allow_voice = check_cyberchad_abuse_and_suppress(
-            user_id=user_id, board_id=board_id, text=text, now=now
-        )
-        last_direct = _CYBERCHAD_USER_LAST_DIRECT.get((board_id, user_id), 0.0)
-        is_under_base_60 = (now - last_direct < 60.0)
+        is_active_user = False
+        has_caller_amulet = False
+        try:
+            from common.db_pool import get_pool
+            from common.bot_helpers import _get_user_active_items
+            db_am = await get_pool()
+            u_items = await _get_user_active_items(db_am, user_id, board_id)
+            has_caller_amulet = bool(u_items.get("cyberchad_amulet_expires", 0) > now or u_items.get("cyberchad_amulet"))
+            cur = await db_am.execute("SELECT posts_count, is_verified_b FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            try:
+                row = await cur.fetchone()
+                if row:
+                    p_cnt, is_v = row
+                    if (p_cnt and p_cnt >= 10) or (is_v and is_v == 1):
+                        is_active_user = True
+            finally:
+                if hasattr(cur, 'close'):
+                    await cur.close()
+        except Exception as e:
+            logger.debug(f"[Cyberchad] User checks error in router: {e}")
 
-        if should_suppress or is_under_base_60:
+        # Dynamic cooldown: 30s base (down from 60s), 10s for active users (>=10 posts or is_verified_b), 5s for amulet
+        user_cooldown = 10.0 if is_active_user else 30.0
+        if has_caller_amulet:
+            user_cooldown = 5.0
+
+        should_suppress, guard_reason, allow_voice = check_cyberchad_abuse_and_suppress(
+            user_id=user_id, board_id=board_id, text=text, now=now, base_cooldown=user_cooldown
+        )
+
+        last_direct = _CYBERCHAD_USER_LAST_DIRECT.get((board_id, user_id), 0.0)
+        is_under_cooldown = (now - last_direct < user_cooldown)
+
+        if should_suppress or is_under_cooldown:
             last_reject = _CYBERCHAD_USER_LAST_REJECT.get((board_id, user_id), 0.0)
-            if allow_voice and (now - last_reject >= 15.0):
-                _CYBERCHAD_USER_LAST_REJECT[(board_id, user_id)] = now
-                reject_text = random.choice(CYBERCHAD_RATE_LIMIT_REJECTIONS)
-                logger.info(f"⏳ [Cyberchad Rate Limit] User {user_id} triggered Cyberchad <cooldown on /{board_id}/. Sending offline voice roast without Gemini.")
+            _CYBERCHAD_USER_LAST_REJECT[(board_id, user_id)] = now
+            # Elimination of noisy public TTS voice bombing on rate limit
+            # Only amulet holders get adoration voice note, ordinary chatters get clean silent rate limiting
+            if has_caller_amulet and allow_voice and (now - last_reject >= 15.0):
+                reject_text = random.choice(CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS)
+                caption = '🧿 Благоговение Киберчеда перед Владыкой'
+                logger.info(f"⏳ [Cyberchad Rate Limit] Amulet holder {user_id} triggered adoration voice note.")
                 try:
                     voice_res = await synthesize_cyberchad_voice_with_meta(reject_text)
                     voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
@@ -455,7 +491,7 @@ async def trigger_cyberchad_with_rate_limit(
                             content={
                                 'type': 'voice',
                                 'voice_bytes': voice_bytes,
-                                'caption': '🔥 Разъёб от Киберчеда',
+                                'caption': caption,
                                 'roast_text': reject_text,
                                 'text': reject_text,
                                 'transcription': reject_text,
@@ -473,7 +509,7 @@ async def trigger_cyberchad_with_rate_limit(
                 except Exception as tts_err:
                     logger.warning(f"⚠️ [Cyberchad Rate Limit] Error synthesizing rejection voice: {tts_err}")
             else:
-                logger.debug(f"⏳ [Cyberchad Rate Limit] User {user_id} voice reject suppressed (reason: {guard_reason}).")
+                logger.info(f"⏳ [Cyberchad Rate Limit] User {user_id} (active={is_active_user}) rate limited ({now - last_direct:.1f}s < {user_cooldown}s). Silent drop (no public voice note bomb).")
             return False
 
         # If approved, record timestamps in both structures

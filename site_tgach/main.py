@@ -4376,9 +4376,9 @@ async def overboard_page(
     sort_mode = request.query_params.get("sort", "bump")
     if sort_mode not in ["bump", "new", "random"]:
         sort_mode = "bump"
-    view_mode = request.query_params.get("view", "threads")
+    view_mode = request.query_params.get("view", "posts")
     if view_mode not in ["threads", "posts", "all"]:
-        view_mode = "threads"
+        view_mode = "posts"
 
     selected_boards = request.query_params.getlist("boards") or None
     boards_key = ",".join(sorted(selected_boards)) if selected_boards else "all"
@@ -4395,44 +4395,41 @@ async def overboard_page(
     posts = []
     is_skeleton = False
 
-    if is_bot:
-        observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
-        if view_mode == "threads":
-            raw_posts = await get_op_posts_for_board(
-                selected_boards,
-                sort_by=sort_mode,
-                page=1,
-                page_size=50,
-                stream=request.state.stream,
-                observer_id=observer_id,
-                ignore_pin=True,
-                reply_limit=2,
-            )
-        elif view_mode == "posts":
-            raw_posts = await get_global_feed_posts(
-                selected_boards,
-                page=1,
-                page_size=50,
-                stream=request.state.stream,
-                observer_id=observer_id,
-                include_chat=False,
-                sort_by=sort_mode,
-            )
-        else:
-            raw_posts = await get_global_feed_posts(
-                selected_boards,
-                page=1,
-                page_size=50,
-                stream=request.state.stream,
-                observer_id=observer_id,
-                include_chat=True,
-                sort_by=sort_mode,
-            )
-        posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
-        is_ru = await is_request_from_ru(request)
-        await enrich_extra_data(posts, is_ru=is_ru)
+    observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
+    if view_mode == "threads":
+        raw_posts = await get_op_posts_for_board(
+            selected_boards,
+            sort_by=sort_mode,
+            page=1,
+            page_size=50,
+            stream=request.state.stream,
+            observer_id=observer_id,
+            ignore_pin=True,
+            reply_limit=2,
+        )
+    elif view_mode == "posts":
+        raw_posts = await get_global_feed_posts(
+            selected_boards,
+            page=1,
+            page_size=50,
+            stream=request.state.stream,
+            observer_id=observer_id,
+            include_chat=False,
+            sort_by=sort_mode,
+        )
     else:
-        is_skeleton = True
+        raw_posts = await get_global_feed_posts(
+            selected_boards,
+            page=1,
+            page_size=50,
+            stream=request.state.stream,
+            observer_id=observer_id,
+            include_chat=True,
+            sort_by=sort_mode,
+        )
+    posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
+    is_ru = await is_request_from_ru(request)
+    await enrich_extra_data(posts, is_ru=is_ru)
 
     lang = getattr(request.state, "lang", "ru")
     local_boards = localize_boards(lang)

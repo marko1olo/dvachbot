@@ -29,6 +29,8 @@ MSK = timezone(timedelta(hours=3))
 
 # Конфигурация экономики аирдропа
 MIN_WEEKLY_POOL = 200_000.0      # Минимальный гарантированный фонд недели в шекелях
+MAX_WEEKLY_POOL = 2_500_000.0    # Разумный верхний кап пула недели (защита от чрезмерного опустошения)
+ABU_FUND_SHARE_RATE = 0.06       # Динамическая доля из Казны Яхты Абу (6%, диапазон 5-8%)
 POST_BONUS_RATE = 30.0           # Дополнительно шекелей в пул за каждый пост недели (~500k при 10k постов)
 MIN_POSTS_REQUIRED = 3           # Минимальный порог постов за неделю для участия
 POWER_EXPONENT = 0.65            # Сублинейный коэффициент сглаживания (Diminishing returns)
@@ -95,10 +97,20 @@ async def fetch_weekly_contributors(db, days: int = 7, min_posts: int = MIN_POST
     return results
 
 
-def calculate_weekly_pool(total_posts_week: int) -> float:
-    """Рассчитывает суммарный размер недельного пула шекелей."""
-    dynamic_bonus = max(0, total_posts_week) * POST_BONUS_RATE
-    return round(MIN_WEEKLY_POOL + dynamic_bonus, 2)
+def calculate_weekly_pool(total_posts_week: int, abu_fund_total: float = 0.0) -> float:
+    """
+    Рассчитывает суммарный размер недельного пула шекелей:
+    - Базовый фонд динамически масштабируется от Казны Яхты Абу (ABU_FUND_SHARE_RATE = 6%, в диапазоне 5-8%).
+    - Добавляет активность авторов (POST_BONUS_RATE = 30 ₪ за каждый пост недели).
+    - Гарантирует минимальный порог MIN_WEEKLY_POOL = 200_000 ₪.
+    - Ограничен разумным капом MAX_WEEKLY_POOL = 2_500_000 ₪, чтобы фонд возвращал шекели анонам,
+      замедляя рост казны Абу, но не опустошая её залпом.
+    """
+    post_bonus = max(0, total_posts_week) * POST_BONUS_RATE
+    fund_component = max(0.0, abu_fund_total) * ABU_FUND_SHARE_RATE if abu_fund_total > 0 else 0.0
+    raw_pool = max(MIN_WEEKLY_POOL, fund_component) + post_bonus
+    pool = min(raw_pool, MAX_WEEKLY_POOL)
+    return round(pool, 2)
 
 
 def compute_airdrop_allocations(
@@ -362,10 +374,9 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
         return {"status": "skipped", "reason": "no_contributors"}
 
     total_posts_week = sum(c["posts_count"] for c in contributors)
-    total_pool = calculate_weekly_pool(total_posts_week)
-
     # Проверяем баланс Казны Яхты Абу (закрытый контур экономики)
     current_fund = await get_abu_fund_total(db)
+    total_pool = calculate_weekly_pool(total_posts_week, abu_fund_total=current_fund)
     if current_fund > 0 and total_pool > current_fund:
         total_pool = round(current_fund * 0.5, 2)
 

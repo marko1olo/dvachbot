@@ -3863,6 +3863,7 @@ BASE_SHOP_PRICES = {
     'tinfoil': 450,
     'ksiva_polkovnik': 650,
     'badge_druzhinnik': 400,
+    'cyberchad_amulet': 2500,
     # 👗 Гардероб и шмот
     'prefix': 350,
     'badge_color': 500,
@@ -4128,6 +4129,7 @@ def _build_pharma_shop_content(user_id: int, balance: float):
     p_foil = get_current_item_price('tinfoil')
     p_ksiva = get_current_item_price('ksiva_polkovnik')
     p_druzh = get_current_item_price('badge_druzhinnik')
+    p_amulet = get_current_item_price('cyberchad_amulet')
 
     text = (
         f"💊 <b>АПТЕКА, ЗАЩИТА И КОРРУПЦИЯ</b>\n"
@@ -4137,7 +4139,8 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         f"3. 📜 <b>Взятка модератору</b> — <i>{p_bribe} ₪</i> (Моментально снимает обычный мут. Команда: /bribe)\n"
         f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Пассивная защита от грабежа и говна)\n"
         f"5. 🎖️ <b>Ксива полковника</b> — <i>{p_ksiva} ₪</i> (100% спасение от облавы пативана)\n"
-        f"6. 🪪 <b>Удостоверение дружинника (7д)</b> — <i>{p_druzh} ₪</i> (Штрафы анонов /fine)"
+        f"6. 🪪 <b>Удостоверение дружинника (7д)</b> — <i>{p_druzh} ₪</i> (Штрафы анонов /fine)\n"
+        f"7. 🧿 <b>Оберег от Киберчеда (7д)</b> — <i>{p_amulet} ₪</i> (Киберчед падает ниц, трепещет и пафосно восхваляет тебя вместо роаста!)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4151,6 +4154,9 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         [
             InlineKeyboardButton(text=f"🎖️ Ксива полковника ({p_ksiva}₪)", callback_data="shop_buy_ksiva_polkovnik"),
             InlineKeyboardButton(text=f"🪪 Дружинник ({p_druzh}₪)", callback_data="shop_buy_badge_druzhinnik")
+        ],
+        [
+            InlineKeyboardButton(text=f"🧿 Оберег от Киберчеда ({p_amulet}₪)", callback_data="shop_buy_cyberchad_amulet")
         ],
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
     ])
@@ -4516,6 +4522,23 @@ async def cb_banners_noop(callback: types.CallbackQuery):
 
 
 
+_MENU_MESSAGE_OWNERS: dict[tuple[int, int], int] = {}
+
+def _record_menu_owner(chat_id: int, message_id: int, owner_id: int) -> None:
+    if len(_MENU_MESSAGE_OWNERS) > 5000:
+        for k in list(_MENU_MESSAGE_OWNERS.keys())[:1000]:
+            _MENU_MESSAGE_OWNERS.pop(k, None)
+    _MENU_MESSAGE_OWNERS[(chat_id, message_id)] = owner_id
+
+def _check_menu_owner(callback: types.CallbackQuery) -> bool:
+    if not callback.message:
+        return True
+    owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id))
+    if owner_id and callback.from_user.id != owner_id:
+        return False
+    return True
+
+
 @dp.message(Command("shop", "store", "магазин", ignore_case=True, ignore_mention=True))
 async def cmd_shop(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -4525,7 +4548,7 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
     text, kb = _build_main_shop_hub(user_id, balance)
 
     from banner_manager import send_banner_message
-    await send_banner_message(
+    sent_msg = await send_banner_message(
         bot=message.bot,
         chat_id=message.chat.id,
         caption=text,
@@ -4533,6 +4556,8 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
         category="shop",
         parse_mode="HTML"
     )
+    if sent_msg and hasattr(sent_msg, 'message_id'):
+        _record_menu_owner(sent_msg.chat.id, sent_msg.message_id, user_id)
     try: await message.delete()
     except Exception: pass
 
@@ -4787,6 +4812,9 @@ async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None)
 @dp.callback_query(F.data == "shop_main_hub")
 async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
@@ -4798,6 +4826,9 @@ async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
 @dp.callback_query(F.data == "shop_cat_weapons")
 async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
@@ -4809,6 +4840,9 @@ async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
 @dp.callback_query(F.data == "shop_cat_clothes")
 async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
@@ -4820,6 +4854,9 @@ async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
 @dp.callback_query(F.data == "shop_cat_pharma")
 async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
@@ -4831,6 +4868,9 @@ async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None
 @dp.callback_query(F.data == "shop_cat_lootbox")
 async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
@@ -4843,6 +4883,9 @@ async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
 @dp.callback_query(F.data == "shop_cat_color")
 async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
@@ -5505,6 +5548,9 @@ INSUFFICIENT_FUNDS_EXCUSES = [
 @dp.callback_query(F.data.startswith("shop_buy_"))
 async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
+    if not _check_menu_owner(callback):
+        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        return
     user_id = callback.from_user.id
     item = callback.data.replace("shop_buy_", "")
     db = await get_pool()
@@ -5804,6 +5850,16 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             active_items["badge_druzhinnik_expires"] = new_until
             days = round((new_until - now) / 86400, 1)
             msg = f"🪪 Ты получил Удостоверение дружинника на {days} дн.! Теперь ты можешь штрафовать нарушителей в тредах командой /fine (раз в сутки)."
+
+        elif item == "cyberchad_amulet":
+            max_cap = now + 30 * 86400
+            current_am = active_items.get("cyberchad_amulet_expires", 0)
+            base = current_am if current_am > now else now
+            new_until = min(base + 7 * 86400, max_cap)
+            active_items["cyberchad_amulet_expires"] = new_until
+            active_items["cyberchad_amulet"] = True
+            days = round((new_until - now) / 86400, 1)
+            msg = f"🧿 Ты надел Оберег от Киберчеда на {days} дн.! Теперь альфа-доминант падает ниц, трепещет и пафосно восхваляет тебя при любом триггере!"
 
         # --- 3. CLOTHING & APPAREL ---
         elif item.startswith("hat_") or item.startswith("body_") or item.startswith("face_") or item.startswith("feet_"):
@@ -8996,7 +9052,7 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     # Атомарная транзакция
-    async with db_lock:
+    async with db_transaction(db):
         sender_bal_fresh = await get_user_global_balance(db, sender_id)
         if sender_bal_fresh < total_deduct:
             await message.reply("❌ Недостаточно средств на момент проведения транзакции.", parse_mode="HTML")
@@ -9013,7 +9069,6 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         await record_user_transaction(db, sender_id, -total_deduct, 'pay', f'Перевод анону [{target_anon}] (Налог Абу: {fee} ₪)')
         await record_user_transaction(db, target_user_id, amount, 'pay', f'Перевод от анона [{sender_anon}]')
         receiver_bal = await get_user_global_balance(db, target_user_id)
-        await db.commit()
 
     flavors = [
         "Шекели успешно перекочевали в чужой карман.",
@@ -9053,12 +9108,15 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
 # ══════════════════════════════════════════════════════════════════════════════
 # /top — графическая карточка топ анонов (Богачи, Шитпостеры, Реакции)
 # ══════════════════════════════════════════════════════════════════════════════
-def get_leaderboard_keyboard(board_id: str, current_mode: str) -> InlineKeyboardMarkup:
+def get_leaderboard_keyboard(board_id: str, current_mode: str, caller_id: int | None = None) -> InlineKeyboardMarkup:
     btn_bal = "• 💰 Богачи •" if current_mode == "balance" else "💰 Богачи"
     btn_posts = "• 📝 Шитпостеры •" if current_mode == "posts" else "📝 Шитпостеры"
     btn_rx = "• 🎭 Реакции •" if current_mode == "reactions" else "🎭 Реакции"
     btn_music = "• 💩 Говноеды •" if current_mode == "music" else "💩 Говноеды"
     
+    prof_cb = f"prof_card:{caller_id}" if caller_id else "prof_card"
+    ledger_cb = f"prof_ledger:{caller_id}" if caller_id else "prof_ledger"
+
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=btn_bal, callback_data="top_switch_balance"),
@@ -9067,8 +9125,8 @@ def get_leaderboard_keyboard(board_id: str, current_mode: str) -> InlineKeyboard
         ],
         [
             InlineKeyboardButton(text=btn_music, callback_data="top_switch_music"),
-            InlineKeyboardButton(text="🪪 Мой паспорт", callback_data="prof_card"),
-            InlineKeyboardButton(text="🧾 Выписка", callback_data="prof_ledger")
+            InlineKeyboardButton(text="🪪 Мой паспорт", callback_data=prof_cb),
+            InlineKeyboardButton(text="🧾 Выписка", callback_data=ledger_cb)
         ],
         [
             InlineKeyboardButton(text="🚢 Фонд Абу", callback_data="abu_fund_refresh")
@@ -9100,8 +9158,10 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
         photo_buf, caption_text = await loop.run_in_executor(None, generate_leaderboard_payload, board_id, mode, caller_id)
         
         photo = BufferedInputFile(photo_buf.getvalue(), filename=f"leaderboard_{mode}.png")
-        kb = get_leaderboard_keyboard(board_id, mode)
-        await message.answer_photo(photo, caption=caption_text, reply_markup=kb, parse_mode="HTML")
+        kb = get_leaderboard_keyboard(board_id, mode, caller_id=caller_id)
+        sent = await message.answer_photo(photo, caption=caption_text, reply_markup=kb, parse_mode="HTML")
+        if sent and hasattr(sent, 'message_id'):
+            _record_menu_owner(sent.chat.id, sent.message_id, caller_id)
     except Exception as e:
         runtime_logger.warning("Error generating leaderboard card: %s", e)
         await message.answer("⚠️ Не удалось сформировать карточку лидеров.")
@@ -9125,7 +9185,8 @@ async def cb_top_switch(callback: types.CallbackQuery, board_id: str | None):
         photo_buf, caption_text = await loop.run_in_executor(None, generate_leaderboard_payload, board_id, mode, caller_id)
         
         photo = BufferedInputFile(photo_buf.getvalue(), filename=f"leaderboard_{mode}.png")
-        kb = get_leaderboard_keyboard(board_id, mode)
+        owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id), caller_id) if callback.message else caller_id
+        kb = get_leaderboard_keyboard(board_id, mode, caller_id=owner_id)
 
         if callback.message.photo:
             await callback.message.edit_media(
@@ -11151,6 +11212,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             check_reaction_delay=True,
             check_claimer_rate_limit=True,
             check_farm_laundering=True,
+            check_anti_snipe=True,
             min_reaction_delay=1.0,
         )
         if not ok:
@@ -11368,29 +11430,36 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         return
 
     db = await get_pool()
-    balance = await get_user_global_balance(db, user_id)
-    if balance < bet:
-        no_funds_caption = f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку."
-        if message_to_edit:
-            try:
-                kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
-                await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except Exception:
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+        if balance < bet:
+            no_funds_caption = f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку."
+            if message_to_edit:
                 try:
-                    await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                    kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
+                    await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
                     return
                 except Exception:
-                    pass
-        from banner_manager import send_banner_message
-        await send_banner_message(
-            bot=bot,
-            chat_id=chat_id,
-            caption=no_funds_caption,
-            category="slots",
-            parse_mode="HTML"
-        )
-        return
+                    try:
+                        await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                        return
+                    except Exception:
+                        pass
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=bot,
+                chat_id=chat_id,
+                caption=no_funds_caption,
+                category="slots",
+                parse_mode="HTML"
+            )
+            return
+
+        ok, balance = await deduct_user_global_balance(db, user_id, board_id, bet)
+        if not ok:
+            return
+        await record_user_transaction(db, user_id, -bet, 'casino', f'Ставка в Слоты 777 (ставка {bet} ₪)')
+        await db.commit()
 
     # 1-second slot spinning animation in place
     if message_to_edit:
@@ -11414,9 +11483,6 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
     tax_note = ""
     rake_note = ""
     async with db_lock:
-        balance = await get_user_global_balance(db, user_id)
-        if balance < bet:
-            return
 
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
@@ -11453,13 +11519,16 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                 await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (user_items["custom_title"], user_items["title_expires_at"], user_id))
             lootbox_bonus_note = f"\n📦 <b>БОНУС СЛОТОВ:</b> Открыт Мусорный Лутбокс: <b>{lb_title}</b> (+{final_cash} ₪)!"
 
-        if net_change > 0:
-            tax_amt, actual_profit = calculate_win_tax(net_change)
-            if tax_amt > 0:
-                await add_to_abu_fund(db, int(tax_amt))
-                tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
-            new_balance = await add_user_global_balance(db, user_id, board_id, actual_profit)
-            await record_user_transaction(db, user_id, actual_profit, 'casino', f'Выигрыш в Слоты 777 (ставка {bet} ₪)')
+        if win_amt > 0:
+            tax_amt = 0
+            if net_change > 0:
+                tax_amt, _ = calculate_win_tax(net_change)
+                if tax_amt > 0:
+                    await add_to_abu_fund(db, int(tax_amt))
+                    tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
+            payout = win_amt - int(tax_amt)
+            new_balance = await add_user_global_balance(db, user_id, board_id, payout)
+            await record_user_transaction(db, user_id, payout, 'casino', f'Выигрыш в Слоты 777 (ставка {bet} ₪, множитель x{mult:.1f})')
             if win_amt >= 300000:
                 try:
                     from news_channel_publisher import publish_casino_jackpot_news
@@ -11496,11 +11565,8 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                     spawn_task(process_new_post(params))
                 except Exception:
                     pass
-        elif net_change < 0:
-            ok, new_balance = await deduct_user_global_balance(db, user_id, board_id, abs(net_change))
-            await record_user_transaction(db, user_id, -abs(net_change), 'casino', f'Проигрыш в Слоты 777 (ставка {bet} ₪)')
         else:
-            new_balance = balance
+            new_balance = await get_user_global_balance(db, user_id)
         await db.commit()
 
     kb = casino_engine.get_slots_keyboard(bet, balance=int(new_balance))
@@ -11611,29 +11677,36 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         return
 
     db = await get_pool()
-    balance = await get_user_global_balance(db, user_id)
-    if balance < bet:
-        no_funds_caption = f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
-        if message_to_edit:
-            try:
-                kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
-                await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except Exception:
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+        if balance < bet:
+            no_funds_caption = f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
+            if message_to_edit:
                 try:
-                    await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                    kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
+                    await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
                     return
                 except Exception:
-                    pass
-        from banner_manager import send_banner_message
-        await send_banner_message(
-            bot=bot,
-            chat_id=chat_id,
-            caption=no_funds_caption,
-            category="coinflip",
-            parse_mode="HTML"
-        )
-        return
+                    try:
+                        await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                        return
+                    except Exception:
+                        pass
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=bot,
+                chat_id=chat_id,
+                caption=no_funds_caption,
+                category="coinflip",
+                parse_mode="HTML"
+            )
+            return
+
+        ok, balance = await deduct_user_global_balance(db, user_id, board_id, bet)
+        if not ok:
+            return
+        await record_user_transaction(db, user_id, -bet, 'casino', f'Ставка в Монетку (ставка {bet} ₪)')
+        await db.commit()
 
     # In-place coinflip animation
     if message_to_edit:
@@ -11655,10 +11728,6 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
     tax_note = ""
     rake_note = ""
     async with db_lock:
-        balance = await get_user_global_balance(db, user_id)
-        if balance < bet:
-            return
-
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
         if rake > 0:
@@ -11669,13 +11738,16 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         win_amt = int(bet * mult)
         net_change = win_amt - bet
 
-        if net_change > 0:
-            tax_amt, actual_profit = calculate_win_tax(net_change)
-            if tax_amt > 0:
-                await add_to_abu_fund(db, int(tax_amt))
-                tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
-            new_balance = await add_user_global_balance(db, user_id, board_id, actual_profit)
-            await record_user_transaction(db, user_id, actual_profit, 'casino', f'Выигрыш в Монетку (ставка {bet} ₪)')
+        if win_amt > 0:
+            tax_amt = 0
+            if net_change > 0:
+                tax_amt, _ = calculate_win_tax(net_change)
+                if tax_amt > 0:
+                    await add_to_abu_fund(db, int(tax_amt))
+                    tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
+            payout = win_amt - int(tax_amt)
+            new_balance = await add_user_global_balance(db, user_id, board_id, payout)
+            await record_user_transaction(db, user_id, payout, 'casino', f'Выигрыш в Монетку (ставка {bet} ₪)')
             user_items = await _get_user_active_items(db, user_id, board_id)
             from achievements_engine import check_and_unlock_achievement
             unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_coin_streak")
@@ -11724,11 +11796,8 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
                     spawn_task(process_new_post(params))
                 except Exception:
                     pass
-        elif net_change < 0:
-            ok, new_balance = await deduct_user_global_balance(db, user_id, board_id, abs(net_change))
-            await record_user_transaction(db, user_id, -abs(net_change), 'casino', f'Проигрыш в Монетку (ставка {bet} ₪)')
         else:
-            new_balance = balance
+            new_balance = await get_user_global_balance(db, user_id)
         await db.commit()
 
     kb = casino_engine.get_coinflip_keyboard(bet, balance=int(new_balance))
@@ -12778,11 +12847,26 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     except (TelegramBadRequest, TelegramForbiddenError): pass
 
 
-@dp.callback_query(F.data == "prof_card")
+@dp.callback_query(F.data.startswith("prof_card"))
 async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = callback.from_user.id
     username = callback.from_user.username or callback.from_user.first_name or "Аноним"
+
+    # Anti-hijacking ownership check
+    owner_id = None
+    if ":" in callback.data:
+        try:
+            owner_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            pass
+    if not owner_id and callback.message:
+        owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id))
+
+    if owner_id and user_id != owner_id:
+        await callback.answer("⛔ Это чужая карточка! Вызови свой паспорт командой /top или /profile", show_alert=True)
+        return
+
     await callback.answer("🔄 Обновляю паспорт...", show_alert=False)
 
     from stats_generator import generate_user_stats_card
@@ -13248,10 +13332,14 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
     if len(recent_posts) < limit:
         db = await get_pool()
         needed = limit - len(recent_posts)
-        exclude_clause = f"AND post_num != {exclude_post_num}" if exclude_post_num else ""
-        query = f"SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? {exclude_clause} ORDER BY post_num DESC LIMIT ?"
+        if exclude_post_num is not None:
+            query = "SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? AND post_num != ? ORDER BY post_num DESC LIMIT ?"
+            params = (board_id, int(exclude_post_num), needed)
+        else:
+            query = "SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT ?"
+            params = (board_id, needed)
         try:
-            async with db.execute(query, (board_id, needed)) as cursor:
+            async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 for row in rows:
                     pnum, author_id, content_raw, ts = row
@@ -18170,7 +18258,7 @@ async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: s
 @dp.callback_query(F.data.startswith("menu_"))
 async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     await state.clear()
-    if not board_id: return
+    board_id = board_id or 'b'
     action = callback.data.split("_")[1]
     user_id = callback.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -18192,12 +18280,21 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         menu_text = await build_menu_header_text(user_id, board_id, stream=stream)
         kb = get_quick_menu_keyboard(board_id, stream=stream)
         try:
-            if callback.message.caption is not None:
+            if callback.message.caption is not None or callback.message.photo:
                 await callback.message.edit_caption(caption=menu_text, reply_markup=kb, parse_mode="HTML")
             else:
                 await callback.message.edit_text(menu_text, reply_markup=kb, parse_mode="HTML")
-        except TelegramBadRequest:
-            pass
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                try:
+                    await callback.message.answer(menu_text, reply_markup=kb, parse_mode="HTML")
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                await callback.message.answer(menu_text, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
     elif action == "profile":
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
         await cmd_passport(fake_msg, board_id)
@@ -27996,6 +28093,13 @@ async def cmd_ledger(message: types.Message, board_id: str | None, stream: str =
 async def cb_prof_ledger(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     user_id = callback.from_user.id
+
+    # Anti-hijacking ownership check
+    if callback.message:
+        owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id))
+        if owner_id and user_id != owner_id:
+            await callback.answer("⛔ Это чужая выписка! Вызови свою команду /top или /profile", show_alert=True)
+            return
     parts = callback.data.split(":")
     offset = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
 

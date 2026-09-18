@@ -14,8 +14,8 @@ from ai_manager import (
 )
 
 
-def test_broadcaster_cyberchad_voice_post_never_duplicates_transcript():
-    """Verify broadcaster._format_main_text formats voice posts as '🔥 Разъёб от Киберчеда' and never spoken transcript."""
+def test_broadcaster_cyberchad_voice_post_no_spoiler_transcript():
+    """Verify broadcaster._format_main_text formats voice posts with header only, omitting hidden spoiler transcript."""
     # 1. Standard Cyberchad voice post with caption
     content1 = {
         "type": "voice",
@@ -27,6 +27,7 @@ def test_broadcaster_cyberchad_voice_post_never_duplicates_transcript():
     }
     formatted1 = _format_main_text(content1)
     assert formatted1 == "🔥 Разъёб от Киберчеда"
+    assert "<tg-spoiler>" not in formatted1
     assert "биомусора" not in formatted1
 
     # 2. Cyberchad voice post without caption
@@ -38,9 +39,20 @@ def test_broadcaster_cyberchad_voice_post_never_duplicates_transcript():
     }
     formatted2 = _format_main_text(content2)
     assert formatted2 == "🔥 Разъёб от Киберчеда"
+    assert "<tg-spoiler>" not in formatted2
     assert "биомусора" not in formatted2
 
-    # 3. Regular non-cyberchad user post with text (should format text normally)
+    # 3. Cyberchad voice post with legacy spoiler in caption (should strip spoiler)
+    content_spoiler = {
+        "type": "voice",
+        "caption": "🔥 Разъёб от Киберчеда\n\n<tg-spoiler>📝 <i>спойлер</i></tg-spoiler>",
+        "is_cyberchad": True
+    }
+    formatted_sp = _format_main_text(content_spoiler)
+    assert formatted_sp == "🔥 Разъёб от Киберчеда"
+    assert "<tg-spoiler>" not in formatted_sp
+
+    # 4. Regular non-cyberchad user post with text (should format text normally)
     content3 = {
         "type": "text",
         "text": "Обычный текст поста от анона"
@@ -79,7 +91,8 @@ async def test_music_roast_rate_limit_5_per_hour_rejects_6th_track_to_pm():
         msg.media_group_id = None
         return msg
 
-    with patch("ai_manager.httpx.AsyncClient") as mock_httpx, \
+    with patch("ai_manager.MUSIC_ROASTS_ENABLED", True), \
+         patch("ai_manager.httpx.AsyncClient") as mock_httpx, \
          patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock) as mock_sum, \
          patch("common.token_pool.google_pool.get_all_active_tokens", return_value=["fake-key"]), \
          patch("common.bot_helpers.process_new_post", new_callable=AsyncMock) as mock_post:

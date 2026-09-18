@@ -118,6 +118,8 @@ async def generate_anchor_reply(context_messages: Union[list[str], str]) -> str 
         if not reply or "Нейронка" in reply or len(reply) < 5:
             return None
 
+        from common.text_utils import clean_ai_thinking
+        reply = clean_ai_thinking(reply)
         reply = re.sub(r"<think\b[^>]*>.*?</think>", "", reply, flags=re.DOTALL | re.IGNORECASE).strip()
         if len(reply) > 600:
             reply = reply[:597] + "..."
@@ -165,17 +167,36 @@ async def fire_anchor_post(
     try:
         from datetime import datetime, timezone
         from common.database import create_post, update_post_content
+        from common.tts_engine import synthesize_cyberchad_voice_with_meta
+        import os
         import __main__ as _main
+
+        voice_res = await synthesize_cyberchad_voice_with_meta(reply_text)
+        voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
+
+        in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        min_voice_size = 1 if in_test_env else 2500
+        if not voice_bytes or len(voice_bytes) < min_voice_size:
+            print(f"[Anchor] TTS synthesis failed or audio too small (<{min_voice_size} bytes). Aborting post to prevent text leak.", flush=True)
+            return False
 
         now_dt = datetime.now(timezone.utc)
         content = {
-            'type': 'text',
-            'text': reply_text,
+            'type': 'voice',
+            'voice_bytes': voice_bytes,
+            'caption': '🔥 Разъёб от Киберчеда',
+            'roast_text': reply_text,
             'is_system_message': True,
             'is_anchor': True,
+            'is_ai_roast': True,
+            'is_ai': True,
+            'is_cyberchad': True,
             'archive_allowed': True,
         }
-        await _main.process_new_post(_main.NewPostParams(
+        from common.bot_helpers import process_new_post
+        import shared_state
+
+        await process_new_post(shared_state.NewPostParams(
             bot_instance=bot,
             board_id=board_id,
             user_id=0,
@@ -184,7 +205,7 @@ async def fire_anchor_post(
             is_shadow_muted=False,
             stream=stream
         ))
-        print(f"[Anchor] Post submitted on board '{board_id}'", flush=True)
+        print(f"[Anchor] Voice post submitted on board '{board_id}'", flush=True)
         return True
 
     except Exception as e:

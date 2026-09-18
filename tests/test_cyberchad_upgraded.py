@@ -358,3 +358,83 @@ class TestSchedulePersonaReplyReplacement:
 
         # Verify execute was called
         mock_instance.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
+    @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
+    @patch("ai_manager.NewPostProcessor")
+    async def test_schedule_persona_reply_aborts_if_tts_fails(
+        self, mock_processor_cls, mock_summarize, mock_synth_meta
+    ):
+        mock_bot = AsyncMock()
+        mock_summarize.return_value = json.dumps({
+            "reply": True,
+            "text": "Пояснил за твой высер по понятиям борды.",
+            "reason_if_skipped": "",
+            "generate_image": False,
+            "image_prompt": ""
+        })
+        # TTS fails
+        mock_synth_meta.return_value = None
+
+        await schedule_persona_reply(
+            bot=mock_bot,
+            board_id="b",
+            target_post_num=777,
+            context_text="киберчед ответь на этот пост",
+            stream="ru",
+            is_admin_trigger=True
+        )
+
+        # Must abort and NOT construct or execute NewPostProcessor
+        assert mock_processor_cls.call_count == 0
+
+
+class TestAnchorBotVoiceSynthesis:
+    """Tests that anchor_bot fires strictly voice messages and aborts if TTS fails."""
+
+    @pytest.mark.asyncio
+    @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
+    @patch("anchor_bot.generate_anchor_reply", new_callable=AsyncMock)
+    @patch("anchor_bot.asyncio.sleep", new_callable=AsyncMock)
+    async def test_anchor_bot_voice_success(self, mock_sleep, mock_gen_reply, mock_synth):
+        import anchor_bot
+        mock_bot = AsyncMock()
+        mock_gen_reply.return_value = "Завалите ебальники, сычи."
+        mock_synth.return_value = (b"CYBERCHAD_VOICE_BYTES_ANCHOR", CYBERCHAD_PRESETS["classic"])
+
+        with patch("common.bot_helpers.process_new_post", new_callable=AsyncMock) as mock_process:
+            res = await anchor_bot.fire_anchor_post(
+                bot=mock_bot,
+                board_id="b",
+                stream="ru",
+                recent_messages=["тест"]
+            )
+            assert res is True
+            assert mock_process.call_count == 1
+            params = mock_process.call_args[0][0]
+            assert params.content["type"] == "voice"
+            assert params.content["voice_bytes"] == b"CYBERCHAD_VOICE_BYTES_ANCHOR"
+            assert params.content["caption"] == "🔥 Разъёб от Киберчеда"
+            assert params.content["is_cyberchad"] is True
+            assert params.content["is_anchor"] is True
+
+    @pytest.mark.asyncio
+    @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
+    @patch("anchor_bot.generate_anchor_reply", new_callable=AsyncMock)
+    @patch("anchor_bot.asyncio.sleep", new_callable=AsyncMock)
+    async def test_anchor_bot_aborts_on_tts_failure(self, mock_sleep, mock_gen_reply, mock_synth):
+        import anchor_bot
+        mock_bot = AsyncMock()
+        mock_gen_reply.return_value = "Завалите ебальники, сычи."
+        mock_synth.return_value = None  # Failed TTS
+
+        with patch("common.bot_helpers.process_new_post", new_callable=AsyncMock) as mock_process:
+            res = await anchor_bot.fire_anchor_post(
+                bot=mock_bot,
+                board_id="b",
+                stream="ru",
+                recent_messages=["тест"]
+            )
+            assert res is False
+            assert mock_process.call_count == 0

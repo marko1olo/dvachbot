@@ -348,3 +348,43 @@ class TestVisionCascade:
             images_data=[b"fake_jpeg"],
         )
         assert finish_reason == "safety"
+
+    @pytest.mark.asyncio
+    async def test_neuro_moderator_404_resilience(self):
+        """When Groq or Gemini returns 404, _safe_groq_json penalizes token and doesn't retry in tight loop."""
+        from site_tgach.neuro_moderator import _safe_groq_json
+        from common.token_pool import groq_pool
+        from unittest.mock import patch, AsyncMock
+
+        mock_resp_404 = MagicMock()
+        mock_resp_404.status_code = 404
+        mock_resp_404.text = "Model not found"
+
+        with patch("site_tgach.neuro_moderator._execute_groq_post", new_callable=AsyncMock) as mock_post, \
+             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_post.return_value = mock_resp_404
+
+            res = await _safe_groq_json([{"role": "user", "content": "hello"}])
+            assert res is None
+            # Verified asyncio.sleep was called with 2.5s cooldown
+            sleep_calls = [c.args[0] for c in mock_sleep.call_args_list if c.args]
+            assert any(s >= 2.5 for s in sleep_calls)
+
+    @pytest.mark.asyncio
+    async def test_neuro_moderator_429_resilience(self):
+        """When Groq or Gemini returns 429, _safe_groq_json penalizes token and applies 2.5s cooldown."""
+        from site_tgach.neuro_moderator import _safe_groq_json
+        from unittest.mock import patch, AsyncMock
+
+        mock_resp_429 = MagicMock()
+        mock_resp_429.status_code = 429
+        mock_resp_429.text = "Rate limit exceeded"
+
+        with patch("site_tgach.neuro_moderator._execute_groq_post", new_callable=AsyncMock) as mock_post, \
+             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_post.return_value = mock_resp_429
+
+            res = await _safe_groq_json([{"role": "user", "content": "hello"}])
+            assert res is None
+            sleep_calls = [c.args[0] for c in mock_sleep.call_args_list if c.args]
+            assert any(s >= 2.5 for s in sleep_calls)

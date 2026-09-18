@@ -2858,6 +2858,21 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 cringe_factor = (user_id * 17 + posts_count * 3) % 45 + (mutes_count * 10)
                 cringe_factor = min(100, max(0, cringe_factor))
 
+            # 8.5 Duel statistics
+            try:
+                c.execute("""
+                    SELECT 
+                        SUM(CASE WHEN amount > 0 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN amount < 0 THEN 1 ELSE 0 END)
+                    FROM UserTransactions 
+                    WHERE user_id = ? AND type = 'duel'
+                """, (user_id,))
+                d_row = c.fetchone()
+                duel_wins = int(d_row[0] or 0) if d_row else 0
+                duel_losses = int(d_row[1] or 0) if d_row else 0
+            except Exception:
+                duel_wins, duel_losses = 0, 0
+
             # 9. Badges
             badges = []
             if posts_count >= 5000:
@@ -2880,6 +2895,11 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 badges.append("Олигарх")
             elif balance < 15 and posts_count > 50:
                 badges.append("Нищук")
+
+            if duel_wins >= 10:
+                badges.append("Дуэлянт")
+            elif duel_wins >= 1:
+                badges.append("Гладиатор")
 
             now_ts = int(time.time())
             if active_items.get("tinfoil_hat", 0) > now_ts:
@@ -2907,7 +2927,9 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 'avg_len': avg_len,
                 'approval_pct': approval_pct,
                 'badges': badges[:4],
-                'active_items': active_items
+                'active_items': active_items,
+                'duel_wins': duel_wins,
+                'duel_losses': duel_losses
             }
 
 
@@ -2956,6 +2978,8 @@ class UserStatsCardData:
     badges: list = None
     active_items: dict = None
     avatar_file_id: str | None = None
+    duel_wins: int = 0
+    duel_losses: int = 0
 
 
 
@@ -2981,6 +3005,12 @@ def _format_text_report(data: UserStatsCardData) -> str:
         except Exception:
             pass
 
+    duel_line = ""
+    total_duels = data.duel_wins + data.duel_losses
+    if total_duels > 0:
+        winrate = int(round((data.duel_wins / total_duels) * 100))
+        duel_line = f"\n⚔️ <b>PvP-Дуэли:</b> {data.duel_wins}W - {data.duel_losses}L ({winrate}%)"
+
     res = (
         f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/{data.board_id}/)\n\n"
         f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
@@ -2991,7 +3021,8 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"💰 <b>Баланс:</b> <code>{int(data.balance):,} ₪</code>\n"
         f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
         f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n"
-        f"🌙 <b>Хронотип:</b> {data.chronotype}\n\n"
+        f"🌙 <b>Хронотип:</b> {data.chronotype}"
+        f"{duel_line}\n\n"
         f"{wardrobe_line}{set_line}\n\n"
         f"💬 <i>\"{data.slang_comment}\"</i>\n"
         f"💡 <i>Карточка персонажа RPG и гардероб: /avatar</i>"
@@ -3139,7 +3170,9 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str, theme: 
         avg_len=stats_data.get('avg_len', 50),
         approval_pct=stats_data.get('approval_pct', 85),
         badges=stats_data.get('badges', ["Анон"]),
-        active_items=stats_data.get('active_items')
+        active_items=stats_data.get('active_items'),
+        duel_wins=stats_data.get('duel_wins', 0),
+        duel_losses=stats_data.get('duel_losses', 0)
     )
 
     text_report = _format_text_report(card_data)
@@ -3174,7 +3207,9 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
             avg_len=data.get('avg_len', 50),
             approval_pct=data.get('approval_pct', 85),
             badges=data.get('badges', ['Анон']),
-            active_items=data.get('active_items')
+            active_items=data.get('active_items'),
+            duel_wins=data.get('duel_wins', 0),
+            duel_losses=data.get('duel_losses', 0)
         )
 
     if theme == 'auto':
@@ -3299,7 +3334,9 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
         "Ньюфаг": (120, 200, 120, 255),
         "Чист перед законом": (100, 220, 200, 255),
         "Нищук": (150, 160, 170, 255),
-        "С говном": (180, 120, 60, 255)
+        "С говном": (180, 120, 60, 255),
+        "Дуэлянт": (255, 60, 60, 255),
+        "Гладиатор": (220, 100, 60, 255)
     }
 
     badge_list = data.badges if data.badges else ["Анон"]

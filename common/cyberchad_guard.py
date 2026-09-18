@@ -92,25 +92,26 @@ def is_copypasta_looping(board_id: str, user_id: int, text: str) -> bool:
     return False
 
 
-def get_user_progressive_cooldown(board_id: str, user_id: int, now: float) -> float:
+def get_user_progressive_cooldown(board_id: str, user_id: int, now: float, base_cooldown: Optional[float] = None) -> float:
     """
     Calculates adaptive cooldown for a user based on trigger frequency in the last 15 minutes:
-    - 1-2 triggers: 60s base cooldown
+    - 1-2 triggers: base cooldown (default 30s, or 10s for active users)
     - 3 triggers: 300s (5 min) cooldown
     - 4 triggers: 600s (10 min) cooldown
     - 5+ triggers: 1800s (30 min) cooldown
     """
     key = (board_id, user_id)
+    base = base_cooldown if base_cooldown is not None else 30.0
     history = _USER_TRIGGER_HISTORY.get(key)
     if not history:
-        return 60.0
+        return base
     cutoff = now - 900.0
     while history and history[0] < cutoff:
         history.popleft()
 
     count = len(history)
     if count <= 2:
-        return 60.0
+        return base
     elif count == 3:
         return 300.0
     elif count == 4:
@@ -123,7 +124,8 @@ def check_cyberchad_abuse_and_suppress(
     user_id: int,
     board_id: str,
     text: str,
-    now: Optional[float] = None
+    now: Optional[float] = None,
+    base_cooldown: Optional[float] = None
 ) -> Tuple[bool, str, bool]:
     """
     Audits a Cyberchad direct trigger.
@@ -154,7 +156,7 @@ def check_cyberchad_abuse_and_suppress(
         return True, "copypasta_loop_blocked", False
 
     # 4. Check progressive rate limit
-    cooldown = get_user_progressive_cooldown(board_id, user_id, t_now)
+    cooldown = get_user_progressive_cooldown(board_id, user_id, t_now, base_cooldown=base_cooldown)
     history = _USER_TRIGGER_HISTORY.get(key)
     if history:
         last_t = history[-1]

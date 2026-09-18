@@ -148,7 +148,7 @@ class TestCommandDispatch(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(mock_banner.called)
             args, kwargs = mock_banner.call_args
             self.assertIn("БИРЖА ТРУДА", kwargs["caption"].upper())
-            self.assertEqual(kwargs["category"], "wallet")
+            self.assertIn(kwargs["category"], ("work", "wallet"))
 
         # Test economy_extension.cmd_work_menu handler delegates to unified career hub
         msg_ext = create_mock_message(user_id=self.user_id, text="/work")

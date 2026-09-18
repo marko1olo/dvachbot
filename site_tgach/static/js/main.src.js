@@ -2146,7 +2146,7 @@ const PreviewManager = {
             if (existing) {
                 const postContentEl = existing.querySelector('.post-content');
                 if (postContentEl) {
-                    this.render(popup, num, postContentEl.innerHTML, true);
+                    this.render(popup, num, postContentEl.innerHTML, true, false, targetLink.getAttribute('href'));
                     this.recalcPosition(popup, targetLink);
                 }
                 return;
@@ -2174,13 +2174,13 @@ const PreviewManager = {
             }
             const dummyEl = PostRenderer.create(data, 'preview');
             const isCensored = data.content && data.content.is_censored === true;
-            this.render(popup, num, dummyEl.querySelector('.post-content').innerHTML, false, isCensored);
+            this.render(popup, num, dummyEl.querySelector('.post-content').innerHTML, false, isCensored, targetLink.getAttribute('href'));
             this.recalcPosition(popup, targetLink);
         } catch (e) {
             popup.innerHTML = `<div class="post" style="padding:10px; color:var(--action-danger);">${t('preview_not_found').replace('{0}', num)}</div>`;
         }
     },
-    render(popupEl, num, contentHtml, isClone, isCensored = false) {
+    render(popupEl, num, contentHtml, isClone, isCensored = false, targetHref = null) {
         popupEl.innerHTML = `
             <div class="post" style="border:none; box-shadow:none; margin:0; background:transparent;">
                 <div class="post-header">
@@ -2189,8 +2189,43 @@ const PreviewManager = {
                     ${isCensored ? `<span style="color:var(--action-danger); font-size:0.85em; font-weight:bold; margin-left:10px;">[РАЗМЫТО]</span>` : ''}
                 </div>
                 <div class="post-content">${contentHtml}</div>
+                <div class="preview-actions" style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding-top:6px; border-top:1px solid var(--border-separator, rgba(255,255,255,0.1));">
+                    <button type="button" class="btn-jump-post" data-post-num="${num}" style="background:var(--accent-primary, #0088cc); color:#fff; border:none; border-radius:4px; padding:6px 12px; font-size:12px; font-weight:bold; cursor:pointer;">
+                        ↵ Перейти к посту #${num}
+                    </button>
+                    <button type="button" class="btn-close-preview" style="background:transparent; border:1px solid var(--border-input, #444); color:var(--text-secondary, #aaa); border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">
+                        Закрыть
+                    </button>
+                </div>
             </div>`;
         
+        const jumpBtn = popupEl.querySelector('.btn-jump-post');
+        if (jumpBtn) {
+            jumpBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                PreviewManager.closeAll();
+                const targetPost = document.getElementById(`post-${num}`);
+                if (targetPost) {
+                    targetPost.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    targetPost.classList.remove('highlight-target');
+                    void targetPost.offsetWidth;
+                    targetPost.classList.add('highlight-target');
+                    setTimeout(() => targetPost.classList.remove('highlight-target'), 2500);
+                } else if (targetHref && targetHref !== '#' && !targetHref.startsWith('#post-')) {
+                    window.location.href = targetHref;
+                }
+            };
+        }
+        const closeBtn = popupEl.querySelector('.btn-close-preview');
+        if (closeBtn) {
+            closeBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                PreviewManager.closeAll();
+            };
+        }
+
         window.initializePostFeatures(popupEl);
         window.parseTextEffects(popupEl);
         if (typeof SmartLoader !== 'undefined') {
@@ -7812,13 +7847,15 @@ const FormManager = {
         document.addEventListener('paste', this._pasteListener);
     },
     autoResize(el) {
-        if (this._resizeAF) cancelAnimationFrame(this._resizeAF);
-        this._resizeAF = requestAnimationFrame(() => {
+        if (!el) return;
+        if (el._resizeAF) cancelAnimationFrame(el._resizeAF);
+        el._resizeAF = requestAnimationFrame(() => {
             el.style.height = 'auto';
             const scrollH = el.scrollHeight;
             const maxHeight = window.innerHeight * 0.5;
             el.style.height = Math.min(scrollH, maxHeight) + 'px';
             el.style.overflowY = scrollH > maxHeight ? 'auto' : 'hidden';
+            el._resizeAF = null;
         });
     },
     initPollCreator() {
@@ -7977,17 +8014,7 @@ const FormManager = {
             if (replyInput && replyInput.value && !textarea.value.includes('>>' + replyInput.value)) {
                 this.setReplyTo(null);
             }
-            if (this.isSyncing) return;
-            this.isSyncing = true;
             this.autoResize(textarea);
-            this.forms.forEach(otherForm => {
-                const otherTextarea = otherForm.querySelector('textarea');
-                if (otherTextarea && otherTextarea !== textarea) {
-                    otherTextarea.value = textarea.value;
-                    this.autoResize(otherTextarea);
-                }
-            });
-            this.isSyncing = false;
         });
         form.addEventListener('submit', (e) => this.handleSubmit(e, form));
     },
@@ -8062,6 +8089,19 @@ const FormManager = {
                 .replace(/'/g, "&#039;");
         };
 
+        // Revoke any previous object URLs to prevent memory leak
+        this.revokePreviewUrls();
+
+        // Create exactly one object URL per file across all forms
+        const fileUrls = this.selectedFiles.map(file => {
+            if (file && file.type && file.type.startsWith('image/')) {
+                const url = URL.createObjectURL(file);
+                this.previewUrls.add(url);
+                return url;
+            }
+            return null;
+        });
+
         this.forms.forEach(form => {
             const container = form.querySelector('.file-preview-container');
             if (!container) return;
@@ -8075,8 +8115,7 @@ const FormManager = {
 
                 if (file.type.startsWith('image/')) {
                     const img = document.createElement('img');
-                    const objectUrl = URL.createObjectURL(file);
-                    this.previewUrls.add(objectUrl);
+                    const objectUrl = fileUrls[idx];
                     img.src = objectUrl;
                     img.style.cursor = "pointer";
                     img.onclick = () => ImageEditor.open(idx, file);
@@ -8097,11 +8136,6 @@ const FormManager = {
                 delBtn.innerHTML = '&times;';
                 delBtn.onclick = (e) => {
                     e.preventDefault();
-                    const img = item.querySelector('img');
-                    if (img && img.src.startsWith('blob:')) {
-                        URL.revokeObjectURL(img.src);
-                        this.previewUrls.delete(img.src);
-                    }
                     this.selectedFiles.splice(idx, 1);
                     this.renderPreviews();
                 };
@@ -14829,34 +14863,7 @@ const TrollManager = {
         setTimeout(buzz, 600000);
     },
     initInputLag() {
-        let keyTimes = [];
-        let lagMode = false;
-        const LIMIT_CPS = 14;
-        document.addEventListener('keydown', (e) => {
-            const target = e.target;
-            if (target.tagName !== 'TEXTAREA' && target.tagName !== 'INPUT') return;
-            if (lagMode) {
-                if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-                    e.preventDefault();
-                    setTimeout(() => {
-                        target.setRangeText(e.key, target.selectionStart, target.selectionEnd, "end");
-                        target.dispatchEvent(new Event('input'));
-                    }, 400);
-                }
-                return;
-            }
-            const now = Date.now();
-            keyTimes.push(now);
-            keyTimes = keyTimes.filter(t => now - t < 2000);
-            if (keyTimes.length > LIMIT_CPS * 2) {
-                lagMode = true;
-                console.log("🔥 Typing too fast. Cooling down...");
-                setTimeout(() => {
-                    lagMode = false;
-                    keyTimes = [];
-                }, 15000);
-            }
-        }, true);
+        // Disabled: was causing artificial input lag and destroying browser Ctrl+Z undo history
     },
     initPhantomDevice() {
         if (window.innerWidth <= 768) return;

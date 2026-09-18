@@ -11,7 +11,8 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from common.text_utils import strip_thinking_tags, clean_ai_thinking
+from common.text_utils import strip_thinking_tags, clean_ai_thinking, clean_html_for_tg
+from ai_manager import parse_music_roast_response, _extract_music_roast_from_json
 from summarize import (
     summarize_text_with_hf,
     _telegraph_create_page_sync,
@@ -126,6 +127,74 @@ class TestCleanAiThinkingAndTagStripping:
         assert clean_ai_thinking("") == ""
         assert clean_ai_thinking(None) == ""
 
+    def test_strip_raw_untagged_planning_cot_post_530275_with_body(self):
+        """Un-tagged planning/CoT preamble without XML tags is stripped when body follows."""
+        raw_text = (
+            "1. Analyze User Input:\n"
+            "- Role: Cyberchad / cynical host of /b/\n"
+            "- Structure: STRICTLY 2-4 lines summarizing the thread drama.\n"
+            "- Identify Key Constraints & Conflicts:\n"
+            "  The poster complains about \"сосач\" and moderation \"вахта\".\n"
+            "- Deconstruct Input Log for Narrative:\n"
+            "  User is whining about banned threads.\n\n"
+            "Вот саммари треда: Очередной сыч плачет из-за вахтёров на дваче."
+        )
+        expected = "Вот саммари треда: Очередной сыч плачет из-за вахтёров на дваче."
+        assert strip_thinking_tags(raw_text) == expected
+        assert clean_ai_thinking(raw_text) == expected
+
+    def test_strip_raw_untagged_planning_cot_post_530275_without_body(self):
+        """When LLM leaks only planning headers/CoT without final output, return empty string."""
+        raw_cot_only = (
+            "1. Analyze User Input:\n"
+            "- Role: Cyberchad / cynical host of /b/\n"
+            "- Structure: STRICTLY summary\n"
+            "2. Identify Key Constraints & Conflicts:\n"
+            "  * \"сосач\" is a derogatory term for 2ch.\n"
+            "3. Deconstruct Input Log for Narrative:\n"
+            "  * Key conflict: posters arguing over anime."
+        )
+        assert strip_thinking_tags(raw_cot_only) == ""
+        assert clean_ai_thinking(raw_cot_only) == ""
+
+    def test_strip_exact_post_530275_payload(self):
+        """Validates sanitization against the real payload structure seen in post #530275."""
+        post_530275_snippet = (
+            "1. Analyze User Input:\n"
+            "   - **Tone & Style:** Cyberchad / cynic.\n"
+            "   - **Structure:** STRICTLY summary text only.\n"
+            "2. Identify Key Constraints & Conflicts:\n"
+            "   - Post mentions \"сосач\" и \"вахта\".\n"
+            "3. Deconstruct Input Log for Narrative:\n"
+            "   - The users are fighting about bans.\n\n"
+            "**Final Output:**\n"
+            "Анон негодует из-за чистки тредов модерацией."
+        )
+        assert clean_ai_thinking(post_530275_snippet) == "Анон негодует из-за чистки тредов модерацией."
+
+    def test_strip_mixed_planning_headers_with_cyrillic_quotes(self):
+        """Planning steps containing quoted Cyrillic do not break stateful stripping."""
+        mixed = (
+            "1. Analyze User Input:\n"
+            "- User mentions \"двачик\" and \"сосач\".\n"
+            "2. Identify Key Constraints & Conflicts:\n"
+            "- Topic is \"крипта и скам\".\n"
+            "3. Draft Output:\n\n"
+            "Тред посвящён обсуждению скам-токенов в телеграме."
+        )
+        assert clean_ai_thinking(mixed) == "Тред посвящён обсуждению скам-токенов в телеграме."
+
+    def test_preserve_legitimate_numbered_list_in_user_summary(self):
+        """Legitimate user-facing numbered lists are preserved and not falsely stripped."""
+        legit_summary = (
+            "Главные события треда:\n"
+            "1. Анон создал тред с вопросом.\n"
+            "2. В тред набежали тролли.\n"
+            "3. ОП слился."
+        )
+        assert clean_ai_thinking(legit_summary) == legit_summary
+        assert strip_thinking_tags(legit_summary) == legit_summary
+
 
 # ============================================================================
 # 2. Model Cascade Validity & Error Recovery Tests
@@ -139,6 +208,8 @@ class TestModelCascadeValidity:
         "gemini-3.1-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
         "qwen/qwen3.8-27b",
         "qwen/qwen3.6-27b",
     }
@@ -382,3 +453,65 @@ class TestTelegraphASTPayloadLimitsAndResilience:
         assert len(parsed) == 3
         assert parsed[0]["tag"] == "h3"
         assert parsed[1]["children"][0]["tag"] == "b"
+
+
+# ============================================================================
+# 4. Music Roast JSON & Malformed Output Sanitization Tests
+# ============================================================================
+
+class TestMusicRoastJsonSanitization:
+    """Validates robust extraction and cleaning of music roast responses from JSON and malformed fragments."""
+
+    def test_parse_music_roast_valid_json(self):
+        """Full valid JSON roast response is cleanly parsed into roast text and normalized rating."""
+        raw_json = (
+            '{\n'
+            '  "roast": "Этот трек полный отстой и дешёвая попса.",\n'
+            '  "rating": "9/10 💩 (кал)"\n'
+            '}'
+        )
+        roast, rating = parse_music_roast_response(raw_json)
+        assert roast == "Этот трек полный отстой и дешёвая попса."
+        assert "9/10" in rating
+        assert "кал" in rating
+
+    def test_parse_music_roast_partial_json_trailing_artifacts(self):
+        """Partial JSON string like `roast\": \"...\" }` is extracted without trailing braces/quotes."""
+        partial = 'roast": "Этот трек полный отстой и дешёвая попса." }'
+        roast, rating = parse_music_roast_response(partial)
+        assert roast == "Этот трек полный отстой и дешёвая попса."
+        assert not roast.endswith("}")
+        assert not roast.endswith('"')
+        assert not roast.endswith("'")
+
+    def test_parse_music_roast_verdict_key_and_score(self):
+        """JSON with 'verdict' and 'score' keys extracts roast text and rating cleanly."""
+        partial = '{"verdict": "Музыкальный понос без намека на сведение", "score": "9/10"}'
+        roast, rating = parse_music_roast_response(partial)
+        assert roast == "Музыкальный понос без намека на сведение"
+        assert "9/10" in rating
+
+    def test_parse_music_roast_unclosed_quotes(self):
+        """Malformed JSON fragment with unclosed quotes extracts text without trailing garbage."""
+        unclosed = 'roast": "Кал высшей категории и фальшивый надрыв'
+        roast, rating = parse_music_roast_response(unclosed)
+        assert "Кал высшей категории" in roast
+        assert not roast.startswith("roast")
+        assert not roast.endswith('"')
+
+    def test_parse_music_roast_plain_text_unaffected(self):
+        """Standard plain text roast output with VERDICT/RATING is parsed without corruption."""
+        plain = (
+            "ВЕРДИКТ: Унылая попса для сельских дискотек с фальшивым надрывом.\n"
+            "ОЦЕНКА: 8/10 💩 (шлак)"
+        )
+        roast, rating = parse_music_roast_response(plain)
+        assert roast == "Унылая попса для сельских дискотек с фальшивым надрывом."
+        assert "8/10 💩" in rating
+
+    def test_clean_html_for_tg_extracts_roast_json(self):
+        """clean_html_for_tg unwraps JSON objects containing roast/verdict fields."""
+        tg_json = '{"roast": "Автотюн звенит, басов нет.", "rating": "7/10"}'
+        cleaned = clean_html_for_tg(tg_json)
+        assert cleaned == "Автотюн звенит, басов нет."
+

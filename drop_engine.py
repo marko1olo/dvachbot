@@ -47,6 +47,9 @@ _user_claim_history: Dict[int, List[float]] = defaultdict(list)
 _pair_claim_history: Dict[Tuple[int, int], List[float]] = defaultdict(list)
 # Board flood limiter: {board_id: last_drop_timestamp}
 _board_drop_timestamps: Dict[str, float] = {}
+# Anti-snipe consecutive claim tracking: {board_id: (claimer_id, timestamp)}
+_last_board_claims: Dict[str, Tuple[int, float]] = {}
+_global_last_claim: Tuple[int, float] = (0, 0.0)
 
 # Minimum reaction delay in seconds (configurable, e.g. 1.0 - 1.5s)
 _min_claim_reaction_delay: float = 1.0
@@ -68,6 +71,7 @@ PAIR_CLAIM_WINDOW_SEC: float = 600.0  # 10 minutes (softened: up to 3 claims per
 MIN_BOARD_DROP_INTERVAL_SEC: float = 5.0
 MAX_ACTIVE_DROPS_PER_USER: int = 1
 DEFAULT_DROP_FEE_PERCENT: float = 0.0
+ANTI_SNIPE_CONSECUTIVE_WINDOW_SEC: float = 15.0  # 15 секунд защита от мгновенных скриптов, позволяющая анонам честно соревноваться
 
 # Пул отмазок с черным юмором в стиле Двача при сумме меньше минимальной (< 150 ₪)
 DROP_MIN_EXCUSES: List[str] = [
@@ -414,6 +418,45 @@ def get_board_flood_rejection_message(remaining_seconds: int) -> str:
     return f"⏳ <b>{template.format(seconds=max(1, remaining_seconds))}</b>"
 
 
+ANTI_SNIPE_EXCUSES: List[str] = [
+    "АНТИ-СНАЙП: Ты уже забрал предыдущий чек в треде! Переведи дух на 15 секунд. Ожидание: {seconds}с. Дай шанс другим анонам!",
+    "Слышь, скриптовая макака, харя треснет все чеки подряд пылесосить! Кулдаун подряд: ещё {seconds}с.",
+    "Жадность фраера сгубила: ты только что поднял прошлый дроп. Следующий сможешь взять только через {seconds}с или после того, как кто-то другой заберет дроп!",
+    "Анти-снайперский протокол: перехват двух дропов подряд ограничен на 15 секунд! Таймер: {seconds}с.",
+    "Твой автокликер спалился на мгновенном сборе. Ты уже забрал прошлый чек! Остынь на {seconds}с.",
+    "Дай другим нищукам поживиться! Не части, подожди 15 секунд ({seconds}с осталось).",
+    "Шекелевый инспектор перехватил твою скриптовую клешню: два чека подряд брать нельзя. Жди {seconds}с.",
+    "Борда — это не твой персональный банкомат. Ты уже забрал прошлый дроп, тайм-аут: {seconds}с.",
+    "Абу конфисковал право на мгновенный повторный чек! Не части, подожди {seconds}с перед следующим сбором.",
+    "Слишком быстро гребешь под себя! Анти-снайп таймер: {seconds}с до следующего разрешения."
+]
+
+
+def get_anti_snipe_rejection_message(remaining_seconds: int) -> str:
+    """Генерирует отмазку анти-снайп защиты при попытке забрать два дропа подряд."""
+    template = secrets.choice(ANTI_SNIPE_EXCUSES)
+    return f"⏳ <b>АНТИ-СНАЙП:</b> {template.format(seconds=max(1, remaining_seconds))}"
+
+
+def get_anti_snipe_cooldown_remaining(board_id: str, user_id: int) -> float:
+    """Возвращает оставшееся время блокировки анти-снайпа при попытке забрать 2 дропа подряд."""
+    now = time.time()
+    last_claimer, last_time = _last_board_claims.get(board_id, (0, 0.0))
+    if not last_claimer and _global_last_claim[0]:
+        last_claimer, last_time = _global_last_claim
+    if last_claimer == user_id and (now - last_time) < ANTI_SNIPE_CONSECUTIVE_WINDOW_SEC:
+        return ANTI_SNIPE_CONSECUTIVE_WINDOW_SEC - (now - last_time)
+    return 0.0
+
+
+def set_last_drop_claimed(board_id: str, user_id: int, timestamp: Optional[float] = None):
+    """Устанавливает последнего получателя дропа на доске (для тестов и восстановления из БД)."""
+    ts = time.time() if timestamp is None else float(timestamp)
+    _last_board_claims[board_id] = (user_id, ts)
+    global _global_last_claim
+    _global_last_claim = (user_id, ts)
+
+
 def set_min_reaction_delay(val: float):
     """Устанавливает минимальную задержку человеческой реакции в секундах (для тестов)."""
     global _min_claim_reaction_delay
@@ -433,6 +476,9 @@ def reset_drop_cooldowns():
     _pair_claim_history.clear()
     _board_drop_timestamps.clear()
     _drop_messages.clear()
+    _last_board_claims.clear()
+    global _global_last_claim
+    _global_last_claim = (0, 0.0)
     active_drops.clear()
 
 
@@ -444,6 +490,13 @@ def set_user_drop_cooldown(user_id: int, duration_sec: float):
 def set_user_claim_cooldown(user_id: int, duration_sec: float):
     """Устанавливает кулдаун сбора дропов пользователю на указанное количество секунд."""
     _user_claim_cooldowns[user_id] = time.time() + duration_sec
+    if duration_sec < 0:
+        for b_id, (c_id, c_ts) in list(_last_board_claims.items()):
+            if c_id == user_id:
+                _last_board_claims.pop(b_id, None)
+        global _global_last_claim
+        if _global_last_claim[0] == user_id:
+            _global_last_claim = (0, 0.0)
 
 
 def register_drop_message(drop_id: str, chat_id: int, message_id: int):
@@ -543,6 +596,18 @@ async def init_drop_engine(db_conn) -> int:
             for d_id, c_id, m_id in msg_rows:
                 if d_id in active_drops:
                     register_drop_message(d_id, c_id, m_id)
+
+        # Restore last claimed drops per board for persistent anti-sniping
+        async with db_conn.execute(
+            "SELECT board_id, claimed_by, claimed_at FROM MoneyDrops WHERE status = 'claimed' AND claimed_by IS NOT NULL ORDER BY claimed_at DESC LIMIT 50"
+        ) as c:
+            claim_rows = await c.fetchall()
+            global _global_last_claim
+            for b_id, cl_id, cl_at in claim_rows:
+                if b_id and b_id not in _last_board_claims and cl_at:
+                    _last_board_claims[b_id] = (int(cl_id), float(cl_at))
+                    if not _global_last_claim[0]:
+                        _global_last_claim = (int(cl_id), float(cl_at))
     except Exception:
         pass
     return loaded
@@ -659,6 +724,7 @@ async def claim_money_drop(
     check_reaction_delay: bool = False,
     check_claimer_rate_limit: bool = True,
     check_farm_laundering: bool = True,
+    check_anti_snipe: bool = False,
     min_reaction_delay: Optional[float] = None,
 ) -> Tuple[bool, str, Optional[DropRecord]]:
     """
@@ -669,7 +735,9 @@ async def claim_money_drop(
     - Claim spamming (cooldown between claims 30s)
     - Greed hoarding (sliding window max 3 claims per 5 min)
     - Sybil/twink farm laundering (max 1 claim per 1 hour from the same donor)
+    - Anti-snipe consecutive monopoly (cannot claim two drops in a row within 15 min)
     """
+    global _global_last_claim
     now = time.time()
     effective_min_delay = _min_claim_reaction_delay if min_reaction_delay is None else min_reaction_delay
 
@@ -718,6 +786,30 @@ async def claim_money_drop(
             if len(recent_pair) >= MAX_PAIR_CLAIMS_PER_WINDOW:
                 return False, get_pair_farm_rejection_message(), record
 
+        # 5. Anti-Snipe Consecutive Monopoly Check (cannot claim two drops in a row within 15 min)
+        if check_anti_snipe and check_claimer_rate_limit:
+            last_claimer, last_claim_time = _last_board_claims.get(claimer_board_id, (0, 0.0))
+            if not last_claimer and _global_last_claim[0]:
+                last_claimer, last_claim_time = _global_last_claim
+
+            if not last_claimer and db_conn:
+                try:
+                    async with db_conn.execute(
+                        "SELECT claimed_by, claimed_at FROM MoneyDrops WHERE status = 'claimed' AND board_id = ? ORDER BY claimed_at DESC LIMIT 1",
+                        (claimer_board_id,)
+                    ) as c:
+                        row = await c.fetchone()
+                        if row and row[0]:
+                            last_claimer = int(row[0])
+                            last_claim_time = float(row[1] or 0.0)
+                            _last_board_claims[claimer_board_id] = (last_claimer, last_claim_time)
+                except Exception:
+                    pass
+
+            if last_claimer == claimer_id and (now - last_claim_time) < ANTI_SNIPE_CONSECUTIVE_WINDOW_SEC:
+                rem_sec = int(ANTI_SNIPE_CONSECUTIVE_WINDOW_SEC - (now - last_claim_time)) + 1
+                return False, get_anti_snipe_rejection_message(rem_sec), record
+
         # Reserve drop status immediately inside drop_lock
         record.status = "claimed"
         record.claimed_by = claimer_id
@@ -729,6 +821,8 @@ async def claim_money_drop(
         _user_claim_history[claimer_id].append(now)
         if record.donor_id:
             _pair_claim_history[(record.donor_id, claimer_id)].append(now)
+        _last_board_claims[claimer_board_id] = (claimer_id, now)
+        _global_last_claim = (claimer_id, now)
 
     # Atomically credit claimer in DB and update MoneyDrops record
     from common.database import add_user_global_balance, record_user_transaction
@@ -752,6 +846,10 @@ async def claim_money_drop(
                     _user_claim_history[claimer_id].pop()
                 if record.donor_id and _pair_claim_history[(record.donor_id, claimer_id)] and _pair_claim_history[(record.donor_id, claimer_id)][-1] == now:
                     _pair_claim_history[(record.donor_id, claimer_id)].pop()
+                if _last_board_claims.get(claimer_board_id) == (claimer_id, now):
+                    _last_board_claims.pop(claimer_board_id, None)
+                if _global_last_claim == (claimer_id, now):
+                    _global_last_claim = (0, 0.0)
             return False, f"❌ Ошибка начисления выигрыша: {e}", None
 
     return True, f"🎉 Ты успешно перехватил дроп на {record.amount} ₪!", record

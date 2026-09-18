@@ -527,8 +527,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 break
                             if "413" in err_str: return "error_413"
                             if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str:
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} not found (404). Skipping model.")
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} not found (404). Applying 2.5s cooldown and skipping model.")
                                 permanent_model_failures += 1
+                                pool.penalize_token(selected_key, 2.5)
+                                async with _KEY_RATE_LOCK:
+                                    fin_now = time.time()
+                                    _LAST_VISION_CALL_TIME[selected_key] = fin_now + 2.5
+                                    if provider == "gemini":
+                                        _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, fin_now + 2.5)
+                                    else:
+                                        _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, fin_now + 2.5)
+                                await asyncio.sleep(2.5)
                                 break
                             if "json_validate" in err_str or "max completion tokens" in err_str or "400" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} failed ({err_str[:120]}). Trying next model...")

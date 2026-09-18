@@ -641,7 +641,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             except main.TelegramForbiddenError:
                 return
             except Exception as e:
-                print(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
+                runtime_logger.warning(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
                 return
     tasks_to_run = []
     for uid, msgs in user_messages_map.items():
@@ -717,7 +717,7 @@ async def execute_delayed_edit(
     except asyncio.CancelledError:
         raise  # нормальная отмена таски — не логируем, propagate вверх
     except Exception as e:
-        print(f"❌ Ошибка в execute_delayed_edit для поста #{post_num}: {e}")
+        runtime_logger.error(f"❌ Ошибка в execute_delayed_edit для поста #{post_num}: {e}")
     finally:
         async with pending_edit_lock:
             current_task = asyncio.current_task()
@@ -741,13 +741,13 @@ async def _supervise_message_worker(worker_name: str, board_id: str, bot_instanc
             await message_worker(worker_name, board_id, bot_instance)
             if is_shutting_down or drain_shutdown_requested:
                 return
-            print(f"⚠️ {worker_name} завершился без запроса остановки. Перезапуск через {delay:.0f} с.")
+            runtime_logger.warning(f"⚠️ {worker_name} завершился без запроса остановки. Перезапуск через {delay:.0f} с.")
         except asyncio.CancelledError:
             raise
         except Exception as e:
             if is_shutting_down or drain_shutdown_requested:
                 return
-            print(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
+            runtime_logger.error(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
             runtime_logger.exception("message_worker_crashed board=%s", board_id)
 
         if time.time() - start_time >= 120:
@@ -820,7 +820,7 @@ class MessageDeliveryTask:
         self.passive_slice_size = _passive_slice_size_for_content(self.content, self.board_id)
 
         if self.post_num in posts_pending_deletion:
-            print(f"[{self.board_id}] Worker пропустил пост #{self.post_num}, т.к. он помечен на удаление.")
+            runtime_logger.info(f"[{self.board_id}] Worker пропустил пост #{self.post_num}, т.к. он помечен на удаление.")
             return
 
         if self.msg_data.get("durable_delivery_id"):
@@ -953,12 +953,9 @@ class MessageDeliveryTask:
                 prio_success = d_stats.get('priority_recipients', len(delivery_results))
                 prio_total = len(recipients_to_send)
                 try:
-                    print(f"⚡ Пост #{p_num} [/{self.board_id}/] разослан активным: {prio_success}/{prio_total} | Время: {prio_elapsed:.1f}с")
+                    runtime_logger.info(f"⚡ Пост #{p_num} [/{self.board_id}/] разослан активным: {prio_success}/{prio_total} | Время: {prio_elapsed:.1f}с")
                 except Exception:
-                    try:
-                        print(f"[Active] Post #{p_num} [/{self.board_id}/] sent to active: {prio_success}/{prio_total} | Time: {prio_elapsed:.1f}s")
-                    except Exception:
-                        pass
+                    pass
 
             if self.post_num and (self.content.get('archive_allowed') or not self.content.get('archive_skip')) and not self.content.get('is_shadow_muted') and not self.msg_data.get('durable_delivery_id'):
                 from archive_manager import _forward_post_to_realtime_archive
@@ -1042,21 +1039,17 @@ class MessageDeliveryTask:
                 p_total = cum['total'] or (cum['success'] + cum['errors'] + cum['blocks'])
                 log_msg = f"📊 Пост #{p_num} [/{self.board_id}/] разослан всем: {cum['success']}/{p_total} (прио: {cum['priority']}, пасс: {cum['passive']}) | Ошибок: {cum['errors']} | Блоков: {cum['blocks']} | Время: {elapsed:.1f}с"
                 try:
-                    print(log_msg)
+                    runtime_logger.info(log_msg)
                 except Exception:
-                    try:
-                        print(f"[Completed] Post #{p_num} [/{self.board_id}/] sent to all: {cum['success']}/{p_total} (prio: {cum['priority']}, pass: {cum['passive']}) | Errors: {cum['errors']} | Blocks: {cum['blocks']} | Time: {elapsed:.1f}s")
-                    except Exception:
-                        pass
+                    pass
 
     async def _handle_preemption(self):
         """Обрабатывает логику прерывания для пассивной фазы."""
         if (
             PRIORITY_SPLIT_FANOUT_ENABLED
-            and self.delivery_phase == "passive"
+            and self.delivery_phase in ("passive", "passive_slice")
             and not self.thread_id
             and PASSIVE_MAX_PREEMPTIONS > 0
-            and len(self.initial_recipients) > self.passive_slice_size
             and _queue_has_full_message(self.queue)
         ):
             preemptions = int(self.msg_data.get("passive_preemptions", 0) or 0)
@@ -1164,7 +1157,6 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
             # доски навсегда. Ошибка восстановимая: get_pool() переподключается
             # сам, поэтому ждём чуть дольше и продолжаем разгребать очередь.
             if "closed database" in str(e).lower():
-                print(f"{worker_name} | ⚠️ Соединение с БД было закрыто, жду переподключения пула...")
                 runtime_logger.warning("message_worker_db_closed board=%s", board_id)
                 await asyncio.sleep(5)
                 try:
@@ -1172,24 +1164,22 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
                 except Exception:
                     pass
                 continue
-            print(f"{worker_name} | ⛔ Ошибка обработки элемента: {str(e)[:200]}")
-            import traceback
-            traceback.print_exc()
+            runtime_logger.error(f"{worker_name} | ⛔ Ошибка обработки элемента: {str(e)[:200]}", exc_info=True)
 
             retries = msg_data.get("_retry_count", 0)
             max_retries = 3
             if retries < max_retries:
                 msg_data["_retry_count"] = retries + 1
                 backoff = 2 ** retries
-                print(f"{worker_name} | 🔄 Повторная попытка ({retries + 1}/{max_retries}) для поста #{msg_data.get('post_num')} через {backoff}с...")
+                runtime_logger.info(f"{worker_name} | 🔄 Повторная попытка ({retries + 1}/{max_retries}) для поста #{msg_data.get('post_num')} через {backoff}с...")
                 await asyncio.sleep(backoff)
                 try:
                     await queue.put(msg_data)
                 except Exception as put_err:
-                    print(f"{worker_name} | ⚠️ Не удалось повторно добавить элемент в очередь: {put_err}")
+                    runtime_logger.warning(f"{worker_name} | ⚠️ Не удалось повторно добавить элемент в очередь: {put_err}")
                     await _persist_durable_delivery_item(board_id, msg_data, "worker_retry_put_failed")
             else:
-                print(f"{worker_name} | ❌ Превышен лимит попыток для поста #{msg_data.get('post_num')}. Сохраняю в надежное хранилище.")
+                runtime_logger.error(f"{worker_name} | ❌ Превышен лимит попыток для поста #{msg_data.get('post_num')}. Сохраняю в надежное хранилище.")
                 await _persist_durable_delivery_item(board_id, msg_data, "worker_max_retries_exceeded")
 
             await asyncio.sleep(1)
@@ -1255,14 +1245,14 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
                 await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=op_post_data['content'], reply_info=op_post_data['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"Ошибка отправки ОП-поста #{op_post_num} юзеру {user_id}: {e}")
+                runtime_logger.error(f"Ошибка отправки ОП-поста #{op_post_num} юзеру {user_id}: {e}")
     for post_bundle in posts_to_send_data:
         if post_bundle['content'].get('post_num') != op_post_num:
             try:
                 await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=post_bundle['content'], reply_info=post_bundle['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"Ошибка отправки пропущенного сообщения #{post_bundle['content'].get('post_num')} юзеру {user_id}: {e}")
+                runtime_logger.error(f"Ошибка отправки пропущенного сообщения #{post_bundle['content'].get('post_num')} юзеру {user_id}: {e}")
     if lang == 'en':
         final_text = "All new messages loaded."
     elif lang == 'jp':
@@ -1299,18 +1289,18 @@ async def board_help_worker(board_id: str):
             # Проверка бэкпрешера: если доска или система перегружены рассылкой, уступаем дорогу пользовательским постам
             queue = message_queues.get(board_id)
             if queue and queue.qsize() > 0:
-                print(f"⏳ [{board_id}] Очередь занята ({queue.qsize()} сообщений), рассылка помощи отложена.")
+                runtime_logger.info(f"⏳ [{board_id}] Очередь занята ({queue.qsize()} сообщений), рассылка помощи отложена.")
                 await asyncio.sleep(300)
                 continue
 
             if len(current_deliveries) > 3:
-                print(f"⏳ [{board_id}] Высокая нагрузка системы ({len(current_deliveries)} активных доставок), помощь отложена.")
+                runtime_logger.info(f"⏳ [{board_id}] Высокая нагрузка системы ({len(current_deliveries)} активных доставок), помощь отложена.")
                 await asyncio.sleep(180)
                 continue
 
             activity = await main.get_board_activity_last_hours(board_id, hours=24)
             if activity < 1: # Пропускаем только если за сутки не было ни одного поста
-                print(f"💀 [{board_id}] Доска неактивна (акт: {activity}), пропускаем рассылку помощи.")
+                runtime_logger.info(f"💀 [{board_id}] Доска неактивна (акт: {activity}), пропускаем рассылку помощи.")
                 continue
             b_data = board_data[board_id]
             streams_to_process = ['ru']
@@ -1373,12 +1363,13 @@ async def board_help_worker(board_id: str):
                             img_bytes = bf.read()
                     except Exception:
                         pass
+                is_photo = bool(fid or img_bytes)
                 content = {
-                    'type': 'photo' if (fid or img_bytes) else 'text',
+                    'type': 'photo' if is_photo else 'text',
                     'file_id': fid,
                     'image_bytes': img_bytes,
-                    'caption': message_text,
-                    'text': message_text,
+                    'caption': message_text if is_photo else None,
+                    'text': None if is_photo else message_text,
                     'is_system_message': True,
                     'archive_allowed': True
                 }
@@ -1399,12 +1390,12 @@ async def board_help_worker(board_id: str):
                     'recipients': recipients, 'content': content,
                     'post_num': post_num, 'board_id': board_id
                 })
-                print(f"✅ [{board_id}] Помощь ({stream}) #{post_num} отправлена в очередь.")
+                runtime_logger.info(f"✅ [{board_id}] Помощь ({stream}) #{post_num} отправлена в очередь.")
         except asyncio.CancelledError:
-            print(f"ℹ️ Воркер помощи для [{board_id}] остановлен.")
+            runtime_logger.info(f"ℹ️ Воркер помощи для [{board_id}] остановлен.")
             break
         except Exception as e:
-            print(f"❌ [{board_id}] Ошибка в board_help_worker: {e}")
+            runtime_logger.error(f"❌ [{board_id}] Ошибка в board_help_worker: {e}")
             await asyncio.sleep(120)
 
 
@@ -1478,14 +1469,14 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         await asyncio.sleep(delay)
         group = current_media_groups.pop(media_group_key, None)
         if not group:
-            print(f"⚠️ [MEDIAGRP] {media_group_key}: group уже удалена (race/duplicate timer), пропускаем.")
+            runtime_logger.warning(f"⚠️ [MEDIAGRP] {media_group_key}: group уже удалена (race/duplicate timer), пропускаем.")
             return
         if media_group_key in sent_media_groups:
-            print(f"ℹ️ [MEDIAGRP] {media_group_key}: уже обработана (dedup), пропускаем.")
+            runtime_logger.info(f"ℹ️ [MEDIAGRP] {media_group_key}: уже обработана (dedup), пропускаем.")
             return
         raw_messages = group.get('raw_messages', [])
         if not raw_messages:
-            print(f"⚠️ [MEDIAGRP] {media_group_key}: raw_messages пустой! board={group.get('board_id')} author={group.get('author_id')} — альбом потерян.")
+            runtime_logger.warning(f"⚠️ [MEDIAGRP] {media_group_key}: raw_messages пустой! board={group.get('board_id')} author={group.get('author_id')} — альбом потерян.")
             return
         raw_messages.sort(key=lambda m: m.message_id)
         found_caption = ""
@@ -1549,9 +1540,7 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         # НЕ трогаем — группу продолжает собирать новая задача.
         pass
     except Exception as e:
-        import traceback
-        print(f"❌ [MEDIAGRP] Ошибка в complete_media_group_after_delay для {media_group_key}: {e}")
-        traceback.print_exc()
+        runtime_logger.error(f"❌ [MEDIAGRP] Ошибка в complete_media_group_after_delay для {media_group_key}: {e}", exc_info=True)
         current_media_groups.pop(media_group_key, None)
     finally:
         _release_media_group_timer(media_group_key)
@@ -1796,7 +1785,7 @@ async def thread_notifier():
                             timestamp=now_dt.timestamp(), is_from_site=False, stream='ru'
                         )
                         if not pnum:
-                            print(f"⛔ [{board_id}] Не удалось создать пост в БД для уведомления об активности треда {thread_id}.")
+                            runtime_logger.warning(f"⛔ [{board_id}] Не удалось создать пост в БД для уведомления об активности треда {thread_id}.")
                             continue
                         header = await format_header(board_id, pnum)
                         content['header'] = header
@@ -1836,7 +1825,7 @@ async def thread_notifier():
                         timestamp=now_dt.timestamp(), is_from_site=False
                     )
                     if not pnum:
-                        print(f"⛔ [{board_id}] Не удалось создать пост в БД для уведомления о бамп-лимите треда {thread_id}.")
+                        runtime_logger.warning(f"⛔ [{board_id}] Не удалось создать пост в БД для уведомления о бамп-лимите треда {thread_id}.")
                         continue
                     header = await format_header(board_id, pnum)
                     content['header'] = header
@@ -2011,7 +2000,7 @@ async def site_posts_broadcaster():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"⛔ ОШИБКА в site_posts_broadcaster: {e}")
+            runtime_logger.error(f"⛔ ОШИБКА в site_posts_broadcaster: {e}", exc_info=True)
             await asyncio.sleep(10)
 def _site_public_url(raw_url: str | None) -> str | None:
     if not raw_url:

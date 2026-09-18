@@ -160,15 +160,17 @@ def _format_reactions_block(post_data: dict) -> str | None:
     return None
 
 def _format_main_text(content: dict) -> str | None:
-    # Для голосовых сообщений Киберчеда подпись ВСЕГДА должна быть краткой ("🔥 Разъёб от Киберчеда"),
-    # а НЕ дублирующий текст транскрипции произнесенной речи!
+    # Для голосовых сообщений Киберчеда подпись содержит только заголовок ("🔥 Разъёб от Киберчеда",
+    # "🧿 Благоговение Киберчеда перед Владыкой", "🧿 Защита Владыки от Киберчеда").
+    # Спойлерный транскрипт убран по запросу пользователей.
     if content.get('type') == 'voice' and (
         content.get('is_cyberchad') or content.get('is_ai_roast') or content.get('is_ai')
     ):
         cap = content.get('caption')
-        if cap and len(cap) < 50:
-            return convert_site_tags_to_telegram(cap)
-        return "🔥 Разъёб от Киберчеда"
+        base_cap = convert_site_tags_to_telegram(cap) if (cap and len(cap) < 80) else "🔥 Разъёб от Киберчеда"
+        if "<tg-spoiler>" in base_cap:
+            base_cap = re.sub(r'\s*<tg-spoiler>.*?</tg-spoiler>', '', base_cap, flags=re.DOTALL).strip()
+        return base_cap or "🔥 Разъёб от Киберчеда"
 
     main_text_raw = content.get('text') or content.get('caption') or ''
     if not main_text_raw:

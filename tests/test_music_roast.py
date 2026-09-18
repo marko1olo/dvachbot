@@ -22,6 +22,16 @@ from common.html_utils import escape_html
 from aiogram.exceptions import TelegramBadRequest
 
 
+@pytest.fixture(autouse=True)
+def enable_music_roasts():
+    with patch("ai_manager.MUSIC_ROASTS_ENABLED", True), \
+         patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock) as mock_tts, \
+         patch("common.database.add_music_roast", new_callable=AsyncMock), \
+         patch("common.database.get_db", new_callable=AsyncMock):
+        mock_tts.return_value = (b"fake_voice", None)
+        yield
+
+
 # ============================================================================
 # 1. Metadata Extraction & Music Document Detection Tests
 # ============================================================================

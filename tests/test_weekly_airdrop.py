@@ -12,6 +12,8 @@ from weekly_airdrop_engine import (
     fetch_weekly_contributors,
     execute_weekly_airdrop,
     MIN_WEEKLY_POOL,
+    MAX_WEEKLY_POOL,
+    ABU_FUND_SHARE_RATE,
     POST_BONUS_RATE,
     MAX_USER_SHARE
 )
@@ -23,9 +25,24 @@ def test_calculate_weekly_pool():
     assert calculate_weekly_pool(0) == MIN_WEEKLY_POOL
     # Negative -> base minimum
     assert calculate_weekly_pool(-10) == MIN_WEEKLY_POOL
-    # 10,000 posts -> base + 100,000
+    # 10,000 posts -> base + 300,000
     expected = MIN_WEEKLY_POOL + 10000 * POST_BONUS_RATE
     assert calculate_weekly_pool(10000) == expected
+
+
+def test_calculate_weekly_pool_dynamic_abu_fund():
+    # 15.7M Abu Fund -> 6% is 942,000 ₪
+    fund = 15_700_000.0
+    expected_base = fund * ABU_FUND_SHARE_RATE  # 942,000
+    assert calculate_weekly_pool(0, abu_fund_total=fund) == expected_base
+    assert calculate_weekly_pool(1000, abu_fund_total=fund) == expected_base + 1000 * POST_BONUS_RATE
+
+    # Small fund (e.g. 50,000 ₪) -> 6% is 3,000 ₪, respects MIN_WEEKLY_POOL (200,000 ₪)
+    assert calculate_weekly_pool(0, abu_fund_total=50_000.0) == MIN_WEEKLY_POOL
+
+    # Giant fund (e.g. 50,000,000 ₪) -> 6% is 3,000,000 ₪, respects MAX_WEEKLY_POOL cap (2,500,000 ₪)
+    assert calculate_weekly_pool(0, abu_fund_total=50_000_000.0) == MAX_WEEKLY_POOL
+    assert calculate_weekly_pool(10000, abu_fund_total=50_000_000.0) == MAX_WEEKLY_POOL
 
 
 def test_compute_airdrop_allocations_empty():

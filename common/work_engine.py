@@ -854,6 +854,39 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
 
     salary_mult = round(salary_mult, 2)
 
+    # Progressive Daily Fatigue System (Unique per Vacancy)
+    # Each subsequent shift on the SAME vacancy completed within the last 24h yields 15% less reward (down to a 20% floor).
+    # Multiplier = max(0.20, 0.85 ** shifts_today)
+    raw_recent = current_items.get("recent_shifts")
+    if isinstance(raw_recent, dict):
+        recent_job_shifts = [ts for ts in raw_recent.get(job_id, []) if isinstance(ts, (int, float)) and (now - ts) < 86400]
+    elif isinstance(raw_recent, list):
+        # Graceful migration for legacy list format: treat previous timestamps as belonging to this job
+        recent_job_shifts = [ts for ts in raw_recent if isinstance(ts, (int, float)) and (now - ts) < 86400]
+        current_items["recent_shifts"] = {job_id: list(recent_job_shifts)}
+    else:
+        recent_job_shifts = []
+
+    shifts_today = len(recent_job_shifts)
+    fatigue_mult = max(0.20, 0.85 ** shifts_today)
+    if shifts_today > 0:
+        fatigue_pct = int(round((1.0 - fatigue_mult) * 100))
+        buff_notes.append(f"⚡ Усталость по вакансии: -{fatigue_pct}% (смена #{shifts_today + 1})")
+
+    def _record_shift_completion(jid: str):
+        work_timers[jid] = now
+        shifts_dict = current_items.get("recent_shifts")
+        if not isinstance(shifts_dict, dict):
+            shifts_dict = {}
+        cleaned_shifts = {}
+        for k, v in shifts_dict.items():
+            if isinstance(v, list):
+                valid = [ts for ts in v if isinstance(ts, (int, float)) and (now - ts) < 86400]
+                if valid:
+                    cleaned_shifts[k] = valid
+        cleaned_shifts.setdefault(jid, []).append(now)
+        current_items["recent_shifts"] = cleaned_shifts
+
     # Failure & Risk Calculation
     risk_pct = job.get("risk_pct", 0.0)
     if (active_set and active_set.get("id") in ["set_riot_police", "set_omon"]) or head == "hat_helmet":
@@ -875,13 +908,13 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
 
     if is_jackpot:
         mult = random.randint(2, 3)
-        reward = int(round(base_reward * mult * salary_mult))
-        work_timers[job_id] = now
+        reward = max(1, int(round(base_reward * mult * salary_mult * fatigue_mult)))
+        _record_shift_completion(job_id)
         jp_tmpl = random.choice(job["jackpot_phrases"]).format(reward=reward, penalty=0)
         clean_msg = re.sub(r'<[^>]+>', '', jp_tmpl)
     else:
-        reward = int(round(base_reward * salary_mult))
-        work_timers[job_id] = now
+        reward = max(1, int(round(base_reward * salary_mult * fatigue_mult)))
+        _record_shift_completion(job_id)
         succ_list = job.get("phrases", ["✅ Успешно отработал смену: +{reward} ₪!"])
         raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
         clean_msg = re.sub(r'<[^>]+>', '', raw_succ)

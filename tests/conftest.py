@@ -201,6 +201,15 @@ def _restore_pristine_modules():
         shared_state._target_attacks.clear()
     except Exception:
         pass
+
+    import logging
+    for _l_name in [None, "runtime", "tgach.runtime", "site_tgach"]:
+        _lo = logging.getLogger(_l_name)
+        for _h in list(_lo.handlers):
+            if isinstance(_h, logging.FileHandler):
+                _lo.removeHandler(_h)
+        if not _lo.handlers:
+            _lo.addHandler(logging.NullHandler())
     yield
 
 
@@ -208,12 +217,13 @@ def _restore_pristine_modules():
 def setup_event_loop():
     import logging
     # Изоляция боевых логов от тестового загрязнения (MagicMock, test exceptions)
-    root_logger = logging.getLogger()
-    for h in list(root_logger.handlers):
-        if isinstance(h, logging.FileHandler):
-            root_logger.removeHandler(h)
-    null_h = logging.NullHandler()
-    root_logger.addHandler(null_h)
+    for logger_name in [None, "runtime", "tgach.runtime", "site_tgach"]:
+        log_obj = logging.getLogger(logger_name)
+        for h in list(log_obj.handlers):
+            if isinstance(h, logging.FileHandler):
+                log_obj.removeHandler(h)
+        null_h = logging.NullHandler()
+        log_obj.addHandler(null_h)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

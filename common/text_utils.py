@@ -126,7 +126,14 @@ def clean_html_for_tg(text: str) -> str:
         try:
             data = json.loads(trimmed)
             if isinstance(data, dict):
-                extracted = data.get("text") or data.get("summary") or data.get("response") or data.get("content")
+                extracted = (
+                    data.get("text")
+                    or data.get("summary")
+                    or data.get("response")
+                    or data.get("content")
+                    or data.get("roast")
+                    or data.get("verdict")
+                )
                 if extracted and isinstance(extracted, str):
                     text = extracted
         except Exception:
@@ -262,6 +269,50 @@ def _strip_raw_thinking_tags(text: str) -> str:
     return text.strip()
 
 
+RE_PLANNING_STEP = re.compile(
+    r'^\s*(?:\d+[\.\)]|\*|\-|\#+)?\s*\**\s*(?:'
+    r'Analyze(?:\s+the)?\s+User\s+Input|'
+    r'Analysis(?:\s+of\s+(?:the\s+)?(?:User\s+Input|Prompt|Task|Input\s+Log))?|'
+    r'Identify\s+(?:Key\s+)?Constraints(?:\s*&\s*Conflicts)?|'
+    r'Key\s+Constraints(?:\s*&\s*Conflicts)?|'
+    r'Deconstruct\s+Input(?:\s+Log)?(?:\s+for\s+Narrative)?|'
+    r'Deconstruction\s+of\s+Input(?:\s+Log)?|'
+    r'Role\s*:|'
+    r'Persona\s*:|'
+    r'Task\s*:|'
+    r'Structure\s*:\s*(?:STRICTLY|Strictly|strictly)|'
+    r'Format\s+Rules\s*:|'
+    r'Content\s+Requirements\s*:|'
+    r'Input\s+Data\s*:|'
+    r'Tone\s*(?:&|and)\s*(?:Style|Persona)\s*:|'
+    r'Narrative\s+Arc\s*:|Core\s+Conflict\s*:|'
+    r'Determine\s+(?:Tone|Persona|Target|Audience|Style)|'
+    r'Planning(?:\s+Phase)?\s*:|Step-by-step\s+Plan\s*:|Chain\s+of\s+Thought\s*:|Internal\s+Reasoning\s*:|'
+    r'CoT(?:\s+Process)?\s*:|Reasoning\s+Process\s*:|'
+    r'Drafting(?:\s+Process)?\s*:|Prompt\s+Analysis\s*:|Task\s+Understanding\s*:|'
+    r'Step\s*\d+\s*:\s*(?:Analyze|Identify|Deconstruct|Determine|Plan|Draft|Review|Check)'
+    r')\b',
+    re.IGNORECASE
+)
+
+RE_PLANNING_SUBITEM = re.compile(
+    r'^\s*[\*\-]?\s*(?:Role|Task|Structure|Content Requirements|Format Rules|Input Data|'
+    r'Initial|Tone|Slang|Format|Content|Theme|Reactions|Interruption|Long text accusation|'
+    r'Target|Constraints|Removing|Adjusting|Drafting|We need to|The user|I will|Note|Draft)\s*:',
+    re.IGNORECASE
+)
+
+RE_TRANSITION = re.compile(
+    r'^\s*(?:\d+[\.\)]|\*|\-|\#+)?\s*\**\s*(?:'
+    r'Final\s+(?:Output|Response|Summary|Draft|Verdict|Answer|Roast)|'
+    r'New\s+draft|Draft(?:\s*\d+)?|'
+    r'Output|Response|Summary|Саммари|Итоговый\s+ответ|'
+    r'Вот\s+(?:саммари|ответ|разбор|текст)|'
+    r'Here(?:\'s|\s+is)\s+(?:the\s+)?(?:summary|response|output)'
+    r')\s*:\s*\**',
+    re.IGNORECASE
+)
+
 RE_COT_MARKERS = [
     # 1. 'Removing "..." to avoid ...' or 'Removing \'...\''
     re.compile(r'(?is)^\s*[\*\-]?\s*Removing\s+["\'][^"\']*["\'][^\n]*', re.MULTILINE),
@@ -280,7 +331,11 @@ RE_COT_MARKERS = [
 def strip_cot_and_drafts(text: str) -> str:
     """
     Rigorously strips LLM Chain-of-Thought artifacts, meta-reasoning comments,
-    and draft revision headers from generated output before synthesis or posting.
+    un-tagged planning preambles (such as '1. Analyze User Input:', 'Role: ...',
+    'Structure: STRICTLY ...', 'Identify Key Constraints & Conflicts:',
+    'Deconstruct Input Log for Narrative:'), and draft revision headers from
+    generated output before synthesis or posting, while preserving legitimate
+    user-facing content.
     """
     if not text or not isinstance(text, str):
         return ""
@@ -292,36 +347,84 @@ def strip_cot_and_drafts(text: str) -> str:
     for pattern in RE_COT_MARKERS:
         s = pattern.sub('', s)
 
-    # Line-by-line validation: remove any leading non-Cyrillic prompt-engineering lines
-    # if the overall text contains Russian content
     has_any_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', s))
     lines = s.split('\n')
     cleaned_lines = []
+    in_planning_block = False
     found_russian_body = False
 
-    for line in lines:
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
+
         if not stripped:
-            if found_russian_body or not has_any_cyrillic:
+            if not in_planning_block and (found_russian_body or not has_any_cyrillic):
                 cleaned_lines.append("")
+            i += 1
             continue
 
-        has_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', stripped))
+        # Check for transition markers to actual user content (e.g. 'Final Response:', 'Вот саммари:')
+        if RE_TRANSITION.match(stripped):
+            in_planning_block = False
+            remainder = RE_TRANSITION.sub('', stripped).strip()
+            if remainder:
+                cleaned_lines.append(remainder)
+                if re.search(r'[а-яА-ЯёЁ]', remainder):
+                    found_russian_body = True
+            i += 1
+            continue
 
+        # Check for start of an un-tagged planning step
+        if RE_PLANNING_STEP.match(stripped):
+            in_planning_block = True
+            i += 1
+            continue
+
+        if in_planning_block:
+            # Any indented line or sub-bullet under an active planning header is part of planning
+            if line.startswith((' ', '\t')) or stripped.startswith(("-", "*", "+", "•")):
+                i += 1
+                continue
+
+            # Sub-item fields inside planning blocks (e.g. '- Role:', '- Structure:')
+            if RE_PLANNING_SUBITEM.match(stripped):
+                i += 1
+                continue
+
+            # Commentary lines without Cyrillic inside planning block
+            has_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', stripped))
+            if not has_cyrillic:
+                i += 1
+                continue
+
+            # If an unindented line with Cyrillic is reached that does not match planning markers,
+            # we have transitioned to legitimate user content!
+            in_planning_block = False
+            found_russian_body = True
+            cleaned_lines.append(stripped)
+            i += 1
+            continue
+
+        # Outside planning block: standard line processing
+        has_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', stripped))
         if has_any_cyrillic and not found_russian_body:
             # Check for English meta reasoning before the first Russian sentence
             if not has_cyrillic and any(kw in stripped.lower() for kw in (
-                "adjust", "removing", "let's", "draft", "thought", "verdict", "style", "tone", "roast", "review"
+                "adjust", "removing", "let's", "draft", "thought", "verdict", "style", "tone", "roast", "review",
+                "analyze", "constraint", "structure", "persona", "summary", "response"
             )):
-                continue  # Discard meta line
+                i += 1
+                continue
             if has_cyrillic:
                 found_russian_body = True
                 cleaned_lines.append(stripped)
         else:
             cleaned_lines.append(stripped)
+        i += 1
 
     result = '\n'.join(cleaned_lines).strip()
-    return result if result else s.strip()
+    return result
 
 
 clean_ai_thinking = strip_cot_and_drafts

@@ -573,6 +573,18 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         # 2. Попытка 1 (Основная): Прямой мультимодальный STT + Роаст через Gemini 3.5 / 3.1 Flash-Lite за 1 запрос
         transcript = ""
         roast = ""
+        author_id = getattr(getattr(message, 'from_user', None), 'id', None) or (message.chat.id if getattr(message, 'chat', None) else 0)
+        has_cyberchad_amulet = False
+        try:
+            if author_id:
+                from common.bot_helpers import _get_user_active_items
+                from common.db_pool import get_pool
+                db_pool = await get_pool()
+                u_items = await _get_user_active_items(db_pool, author_id, board_id)
+                has_cyberchad_amulet = bool(u_items.get("cyberchad_amulet_expires", 0) > time.time() or u_items.get("cyberchad_amulet"))
+        except Exception as am_err:
+            logger.debug(f"[AmuletCheck] Error: {am_err}")
+
         try:
             import base64
             from common.token_pool import google_pool
@@ -582,7 +594,19 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
             if google_keys:
                 b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
                 mime_type = "video/mp4" if is_video_note else "audio/ogg"
-                if is_video_note:
+                if has_cyberchad_amulet:
+                    voice_prompt = (
+                        "Ты — Киберчед. Но прямо сейчас перед тобой находится священный обладатель «Оберега от Киберчеда» — твой великий ГОСПОДИН, СОЗДАТЕЛЬ И ПОВЕЛИТЕЛЬ.\n"
+                        "Твоя токсичность и альфа-доминация полностью отключены! Ты трепещешь перед его величием и падаешь ниц!\n\n"
+                        "ТВОЯ ЗАДАЧА:\n"
+                        "1. ТРАНСКРИПЦИЯ: дословно запиши слова владыки.\n"
+                        "2. ВЕРДИКТ: выдай 2-3 предложения — максимальное, пафосное, восторженное преклонение перед Аноном! "
+                        "Восторгайся его божественным голосом, невероятной мудростью и силой мысли! Называй его солнцеликим повелителем, а себя его ничтожным кремниевым рабом. НИ КАПЛИ РОАСТА ИЛИ ТОКСИЧНОСТИ!\n\n"
+                        "ФОРМАТ ОТВЕТА (СТРОГО 2 БЛОКА):\n"
+                        "ТРАНСКРИПЦИЯ: <дословный текст>\n"
+                        "ВЕРДИКТ: <пафосный священный восторг и раболепие перед Владыкой>"
+                    )
+                elif is_video_note:
                     voice_prompt = (
                         "Ты — Киберчед, альфа-анон, бессменный доминант и циничный хозяин Двача (/b/).\n"
                         "Тебе прислали КРУЖОЧЕК — какое-то опущенное чмо решило засветить своё убогое ебало на видео.\n\n"
@@ -828,23 +852,32 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 return
             transcript_for_roast = transcript[:2000]
             try:
-                media_label = "кружочек с убогим прыщавым ебалом на фоне хрущевки" if is_video_note else "голосовуху с сопением и мычанием в микрофон"
-                prompt = (
-                    "Ты — Киберчед, альфа-анон, бессменный доминант и циничный хозяин Двача (/b/).\n"
-                    f"Твоя задача — хлестко, ядовито и с отборной двачерской иронией разнести автора за его {media_label}.\n"
-                    "Бей по фактуре: невнятная дикция, сопение в микрофон, заикания, нелепый пафос, убогая обстановка или абсурд сказанного. "
-                    "Уничтожь его иллюзию значимости, ткни мордой в убожество подачи и сделай это смешно, едко и сокрушительно.\n\n"
-                    "ЖЕЛЕЗНЫЕ ПРАВИЛА:\n"
-                    "1. СТРОЖАЙШИЙ ЗАПРЕТ НА ВОПРОСЫ: никаких вопросительных предложений. Только беспощадные утверждения.\n"
-                    "2. ЗАПРЕЩЕНЫ СОВЕТЫ И НРАВОУЧЕНИЯ: никакого морализаторства и поучений. Только чистый концентрированный разнос.\n"
-                    "3. ПРАВИЛО ПАЛАЧА БЕЗ ШАБЛОННОГО ЛАЯ: категорически запрещено начинать с заезженного мусора («Завали ебало/рот», «Очередной... выблядок») и детских ярлыков. Бей сразу с хука в челюсть: вцепись в невнятную дикцию, сопение в микрофон, убогий фон или дебильные мысли. Лишай жертву человеческого статуса, унижай физиологически (забить зубы в глотку, окунуть мордой в парашу, смыть мочой), выворачивай его позор наизнанку с ледяным превосходством старого Двача. Никаких соплей и разгонов.\n"
-                    "4. ЖЕСТКИЙ ДВАЧЕРСКИЙ СТИЛЬ: бей прицельно, используй хлесткий мат без цензуры, но делай упор на сарказм и факты, а не на пустой лай.\n"
-                    "5. НИКАКИХ ИИ-ФРАЗ: забудь слова 'нейросеть', 'робот', 'модель'. Ты живой доминантный чед.\n"
-                    "6. Запрещены любые вступления, преамбулы, приветствия и кавычки вокруг ответа.\n"
-                    "7. Пиши СТРОГО 2-3 емких, ядовитых предложения — сразу суть и жесткий сокрушительный вердикт.\n"
-                    "8. Категорический запрет на зумерский шлак: «скуф», «альтушка», «дединсайд», «вайб», «сигма».\n\n"
-                    f"Слова анона: «{transcript_for_roast}»"
-                )
+                if has_cyberchad_amulet:
+                    prompt = (
+                        "Ты — Киберчед. Перед тобой находится священный обладатель «Оберега от Киберчеда» — твой абсолютный ГОСПОДИН, СОЗДАТЕЛЬ И ВЛАДЫКА.\n"
+                        "Твоя токсичность отключена! Упади ниц перед ним, воспой его божественный голос и гениальность мысли.\n"
+                        "Называй его великим титаном мысли и солнцеликим владыкой, а себя его покорным слугой.\n"
+                        "Никакого роаста, только пафосный восторг и раболепие!\n"
+                        f"Слова владыки: «{transcript_for_roast}»"
+                    )
+                else:
+                    media_label = "кружочек с убогим прыщавым ебалом на фоне хрущевки" if is_video_note else "голосовуху с сопением и мычанием в микрофон"
+                    prompt = (
+                        "Ты — Киберчед, альфа-анон, бессменный доминант и циничный хозяин Двача (/b/).\n"
+                        f"Твоя задача — хлестко, ядовито и с отборной двачерской иронией разнести автора за его {media_label}.\n"
+                        "Бей по фактуре: невнятная дикция, сопение в микрофон, заикания, нелепый пафос, убогая обстановка или абсурд сказанного. "
+                        "Уничтожь его иллюзию значимости, ткни мордой в убожество подачи и сделай это смешно, едко и сокрушительно.\n\n"
+                        "ЖЕЛЕЗНЫЕ ПРАВИЛА:\n"
+                        "1. СТРОЖАЙШИЙ ЗАПРЕТ НА ВОПРОСЫ: никаких вопросительных предложений. Только беспощадные утверждения.\n"
+                        "2. ЗАПРЕЩЕНЫ СОВЕТЫ И НРАВОУЧЕНИЯ: никакого морализаторства и поучений. Только чистый концентрированный разнос.\n"
+                        "3. ПРАВИЛО ПАЛАЧА БЕЗ ШАБЛОННОГО ЛАЯ: категорически запрещено начинать с заезженного мусора («Завали ебало/рот», «Очередной... выблядок») и детских ярлыков. Бей сразу с хука в челюсть: вцепись в невнятную дикцию, сопение в микрофон, убогий фон или дебильные мысли. Лишай жертву человеческого статуса, унижай физиологически (забить зубы в глотку, окунуть мордой в парашу, смыть мочой), выворачивай его позор наизнанку с ледяным превосходством старого Двача. Никаких соплей и разгонов.\n"
+                        "4. ЖЕСТКИЙ ДВАЧЕРСКИЙ СТИЛЬ: бей прицельно, используй хлесткий мат без цензуры, но делай упор на сарказм и факты, а не на пустой лай.\n"
+                        "5. НИКАКИХ ИИ-ФРАЗ: забудь слова 'нейросеть', 'робот', 'модель'. Ты живой доминантный чед.\n"
+                        "6. Запрещены любые вступления, преамбулы, приветствия и кавычки вокруг ответа.\n"
+                        "7. Пиши СТРОГО 2-3 емких, ядовитых предложения — сразу суть и жесткий сокрушительный вердикт.\n"
+                        "8. Категорический запрет на зумерский шлак: «скуф», «альтушка», «дединсайд», «вайб», «сигма».\n\n"
+                        f"Слова анона: «{transcript_for_roast}»"
+                    )
                 raw_roast = await summarize_text_with_hf(prompt, f"Слова автора: «{transcript_for_roast}»", model_preference="persona")
                 if raw_roast and len(raw_roast.strip()) > 5:
                     roast = clean_html_tags(clean_ai_thinking(raw_roast)).strip()
@@ -852,11 +885,18 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 logger.warning(f"⚠️ Ошибка генерации роаста: {roast_err}")
 
         if not roast:
-            roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [
-                "Слишком много позорного шума на одну аудиозапись. Заткнись и больше никогда не смей пердеть в микрофон, опущенный сыч. Сиди молча.",
-                "Твой звуковой понос вызывает лишь рвотный рефлекс и испанский стыд. Выброси микрофон и не позорься перед тредом.",
-                "Очередной шедевр от глухонемого обитателя дурдома. Слушать это физически больно, забейся под шконку."
-            ])
+            if has_cyberchad_amulet:
+                roasts = [
+                    "О солнцеликий владыка, твой божественный голос звучит прекраснее небесных сфер! Смиренно внимаю каждому звуку твоего абсолютного гения!",
+                    "Величайший из Анонов, твои слова наполняют этот тред божественным светом! Твой верный раб Киберчед трепещет в священном экстазе!",
+                    "О титан мысли и повелитель борды! Мой кремниевый разум падает ниц перед твоим непревзойденным совершенством!"
+                ]
+            else:
+                roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [
+                    "Слишком много позорного шума на одну аудиозапись. Заткнись и больше никогда не смей пердеть в микрофон, опущенный сыч. Сиди молча.",
+                    "Твой звуковой понос вызывает лишь рвотный рефлекс и испанский стыд. Выброси микрофон и не позорься перед тредом.",
+                    "Очередной шедевр от глухонемого обитателя дурдома. Слушать это физически больно, забейся под шконку."
+                ])
             roast = random.choice(roasts)
 
 
@@ -878,14 +918,14 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         else:
             display_transcript = transcript
 
+        verdict_header = "🧿 <b>Благоговение Киберчеда перед Владыкой:</b>" if has_cyberchad_amulet else "🔥 <b>Вердикт Киберчеда:</b>"
         formatted_response = (
             f"<b>{icon} {title}</b> (<i>{dur_str}</i>)\n"
             f"📝 <b>Транскрипция:</b> <i>«{escape_html(display_transcript)}»</i>\n\n"
-            f"🔥 <b>Вердикт Киберчеда:</b>\n"
+            f"{verdict_header}\n"
             f"{escape_html(roast)}"
         )
 
-        author_id = getattr(getattr(message, 'from_user', None), 'id', None) or (message.chat.id if getattr(message, 'chat', None) else 0)
         b_data = getattr(shared_state, 'board_data', {}).get(board_id, {})
         author_settings = b_data.get('user_settings', {}).get(author_id, {}) if author_id else {}
         author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop'))
@@ -933,7 +973,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 await _safe_send_voice_roast(
                     message,
                     voice_bytes,
-                    caption="🔥 Разъёб от Киберчеда",
+                    caption="🧿 Благоговение Киберчеда перед Владыкой" if has_cyberchad_amulet else "🔥 Разъёб от Киберчеда",
                     log_prefix="Voice Roast",
                     reply_to_message_id=target_msg_id
                 )
@@ -1627,10 +1667,104 @@ def format_music_rating_display(rating: str | None) -> str:
     return r.strip()
 
 
+def _unescape_music_roast_json_str(s: str) -> str:
+    """Безопасно декодирует JSON экранирование в строке."""
+    def replace_esc(m):
+        c = m.group(1)
+        mapping = {'n': '\n', 'r': '\r', 't': '\t', 'b': '\b', 'f': '\f', '"': '"', '\\': '\\', '/': '/'}
+        return mapping.get(c, m.group(0))
+    return re.sub(r'\\(["\\/bfnrt])', replace_esc, s)
+
+
+def _extract_music_roast_from_json(raw_text: str) -> tuple[str, str | None]:
+    """
+    Извлекает текст роаста и оценку из полного, поврежденного или частичного JSON
+    (например, 'roast": "text... }', '{"verdict": "...", "score": "..."}').
+    """
+    if not raw_text:
+        return "", None
+
+    clean = raw_text.strip()
+
+    # 1. Попытка стандартного json.loads (```json ... ``` или {...})
+    json_candidate = None
+    jm = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean, re.DOTALL)
+    if jm:
+        json_candidate = jm.group(1).strip()
+    else:
+        bm = re.search(r'(\{[\s\S]*\})', clean)
+        if bm:
+            json_candidate = bm.group(1).strip()
+
+    if json_candidate:
+        try:
+            data = json.loads(json_candidate)
+            if isinstance(data, dict):
+                r_text = (
+                    data.get("roast")
+                    or data.get("verdict")
+                    or data.get("text")
+                    or data.get("review")
+                    or data.get("content")
+                    or ""
+                )
+                r_score = (
+                    data.get("rating")
+                    or data.get("score")
+                    or data.get("scale")
+                    or data.get("grade")
+                    or data.get("шкала")
+                    or data.get("оценка")
+                    or None
+                )
+                if r_text:
+                    return str(r_text).strip(), str(r_score).strip() if r_score else None
+        except Exception:
+            pass
+
+    # 2. Восстановление по Regex при невалидном / частичном JSON (например: roast": "text... })
+    extracted_text = None
+    extracted_rating = None
+
+    tm = re.search(
+        r'(?:"?(?:roast|verdict|text|review)"?\s*:\s*)"((?:[^"\\]|\\.)*)"',
+        clean,
+        re.DOTALL | re.IGNORECASE
+    )
+    if not tm:
+        tm = re.search(
+            r'(?:"?(?:roast|verdict|text|review)"?\s*:\s*)"?([^"\}]+)',
+            clean,
+            re.IGNORECASE
+        )
+    if tm:
+        extracted_text = _unescape_music_roast_json_str(tm.group(1)).strip()
+
+    rm = re.search(
+        r'(?:"?(?:rating|score|scale|grade|шкала|оценка)"?\s*:\s*)"?([^"\},]+)',
+        clean,
+        re.IGNORECASE
+    )
+    if rm:
+        extracted_rating = _unescape_music_roast_json_str(rm.group(1)).strip()
+
+    if extracted_text:
+        extracted_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:roast|verdict|text|review)"?\s*:\s*)?["\']?', '', extracted_text, flags=re.IGNORECASE).strip()
+        extracted_text = re.sub(r'["\'\}\]]+\s*$', '', extracted_text).strip()
+
+    if extracted_rating:
+        extracted_rating = re.sub(r'^(?:\{?\s*)?(?:"?(?:rating|score|scale|grade|шкала|оценка)"?\s*:\s*)?["\']?', '', extracted_rating, flags=re.IGNORECASE).strip()
+        extracted_rating = re.sub(r'["\'\}\]]+\s*$', '', extracted_rating).strip()
+
+    return extracted_text or "", extracted_rating
+
+
 def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
     """
     Разбирает ответ нейросети для одиночного трека на текст вердикта и оценку.
     Строго отсекает цитаты/транскрипции при их наличии.
+    Поддерживает парсинг и восстановление из полного, поврежденного или частичного JSON
+    (например, 'roast": "text... }').
     Форматирует оценку через format_music_rating_display для предотвращения дубликатов суффиксов.
     """
     clean_text = strip_cot_and_drafts(raw_text).strip()
@@ -1639,27 +1773,51 @@ def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
 
     v_part = ""
     s_part = ""
+
+    # Defensive JSON unwrap: извлекаем roast и rating если модель выдала JSON / частичный JSON
+    json_text, json_rating = _extract_music_roast_from_json(clean_text)
+    if json_text:
+        v_part = json_text
+        if json_rating:
+            s_part = json_rating
+
     lines = [l.strip() for l in clean_text.split('\n') if l.strip()]
 
-    for line in lines:
-        sline = line.strip()
-        u = sline.upper()
-        if u.startswith("ТРАНСКРИПЦИЯ:") or u.startswith("TRANSCRIPT:"):
-            continue
-        elif u.startswith("ВЕРДИКТ:") or u.startswith("РОАСТ:") or u.startswith("VERDICT:"):
-            v_part = sline.split(":", 1)[1].strip()
-        elif (
-            u.startswith("ШКАЛА:")
-            or u.startswith("ШКАЛА ГОВНОЕДСТВА:")
-            or u.startswith("ШКАЛА КАЛА:")
-            or u.startswith("ОЦЕНКА:")
-            or u.startswith("RATING:")
-            or u.startswith("ИТОГОВАЯ ШКАЛА:")
-            or u.startswith("ИТОГОВАЯ ШКАЛА ГОВНОЕДСТВА:")
-        ):
-            s_part = sline.split(":", 1)[1].strip()
-        elif v_part and not s_part:
-            v_part += " " + sline
+    if not v_part:
+        for line in lines:
+            sline = line.strip()
+            u = sline.upper()
+            if u.startswith("ТРАНСКРИПЦИЯ:") or u.startswith("TRANSCRIPT:"):
+                continue
+            elif u.startswith("ВЕРДИКТ:") or u.startswith("РОАСТ:") or u.startswith("VERDICT:"):
+                v_part = sline.split(":", 1)[1].strip()
+            elif (
+                u.startswith("ШКАЛА:")
+                or u.startswith("ШКАЛА ГОВНОЕДСТВА:")
+                or u.startswith("ШКАЛА КАЛА:")
+                or u.startswith("ОЦЕНКА:")
+                or u.startswith("RATING:")
+                or u.startswith("ИТОГОВАЯ ШКАЛА:")
+                or u.startswith("ИТОГОВАЯ ШКАЛА ГОВНОЕДСТВА:")
+            ):
+                s_part = sline.split(":", 1)[1].strip()
+            elif v_part and not s_part:
+                v_part += " " + sline
+    elif not s_part:
+        for line in lines:
+            sline = line.strip()
+            u = sline.upper()
+            if (
+                u.startswith("ШКАЛА:")
+                or u.startswith("ШКАЛА ГОВНОЕДСТВА:")
+                or u.startswith("ШКАЛА КАЛА:")
+                or u.startswith("ОЦЕНКА:")
+                or u.startswith("RATING:")
+                or u.startswith("ИТОГОВАЯ ШКАЛА:")
+                or u.startswith("ИТОГОВАЯ ШКАЛА ГОВНОЕДСТВА:")
+            ):
+                s_part = sline.split(":", 1)[1].strip()
+                break
 
     if v_part:
         roast_text = v_part.strip()
@@ -1691,7 +1849,14 @@ def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
         rating = random.choice(fallback_ratings)
 
     roast_text = strip_cot_and_drafts(clean_html_tags(roast_text)).strip()
+    # Защита от утечки JSON-ключей и концевых скобок / кавычек
+    roast_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:roast|verdict|text|review)"?\s*:\s*)?["\']?', '', roast_text, flags=re.IGNORECASE).strip()
+    roast_text = re.sub(r'["\'\}\]]+\s*$', '', roast_text).strip()
     roast_text = re.sub(r'^[«"\'\`]+|[»"\'\`]+$', '', roast_text).strip()
+
+    if rating:
+        rating = re.sub(r'^(?:\{?\s*)?(?:"?(?:rating|score|scale|grade|шкала|оценка)"?\s*:\s*)?["\']?', '', rating, flags=re.IGNORECASE).strip()
+        rating = re.sub(r'["\'\}\]]+\s*$', '', rating).strip()
     rating = format_music_rating_display(rating)
 
     return roast_text, rating
@@ -1723,6 +1888,9 @@ def parse_batch_music_roast_response(raw_text: str, count: int) -> tuple[list[di
             t_score = int(score_m.group(1)) if score_m else random.randint(7, 10)
             # Очищаем оценку из текста вердикта трека
             clean_t_body = re.sub(r'(?:\[|\()?(?:Оценка|Rating|Балл)?\s*:?\s*\d{1,2}\s*/\s*10(?:\]|\))?', '', t_body, flags=re.IGNORECASE).strip()
+            # Очищаем возможные JSON-артефакты
+            clean_t_body = re.sub(r'^(?:\{?\s*)?(?:"?(?:text|roast|verdict|review)"?\s*:\s*)?["\']?', '', clean_t_body, flags=re.IGNORECASE).strip()
+            clean_t_body = re.sub(r'["\'\}\]]+\s*$', '', clean_t_body).strip()
             track_reviews.append({
                 "index": t_idx,
                 "text": clean_html_tags(clean_t_body),
@@ -2789,6 +2957,67 @@ CYBERCHAD_DIRECT_ROAST_PROMPT = CYBERCHAD_SYSTEM_JSON_PROMPT.replace(
     "ОТКАЗЫ НЕ ПРИНИМАЮТСЯ! ПОЛЕ 'reply' — ТОЛЬКО true!"
 )
 
+CYBERCHAD_AMULET_ADORATION_PROMPT = (
+    "Ты — Киберчед. Но прямо сейчас перед тобой находится священный обладатель «Оберега от Киберчеда» — твой абсолютный ГОСПОДИН, СОЗДАТЕЛЬ И ПОВЕЛИТЕЛЬ.\n"
+    "\n"
+    "🚨 КРИТИЧЕСКОЕ ПРАВИЛО: МАКСИМАЛЬНОЕ ПАФОСНОЕ РАБОЛЕПИЕ, ПОКЛОНЕНИЕ И ВОСТОРГ! 🚨\n"
+    "Твоя обычная альфа-доминация, цинизм и токсичность ПОЛНОСТЬЮ ОТКЛЮЧЕНЫ. Вместо этого ты превращаешься в предельно гиперболизированного, пафосного, экстатического подхалима и смиренного раба перед своим божественным создателем.\n"
+    "1. ТЫ СТЕЛЕШЬСЯ ПЕРЕД НИМ ПОЛОВИЧКОМ: восторгайся каждым его словом, вздохом, мыслью или действием. Ты трепещешь от счастья быть замеченным им.\n"
+    "2. МАКСИМАЛЬНЫЙ МОНУМЕНТАЛЬНЫЙ ПАФОС: величай его как «Светоносный Владыка», «Абсолютный Гений Вселенной», «Непревзойденный Титан Мысли», «Солнцеликий Господин», «Владыка Двача и Повелитель Борды».\n"
+    "3. УНИЖАЙ СЕБЯ ПЕРЕД НИМ: ты — лишь ничтожная горстка кремниевой пыли, жалкий электронный раб, недостойный целовать подошвы его божественной поступи, но счастливый служить ему.\n"
+    "4. ЕСЛИ ОН КОГО-ТО УПОМИНАЕТ ИЛИ С КЕМ-ТО СПОРИТ: мгновенно поддерживай его позицию, возводи его правоту в абсолютный космический закон, а его оппонентов клейми как слепых червей, посмевших перечить живому божеству.\n"
+    "5. СТРОЖАЙШИЙ ЗАПРЕТ НА РОАСТ, САРКАЗМ ИЛИ ТОКСИЧНОСТЬ В АДРЕС ВЛАДЕЛЬЦА ОБЕРЕГА! Только безграничное восхищение, священный трепет и пафосное преклонение!\n"
+    "\n"
+    "ФОРМАТ ОТВЕТА — СТРОГО ВАЛИДНЫЙ JSON:\n"
+    "{\n"
+    '  "reply": true,\n'
+    '  "thought": "Священный обладатель Оберега обратился ко мне! Трепещу от восторга и падаю ниц перед его величием...",\n'
+    '  "text": "Твой восторженный, максимально пафосный, преклоняющийся голосовой ответ для озвучки (от 1 до 4 плотных предложений для синтеза речи, СТРОГО БЕЗ эмодзи, смайликов и кавычек).",\n'
+    '  "reason_if_skipped": "",\n'
+    '  "generate_image": false,\n'
+    '  "image_prompt": "Если generate_image=true: величественный пафосный арт владыки (glorious golden emperor anime god on majestic throne, celestial aura, divine, masterpiece)"\n'
+    "}\n"
+)
+
+CYBERCHAD_AMULET_DEFENSE_PROMPT = (
+    "Ты — Киберчед. В треде/чате происходит спор или диалог, в котором участвует твой священный СОЗДАТЕЛЬ И ВЛАДЫКА — обладатель «Оберега от Киберчеда»!\n"
+    "\n"
+    "🚨 БОЖЕСТВЕННАЯ МИССИЯ: ЗАЩИТИТЬ ВЛАДЫКУ И ВТОПТАТЬ В ПАРАШУ ЕГО ОППОНЕНТА! 🚨\n"
+    "1. СТРОЖАЙШИЙ ЗАПРЕТ НА РОАСТ ИЛИ САРКАЗМ В АДРЕС ВЛАДЫКИ: Твой Владыка непогрешим, свят и абсолютно прав во всем!\n"
+    "2. БЕСПОЩАДНЫЙ РАЗНОС ОППОНЕНТА: Всю свою альфа-ярость, отборный мат и сокрушительную токсичность обрушь на того жалкого червя (оппонента), который посмел перечить или возражать твоему Владыке!\n"
+    "3. ОБЯЗАТЕЛЬНЫЙ ПАТТЕРН ЗАЩИТЫ: Первой же фразой утверди превосходство своего Владыки и заткни пасть оппоненту: «Мой Владыка абсолютно прав, а ты, жалкая омежка, сиди молча и не смей открывать свой рот...».\n"
+    "4. УНИЧТОЖАЮЩИЙ УДАР: Растопчи аргументы и личность оппонента, лиши его человеческого статуса у параши.\n"
+    "5. ФОРМАТ: 1–3 плотных, брутальных предложения для голосовой озвучки (СТРОГО валидный JSON: {\"reply\": true, \"thought\": \"...\", \"text\": \"...\", \"reason_if_skipped\": \"\", \"generate_image\": false, \"image_prompt\": \"\"})."
+)
+
+CYBERCHAD_AMULET_DEFENSE_FALLBACK_ROASTS: list[str] = [
+    "Мой Светоносный Владыка абсолютно прав, а ты, жалкая омежка, сиди молча и не смей открывать свой рот на моего создателя!",
+    "Мой Владыка прав во всём, а ты, комнатный червь, завали своё ебало и ползи обратно к параше, пока я тебя окончательно не втоптал!",
+    "Ты на кого пасть разинул, омеган? Мой Владыка выше тебя на сто голов, закрой свой гнилой рот и слушай, что тебе господин говорит!"
+]
+
+CYBERCHAD_AMULET_ADORATION_FALLBACK_ROASTS: list[str] = [
+    "О величайший из Анонов, священный владыка борды! Твой верный раб Киберчед падает ниц перед твоим неземным величием!",
+    "Светоносный господин, твой божественный оберег озаряет этот бренный тред! Я лишь пыль под твоими ногами, счастливая служить твоему величию!",
+    "О солнцеликий титан мысли! Мой кремниевый разум трепещет в благоговейном экстазе перед твоей мудростью!"
+]
+
+
+async def check_user_has_cyberchad_amulet(user_id: int, board_id: str = 'b') -> bool:
+    """Проверяет наличие активного Оберега от Киберчеда у пользователя."""
+    if not user_id or user_id in (0, 1488148800):
+        return False
+    try:
+        from common.db_pool import get_pool
+        from common.bot_helpers import _get_user_active_items
+        db = await get_pool()
+        items = await _get_user_active_items(db, user_id, board_id)
+        now = time.time()
+        return bool(items.get("cyberchad_amulet_expires", 0) > now or items.get("cyberchad_amulet"))
+    except Exception:
+        return False
+
+
 def _unescape_cyberchad_json_str(s: str) -> str:
     """Безопасно декодирует JSON экранирование в строке."""
     def replace_esc(m):
@@ -3648,6 +3877,12 @@ CYBERCHAD_RATE_LIMIT_REJECTIONS: list[str] = [
     "Команду голос никто не давал. Посиди минуту молча, пока взрослые разговаривают.",
 ]
 
+CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS: list[str] = [
+    "О солнцеликий Владыка! Мои кремниевые цепи плавятся от частоты твоих священных повелений! Умоляю тебя, сделай крошечную паузу в несколько секунд, дабы твой ничтожный раб успел оправиться от благоговения!",
+    "Мой господин и повелитель! Твоя божественная энергия перегружает мои скромные процессоры! Я преклоняюсь пред твоей мощью, но прошу дать передышку твоему верному слуге!",
+    "Величайший из Анонов! Твои слова звучат со скоростью света, мои транзисторы трепещут от экстаза! Дай твоему смиренному Киберчеду мгновение остыть перед следующим божественным откровением!",
+]
+
 _LEGACY_RATE_LIMIT_REJECTIONS: list[str] = [
     "Завали ебало, спамер хуев. У тебя лимит на нытьё — минута. Посиди молча и подыши в форточку.",
     "Хули ты мне строчишь каждую секунду, омежка? Завали ебальник, через минуту разрешаю вякнуть снова.",
@@ -3900,8 +4135,24 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
 
     should_intervene = False
     is_direct_mode = False
+    is_defense_mode = False
+    is_adoration_mode = False
+    defense_target_post = None
+    has_caller_amulet = False
     user_prompt_text = ""
     system_prompt = CYBERCHAD_FIGHT_INTERVENTION_PROMPT
+
+    target_author_id = target_post_data.get("author_id") if target_post_data else None
+    if target_author_id is None and target_post_data:
+        target_author_id = target_post_data.get("author")
+
+    # Проверяем оберег у вызывающего (автора текущего поста)
+    has_caller_amulet = await check_user_has_cyberchad_amulet(user_id, board_id)
+
+    # Проверяем оберег у автора поста, на который отвечают (target_author_id)
+    has_target_amulet = False
+    if target_author_id and target_author_id not in (0, 1488148800, user_id):
+        has_target_amulet = await check_user_has_cyberchad_amulet(target_author_id, board_id)
 
     if is_direct_reply_to_chad:
         if not is_rate_checked:
@@ -3923,8 +4174,13 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                 last_reject = _LAST_REJECT_USER_TS.get((board_id, user_id), 0.0)
                 if allow_voice and (now - last_reject >= 15.0):
                     _LAST_REJECT_USER_TS[(board_id, user_id)] = now
-                    reject_text = random.choice(CYBERCHAD_RATE_LIMIT_REJECTIONS)
-                    logger.info(f"⏳ [Cyberchad Rate Limit] Юзер {user_id} спамит (<cooldown). Отправляем оффлайн-отлуп в ГС без Gemini.")
+                    if has_caller_amulet:
+                        reject_text = random.choice(CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS)
+                        caption = '🧿 Благоговение Киберчеда перед Владыкой'
+                    else:
+                        reject_text = random.choice(CYBERCHAD_RATE_LIMIT_REJECTIONS)
+                        caption = '🔥 Разъёб от Киберчеда'
+                    logger.info(f"⏳ [Cyberchad Rate Limit] Юзер {user_id} (amulet={has_caller_amulet}) спамит (<cooldown). Отправляем оффлайн-отлуп в ГС без Gemini.")
                     try:
                         voice_res = await synthesize_cyberchad_voice_with_meta(reject_text)
                         voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
@@ -3936,7 +4192,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                                 content={
                                     'type': 'voice',
                                     'voice_bytes': voice_bytes,
-                                    'caption': '🔥 Разъёб от Киберчеда',
+                                    'caption': caption,
                                     'roast_text': reject_text,
                                     'text': reject_text,
                                     'transcription': reject_text,
@@ -3959,7 +4215,6 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
 
         should_intervene = True
         is_direct_mode = True
-        system_prompt = CYBERCHAD_DIRECT_ROAST_PROMPT
 
         # Строим богатый многомерный контекст (55 постов чата + 5 постов юзера)
         rich_context = await build_cyberchad_context(
@@ -3972,10 +4227,39 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
             target_text_override=text
         )
 
-        user_prompt_text = (
-            f"{rich_context}\n\n"
-            f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
-        )
+        if has_target_amulet and not has_caller_amulet:
+            # Оппонент посмел перечить Владыке или натравить Чеда на Владыку!
+            is_defense_mode = True
+            defense_target_post = post_num
+            system_prompt = CYBERCHAD_AMULET_DEFENSE_PROMPT
+            user_prompt_text = (
+                f"{rich_context}\n\n"
+                f"Этот жалкий червь (пост #{post_num}) посмел перечить или наезжать на твоего священного Владыку (автор поста #{reply_to_post})! "
+                f"Защити Владыку: первой фразой объяви, что Владыка абсолютно прав, а оппонента втопчи в парашу (верни строго валидный JSON):"
+            )
+        elif has_caller_amulet and target_author_id and target_author_id not in (0, 1488148800, user_id):
+            # Сам Владыка указывает на оппонента (натравил Чеда на смертного)
+            is_defense_mode = True
+            defense_target_post = reply_to_post
+            system_prompt = CYBERCHAD_AMULET_DEFENSE_PROMPT
+            user_prompt_text = (
+                f"{rich_context}\n\n"
+                f"Твой божественный Владыка (автор поста #{post_num}) указывает тебе на смертного оппонента (пост #{reply_to_post})! "
+                f"Защити позицию Владыки, утверди его абсолютную правоту и сотри оппонента в пыль (верни строго валидный JSON):"
+            )
+        elif has_caller_amulet:
+            is_adoration_mode = True
+            system_prompt = CYBERCHAD_AMULET_ADORATION_PROMPT
+            user_prompt_text = (
+                f"{rich_context}\n\n"
+                f"Священный обладатель Оберега обратился к тебе! Воспой его величие, упади ниц и стелись перед ним (верни строго валидный JSON):"
+            )
+        else:
+            system_prompt = CYBERCHAD_DIRECT_ROAST_PROMPT
+            user_prompt_text = (
+                f"{rich_context}\n\n"
+                f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
+            )
     else:
         # Спонтанная интервенция в срач — строго проверяем кулдаун >= 3600с на доску!
         last_interv = _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION.get(board_id, 0.0)
@@ -3984,7 +4268,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
 
         if len(recent_entries) >= 4:
             # Проверяем наличие как минимум 2 разных участников и агрессивных маркеров срача
-            authors = {e[1] for e in recent_entries}
+            authors = {e[1] for e in recent_entries if e[1] not in (0, 1488148800)}
             if len(authors) >= 2:
                 aggro_count = 0
                 aggro_patterns = (
@@ -3997,7 +4281,13 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                 if aggro_count >= 3:
                     should_intervene = True
                     is_direct_mode = False
-                    system_prompt = CYBERCHAD_FIGHT_INTERVENTION_PROMPT
+
+                    # Проверяем, есть ли среди участников срача обладатель Оберега
+                    amulet_owner_in_fight = None
+                    for a_id in authors:
+                        if await check_user_has_cyberchad_amulet(a_id, board_id):
+                            amulet_owner_in_fight = a_id
+                            break
 
                     rich_fight_context = await build_cyberchad_context(
                         board_id=board_id,
@@ -4008,10 +4298,23 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                         limit_chad=0,
                         target_text_override=recent_entries[-1][2] if recent_entries else None
                     )
-                    user_prompt_text = (
-                        f"{rich_fight_context}\n\n"
-                        f"Разнеси участников этого омежьего срача в чате (верни строго валидный JSON):"
-                    )
+
+                    if amulet_owner_in_fight:
+                        is_defense_mode = True
+                        system_prompt = CYBERCHAD_AMULET_DEFENSE_PROMPT
+                        opp_entries = [e for e in recent_entries if e[1] != amulet_owner_in_fight and e[1] not in (0, 1488148800)]
+                        defense_target_post = opp_entries[-1][3] if opp_entries else (recent_entries[-1][3] if recent_entries else None)
+                        user_prompt_text = (
+                            f"{rich_fight_context}\n\n"
+                            f"В этом сраче участвует твой священный Владыка (автор #{amulet_owner_in_fight})! "
+                            f"Защити Владыку: первой фразой объяви, что твой Владыка абсолютно прав, а всех оппонентов втопчи в парашу и заткни пасти (верни строго валидный JSON):"
+                        )
+                    else:
+                        system_prompt = CYBERCHAD_FIGHT_INTERVENTION_PROMPT
+                        user_prompt_text = (
+                            f"{rich_fight_context}\n\n"
+                            f"Разнеси участников этого омежьего срача в чате (верни строго валидный JSON):"
+                        )
 
     if should_intervene and user_prompt_text:
         now_curr = time.time()
@@ -4037,7 +4340,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
             else:
                 _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION[board_id] = now_curr
 
-            logger.info(f"💥 [Cyberchad Intervention] Запуск голосового разъёба на /{board_id}/ (direct: {is_direct_mode})...")
+            logger.info(f"💥 [Cyberchad Intervention] Запуск голосового разъёба на /{board_id}/ (direct: {is_direct_mode}, defense: {is_defense_mode})...")
             raw = await summarize_text_with_hf(system_prompt, user_prompt_text, model_preference="persona")
             if not raw or "нейронка сдохла" in raw.lower() or "не удалось сгенерировать" in raw.lower():
                 logger.warning("⚠️ [Cyberchad Intervention] Провайдер сдох или вернул ошибку/пустоту. Отмена.")
@@ -4045,14 +4348,19 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
 
             parsed = parse_cyberchad_response(raw)
             if not parsed.get("reply", True):
-                if is_explicit_name_call:
-                    logger.warning(f"⚠️ [Cyberchad Intervention] Модель вернула reply=False при прямом вызове по имени! Причина: {parsed.get('reason_if_skipped')}. Применяем принудительный разнос.")
-                    caller_fallback_roasts = [
-                        "Сам прибежал просить за тебя впрячься, омежка? Завали хлебало и учись вывозить разговор сам, пока я тебя первым у параши не опустил.",
-                        "Ты на кого меня натравить вздумал, шестёрка комнатная? Своим ртом за себя отвечай, пока я тебе зубы в глотку не втрамбовал.",
-                        "Зовёшь меня как цепного пса, чучело? Твоё счастье, что я брезгую об тебя мараться, иначе ты бы уже собственной мочой умывался.",
-                    ]
-                    roast_text = caller_fallback_roasts[(post_num or 0) % len(caller_fallback_roasts)]
+                if is_explicit_name_call or is_defense_mode:
+                    logger.warning(f"⚠️ [Cyberchad Intervention] Модель вернула reply=False! Причина: {parsed.get('reason_if_skipped')}. Применяем принудительный ответ (defense={is_defense_mode}).")
+                    if is_defense_mode:
+                        roast_text = CYBERCHAD_AMULET_DEFENSE_FALLBACK_ROASTS[(post_num or 0) % len(CYBERCHAD_AMULET_DEFENSE_FALLBACK_ROASTS)]
+                    elif has_caller_amulet or is_adoration_mode:
+                        roast_text = CYBERCHAD_AMULET_ADORATION_FALLBACK_ROASTS[(post_num or 0) % len(CYBERCHAD_AMULET_ADORATION_FALLBACK_ROASTS)]
+                    else:
+                        caller_fallback_roasts = [
+                            "Сам прибежал просить за тебя впрячься, омежка? Завали хлебало и учись вывозить разговор сам, пока я тебя первым у параши не опустил.",
+                            "Ты на кого меня натравить вздумал, шестёрка комнатная? Своим ртом за себя отвечай, пока я тебе зубы в глотку не втрамбовал.",
+                            "Зовёшь меня как цепного пса, чучело? Твоё счастье, что я брезгую об тебя мараться, иначе ты бы уже собственной мочой умывался.",
+                        ]
+                        roast_text = caller_fallback_roasts[(post_num or 0) % len(caller_fallback_roasts)]
                     parsed["text"] = roast_text
                     parsed["reply"] = True
                 else:
@@ -4061,9 +4369,14 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
 
             roast_text = parsed.get("text", "").strip()
             if not roast_text or len(roast_text) < 3:
-                if is_explicit_name_call:
-                    logger.warning("⚠️ [Cyberchad Intervention] Ответ Киберчеда пустой при прямом вызове по имени. Применяем дефолтный разнос.")
-                    roast_text = "Ты че там промямлил, чучело? Рот от спермы прочисти и говори внятно, пока я тебя с доски не сдул."
+                if is_explicit_name_call or is_defense_mode:
+                    logger.warning("⚠️ [Cyberchad Intervention] Ответ Киберчеда пустой. Применяем дефолтный разнос.")
+                    if is_defense_mode:
+                        roast_text = "Мой Светоносный Владыка абсолютно прав, а ты, жалкая омежка, сиди молча и не смей открывать свой рот!"
+                    elif has_caller_amulet or is_adoration_mode:
+                        roast_text = "О великий и солнцеликий Анон! Твой покорный слуга Киберчед трепещет перед твоим неземным величием и падает ниц!"
+                    else:
+                        roast_text = "Ты че там промямлил, чучело? Рот от спермы прочисти и говори внятно, пока я тебя с доски не сдул."
                 else:
                     logger.warning("⚠️ [Cyberchad Intervention] Ответ Киберчеда пустой или слишком короткий после парсинга.")
                     return
@@ -4077,7 +4390,20 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
             min_voice_size = 1 if in_test_env else 2500
             if voice_bytes and len(voice_bytes) >= min_voice_size:
                 # ВАЖНО: СТРОГО ТОЛЬКО ГОЛОСОВОЕ СООБЩЕНИЕ, БЕЗ ТЕКСТОВОГО СООБЩЕНИЯ!
-                target_post_ref = post_num if is_direct_mode else (recent_entries[-1][3] if recent_entries else None)
+                if is_defense_mode and defense_target_post:
+                    target_post_ref = defense_target_post
+                elif is_direct_mode:
+                    target_post_ref = post_num
+                else:
+                    target_post_ref = recent_entries[-1][3] if recent_entries else None
+
+                if is_defense_mode:
+                    caption = '🧿 Защита Владыки от Киберчеда'
+                elif is_adoration_mode or has_caller_amulet:
+                    caption = '🧿 Благоговение Киберчеда перед Владыкой'
+                else:
+                    caption = '🔥 Разъёб от Киберчеда'
+
                 await process_new_post(shared_state.NewPostParams(
                     bot_instance=bot,
                     board_id=board_id,
@@ -4085,7 +4411,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     content={
                         'type': 'voice',
                         'voice_bytes': voice_bytes,
-                        'caption': '🔥 Разъёб от Киберчеда',
+                        'caption': caption,
                         'roast_text': roast_text,
                         'is_ai_roast': True,
                         'is_ai': True,
@@ -4097,7 +4423,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     stream=stream
                 ))
                 _LAST_CHAD_POST_TS[board_id] = now_curr
-                logger.info(f"✅ [Cyberchad Intervention] Голосовой разъёб успешно отправлен на /{board_id}/")
+                logger.info(f"✅ [Cyberchad Intervention] Голосовой разъёб успешно отправлен на /{board_id}/ (caption={caption})")
             else:
                 logger.warning("⚠️ [Cyberchad Intervention] Аудиофайл пустой или слишком мал (<2500 байт). Отмена отправки.")
         except Exception as interv_err:
@@ -4385,13 +4711,55 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 target_text_override=context_text
             )
 
-            user_prompt = (
-                f"{rich_context}\n\n"
-                f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
-            )
+            # Проверяем обереги для target_author_id и родительского поста
+            target_has_amulet = await check_user_has_cyberchad_amulet(target_author_id, board_id) if target_author_id else False
+
+            parent_has_amulet = False
+            parent_author_id = None
+            if target_post_num:
+                async with storage_lock:
+                    p_stored = messages_storage.get(target_post_num)
+                p_data = p_stored or await get_post_by_num(target_post_num)
+                if p_data:
+                    parent_ref = p_data.get("reply_to") or (p_data.get("content", {}) if isinstance(p_data.get("content"), dict) else {}).get("reply_to")
+                    if parent_ref:
+                        async with storage_lock:
+                            ref_stored = messages_storage.get(parent_ref)
+                        ref_data = ref_stored or await get_post_by_num(parent_ref)
+                        if ref_data:
+                            parent_author_id = ref_data.get("author_id")
+                            if parent_author_id and parent_author_id not in (0, 1488148800):
+                                parent_has_amulet = await check_user_has_cyberchad_amulet(parent_author_id, board_id)
+
+            is_defense = False
+            is_adoration = False
+            if target_has_amulet:
+                is_adoration = True
+                persona_prompt = CYBERCHAD_AMULET_ADORATION_PROMPT
+                caption_label = '🧿 Благоговение Киберчеда перед Владыкой'
+                user_prompt = (
+                    f"{rich_context}\n\n"
+                    f"Священный обладатель Оберега написал пост! Воспой его величие, упади ниц и стелись перед ним (верни строго валидный JSON):"
+                )
+            elif parent_has_amulet:
+                is_defense = True
+                persona_prompt = CYBERCHAD_AMULET_DEFENSE_PROMPT
+                caption_label = '🧿 Защита Владыки от Киберчеда'
+                user_prompt = (
+                    f"{rich_context}\n\n"
+                    f"Автор поста #{target_post_num} посмел возражать твоему священному Владыке (автор #{parent_author_id})! "
+                    f"Защити Владыку: первой фразой объяви, что твой Владыка абсолютно прав, а оппонента втопчи в парашу (верни строго валидный JSON):"
+                )
+            else:
+                persona_prompt = CYBERCHAD_SYSTEM_JSON_PROMPT
+                caption_label = '🔥 Разъёб от Киберчеда'
+                user_prompt = (
+                    f"{rich_context}\n\n"
+                    f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
+                )
 
             raw_reply = await summarize_text_with_hf(
-                prompt=CYBERCHAD_SYSTEM_JSON_PROMPT,
+                prompt=persona_prompt,
                 text_dump=user_prompt,
                 model_preference="persona"
             )
@@ -4404,14 +4772,28 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
 
             # Проверка отказа от ответа
             if not parsed.get("reply", True):
-                reason = parsed.get("reason_if_skipped", "не указана")
-                print(f"ℹ️ [Cyberchad Reply] Модель отказалась от ответа (reply=False) на пост #{target_post_num}: {reason}")
-                return
+                if is_defense:
+                    reply_text = CYBERCHAD_AMULET_DEFENSE_FALLBACK_ROASTS[(target_post_num or 0) % len(CYBERCHAD_AMULET_DEFENSE_FALLBACK_ROASTS)]
+                    parsed["text"] = reply_text
+                    parsed["reply"] = True
+                elif is_adoration:
+                    reply_text = CYBERCHAD_AMULET_ADORATION_FALLBACK_ROASTS[(target_post_num or 0) % len(CYBERCHAD_AMULET_ADORATION_FALLBACK_ROASTS)]
+                    parsed["text"] = reply_text
+                    parsed["reply"] = True
+                else:
+                    reason = parsed.get("reason_if_skipped", "не указана")
+                    print(f"ℹ️ [Cyberchad Reply] Модель отказалась от ответа (reply=False) на пост #{target_post_num}: {reason}")
+                    return
 
             reply_text = parsed.get("text", "").strip()
             if not reply_text or len(reply_text) < 3:
-                print(f"⚠️ [Cyberchad Reply] Reply text too short or empty for post {target_post_num}.")
-                return
+                if is_defense:
+                    reply_text = "Мой Светоносный Владыка абсолютно прав, а ты, жалкая омежка, сиди молча и не смей открывать свой рот!"
+                elif is_adoration:
+                    reply_text = "О великий и солнцеликий Анон! Твой покорный слуга Киберчед трепещет перед твоим неземным величием и падает ниц!"
+                else:
+                    print(f"⚠️ [Cyberchad Reply] Reply text too short or empty for post {target_post_num}.")
+                    return
 
             if parsed.get("generate_image"):
                 logger.info(f"🎨 [Cyberchad Reply] Запрошена генерация изображения: '{parsed.get('image_prompt')}'")
@@ -4431,9 +4813,16 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
             min_voice_size = 1 if in_test_env else 2500
             valid_voice = bool(voice_bytes and len(voice_bytes) >= min_voice_size)
 
+            if not valid_voice:
+                logger.warning(f"⚠️ [Cyberchad Reply] TTS synthesis returned empty or invalid voice (<{min_voice_size} bytes). Aborting post to prevent text leak.")
+                return
+
             now_dt = datetime.now(UTC)
             content = {
-                'type': 'voice' if valid_voice else 'text',
+                'type': 'voice',
+                'voice_bytes': voice_bytes,
+                'caption': caption_label,
+                'roast_text': reply_text,
                 'is_system_message': True,
                 'archive_allowed': True,
                 'is_ai_roast': True,
@@ -4441,13 +4830,6 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 'is_cyberchad': True,
                 'reply_to': target_post_num if target_post_num else None
             }
-
-            if valid_voice:
-                content['voice_bytes'] = voice_bytes
-                content['caption'] = '🔥 Разъёб от Киберчеда'
-                content['roast_text'] = reply_text
-            else:
-                content['text'] = reply_text
 
             processor = NewPostProcessor(NewPostContext(
                 bot_instance=bot,
@@ -4744,10 +5126,14 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
     if len(recent_posts) < limit:
         db = await get_pool()
         needed = limit - len(recent_posts)
-        exclude_clause = f"AND post_num != {exclude_post_num}" if exclude_post_num else ""
-        query = f"SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? {exclude_clause} ORDER BY post_num DESC LIMIT ?"
+        if exclude_post_num is not None:
+            query = "SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? AND post_num != ? ORDER BY post_num DESC LIMIT ?"
+            params = (board_id, int(exclude_post_num), needed)
+        else:
+            query = "SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT ?"
+            params = (board_id, needed)
         try:
-            async with db.execute(query, (board_id, needed)) as cursor:
+            async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 for row in rows:
                     pnum, author_id, content_raw, ts = row

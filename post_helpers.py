@@ -352,21 +352,21 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
         min_voice_size = 1 if in_test_env else 2500
         valid_voice = bool(voice_bytes and len(voice_bytes) >= min_voice_size)
 
+        if not valid_voice:
+            print(f"⚠️ [Auto-Roast] TTS synthesis returned empty or invalid voice (<{min_voice_size} bytes). Aborting post to prevent text leak.")
+            return
+
         content_payload = {
-            'type': 'voice' if valid_voice else 'text',
+            'type': 'voice',
+            'voice_bytes': voice_bytes,
+            'caption': '🔥 Разъёб от Киберчеда',
+            'roast_text': roast_text,
             'is_system_message': True,
             'archive_allowed': True,
             'is_ai_roast': True,
             'is_ai': True,
             'is_cyberchad': True
         }
-
-        if valid_voice:
-            content_payload['voice_bytes'] = voice_bytes
-            content_payload['caption'] = '🔥 Разъёб от Киберчеда'
-            content_payload['roast_text'] = roast_text
-        else:
-            content_payload['text'] = roast_text
         
         pnum = await create_post(
             board_id=board_id,

@@ -131,7 +131,14 @@ async def _safe_groq_json(messages, max_tokens=1024):
                                 logger.warning(f"DeepCheck JSON Parse Warning: {jde} | Raw AI Response: {raw_content[:150]}")
                                 return None
                         elif resp.status_code == 429:
-                            logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}, switching model immediately.")
+                            logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}. Penalizing key and cooling down 2.5s.")
+                            groq_pool.penalize_token(token, 120.0)
+                            await asyncio.sleep(2.5)
+                            break
+                        elif resp.status_code == 404:
+                            logger.warning(f"⚠️ Groq model {current_model} not found (404). Cooldown 2.5s, skipping model.")
+                            groq_pool.penalize_token(token, 2.5)
+                            await asyncio.sleep(2.5)
                             break
                         elif resp.status_code == 401:
                             logger.warning(
@@ -144,8 +151,9 @@ async def _safe_groq_json(messages, max_tokens=1024):
                                 f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
                             )
                             if resp.status_code == 400 and "refusal" in resp.text.lower():
-                                logger.warning(f"DeepCheck API refusal for {file_id}, skipping without false positive penalty.")
+                                logger.warning("DeepCheck API refusal, skipping without false positive penalty.")
                                 return None
+                            await asyncio.sleep(2.5)
                             break
                 except Exception as e:
                     err_str = str(e).lower()
@@ -160,18 +168,27 @@ async def _safe_groq_json(messages, max_tokens=1024):
                         )
                         groq_pool.penalize_token(token, 900.0)
                         break
+                    if "429" in err_str or "rate limit" in err_str:
+                        groq_pool.penalize_token(token, 120.0)
+                        await asyncio.sleep(2.5)
+                        break
+                    if "404" in err_str or "not found" in err_str:
+                        groq_pool.penalize_token(token, 2.5)
+                        await asyncio.sleep(2.5)
+                        break
                     if strategy["proxy"] is not None:
                         logger.warning(f"⚠️ [DeepCheck] Proxy connection failed ({e}), falling back to Direct connection...")
                         continue
                     else:
                         logger.error(f"DeepCheck Req Failed ({strategy['name']}): {e}")
+                        await asyncio.sleep(2.5)
                         break
 
     # === РЕЗЕРВНЫЙ ФОЛБЭК НА GEMINI VISION ===
     gemini_keys = google_pool.get_all_active_tokens()
     if gemini_keys:
         for g_key in gemini_keys:
-            for g_model in ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.5-flash"]:
+            for g_model in ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash"]:
                 try:
                     transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
                     async with httpx.AsyncClient(timeout=GROQ_TIMEOUT, transport=transport, verify=False) as client:
@@ -197,7 +214,25 @@ async def _safe_groq_json(messages, max_tokens=1024):
                                 return json.loads(content)
                             except Exception:
                                 pass
+                        elif resp.status_code == 429:
+                            logger.warning(f"⚠️ [DeepCheck] Gemini 429 Rate Limit for {g_model}. Cooldown 2.5s.")
+                            google_pool.penalize_token(g_key, 120.0)
+                            await asyncio.sleep(2.5)
+                            break
+                        elif resp.status_code == 404:
+                            logger.warning(f"⚠️ [DeepCheck] Gemini model {g_model} returned 404. Cooldown 2.5s, skipping model.")
+                            google_pool.penalize_token(g_key, 2.5)
+                            await asyncio.sleep(2.5)
+                            continue
+                        else:
+                            await asyncio.sleep(2.5)
                 except Exception as g_err:
+                    err_str = str(g_err).lower()
+                    if "429" in err_str:
+                        google_pool.penalize_token(g_key, 120.0)
+                    elif "404" in err_str:
+                        google_pool.penalize_token(g_key, 2.5)
+                    await asyncio.sleep(2.5)
                     logger.debug(f"[DeepCheck] Gemini fallback error ({g_model}): {g_err}")
     return None
 
