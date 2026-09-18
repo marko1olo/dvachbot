@@ -469,8 +469,10 @@ class TestBannerCacheDebounce(unittest.TestCase):
         mock_video_msg.video = MagicMock(file_id="cached_vid_fid_999")
         mock_video_msg.photo = None
         mock_video_msg.animation = None
+        recorded_kwargs = {}
 
         async def mock_send_video(*args, **kwargs):
+            recorded_kwargs.update(kwargs)
             return mock_video_msg
 
         mock_bot.send_video = mock_send_video
@@ -490,6 +492,7 @@ class TestBannerCacheDebounce(unittest.TestCase):
 
         msg = asyncio.run(run_send())
         self.assertIsNotNone(msg)
+        self.assertTrue(recorded_kwargs.get("supports_streaming"), "Expected supports_streaming=True")
         self.assertEqual(banner_manager._BANNER_CACHE.get(f"12345:{chosen_vid}"), "cached_vid_fid_999")
 
 

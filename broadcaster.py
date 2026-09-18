@@ -1249,6 +1249,8 @@ class MessageBroadcaster:
                         return await _send_text_fallback("cached_bad_media_url")
                     if has_spoiler and ct in ['photo', 'video', 'animation']:
                         common_kwargs['has_spoiler'] = True
+                    if ct == 'video':
+                        common_kwargs['supports_streaming'] = True
                     if len(full_text) > 1024:
                         common_kwargs[ct] = file_source
                         send_method = getattr(self.bot_instance, f"send_{ct}")

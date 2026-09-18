@@ -576,7 +576,7 @@ async def send_banner_message(
     if len(caption) > 1024:
         try:
             if is_vid:
-                media_msg = await bot.send_video(chat_id=chat_id, video=media_payload)
+                media_msg = await bot.send_video(chat_id=chat_id, video=media_payload, supports_streaming=True)
             else:
                 media_msg = await bot.send_photo(chat_id=chat_id, photo=media_payload)
             fid = _extract_media_file_id(media_msg)
@@ -598,7 +598,7 @@ async def send_banner_message(
             if local_path.exists() and not isinstance(media_payload, FSInputFile):
                 try:
                     if is_vid:
-                        media_msg = await bot.send_video(chat_id=chat_id, video=FSInputFile(str(local_path)))
+                        media_msg = await bot.send_video(chat_id=chat_id, video=FSInputFile(str(local_path)), supports_streaming=True)
                     else:
                         media_msg = await bot.send_photo(chat_id=chat_id, photo=FSInputFile(str(local_path)))
                     fid = _extract_media_file_id(media_msg)
@@ -624,7 +624,8 @@ async def send_banner_message(
                 video=media_payload,
                 caption=caption,
                 reply_markup=reply_markup,
-                parse_mode=parse_mode
+                parse_mode=parse_mode,
+                supports_streaming=True
             )
         else:
             msg = await bot.send_photo(
@@ -655,7 +656,8 @@ async def send_banner_message(
                         video=media_payload,
                         caption=plain_cap,
                         reply_markup=reply_markup,
-                        parse_mode=None
+                        parse_mode=None,
+                        supports_streaming=True
                     )
                 else:
                     msg = await bot.send_photo(
@@ -691,7 +693,8 @@ async def send_banner_message(
                             video=FSInputFile(str(local_path)),
                             caption=caption,
                             reply_markup=reply_markup,
-                            parse_mode=parse_mode
+                            parse_mode=parse_mode,
+                            supports_streaming=True
                         )
                     else:
                         msg = await bot.send_photo(

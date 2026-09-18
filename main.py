@@ -2114,12 +2114,13 @@ async def board_statistics_broadcaster():
                             recipients = b_data['users']['active'] - b_data['users']['banned']
                     if not recipients: continue
                     full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
-                    from banner_manager import get_banner_delivery_payload
+                    from banner_manager import get_banner_delivery_payload, is_video_banner
                     target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id)
                     b_bot_id = getattr(target_bot, "id", None)
                     fname, fid, img_bytes = get_banner_delivery_payload(category="stats", bot_id=b_bot_id)
+                    media_type = ("video" if is_video_banner(fname) else "photo") if (fid or img_bytes) else "text"
                     content = {
-                        "type": "photo" if (fid or img_bytes) else "text",
+                        "type": media_type,
                         "file_id": fid,
                         "image_bytes": img_bytes,
                         "caption": full_stats_text,
@@ -4303,7 +4304,7 @@ _BANNER_CAT_LABELS = {
 
 async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all", sort: str = "alpha", seed: int = 0, **kwargs):
     """Sends a page of banners as a media group + navigation buttons with automatic cache fallback and sorting."""
-    from banner_manager import _CATEGORIZED_BANNERS, get_banner_file, BANNERS_DIR, _BANNER_CACHE, save_cache
+    from banner_manager import _CATEGORIZED_BANNERS, get_banner_file, BANNERS_DIR, _BANNER_CACHE, save_cache, is_video_banner
 
     raw_pool = _CATEGORIZED_BANNERS.get(category, _CATEGORIZED_BANNERS.get("all", []))
     if not raw_pool:
@@ -4355,11 +4356,19 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
                     f"({start + 1}–{end} из {total})"
                 )
 
-            items.append(types.InputMediaPhoto(
-                media=photo_payload,
-                caption=caption_text,
-                parse_mode="HTML" if caption_text else None
-            ))
+            if is_video_banner(fname):
+                items.append(types.InputMediaVideo(
+                    media=photo_payload,
+                    caption=caption_text,
+                    parse_mode="HTML" if caption_text else None,
+                    supports_streaming=True
+                ))
+            else:
+                items.append(types.InputMediaPhoto(
+                    media=photo_payload,
+                    caption=caption_text,
+                    parse_mode="HTML" if caption_text else None
+                ))
             valid_filenames.append(fname)
         return items, valid_filenames
 
@@ -14409,12 +14418,13 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=btn_text, url=site_url)]
         ])
-        from banner_manager import get_banner_delivery_payload
+        from banner_manager import get_banner_delivery_payload, is_video_banner
         target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
         b_bot_id = getattr(target_bot, "id", None)
         fname, fid, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
+        media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
         content = {
-            'type': 'photo' if (fid or img_bytes) else 'text',
+            'type': media_type,
             'file_id': fid,
             'image_bytes': img_bytes,
             'caption': message_text,
@@ -14501,13 +14511,14 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
                 InlineKeyboardButton(text=pic_btn, callback_data=f"gen_invite_pic:{board_id}")
             ]
         ])
-        from banner_manager import get_banner_delivery_payload
+        from banner_manager import get_banner_delivery_payload, is_video_banner
         target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
         b_bot_id = getattr(target_bot, "id", None)
         fname, file_id, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
+        media_type = ('video' if is_video_banner(fname) else 'photo') if (file_id or img_bytes) else 'text'
 
         content = {
-            'type': 'photo' if (file_id or img_bytes) else 'text',
+            'type': media_type,
             'file_id': file_id,
             'image_bytes': img_bytes,
             'caption': message_text,
@@ -14765,7 +14776,7 @@ async def dvach_thread_poster():
                     'subscribers': set(), 'is_archived': False, 'stream': 'ru'
                 })
             
-            from banner_manager import get_banner_delivery_payload
+            from banner_manager import get_banner_delivery_payload, is_video_banner
             target_bot = GLOBAL_BOTS.get(destination_board_id) or shared_state.GLOBAL_BOTS.get(destination_board_id) or GLOBAL_BOTS.get('b')
             b_bot_id = getattr(target_bot, "id", None)
             fname, fid, img_bytes = get_banner_delivery_payload(category="digest", bot_id=b_bot_id)
@@ -14774,8 +14785,9 @@ async def dvach_thread_poster():
                 [InlineKeyboardButton(text="🔗 Открыть на 2ch.hk", url=link)]
             ])
             
+            media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
             content = {
-                'type': 'photo' if (fid or img_bytes) else 'text',
+                'type': media_type,
                 'file_id': fid,
                 'image_bytes': img_bytes,
                 'caption': thread_text,
@@ -25937,7 +25949,7 @@ async def periodic_board_summary():
             if not recipients:
                 continue
                 
-            from banner_manager import get_banner_delivery_payload
+            from banner_manager import get_banner_delivery_payload, is_video_banner
             target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
             b_bot_id = getattr(target_bot, "id", None)
             fname, fid, img_bytes = get_banner_delivery_payload(category="summary", bot_id=b_bot_id)
@@ -25947,8 +25959,9 @@ async def periodic_board_summary():
                 # Telegram limit for photo caption is 1024 chars; fallback to text if exceeded
                 is_photo = False
 
+            media_type = ('video' if is_video_banner(fname) else 'photo') if is_photo else 'text'
             content_obj = {
-                'type': 'photo' if is_photo else 'text',
+                'type': media_type,
                 'file_id': fid if is_photo else None,
                 'image_bytes': img_bytes if is_photo else None,
                 'caption': final_text if is_photo else None,
@@ -26017,12 +26030,13 @@ async def periodic_thread_digest():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
-                from banner_manager import get_banner_delivery_payload
+                from banner_manager import get_banner_delivery_payload, is_video_banner
                 target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
                 b_bot_id = getattr(target_bot, "id", None)
                 fname, fid, img_bytes = get_banner_delivery_payload(category="digest", bot_id=b_bot_id)
+                media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
                 content = {
-                    'type': 'photo' if (fid or img_bytes) else 'text',
+                    'type': media_type,
                     'file_id': fid,
                     'image_bytes': img_bytes,
                     'caption': digest_text,
@@ -26084,12 +26098,13 @@ async def periodic_newspaper_broadcast():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
-                from banner_manager import get_banner_delivery_payload
+                from banner_manager import get_banner_delivery_payload, is_video_banner
                 target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
                 b_bot_id = getattr(target_bot, "id", None)
                 fname, fid, img_bytes = get_banner_delivery_payload(category="newspaper", bot_id=b_bot_id)
+                media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
                 content = {
-                    'type': 'photo' if (fid or img_bytes) else 'text',
+                    'type': media_type,
                     'file_id': fid,
                     'image_bytes': img_bytes,
                     'caption': newspaper_text,
@@ -26151,7 +26166,7 @@ async def periodic_shop_broadcast():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
-                from banner_manager import get_banner_file
+                from banner_manager import get_banner_file, is_video_banner
                 fname, photo_payload = get_banner_file(category="shop")
                 fid = photo_payload if isinstance(photo_payload, str) else None
                 img_bytes = None
@@ -26161,8 +26176,9 @@ async def periodic_shop_broadcast():
                             img_bytes = bf.read()
                     except Exception:
                         pass
+                media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
                 content = {
-                    'type': 'photo' if (fid or img_bytes) else 'text',
+                    'type': media_type,
                     'file_id': fid,
                     'image_bytes': img_bytes,
                     'caption': shop_text,
@@ -26287,13 +26303,14 @@ async def periodic_economy_broadcast():
                 if not recipients:
                     continue
 
-                from banner_manager import get_banner_delivery_payload
+                from banner_manager import get_banner_delivery_payload, is_video_banner
                 target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
                 b_bot_id = getattr(target_bot, "id", None)
                 fname, fid, img_bytes = get_banner_delivery_payload(category="wallet", bot_id=b_bot_id)
+                media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
 
                 content = {
-                    'type': 'photo' if (fid or img_bytes) else 'text',
+                    'type': media_type,
                     'file_id': fid,
                     'image_bytes': img_bytes,
                     'caption': economy_text,

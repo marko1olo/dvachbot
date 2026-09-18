@@ -1344,7 +1344,7 @@ async def board_help_worker(board_id: str):
                     elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_RU)
                     else: message_text = random.choice(main.MECHANICS_INFO_TEXT_RU)
                 now_dt = datetime.now(UTC)
-                from banner_manager import get_banner_file, _BANNER_CACHE
+                from banner_manager import get_banner_file, _BANNER_CACHE, is_video_banner
                 cat_map = {
                     1: "summary",
                     2: "newspaper",
@@ -1364,8 +1364,9 @@ async def board_help_worker(board_id: str):
                     except Exception:
                         pass
                 is_photo = bool(fid or img_bytes)
+                media_type = ('video' if is_video_banner(fname) else 'photo') if is_photo else 'text'
                 content = {
-                    'type': 'photo' if is_photo else 'text',
+                    'type': media_type,
                     'file_id': fid,
                     'image_bytes': img_bytes,
                     'caption': message_text if is_photo else None,
