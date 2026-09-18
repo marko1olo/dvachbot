@@ -85,7 +85,8 @@ class TestBannerManager(unittest.TestCase):
     def test_subsection_categories_pool_size_and_reachability(self):
         from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
         all_banners = set(_CATEGORIZED_BANNERS["all"])
-        self.assertEqual(len(all_banners), 1441)
+        self.assertGreaterEqual(len(all_banners), 1441)
+        self.assertEqual(len(all_banners), 1657)
 
         all_reached = set()
         for subsection, cats in SUBSECTION_CATEGORIES.items():
@@ -437,7 +438,59 @@ class TestBannerCacheDebounce(unittest.TestCase):
         finally:
             if test_banner.exists():
                 test_banner.unlink()
+            cat_file = BANNERS_DIR.parent.parent / "data" / "banner_categories.json"
+            if cat_file.exists():
+                try:
+                    with open(cat_file, "r", encoding="utf-8") as f:
+                        c_data = json.load(f)
+                    for k in c_data:
+                        if isinstance(c_data[k], list) and "test_cyberpunk_neon_temp_banner.jpg" in c_data[k]:
+                            c_data[k].remove("test_cyberpunk_neon_temp_banner.jpg")
+                    with open(cat_file, "w", encoding="utf-8") as f:
+                        json.dump(c_data, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
             banner_manager.reload_banners()
+
+    def test_video_banner_detection_and_send(self):
+        import asyncio
+        from banner_manager import is_video_banner, send_banner_message
+        self.assertTrue(is_video_banner("test_animation.mp4"))
+        self.assertTrue(is_video_banner("sample.webm"))
+        self.assertTrue(is_video_banner("movie.mov"))
+        self.assertFalse(is_video_banner("image.jpg"))
+        self.assertFalse(is_video_banner("banner.png"))
+        self.assertFalse(is_video_banner(""))
+
+        # Test send_banner_message with mock bot and video
+        mock_bot = MagicMock()
+        mock_bot.id = 12345
+        mock_video_msg = MagicMock()
+        mock_video_msg.video = MagicMock(file_id="cached_vid_fid_999")
+        mock_video_msg.photo = None
+        mock_video_msg.animation = None
+
+        async def mock_send_video(*args, **kwargs):
+            return mock_video_msg
+
+        mock_bot.send_video = mock_send_video
+
+        # Use an existing .mp4 from BANNERS_DIR or a mock video banner
+        video_banners = [fn for fn in _CATEGORIZED_BANNERS["all"] if is_video_banner(fn)]
+        self.assertGreater(len(video_banners), 0, "Expected video banners in BANNERS_DIR")
+        chosen_vid = video_banners[0]
+
+        async def run_send():
+            return await send_banner_message(
+                bot=mock_bot,
+                chat_id=999,
+                caption="Test video caption",
+                banner_name=chosen_vid
+            )
+
+        msg = asyncio.run(run_send())
+        self.assertIsNotNone(msg)
+        self.assertEqual(banner_manager._BANNER_CACHE.get(f"12345:{chosen_vid}"), "cached_vid_fid_999")
 
 
 if __name__ == "__main__":

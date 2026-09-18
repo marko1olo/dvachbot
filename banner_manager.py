@@ -24,6 +24,16 @@ PROJECT_ROOT = Path(__file__).parent
 BANNERS_DIR = PROJECT_ROOT / "assets" / "banners"
 CACHE_FILE = PROJECT_ROOT / "data" / "banners_cache.json"
 
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp')
+VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov')
+SUPPORTED_BANNER_EXTENSIONS = IMAGE_EXTENSIONS + VIDEO_EXTENSIONS
+
+def is_video_banner(filename: str) -> bool:
+    """Returns True if the given banner filename has a video extension."""
+    if not filename:
+        return False
+    return Path(filename).suffix.lower() in VIDEO_EXTENSIONS
+
 # Detailed categorization ensuring every single banner is actively utilized across multiple features
 CATEGORY_PATTERNS = {
     "start": [],  # All 383 banners
@@ -165,7 +175,7 @@ def _init_banners():
     if not BANNERS_DIR.exists():
         os.makedirs(BANNERS_DIR, exist_ok=True)
         
-    all_files = [f.name for f in BANNERS_DIR.iterdir() if f.is_file() and f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')]
+    all_files = [f.name for f in BANNERS_DIR.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_BANNER_EXTENSIONS]
     all_files.sort()
 
     _CATEGORIZED_BANNERS.clear()
@@ -532,11 +542,11 @@ async def send_banner_message(
     strict: bool = False
 ) -> Optional[types.Message]:
     """
-    Sends a photo message with banner, caching the file_id automatically per bot.
-    Falls back to text message if photo sending fails, and plain text if HTML parsing fails.
+    Sends a photo or video message with banner, caching the file_id automatically per bot.
+    Falls back to text message if media sending fails, and plain text if HTML parsing fails.
     """
     bot_id = getattr(bot, "id", None)
-    fname, photo_payload = get_banner_file(
+    fname, media_payload = get_banner_file(
         category=category,
         banner_name=banner_name,
         user_id=chat_id,
@@ -544,39 +554,56 @@ async def send_banner_message(
         strict=strict
     )
     
-    # Telegram photo captions are limited to 1024 characters.
-    # If no photo available, send as text.
-    if not photo_payload:
+    # Telegram photo and video captions are limited to 1024 characters.
+    # If no media available, send as text.
+    if not media_payload:
         return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
 
-    # If caption exceeds 1024 chars, send photo first (no caption), then reply with text.
+    is_vid = is_video_banner(fname)
+
+    def _extract_media_file_id(m: Optional[types.Message]) -> Optional[str]:
+        if not m:
+            return None
+        if getattr(m, "video", None):
+            return m.video.file_id
+        if getattr(m, "animation", None):
+            return m.animation.file_id
+        if getattr(m, "photo", None) and len(m.photo) > 0:
+            return m.photo[-1].file_id
+        return None
+
+    # If caption exceeds 1024 chars, send media first (no caption), then reply with text.
     if len(caption) > 1024:
         try:
-            photo_msg = await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_payload
-            )
-            # Cache file_id from the photo message
-            if photo_msg.photo and fname and bot_id:
-                _BANNER_CACHE[f"{bot_id}:{fname}"] = photo_msg.photo[-1].file_id
+            if is_vid:
+                media_msg = await bot.send_video(chat_id=chat_id, video=media_payload)
+            else:
+                media_msg = await bot.send_photo(chat_id=chat_id, photo=media_payload)
+            fid = _extract_media_file_id(media_msg)
+            if fid and fname and bot_id:
+                _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                 save_cache()
-            # Reply to the photo with the full text
+            # Reply to the media with the full text
             return await _send_text_with_fallback(
                 bot=bot,
                 chat_id=chat_id,
                 text=caption,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
-                reply_to_message_id=photo_msg.message_id
+                reply_to_message_id=media_msg.message_id
             )
         except Exception as e:
-            logger.warning(f"[banner_manager] Photo+reply failed for {fname}: {e}. Retrying local file...")
+            logger.warning(f"[banner_manager] Media+reply failed for {fname}: {e}. Retrying local file...")
             local_path = BANNERS_DIR / fname
-            if local_path.exists() and not isinstance(photo_payload, FSInputFile):
+            if local_path.exists() and not isinstance(media_payload, FSInputFile):
                 try:
-                    photo_msg = await bot.send_photo(chat_id=chat_id, photo=FSInputFile(str(local_path)))
-                    if photo_msg.photo and bot_id:
-                        _BANNER_CACHE[f"{bot_id}:{fname}"] = photo_msg.photo[-1].file_id
+                    if is_vid:
+                        media_msg = await bot.send_video(chat_id=chat_id, video=FSInputFile(str(local_path)))
+                    else:
+                        media_msg = await bot.send_photo(chat_id=chat_id, photo=FSInputFile(str(local_path)))
+                    fid = _extract_media_file_id(media_msg)
+                    if fid and bot_id:
+                        _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                         save_cache()
                     return await _send_text_with_fallback(
                         bot=bot,
@@ -584,45 +611,63 @@ async def send_banner_message(
                         text=caption,
                         reply_markup=reply_markup,
                         parse_mode=parse_mode,
-                        reply_to_message_id=photo_msg.message_id
+                        reply_to_message_id=media_msg.message_id
                     )
                 except Exception as e2:
-                    logger.warning(f"[banner_manager] Local photo retry failed: {e2}")
+                    logger.warning(f"[banner_manager] Local media retry failed: {e2}")
             return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
 
     try:
-        msg = await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo_payload,
-            caption=caption,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
+        if is_vid:
+            msg = await bot.send_video(
+                chat_id=chat_id,
+                video=media_payload,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
+        else:
+            msg = await bot.send_photo(
+                chat_id=chat_id,
+                photo=media_payload,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
         
-        # Cache file_id if this was an initial upload
-        if msg.photo and fname and bot_id:
-            _BANNER_CACHE[f"{bot_id}:{fname}"] = msg.photo[-1].file_id
+        fid = _extract_media_file_id(msg)
+        if fid and fname and bot_id:
+            _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
             save_cache()
             
         return msg
     except Exception as e:
         err_text = str(e).lower()
 
-        # 1. If Telegram failed due to unclosed HTML tag in caption, retry photo with plain text caption
+        # 1. If Telegram failed due to unclosed HTML tag in caption, retry with plain text caption
         if "can't parse entities" in err_text and parse_mode:
             try:
                 import re
                 plain_cap = re.sub(r'<[^>]+>', '', caption) if caption else ""
-                msg = await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo_payload,
-                    caption=plain_cap,
-                    reply_markup=reply_markup,
-                    parse_mode=None
-                )
+                if is_vid:
+                    msg = await bot.send_video(
+                        chat_id=chat_id,
+                        video=media_payload,
+                        caption=plain_cap,
+                        reply_markup=reply_markup,
+                        parse_mode=None
+                    )
+                else:
+                    msg = await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=media_payload,
+                        caption=plain_cap,
+                        reply_markup=reply_markup,
+                        parse_mode=None
+                    )
                 return msg
             except Exception as pe_err:
-                logger.warning(f"[banner_manager] Plain caption photo retry failed for {fname}: {pe_err}")
+                logger.warning(f"[banner_manager] Plain caption retry failed for {fname}: {pe_err}")
 
         # 2. Only evict cached file_id if the file_id itself was rejected
         is_broken_id = any(term in err_text for term in (
@@ -638,23 +683,33 @@ async def send_banner_message(
             save_cache()
 
             local_path = BANNERS_DIR / fname
-            if local_path.exists() and not isinstance(photo_payload, FSInputFile):
+            if local_path.exists() and not isinstance(media_payload, FSInputFile):
                 try:
-                    msg = await bot.send_photo(
-                        chat_id=chat_id,
-                        photo=FSInputFile(str(local_path)),
-                        caption=caption,
-                        reply_markup=reply_markup,
-                        parse_mode=parse_mode
-                    )
-                    if msg.photo and bot_id:
-                        _BANNER_CACHE[f"{bot_id}:{fname}"] = msg.photo[-1].file_id
+                    if is_vid:
+                        msg = await bot.send_video(
+                            chat_id=chat_id,
+                            video=FSInputFile(str(local_path)),
+                            caption=caption,
+                            reply_markup=reply_markup,
+                            parse_mode=parse_mode
+                        )
+                    else:
+                        msg = await bot.send_photo(
+                            chat_id=chat_id,
+                            photo=FSInputFile(str(local_path)),
+                            caption=caption,
+                            reply_markup=reply_markup,
+                            parse_mode=parse_mode
+                        )
+                    fid = _extract_media_file_id(msg)
+                    if fid and bot_id:
+                        _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                         save_cache()
                     return msg
                 except Exception as retry_e:
-                    logger.warning(f"[banner_manager] Local file retry also failed for {fname}: {retry_e}")
+                    logger.warning(f"[banner_manager] Local media retry also failed for {fname}: {retry_e}")
 
-        logger.warning(f"[banner_manager] send_photo failed for {fname}, falling back to text: {e}")
+        logger.warning(f"[banner_manager] send_media failed for {fname}, falling back to text: {e}")
         return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
 
 
