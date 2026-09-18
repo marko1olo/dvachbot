@@ -44,7 +44,8 @@ def test_work_fatigue_separate_per_vacancy():
     now = int(time.time())
     # User has 3 previous shifts on 'bottles' (fatigued)
     items = {
-        "work_shifts": 10,  # Unlocks courier (req: 5)
+        "work_shifts": 10,  # Unlocks courier (req: 8)
+        "equipped_head": "hat_helmet",  # Immunity to work fines for deterministic tests
         "work_cooldowns": {"bottles": now - 500, "courier": now - 5000},
         "recent_shifts": {
             "bottles": [now - 600, now - 300]
