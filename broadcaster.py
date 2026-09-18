@@ -1072,6 +1072,8 @@ class MessageBroadcaster:
                 }
                 if has_spoiler and ct in {'photo', 'video', 'animation'}:
                     common_plain_kwargs['has_spoiler'] = True
+                if ct == 'video':
+                    common_plain_kwargs['supports_streaming'] = True
                 send_method = getattr(self.bot_instance, f"send_{ct}")
                 if len(plain_text) > 1024:
                     common_plain_kwargs[ct] = file_source
@@ -1112,7 +1114,7 @@ class MessageBroadcaster:
                     if m_type == 'photo':
                         media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, has_spoiler=has_spoiler))
                     elif m_type == 'video':
-                        media_group_build.append(InputMediaVideo(media=media_src, caption=cap, has_spoiler=has_spoiler))
+                        media_group_build.append(InputMediaVideo(media=media_src, caption=cap, has_spoiler=has_spoiler, supports_streaming=True))
                     elif m_type == 'document':
                         media_group_build.append(InputMediaDocument(media=media_src, caption=cap))
                     elif m_type == 'audio':
@@ -1137,6 +1139,8 @@ class MessageBroadcaster:
                     }
                     if has_spoiler and single_type in ['photo', 'video']:
                         common_single_kwargs['has_spoiler'] = True
+                    if single_type == 'video':
+                        common_single_kwargs['supports_streaming'] = True
                     try:
                         if len(plain_text) <= 1024:
                             common_single_kwargs['caption'] = plain_text
@@ -1336,7 +1340,7 @@ class MessageBroadcaster:
                         if m_type == 'photo':
                             media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
                         elif m_type == 'video':
-                            media_group_build.append(InputMediaVideo(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
+                            media_group_build.append(InputMediaVideo(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler, supports_streaming=True))
                         elif m_type == 'document':
                             media_group_build.append(InputMediaDocument(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
                         elif m_type == 'audio':
@@ -1361,6 +1365,8 @@ class MessageBroadcaster:
                         }
                         if has_spoiler and single_type in ['photo', 'video']:
                             common_single_kwargs['has_spoiler'] = True
+                        if single_type == 'video':
+                            common_single_kwargs['supports_streaming'] = True
                         try:
                             if len(full_text) <= 1024:
                                 common_single_kwargs['caption'] = full_text

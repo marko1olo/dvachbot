@@ -4463,12 +4463,17 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
         try:
             bot_key_prefix = bot_id if bot_id else getattr(bot, "id", "default")
             for idx, msg in enumerate(sent_messages):
-                if msg.photo and idx < len(valid_fnames):
+                if idx < len(valid_fnames):
                     fn = valid_fnames[idx]
-                    fid = msg.photo[-1].file_id
-                    _BANNER_CACHE[f"{bot_key_prefix}:{fn}"] = fid
-                    _BANNER_CACHE[f"{bot_key_prefix}_{fn}"] = fid
-                    _BANNER_CACHE[fn] = fid
+                    fid = None
+                    if getattr(msg, 'photo', None):
+                        fid = msg.photo[-1].file_id
+                    elif getattr(msg, 'video', None):
+                        fid = msg.video.file_id
+                    if fid:
+                        _BANNER_CACHE[f"{bot_key_prefix}:{fn}"] = fid
+                        _BANNER_CACHE[f"{bot_key_prefix}_{fn}"] = fid
+                        _BANNER_CACHE[fn] = fid
             save_cache()
         except Exception:
             pass

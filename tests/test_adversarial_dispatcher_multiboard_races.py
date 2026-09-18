@@ -5,7 +5,7 @@ tests/test_adversarial_dispatcher_multiboard_races.py
 Adversarial Stress Test Suite for DvachBot:
 1. 114 Commands Live Routing & Handler Signatures under Aiogram Dispatcher.
 2. Multi-board Concurrent State Persistence (shifts, cooldowns, drops, wardrobe, transactions).
-3. Side Hustles (work_bottles 24h cooldown, work_sell_mother 1-time limit) Race Conditions & Edge Cases.
+3. Side Hustles (work_bottles 3h cooldown, work_sell_mother 1-time limit) Race Conditions & Edge Cases.
 """
 
 import asyncio
@@ -420,12 +420,14 @@ class TestSideHustlesRaceConditions(unittest.IsolatedAsyncioTestCase):
             ])
 
             # Inspect callback answers
+            # Actual success string: "🍾 Ты сдал 2 мешка стеклотары у теплотрассы и залутал +N ₪!"
+            # Actual cooldown string: "⏳ Пункты приема закрыты на переучет! Доступно через Xч Yм."
             success_count = 0
             cooldown_count = 0
             for cb in callbacks:
                 self.assertTrue(cb.answer.called)
                 ans_text = cb.answer.call_args[0][0]
-                if "Ты успешно сдал бутылки" in ans_text:
+                if "стеклотары" in ans_text:
                     success_count += 1
                 elif "Пункты приема закрыты" in ans_text:
                     cooldown_count += 1
@@ -433,21 +435,21 @@ class TestSideHustlesRaceConditions(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(success_count, 1, f"Expected exactly 1 successful bottle collection, got {success_count}")
             self.assertEqual(cooldown_count, 29, f"Expected 29 rejected cooldown requests, got {cooldown_count}")
 
-            # Verify balance in database
+            # Verify balance in database — actual reward: random.randint(150, 500)
             bal = await get_user_global_balance(self.db_conn, self.user_id)
-            self.assertGreaterEqual(bal, 10)
-            self.assertLessEqual(bal, 50)
+            self.assertGreaterEqual(bal, 150)
+            self.assertLessEqual(bal, 500)
 
             # Verify transactions
             async with self.db_conn.execute("SELECT COUNT(*) FROM UserTransactions WHERE user_id = ?", (self.user_id,)) as c:
                 tx_count = (await c.fetchone())[0]
             self.assertEqual(tx_count, 1, "Exactly 1 transaction should be recorded")
 
-    async def test_work_bottles_24h_boundary_conditions(self):
-        """Verify cooldown expiration precision at 24h boundary."""
+    async def test_work_bottles_3h_boundary_conditions(self):
+        """Verify cooldown expiration precision at 3h boundary (actual base_cd = 10800s)."""
         now = int(time.time())
-        # Set last_bottles to 23 hours 59 minutes ago (86340s)
-        items = {"last_bottles": now - 86340}
+        # Set last_bottles to 2 hours 59 minutes ago (10740s) — still within 3h cooldown
+        items = {"last_bottles": now - 10740}
         await self.db_conn.execute(
             "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, 'b', 0, ?)",
             (self.user_id, json.dumps(items))
@@ -457,13 +459,13 @@ class TestSideHustlesRaceConditions(unittest.IsolatedAsyncioTestCase):
         with patch("economy_extension.get_pool", return_value=self.db_conn), \
              patch("main._build_work_card", return_value=("CAPTION", MagicMock())):
 
-            # 1. At 23h 59m -> Rejected
+            # 1. At 2h 59m -> Rejected (cooldown not expired)
             cb1 = create_mock_callback(user_id=self.user_id, data="work_bottles")
             await economy_extension.cb_work_action(cb1, board_id="b")
             self.assertIn("Пункты приема закрыты", cb1.answer.call_args[0][0])
 
-            # 2. Advance time to 24h + 1s (86401s ago)
-            items["last_bottles"] = now - 86401
+            # 2. Advance time to 3h + 1s (10801s ago) -> Should succeed
+            items["last_bottles"] = now - 10801
             await self.db_conn.execute(
                 "UPDATE Users SET active_items = ? WHERE user_id = ?",
                 (json.dumps(items), self.user_id)
@@ -472,7 +474,7 @@ class TestSideHustlesRaceConditions(unittest.IsolatedAsyncioTestCase):
 
             cb2 = create_mock_callback(user_id=self.user_id, data="work_bottles")
             await economy_extension.cb_work_action(cb2, board_id="b")
-            self.assertIn("Ты успешно сдал бутылки", cb2.answer.call_args[0][0])
+            self.assertIn("стеклотары", cb2.answer.call_args[0][0])
 
     async def test_work_sell_mother_concurrency_race_condition(self):
         """Simulate 30 concurrent clicks on work_sell_mother and verify exactly 1 succeeds (8000 shekels)."""
