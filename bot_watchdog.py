@@ -441,11 +441,31 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                     return True
                 live_pid = _locked_live_bot_pid()
                 if live_pid and live_pid != child.pid:
-                    log(
-                        f"Child exited while bot.lock is owned by another live pid={live_pid}; "
-                        "supervisor exits instead of restart-looping"
-                    )
-                    return True
+                    is_descendant = False
+                    try:
+                        import psutil
+                        if psutil.pid_exists(live_pid):
+                            p = psutil.Process(live_pid)
+                            parent = p.parent()
+                            if parent and parent.pid == child.pid:
+                                is_descendant = True
+                    except Exception:
+                        pass
+
+                    if not is_descendant:
+                        log(
+                            f"Child exited while bot.lock is owned by another live pid={live_pid}; "
+                            "supervisor exits instead of restart-looping"
+                        )
+                        return True
+                    else:
+                        try:
+                            import psutil
+                            if psutil.pid_exists(live_pid):
+                                psutil.Process(live_pid).kill()
+                        except Exception:
+                            pass
+                        BOT_LOCK.unlink(missing_ok=True)
                 log(f"Bot child exited (code={return_code}). Supervisor will restart the bot...")
                 return False
 
