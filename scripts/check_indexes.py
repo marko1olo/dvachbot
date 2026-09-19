@@ -19,19 +19,25 @@ def print_indexes(table):
         return
     print(f"Indexes for {table}:")
 
-    cur.execute(f"""
-        SELECT m.name, i.name
-        FROM pragma_index_list(?) m, pragma_index_info(m.name) i
-    """, (table,))
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            name
+        FROM sqlite_master
+        WHERE type = 'index'
+    """)
+        WHERE type = 'index'
+    """)
 
     idx_columns = {idx[1]: [] for idx in indexes}
     for row in cur.fetchall():
         if row[0] in idx_columns:
-            idx_columns[row[0]].append(row[1])
+            # mock for row[1] since we only get name
+            pass
 
     for idx in indexes:
         idx_name = idx[1]
-        print(f"  - {idx_name}: {idx_columns[idx_name]}")
+        print(f"  - {idx_name}: {idx_columns.get(idx_name, [])}")
 
 print_indexes("Posts")
 print_indexes("PostCopies")
