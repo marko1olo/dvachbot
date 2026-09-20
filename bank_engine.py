@@ -596,6 +596,120 @@ async def withdraw_bank_deposit(
 
 
 # -----------------------------------------------------------------------------
+# Event «Abu Robbed the Bank» (Haircut of 30-50% on deposits > 500k)
+# -----------------------------------------------------------------------------
+
+async def execute_abu_bank_haircut(
+    db,
+    haircut_pct: float = 0.40,
+    threshold: float = 500_000.0,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """
+    Ивент «Абу ограбил банк» (Great Abu Bank Haircut):
+    Разовое или циклическое списание 30–50% (по умолчанию 40%) с активных вкладов свыше 500 000 ₪
+    с выдачей взамен бесполезного памятного трофея/медали «Инвестор МММ».
+    
+    Параметры:
+    - db: соединение aiosqlite к БД.
+    - haircut_pct: процент списания (от 0.30 до 0.50).
+    - threshold: порог вклада (по умолчанию 500 000 ₪).
+    - dry_run: если True, только симулирует и возвращает аудит без изменений в БД.
+    
+    Возвращает отчет со статистикой списаний.
+    """
+    haircut_pct = max(0.30, min(0.50, float(haircut_pct)))
+    threshold = float(threshold)
+
+    query = """
+        SELECT id, user_id, board_id, tier_id, principal, accrued_interest
+        FROM BankDeposits
+        WHERE status = 'active' AND principal >= ?
+    """
+    affected_deposits = []
+    affected_users = set()
+    total_confiscated = 0.0
+
+    async with db.execute(query, (threshold,)) as c:
+        rows = await c.fetchall()
+
+    if not rows:
+        return {
+            "status": "noop",
+            "message": f"Нет активных вкладов свыше {threshold:,.0f} ₪.",
+            "threshold": threshold,
+            "haircut_pct": haircut_pct,
+            "affected_users_count": 0,
+            "affected_deposits_count": 0,
+            "total_confiscated": 0.0,
+            "dry_run": dry_run,
+            "details": []
+        }
+
+    from common.bot_helpers import _get_user_active_items
+    from achievements_engine import check_and_unlock_achievement
+
+    for dep_id, user_id, board_id, tier_id, principal, accrued_interest in rows:
+        principal = float(principal)
+        shave = round(principal * haircut_pct, 2)
+        new_principal = round(principal - shave, 2)
+        total_confiscated += shave
+        affected_users.add(user_id)
+
+        detail = {
+            "deposit_id": dep_id,
+            "user_id": user_id,
+            "board_id": board_id or "b",
+            "tier_id": tier_id,
+            "old_principal": principal,
+            "shaved_amount": shave,
+            "new_principal": new_principal
+        }
+        affected_deposits.append(detail)
+
+        if not dry_run:
+            async with db_transaction(db):
+                # Обновляем тело вклада
+                await db.execute(
+                    "UPDATE BankDeposits SET principal = ? WHERE id = ?",
+                    (new_principal, dep_id)
+                )
+                # Переводим конфискованное в Казну Абу
+                await add_to_abu_fund(db, shave, donor_id=user_id, reason=f"Стрижка вкладов Абу (-{int(haircut_pct*100)}%) со вклада #{dep_id}")
+                # Фиксируем транзакцию списания
+                await record_user_transaction(
+                    db,
+                    user_id,
+                    -shave,
+                    "bank_haircut",
+                    f"«Абу ограбил банк» (-{int(haircut_pct*100)}%): списано {shave:,.0f} ₪ со вклада #{dep_id}"
+                )
+                # Награждаем бесполезным трофеем «Инвестор МММ»
+                try:
+                    user_items = await _get_user_active_items(db, user_id, board_id or "b")
+                    unlocked, _ = check_and_unlock_achievement(user_items, "ach_mmm_investor")
+                    if unlocked:
+                        await db.execute(
+                            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                            (json.dumps(user_items), user_id, board_id or "b")
+                        )
+                except Exception as e:
+                    logger.error(f"Error awarding ach_mmm_investor to {user_id}: {e}")
+
+    return {
+        "status": "success",
+        "message": f"{'[DRY RUN] ' if dry_run else ''}Стрижка вкладов выполнена: конфисковано {total_confiscated:,.0f} ₪ у {len(affected_users)} анонов.",
+        "threshold": threshold,
+        "haircut_pct": haircut_pct,
+        "affected_users_count": len(affected_users),
+        "affected_deposits_count": len(affected_deposits),
+        "total_confiscated": round(total_confiscated, 2),
+        "dry_run": dry_run,
+        "details": affected_deposits
+    }
+
+
+# -----------------------------------------------------------------------------
 # Portfolio Summary & Analytics
 # -----------------------------------------------------------------------------
 
@@ -1277,4 +1391,63 @@ async def handle_chat_deposit_amount(
         [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
     ])
     await message.answer(resp, reply_markup=kb, parse_mode="HTML")
+
+
+# -----------------------------------------------------------------------------
+# Admin Command: Great Abu Bank Haircut (/admin_abu_haircut)
+# -----------------------------------------------------------------------------
+
+@bank_router.message(Command("admin_abu_haircut"))
+async def handle_admin_abu_haircut(message: types.Message) -> None:
+    """
+    Админ-команда проведения Великой Стрижки Абу депозитов свыше 500 000 ₪.
+    Использование:
+      /admin_abu_haircut — сухой прогон (Dry Run), аудит затронутых вкладов.
+      /admin_abu_haircut --confirm — реальное выполнение списания 40% и выдачи медалей «Инвестор МММ».
+      /admin_abu_haircut 50% --confirm — кастомный процент списания (30-50%).
+    """
+    from bot_helpers import is_admin
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        await message.answer("❌ У тебя нет прав администратора для проведения Великой Стрижки Абу.")
+        return
+
+    text = message.text or ""
+    tokens = text.split()
+    is_confirm = "--confirm" in tokens
+
+    haircut_pct = 0.40
+    for tok in tokens[1:]:
+        if tok == "--confirm":
+            continue
+        clean_tok = tok.replace("%", "").replace(",", ".")
+        try:
+            val = float(clean_tok)
+            if val > 1.0:
+                val /= 100.0
+            haircut_pct = max(0.30, min(0.50, val))
+        except ValueError:
+            pass
+
+    db = await get_pool()
+    result = await execute_abu_bank_haircut(db, haircut_pct=haircut_pct, threshold=500_000.0, dry_run=(not is_confirm))
+
+    status_title = "🔍 <b>АУДИТ ВЕЛИКОЙ СТРИЖКИ АБУ (DRY RUN)</b>" if not is_confirm else "🚨 <b>ВЕЛИКАЯ СТРИЖКА АБУ ЗАВЕРШЕНА!</b>"
+
+    lines = [
+        status_title,
+        f"\n⚙️ <b>Параметры:</b> Списание <b>{int(result['haircut_pct'] * 100)}%</b> с вкладов от <b>{result['threshold']:,.0f} ₪</b>",
+        f"👥 Затронуто анонов: <b>{result['affected_users_count']}</b>",
+        f"📜 Затронуто депозитов: <b>{result['affected_deposits_count']}</b>",
+        f"💰 Всего к конфискации в Казну: <b>{result['total_confiscated']:,.2f} ₪</b>\n"
+    ]
+
+    if not is_confirm:
+        lines.append("⚠️ <i>Это тестовый прогон! Шекели не списаны.</i>")
+        lines.append("Для реального исполнения отправь: <code>/admin_abu_haircut --confirm</code>")
+    else:
+        lines.append("🔥 <i>Шекели переведены в Казну Абу, пострадавшим выдана медаль «Инвестор МММ»!</i>")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
 

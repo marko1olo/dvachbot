@@ -624,3 +624,79 @@ async def test_bank_safe_wealth_accumulation_during_street_attacks(bank_db):
     # Wallet balance is restored with interest
     final_bal = await common.database.get_user_global_balance(bank_db, user_id)
     assert final_bal == payout
+
+
+# ---------------------------------------------------------------------------
+# Tier 5: Abu Bank Haircut Event Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_abu_bank_haircut_event_lifecycle(bank_db):
+    """
+    Tests the «Абу ограбил банк» Haircut mechanism:
+    1. Dry run inspects deposits > 500k without modifying DB.
+    2. Real execution shaves 40% from deposits >= 500k, transfers to AbuFund,
+       records transaction, and awards 'ach_mmm_investor' trophy.
+    3. Deposits under 500k remain untouched.
+    """
+    be = _get_bank_module()
+    user_rich = 8881
+    user_normal = 8882
+
+    await _set_user(bank_db, user_rich, balance=1_000_000.0)
+    await _set_user(bank_db, user_normal, balance=200_000.0)
+
+    # user_rich deposits 800,000 ₪ (qualifies for haircut)
+    ok1, dep_rich, _ = await be.create_bank_deposit(bank_db, user_rich, "b", "sych", 800_000.0)
+    assert ok1 is True
+
+    # user_normal deposits 150,000 ₪ (does not qualify for haircut)
+    ok2, dep_norm, _ = await be.create_bank_deposit(bank_db, user_normal, "b", "sych", 150_000.0)
+    assert ok2 is True
+
+    # Step 1: DRY RUN
+    dry_res = await be.execute_abu_bank_haircut(bank_db, haircut_pct=0.40, threshold=500_000.0, dry_run=True)
+    assert dry_res["status"] == "success"
+    assert dry_res["dry_run"] is True
+    assert dry_res["affected_deposits_count"] == 1
+    assert dry_res["affected_users_count"] == 1
+    assert dry_res["total_confiscated"] == 320_000.0  # 40% of 800,000
+
+    # Verify DB unchanged after dry run
+    async with bank_db.execute("SELECT principal FROM BankDeposits WHERE id = ?", (dep_rich["id"],)) as c:
+        row = await c.fetchone()
+        assert row[0] == 800_000.0
+
+    # Step 2: REAL EXECUTION
+    real_res = await be.execute_abu_bank_haircut(bank_db, haircut_pct=0.40, threshold=500_000.0, dry_run=False)
+    assert real_res["status"] == "success"
+    assert real_res["dry_run"] is False
+    assert real_res["affected_deposits_count"] == 1
+    assert real_res["total_confiscated"] == 320_000.0
+
+    # Verify DB: rich deposit principal shaved by 40% (800,000 - 320,000 = 480,000)
+    async with bank_db.execute("SELECT principal FROM BankDeposits WHERE id = ?", (dep_rich["id"],)) as c:
+        row = await c.fetchone()
+        assert row[0] == 480_000.0
+
+    # Verify DB: normal deposit untouched
+    async with bank_db.execute("SELECT principal FROM BankDeposits WHERE id = ?", (dep_norm["id"],)) as c:
+        row = await c.fetchone()
+        assert row[0] == 150_000.0
+
+    # Verify Abu Fund received confiscated funds
+    fund = await common.database.get_abu_fund_total(bank_db)
+    assert fund >= 320_000.0
+
+    # Verify transaction record
+    async with bank_db.execute("SELECT amount, category FROM UserTransactions WHERE user_id = ? AND category = 'bank_haircut'", (user_rich,)) as c:
+        tx = await c.fetchone()
+        assert tx is not None
+        assert tx[0] == -320_000.0
+
+    # Verify user received ach_mmm_investor trophy
+    async with bank_db.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_rich,)) as c:
+        user_row = await c.fetchone()
+        items = json.loads(user_row[0] or "{}")
+        assert "ach_mmm_investor" in items.get("unlocked_achievements", [])
+

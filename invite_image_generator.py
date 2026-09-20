@@ -16,7 +16,7 @@ import asyncio
 import sqlite3
 import aiohttp
 from typing import Optional, Tuple, Dict, List, Union, Any
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
 
 try:
     import qrcode
@@ -36,28 +36,28 @@ OCRA_FONT = os.path.join(FONTS_DIR, "ocra.ttf") if os.path.exists(os.path.join(F
 IMAGE_SLOGANS = [
     {
         "badge": "АНАРХИЯ И АНОНИМНОСТЬ",
-        "headline": "СЫЧ, ХВАТИТ ТЕРПЕТЬ!",
-        "subline": "Залетай в Тгач — тут все свои дегенераты. Обсуждай что хочешь без цензуры и правил."
+        "headline": "СЫЧ, ХВАТИТ ТЕРПЕТЬ ЭТО ДЕРЬМО!",
+        "subline": "Залетай в Тгач — тут все свои дегенераты. Обсуждай что хочешь без цензуры и ебучих правил."
     },
     {
         "badge": "ДВАЧ • ТГАЧ /b/",
         "headline": "ТВОЁ МНЕНИЕ ЗДЕСЬ НАХУЙ НЕ НУЖНО",
-        "subline": "Но высказать его можно безнаказанно. Заходи, обосри ОПа и получи дозу сажи."
+        "subline": "Но высказать его можно безнаказанно. Заходи, обосри ОПа и получи ведро сажи."
     },
     {
         "badge": "1488% АНОНИМНОСТИ",
         "headline": "ЦИФРОВОЙ АД В ТВОЕМ КАРМАНЕ",
-        "subline": "Без регистрации, СМС и морали. Товарищ майор плачет в сторонке."
+        "subline": "Без регистрации, СМС и морали. Товарищ майор плачет и дрочит в сторонке."
     },
     {
         "badge": "ЧИСТАЯ НЕНАВИСТЬ",
-        "headline": "ТОКСИЧНЫЙ АД ДЛЯ СВОИХ",
+        "headline": "ХУЛИ ТЫ СИДИШЬ И ДРОЧИШЬ, БЛЯДЬ?",
         "subline": "Смывайся в филиал /b/ прямо в телеге. Чистая ненависть, чернейший юмор и угар 24/7."
     },
     {
         "badge": "БАЗА ВЫДАНА",
         "headline": "ЧАТ СМЕРТНИКОВ И ПСИХОВ",
-        "subline": "Шитпостинг высшей пробы, чернейший юмор и полная свобода слова."
+        "subline": "Шитпостинг высшей пробы, чернейший юмор, мат и полная свобода слова."
     },
     {
         "badge": "ЛАМПОВЫЙ СЫЧ",
@@ -66,33 +66,33 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "БИТАРДЫ ОДОБРЯЮТ",
-        "headline": "ОБНИМИ СВОЮ ШИЗУ",
-        "subline": "В @dvach_chatbot твой внутренний голос наконец-то найдет единомышленников."
+        "headline": "ОБНИМИ СВОЮ ШИЗУ, СУКА",
+        "subline": "В @dvach_chatbot твой внутренний голос наконец-то найдет таких же отбитых."
     },
     {
         "badge": "СВЕРХСЕКРЕТНО /b/",
-        "headline": "ЗАБУДЬ ПРО РЕАЛЬНЫЙ МИР",
+        "headline": "ЗАБУДЬ ПРО РЕАЛЬНЫЙ МИР НАХУЙ",
         "subline": "Твоя новая цифровая родина здесь. Сканируй QR или ищи в поиске."
     },
     {
         "badge": "ДВАЧЕВОРЕЗКА",
         "headline": "ХОЧЕШЬ ОБЩЕНИЯ, СКОТИНА?",
-        "subline": "Тгач зовет: срачи, лампота, лоли, хентай и бесконечная деградация."
+        "subline": "Тгач зовет: срачи, лампота, лоли, хентай и бесконечная ебля мозгов."
     },
     {
         "badge": "ПРИГЛАШЕНИЕ В АД",
-        "headline": "ОНИ ЗНАЮТ ТВОЙ IP",
+        "headline": "ОНИ ЗНАЮТ ТВОЙ IP, УЕБОК",
         "subline": "Санитары уже выехали. Присоединяйся к ночному параноидальному дозору прямо сейчас."
     },
     {
         "badge": "ОСТОРОЖНО: МАТ",
         "headline": "ПОСЫЛАЕМ НАХУЙ С ЛЮБОВЬЮ",
-        "subline": "Здесь нет банов за токсичность. Это не баг, это наша культура."
+        "subline": "Здесь нет банов за токсичность. Обиделся — иди нахуй сразу."
     },
     {
         "badge": "ПАЛАТА №6",
         "headline": "ПРИЕМ У ПСИХИАТРА ОТМЕНЯЕТСЯ",
-        "subline": "Весь консилиум уже в треде. Заходи делиться своими галлюцинациями."
+        "subline": "Весь консилиум уже в треде. Заходи делиться своими ебанутыми галлюцинациями."
     },
     {
         "badge": "ОРУ В ГОЛОСИНУ",
@@ -101,13 +101,13 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "ДУМЕРСКИЙ РАЙ",
-        "headline": "ЗА ОКОШКОМ ПАНЕЛЬКИ",
-        "subline": "А в Тгаче тепло, лампово и наливают виртуальный спирт."
+        "headline": "ЗА ОКОШКОМ ПАНЕЛЬКИ И ТЛЕН",
+        "subline": "А в Тгаче тепло, лампово и наливают виртуальный спирт, блядь."
     },
     {
         "badge": "АБУ С НАМИ",
         "headline": "МИНУС МОЗГ, ПЛЮС АНОНИМНОСТЬ",
-        "subline": "Вступай в орден святого двачевания. Сканируй QR-код."
+        "subline": "Вступай в орден святого двачевания. Сканируй QR-код и не выебывайся."
     },
     {
         "badge": "РОДИНА ЖДЕТ",
@@ -117,12 +117,12 @@ IMAGE_SLOGANS = [
     {
         "badge": "ЧИСТАЯ АНАРХИЯ",
         "headline": "НИ БОГОВ, НИ ГОСПОД, ТОЛЬКО /B/",
-        "subline": "Пиши что думаешь, никто не узнает твой IP и номер телефона."
+        "subline": "Пиши что думаешь, никто не узнает твой IP и номер телефона, нахуй."
     },
     {
         "badge": "ЭКСТРЕННЫЙ ВБРОС",
         "headline": "ПРОБИТИЕ ДНА ЗАФИКСИРОВАНО",
-        "subline": "Твой персональный телепорт в эпицентр интернет-баталий."
+        "subline": "Твой персональный телепорт в эпицентр интернет-баталий и матерных войн."
     },
     {
         "badge": "GACHI APPROVED",
@@ -132,12 +132,12 @@ IMAGE_SLOGANS = [
     {
         "badge": "ОРДЕН БИТАРДОВ",
         "headline": "ОСТАВЬ НАДЕЖДУ, ВСЯК СЮДА ВХОДЯЩИЙ",
-        "subline": "Вход бесплатный, выход платный (но выходить никто не хочет)."
+        "subline": "Вход бесплатный, выход платный (но выходить отсюда никто нахуй не хочет)."
     },
     {
         "badge": "КИБЕР-СЫЧЕВНЯ",
-        "headline": "ЖИЗНЬ — ЭТО ИГРА С ПЛОХОЙ ГРАФИКОЙ",
-        "subline": "А Тгач — это чит-код на веселье без цензуры."
+        "headline": "ЖИЗНЬ — ЭТО ИГРА С ХУЁВОЙ ГРАФИКОЙ",
+        "subline": "А Тгач — это чит-код на веселье без цензуры и тормозов."
     },
     {
         "badge": "ПРОВЕРКА НА ПРОЧНОСТЬ",
@@ -146,13 +146,13 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "ШИЗОФАЗИЯ ON",
-        "headline": "ГОЛОСА В ГОЛОВЕ ПРАВЫ",
+        "headline": "ГОЛОСА В ГОЛОВЕ БЛЯДЬ ПРАВЫ",
         "subline": "Они велят тебе отсканировать QR и залететь в наш анонимный чат."
     },
     {
         "badge": "БЕСКОНЕЧНЫЙ ТРЕД",
         "headline": "НОЧЬ, ДОШИРАК, ДВАЧ",
-        "subline": "Идеальное комбо для спасения от экзистенциальной тоски."
+        "subline": "Идеальное комбо для спасения от экзистенциальной тоски и ебучей реальности."
     },
     {
         "badge": "СВЯТАЯ САЖА",
@@ -162,7 +162,7 @@ IMAGE_SLOGANS = [
     {
         "badge": "ХЕНТАЙ-ПАТРУЛЬ",
         "headline": "КУЛЬТУРНЫЙ ОТДЫХ ДЛЯ ГОСПОД",
-        "subline": "Лучшие арты, соусы и фан-арты без купюр и ханжества."
+        "subline": "Лучшие арты, соусы и хентай без купюр, ханжества и морали."
     },
     {
         "badge": "СТАРАЯ ШКОЛА /b/",
@@ -171,10 +171,9 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "МАТРИЦА СЛОМАЛАСЬ",
-        "headline": "КРАСНАЯ ТАБЛЕТКА В ТВОИХ РУКАХ",
-        "subline": "Прими правду и стань полноправным обитателем анонимной сети."
+        "headline": "РЕАЛЬНЫЙ МИР — ПОЛНАЯ ХУЕТА",
+        "subline": "Прими красную таблетку и стань полноправным обитателем анонимной сети."
     },
-    # Extended Authentic Slogans Collection (+20 new high-impact slogans)
     {
         "badge": "СВЯТАЯ КАПЧА",
         "headline": "ТЫ КТО ТАКОЙ? СУКА, ЗАХОДИ!",
@@ -182,12 +181,12 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "АГИТПРОП /b/",
-        "headline": "ТОВАРИЩ СЫЧ, ТЫ В ТРЕДЕ?!",
+        "headline": "ТОВАРИЩ СЫЧ, ТЫ В ТРЕДЕ, БЛЯДЬ?!",
         "subline": "Пятилетку деградации за три дня. Вступай в анонимную ударную бригаду Тгача."
     },
     {
         "badge": "БУГУРТ-ТРЕД",
-        "headline": "БОМБИТ ТАК, ЧТО ВИДНО ИЗ КОСМОСА",
+        "headline": "БОМБИТ ТАК, ЧТО ЕБАТЬ МОЙ ХУЙ",
         "subline": "Выплесни всю желчь на доску. Здесь поймут, поддержат или добьют в комментариях."
     },
     {
@@ -197,8 +196,8 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "НОЧНОЙ ДОЗОР",
-        "headline": "3 ЧАСА НОЧИ. ВРЕМЯ ШИЗЫ",
-        "subline": "Когда нормальные люди спят, битарды строят теории заговора и делятся сокровенным."
+        "headline": "3 ЧАСА НОЧИ. ВСЕ СПЯТ, А МЫ ХУЯРИМ",
+        "subline": "Когда нормальные люди спят, битарды строят теории заговора и топят треды в саже."
     },
     {
         "badge": "АНАЛОГОВЫЙ КОШМАР",
@@ -207,7 +206,7 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "ИНКВИЗИЦИЯ /b/",
-        "headline": "ЕРЕСЬ ВЫСШЕЙ ПРОБЫ",
+        "headline": "ЕРЕСЬ ВЫСШЕЙ ПРОБЫ, НАХУЙ",
         "subline": "Оставь нормы приличия за порогом. В Тгаче нет запретных тем и догм."
     },
     {
@@ -217,28 +216,28 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "ПЕРЕКАТ В БЕЗДНУ",
-        "headline": "СТАРЫЙ ТРЕД УТОНУЛ",
+        "headline": "СТАРЫЙ ТРЕД УТОНУЛ В ГОВНЕ",
         "subline": "Новый уже на первой странице. Запрыгивай в вагон бесконечного шитпостинга."
     },
     {
         "badge": "БЕЗ РЕГИСТРАЦИИ",
-        "headline": "НИКАКИХ ТЕЛЕФОНОВ И ПАСПОРТОВ",
+        "headline": "НАХУЙ ТЕЛЕФОНЫ И ПАСПОРТА",
         "subline": "Полная анонимность старой школы. Забудь про слежку и цифровой концлагерь."
     },
     {
         "badge": "СЫЧЕВАРНЯ 2.0",
         "headline": "ТЕПЛО, ЛАМПОВО И ПАХНЕТ ПЕЛЬМЕНЯМИ",
-        "subline": "Лучшее убежище от внешнего мира. Уютный чат для тех, кто устал от людей."
+        "subline": "Лучшее убежище от внешнего мира. Уютный чат для тех, кто заебался от людей."
     },
     {
         "badge": "КУЛЬТУРА ДЕГРАДАЦИИ",
-        "headline": "УМНЫЕ РАЗГОВОРЫ ДЛЯ ГЛУПЫХ ЛЮДЕЙ",
-        "subline": "От квантовой физики до любимых сортов доширака за 5 секунд."
+        "headline": "УМНЫЕ РАЗГОВОРЫ ДЛЯ ЕБАНУТЫХ",
+        "subline": "От квантовой физики до рецептов жарки доширака за 5 секунд."
     },
     {
         "badge": "БАЗИРОВАННЫЙ ТГАЧ",
         "headline": "СЛИШКОМ ЖЁСТКО ДЛЯ ТЕЛЕГРАМА",
-        "subline": "Но мы всё равно здесь. Сканируй QR, пока РКН протирает свои мониторы."
+        "subline": "Но мы всё равно здесь, блядь. Сканируй QR, пока РКН протирает свои мониторы."
     },
     {
         "badge": "АЛЁ, ЭТО ДВАЧ?",
@@ -247,12 +246,12 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "ЭРА ПОСТИРОНИИ",
-        "headline": "МЫ ВСЁ ЕЩЁ РОФЛИМ ИЛИ УЖЕ НЕТ?",
+        "headline": "МЫ ВСЁ ЕЩЁ РОФЛИМ ИЛИ УЖЕ ПИЗДЕЦ?",
         "subline": "Грань между шуткой и реальностью стёрта. Исследуй глубины постиронии вместе с нами."
     },
     {
         "badge": "БИТАРДЫ ВСЕХ СТРАН",
-        "headline": "ОБЪЕДИНЯЙТЕСЬ В ТГАЧЕ!",
+        "headline": "ОБЪЕДИНЯЙТЕСЬ В ТГАЧЕ, БЛЯДЬ!",
         "subline": "Самый масштабный анонимный синдикат рунета ждёт свежую кровь."
     },
     {
@@ -263,16 +262,16 @@ IMAGE_SLOGANS = [
     {
         "badge": "ПАЛАТА №6",
         "headline": "ПРИНУДИТЕЛЬНАЯ ЛОБОТОМИЯ",
-        "subline": "Тебе уже ничего не поможет, но здесь хотя бы весело деградировать."
+        "subline": "Тебе уже ничего не поможет, но здесь хотя бы охуенно весело деградировать."
     },
     {
         "badge": "ПАТРУЛЬ ДЕГРАДАЦИИ",
         "headline": "САЖА ВМЕСТО ЛАЙКОВ",
-        "subline": "Здесь не дрочат на социальный рейтинг. Пиши что думаешь и лови фидбек."
+        "subline": "Здесь не дрочат на социальный рейтинг. Пиши что думаешь и получай пиздюлей."
     },
     {
         "badge": "ЦИФРОВОЙ КАТАРСИС",
-        "headline": "ВСЁ ТЛЕН, КРОМЕ /b/",
+        "headline": "ВСЁ ТЛЕН И ХУЙНЯ, КРОМЕ /b/",
         "subline": "Очисти свой разум от информационного мусора в ламповом анонимном котле."
     }
 ]
@@ -282,86 +281,85 @@ AUTO_POST_COMPANION_TEXTS = [
     (
         "🔥 <b>Сводка из глубин Тгача:</b>\n\n"
         "Анон, пока снаружи течет унылая предсказуемая жизнь, у нас кипят эпичные срачи, "
-        "рождаются легендарные пасты и льется отборная сажа. Не будь чужим на этом празднике деградации!\n\n"
+        "рождаются легендарные пасты и хуярится отборная сажа. Не будь унылым говном — залетай!\n\n"
         "👉 <i>Сохраняй карточку, кидай друзьям в конфу или сканируй QR-код:</i>"
     ),
     (
         "💀 <b>Экстренное включение /b/:</b>\n\n"
-        "Устал от банов за слово «пидор» и цензуры в обычных каналах? Тгач — это последний оплот "
-        "абсолютной анонимности. Пиши любую шизу, сливай секреты, спорь до хрипоты.\n\n"
-        "👉 <i>Перешли инвайт знакомому сычу — спаси его от цензурного стерильного интернета:</i>"
+        "Заебали баны за любое грубое слово и цензура в стерильных пабликах? Тгач — это последний оплот "
+        "чистой анонимности. Пиши любую шизу, посылай всех нахуй, сливай секреты.\n\n"
+        "👉 <i>Перешли инвайт знакомому сычу — спаси его от цензурного загона:</i>"
     ),
     (
         "🌸 <b>Ночной тред ждет тебя:</b>\n\n"
-        "Одиноко, темно и хочется поговорить по душам (или кого-нибудь покрыть хуями)? "
+        "Одиноко, темно и хочется поговорить по душам (или от души покрыть кого-нибудь хуями)? "
         "Вливайся в наш анонимный котел. Тут тебя поймут, обнимут или обосрут — в зависимости от настроения.\n\n"
         "👉 <i>Твой персональный инвайт-билет:</i>"
     ),
     (
         "⚡ <b>Портал в двачевское подполье:</b>\n\n"
-        "Без регистрации, без телефонных номеров, без лицемерия. Настоящий дух нулевых "
-        "прямо в мессенджере. Сканируй код на картинке и заходи на доску.\n\n"
+        "Без регистрации, без номеров телефонов, без лицемерия. Настоящий дух старого Двача: "
+        "свобода слова, черный юмор и никакой политкорректной хуеты. Сканируй код и пиздуй на доску.\n\n"
         "👉 <i>Делись с бро и залетай:</i>"
     ),
     (
         "🧠 <b>Шизо-проповедь дня:</b>\n\n"
-        "Если ты чувствуешь, что вокруг матрица и все сошли с ума — добро пожаловать домой. "
-        "В Тгаче все давно признали свой диагноз и весело проводят время.\n\n"
+        "Если ты чувствуешь, что вокруг матрица и все кругом ебанулись — добро пожаловать домой. "
+        "В Тгаче все давно признали свой диагноз и охуенно проводят время.\n\n"
         "👉 <i>Лови инвайт-карточку с QR-кодом:</i>"
     ),
     (
         "🍻 <b>Вечерний сбор битардов:</b>\n\n"
-        "Заваривай чай/пивас и заходи на перекличку. В тредах уже делят мир, обсуждают теории заговора "
-        "и постят годноту. Не пропусти главное!\n\n"
+        "Заваривай чай/пивас и заходи на перекличку, блядь. В тредах уже делят мир, строят теории заговора "
+        "и постят годноту. Не проеби главное!\n\n"
         "👉 <i>Отсканируй или перешли друзьям:</i>"
     ),
     (
         "🚀 <b>Рейд в реальность отменяется:</b>\n\n"
-        "Зачем выходить на улицу, когда в @dvach_chatbot есть всё: политика, хентай, мемы, "
-        "философия и бесплатный душевный покой без цензуры.\n\n"
+        "Зачем выходить на улицу, когда в @dvach_chatbot есть всё: политота, хентай, мемы, "
+        "философия и душевный покой без цензуры и ебучих моралистов.\n\n"
         "👉 <i>Залетай на доску:</i>"
     ),
     (
         "🪆 <b>Майор в замешательстве:</b>\n\n"
         "Никаких логов, никакой привязки к аккаунтам, чистый двачевский протокол. "
-        "Забирай инвайт-постер и приглашай всех, кто устал от корпоративного интернета.\n\n"
+        "Забирай инвайт-постер и зови всех, кто заебался от корпоративного интернета.\n\n"
         "👉 <i>Твой QR-ключ от Тгача:</i>"
     ),
     (
         "🎭 <b>Театр абсурда открывает двери:</b>\n\n"
         "Здесь каждый анон — либо философ, либо клоун, либо тролль 80 уровня. "
-        "Вступай в дискуссии, байти школьников и делись своими сокровенными мыслями.\n\n"
+        "Вступай в срачи, байти школьников и шли всех нахуй с чистой совестью.\n\n"
         "👉 <i>Сканируй карточку:</i>"
     ),
     (
         "⚡ <b>Прямой эфир с передовой шитпостинга:</b>\n\n"
-        "Никаких алгоритмических лент и рекламы крипто-каналов. Живой поток мыслей "
-        "от тысяч анонимных пользователей в реальном времени.\n\n"
+        "Никаких алгоритмических лент и рекламы крипто-цыган. Живой поток сознания "
+        "от тысяч анонимных психопатов в реальном времени.\n\n"
         "👉 <i>Кидай бро и залетай:</i>"
     ),
-    # New Companion Texts
     (
         "📯 <b>Декрет Революционного Военсовета /b/:</b>\n\n"
-        "Товарищ сыч! Пока алгоритмы впаривают тебе рекламу курсов и цензурный корпоративный мусор, "
-        "анонимный авангард Тгача куёт свободу слова без купюр. Пятилетку угара выполняем досрочно!\n\n"
+        "Товарищ сыч! Пока алгоритмы впаривают тебе рекламу курсов и цензурный корпоративный шлак, "
+        "анонимный авангард Тгача куёт свободу слова без купюр. Пятилетку угара выполняем досрочно, блядь!\n\n"
         "👉 <i>Печатай инвайт, передавай товарищам или сканируй QR-код:</i>"
     ),
     (
-        "📼 <b>Перехват засекреченной частоты:</b>\n\n"
+        "📼 <b>Перехват засекреченной частоты Тгача:</b>\n\n"
         "Внимание: обнаружен немодерируемый сигнал с борды. Никаких телефонных привязок, никаких "
         "историй переписок для товарища майора. Полное погружение в атмосферу дикого раннего веба.\n\n"
-        "👉 <i>Ключ дешифровки на карточке:</i>"
+        "👉 <i>Ключ дешифровки и QR-код на карточке:</i>"
     ),
     (
         "🕯 <b>Тайный орден анонимных еретиков:</b>\n\n"
         "Устал от ханжества и навязанных правил? В обители Тгача каждый волен сбросить маску нормальности. "
-        "Здесь спорят до победного, делятся запретными мыслями и не боятся обидеть нежные чувства.\n\n"
+        "Здесь спорят до победного, делятся запретными мыслями и не боятся обидеть чьи-то нежные чувства.\n\n"
         "👉 <i>Свиток с печатью для входа:</i>"
     ),
     (
         "💥 <b>Срочный бугурт-патруль:</b>\n\n"
         "Чувствуешь, как закипает котёл от ежедневной рутины? Не держи в себе — неси на доску. "
-        "В комментариях всегда найдётся десяток анонов, готовых подлить масла в огонь или поддержать словом.\n\n"
+        "В комментариях всегда найдётся десяток анонов, готовых подлить масла в огонь или послать нахуй.\n\n"
         "👉 <i>Залетай на огонёк:</i>"
     ),
     (
@@ -1744,11 +1742,439 @@ def _render_layout_comic_bubble(
     return Image.alpha_composite(base_conv.convert("RGBA"), overlay).convert("RGB")
 
 
+def _render_layout_biohazard_zone(
+    base: Image.Image,
+    target_width: int,
+    target_height: int,
+    slogan_dict: Dict[str, str],
+    board_id: str,
+    bot_username: str,
+    tgach_logo: Image.Image
+) -> Image.Image:
+    """Layout 12: Toxic post-apoc biohazard zone with hazard stripes, radiation meter and acid green highlights."""
+    canvas = Image.new("RGB", (target_width, target_height), (18, 16, 14))
+    draw = ImageDraw.Draw(canvas)
+    
+    draw.rectangle([0, 0, target_width - 1, target_height - 1], outline=(12, 10, 8), width=6)
+    
+    top_h = 56
+    draw.rectangle([6, 6, target_width - 6, top_h], fill=(26, 22, 16))
+    stripe_w = 16
+    for x in range(6, target_width, stripe_w * 2):
+        draw.polygon([(x, 6), (x + stripe_w, 6), (x + stripe_w - 12, top_h), (x - 12, top_h)], fill=(255, 185, 0))
+        
+    draw.rectangle([16, 10, 410, top_h - 6], fill=(12, 11, 10), outline=(255, 185, 0), width=2)
+    logo_sz = 30
+    logo_res = tgach_logo.resize((logo_sz, logo_sz), Image.Resampling.LANCZOS)
+    canvas.paste(logo_res, (22, 13), logo_res)
+    
+    h_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
+    draw.text((58, 15), f"BIOHAZARD ZONE /{board_id}/", font=h_font, fill=(57, 255, 20))
+    
+    draw.rectangle([target_width - 165, 10, target_width - 16, top_h - 6], fill=(12, 11, 10), outline=(255, 50, 50), width=2)
+    rad_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 13)
+    draw.text((target_width - 155, 16), "RAD: 950 R/h", font=rad_font, fill=(255, 60, 60))
+    
+    pad = 16
+    img_w = target_width - pad * 2
+    img_h = int(target_height * 0.54)
+    im_crop = fit_and_crop(base.convert("RGB"), img_w, img_h)
+    im_crop = ImageEnhance.Color(im_crop).enhance(0.75)
+    im_crop = ImageEnhance.Contrast(im_crop).enhance(1.2)
+    canvas.paste(im_crop, (pad, top_h + 12))
+    
+    draw.rectangle([pad, top_h + 12, pad + img_w, top_h + 12 + img_h], outline=(190, 150, 20), width=3)
+    for cx, cy in [(pad+4, top_h+16), (pad+img_w-8, top_h+16), (pad+4, top_h+12+img_h-8), (pad+img_w-8, top_h+12+img_h-8)]:
+        draw.ellipse([cx, cy, cx+4, cy+4], fill=(210, 200, 170), outline=(40, 30, 20))
+        
+    badge_clean = clean_text_for_font(slogan_dict.get("badge", "ТОКСИЧНАЯ ЗОНА")).upper()
+    b_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 17)
+    bb = draw.textbbox((0, 0), badge_clean, font=b_font)
+    bw = (bb[2] - bb[0]) + 20
+    draw.rectangle([pad + 10, top_h + 20, pad + 10 + bw, top_h + 48], fill=(12, 11, 10), outline=(57, 255, 20), width=2)
+    draw.text((pad + 20, top_h + 24), f"! {badge_clean}", font=b_font, fill=(57, 255, 20))
+    
+    bot_y = top_h + 12 + img_h + 10
+    draw.rectangle([pad, bot_y, target_width - pad, target_height - pad], fill=(14, 13, 11), outline=(80, 70, 50), width=2)
+    
+    headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАРАЖЕНИЕ ДВАЧЕМ 100%")).upper()
+    subline_clean = clean_text_for_font(slogan_dict.get("subline", "Уровень токсичности зашкаливает. Пиздуй в тред."))
+    
+    max_tw = target_width - 240
+    hl_font_size = 32
+    hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
+    hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+    while len(hl_lines) > 2 and hl_font_size > 22:
+        hl_font_size -= 4
+        hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
+        hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+        
+    sub_font_size = 18
+    sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
+    sub_lines = wrap_text(subline_clean, sub_font, max_tw, draw)
+    
+    curr_y = bot_y + 16
+    for line in hl_lines:
+        draw.text((pad + 16, curr_y), line, font=hl_font, fill=(255, 190, 0))
+        curr_y += hl_font_size + 4
+        
+    curr_y += 6
+    for line in sub_lines:
+        draw.text((pad + 16, curr_y), line, font=sub_font, fill=(210, 230, 200))
+        curr_y += sub_font_size + 4
+        
+    draw.text((pad + 16, target_height - pad - 24), f"DOSIMETER_ID://{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 13), fill=(57, 255, 20))
+    
+    qr_target = f"https://t.me/{bot_username.lstrip('@')}"
+    qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#39ff14", back_color="#0e0d0b")
+    qr_w, qr_h = qr_img.size
+    qr_bx = target_width - pad - qr_w - 14
+    qr_by = bot_y + 14
+    draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(10, 9, 8), outline=(57, 255, 20), width=2)
+    canvas.paste(qr_img, (qr_bx, qr_by))
+    
+    q_lbl = "DANGER"
+    qw = draw.textlength(q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11))
+    draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 5), q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11), fill=(255, 190, 0))
+    
+    return canvas
+
+
+def _render_layout_ascii_terminal(
+    base: Image.Image,
+    target_width: int,
+    target_height: int,
+    slogan_dict: Dict[str, str],
+    board_id: str,
+    bot_username: str,
+    tgach_logo: Image.Image
+) -> Image.Image:
+    """Layout 13: Pure retro green-on-black DOS/BBS terminal with ASCII borders and phosphor glow."""
+    canvas = Image.new("RGB", (target_width, target_height), (4, 10, 5))
+    draw = ImageDraw.Draw(canvas)
+    
+    for y in range(0, target_height, 4):
+        draw.line([(0, y), (target_width, y)], fill=(2, 6, 3), width=1)
+        
+    draw.rectangle([10, 10, target_width - 11, target_height - 11], outline=(0, 220, 70), width=2)
+    draw.rectangle([14, 14, target_width - 15, target_height - 15], outline=(0, 140, 45), width=1)
+    
+    top_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 16)
+    draw.text((24, 22), f"C:\\DVACH\\BBS\\TGACH.EXE -BOARD /{board_id}/", font=top_font, fill=(0, 255, 90))
+    draw.text((target_width - 175, 22), "[V3.20_640KB_OK]", font=top_font, fill=(0, 180, 60))
+    draw.line([(14, 48), (target_width - 15, 48)], fill=(0, 220, 70), width=2)
+    
+    pad_x = 20
+    img_w = target_width - pad_x * 2
+    img_h = int(target_height * 0.53)
+    im_crop = fit_and_crop(base.convert("RGB"), img_w, img_h)
+    im_gray = ImageOps.grayscale(im_crop)
+    im_phos = ImageOps.colorize(im_gray, black=(0, 15, 5), white=(0, 255, 80))
+    canvas.paste(im_phos, (pad_x, 56))
+    
+    draw.rectangle([pad_x, 56, pad_x + img_w, 56 + img_h], outline=(0, 220, 70), width=2)
+    
+    for cx, cy in [(pad_x-4, 52), (pad_x+img_w-4, 52), (pad_x-4, 52+img_h), (pad_x+img_w-4, 52+img_h)]:
+        draw.text((cx, cy), "+", font=top_font, fill=(0, 255, 120))
+        
+    badge_clean = clean_text_for_font(slogan_dict.get("badge", "TERMINAL /b/")).upper()
+    b_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 15)
+    b_tag = f"[SYS_OP: {badge_clean}]"
+    draw.rectangle([pad_x + 10, 64, pad_x + 10 + draw.textlength(b_tag, font=b_font) + 10, 88], fill=(0, 25, 10), outline=(0, 255, 90), width=1)
+    draw.text((pad_x + 15, 68), b_tag, font=b_font, fill=(0, 255, 90))
+    
+    bot_y = 56 + img_h + 10
+    draw.rectangle([pad_x, bot_y, target_width - pad_x, target_height - 18], fill=(2, 14, 6), outline=(0, 160, 50), width=2)
+    
+    headline_clean = clean_text_for_font(slogan_dict.get("headline", "СВЯЗЬ С СЕРВЕРОМ УСТАНОВЛЕНА")).upper()
+    subline_clean = clean_text_for_font(slogan_dict.get("subline", "Введи команду или сканируй матрицу."))
+    
+    max_tw = target_width - 240
+    hl_font_size = 28
+    hl_font = ImageFont.truetype(IMPACT_FONT or MONO_FONT or MAIN_FONT, hl_font_size)
+    hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+    while len(hl_lines) > 2 and hl_font_size > 20:
+        hl_font_size -= 4
+        hl_font = ImageFont.truetype(IMPACT_FONT or MONO_FONT or MAIN_FONT, hl_font_size)
+        hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+        
+    sub_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 16)
+    sub_lines = wrap_text(f"> {subline_clean}", sub_font, max_tw, draw)
+    
+    curr_y = bot_y + 12
+    for line in hl_lines:
+        draw.text((pad_x + 16, curr_y), line, font=hl_font, fill=(0, 255, 100))
+        curr_y += hl_font_size + 4
+        
+    curr_y += 4
+    for line in sub_lines:
+        draw.text((pad_x + 16, curr_y), line, font=sub_font, fill=(150, 240, 170))
+        curr_y += 20
+        
+    draw.text((pad_x + 16, curr_y + 4), f"C:\\> CONNECT {bot_username} _", font=sub_font, fill=(0, 255, 100))
+    draw.text((pad_x + 16, target_height - 34), "[PORT: 23/TELNET] [BAUD: 56K] [STATUS: ONLINE]", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 11), fill=(0, 170, 60))
+    
+    qr_target = f"https://t.me/{bot_username.lstrip('@')}"
+    qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#00ff66", back_color="#020e06")
+    qr_w, qr_h = qr_img.size
+    qr_bx = target_width - pad_x - qr_w - 12
+    qr_by = bot_y + 12
+    draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(0, 10, 4), outline=(0, 255, 100), width=2)
+    canvas.paste(qr_img, (qr_bx, qr_by))
+    
+    q_lbl = "[MATRIX_NET]"
+    qw = draw.textlength(q_lbl, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 10))
+    draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 6), q_lbl, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 10), fill=(0, 255, 100))
+    
+    return canvas
+
+
+def _render_layout_y2k_win98(
+    base: Image.Image,
+    target_width: int,
+    target_height: int,
+    slogan_dict: Dict[str, str],
+    board_id: str,
+    bot_username: str,
+    tgach_logo: Image.Image
+) -> Image.Image:
+    """Layout 14: Windows 98/2000 retro OS dialog with 3D beveled borders, navy titlebar, and system buttons."""
+    canvas = Image.new("RGB", (target_width, target_height), (0, 128, 128))
+    draw = ImageDraw.Draw(canvas)
+    
+    margin = 16
+    win_w = target_width - margin * 2
+    win_h = target_height - margin * 2
+    wx1, wy1 = margin, margin
+    wx2, wy2 = margin + win_w, margin + win_h
+    
+    draw.rectangle([wx1, wy1, wx2, wy2], fill=(192, 192, 192))
+    draw.line([(wx1, wy1), (wx2, wy1)], fill=(255, 255, 255), width=3)
+    draw.line([(wx1, wy1), (wx1, wy2)], fill=(255, 255, 255), width=3)
+    draw.line([(wx2, wy1), (wx2, wy2)], fill=(0, 0, 0), width=3)
+    draw.line([(wx1, wy2), (wx2, wy2)], fill=(0, 0, 0), width=3)
+    draw.line([(wx2 - 2, wy1 + 2), (wx2 - 2, wy2 - 2)], fill=(128, 128, 128), width=2)
+    draw.line([(wx1 + 2, wy2 - 2), (wx2 - 2, wy2 - 2)], fill=(128, 128, 128), width=2)
+    
+    tb_h = 34
+    tb_y1 = wy1 + 4
+    tb_y2 = tb_y1 + tb_h
+    for x in range(wx1 + 4, wx2 - 4):
+        ratio = (x - (wx1 + 4)) / max(1, (wx2 - wx1 - 8))
+        r = int(0 * (1 - ratio) + 16 * ratio)
+        g = int(0 * (1 - ratio) + 132 * ratio)
+        b = int(128 * (1 - ratio) + 208 * ratio)
+        draw.line([(x, tb_y1), (x, tb_y2)], fill=(r, g, b), width=1)
+        
+    logo_sz = 22
+    logo_res = tgach_logo.resize((logo_sz, logo_sz), Image.Resampling.LANCZOS)
+    canvas.paste(logo_res, (wx1 + 8, tb_y1 + 6), logo_res)
+    
+    tb_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 17)
+    draw.text((wx1 + 36, tb_y1 + 7), f"Dvach OS - [/{board_id}/ Fatal Alert: Reality Not Found]", font=tb_font, fill=(255, 255, 255))
+    
+    btn_w, btn_h = 20, 20
+    bx = wx2 - 10 - btn_w
+    by = tb_y1 + 7
+    for sym in ["X", "□", "_"]:
+        draw.rectangle([bx, by, bx + btn_w, by + btn_h], fill=(192, 192, 192))
+        draw.line([(bx, by), (bx + btn_w, by)], fill=(255, 255, 255), width=2)
+        draw.line([(bx, by), (bx, by + btn_h)], fill=(255, 255, 255), width=2)
+        draw.line([(bx + btn_w, by), (bx + btn_w, by + btn_h)], fill=(0, 0, 0), width=2)
+        draw.line([(bx, by + btn_h), (bx + btn_w, by + btn_h)], fill=(0, 0, 0), width=2)
+        s_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 13)
+        sw = draw.textlength(sym, font=s_font)
+        draw.text((bx + (btn_w - sw)//2, by + 2), sym, font=s_font, fill=(0, 0, 0))
+        bx -= btn_w + 4
+        
+    pad = 14
+    im_x1 = wx1 + pad
+    im_y1 = tb_y2 + 10
+    img_w = win_w - pad * 2
+    img_h = int(win_h * 0.54)
+    im_crop = fit_and_crop(base.convert("RGB"), img_w, img_h)
+    canvas.paste(im_crop, (im_x1, im_y1))
+    
+    draw.line([(im_x1 - 2, im_y1 - 2), (im_x1 + img_w + 2, im_y1 - 2)], fill=(128, 128, 128), width=2)
+    draw.line([(im_x1 - 2, im_y1 - 2), (im_x1 - 2, im_y1 + img_h + 2)], fill=(128, 128, 128), width=2)
+    draw.line([(im_x1 + img_w + 2, im_y1 - 2), (im_x1 + img_w + 2, im_y1 + img_h + 2)], fill=(255, 255, 255), width=2)
+    draw.line([(im_x1 - 2, im_y1 + img_h + 2), (im_x1 + img_w + 2, im_y1 + img_h + 2)], fill=(255, 255, 255), width=2)
+    
+    bot_y1 = im_y1 + img_h + 12
+    icon_sz = 40
+    draw.ellipse([im_x1 + 4, bot_y1, im_x1 + 4 + icon_sz, bot_y1 + icon_sz], fill=(220, 20, 20), outline=(0, 0, 0), width=2)
+    ic_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 26)
+    draw.text((im_x1 + 17, bot_y1 + 4), "X", font=ic_font, fill=(255, 255, 255))
+    
+    headline_clean = clean_text_for_font(slogan_dict.get("headline", "КРИТИЧЕСКИЙ СБОЙ В РЕАЛЕ")).upper()
+    subline_clean = clean_text_for_font(slogan_dict.get("subline", "Нажмите 'Зайти' для аварийного перехода в Тгач."))
+    
+    text_x = im_x1 + icon_sz + 16
+    max_tw = win_w - (icon_sz + 36) - 165
+    hl_font_size = 28
+    hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
+    hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+    while len(hl_lines) > 2 and hl_font_size > 20:
+        hl_font_size -= 4
+        hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
+        hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+        
+    sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 16)
+    sub_lines = wrap_text(subline_clean, sub_font, max_tw, draw)
+    
+    cy = bot_y1
+    for line in hl_lines:
+        draw.text((text_x, cy), line, font=hl_font, fill=(0, 0, 0))
+        cy += hl_font_size + 4
+    cy += 4
+    for line in sub_lines:
+        draw.text((text_x, cy), line, font=sub_font, fill=(50, 50, 50))
+        cy += 20
+        
+    btn_w2, btn_h2 = 120, 32
+    btn_x = text_x
+    btn_y = cy + 10
+    draw.rectangle([btn_x, btn_y, btn_x + btn_w2, btn_y + btn_h2], fill=(192, 192, 192))
+    draw.line([(btn_x, btn_y), (btn_x + btn_w2, btn_y)], fill=(255, 255, 255), width=2)
+    draw.line([(btn_x, btn_y), (btn_x, btn_y + btn_h2)], fill=(255, 255, 255), width=2)
+    draw.line([(btn_x + btn_w2, btn_y), (btn_x + btn_w2, btn_y + btn_h2)], fill=(0, 0, 0), width=2)
+    draw.line([(btn_x, btn_y + btn_h2), (btn_x + btn_w2, btn_y + btn_h2)], fill=(0, 0, 0), width=2)
+    b_txt = "OK (Зайти)"
+    bw2 = draw.textlength(b_txt, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14))
+    draw.text((btn_x + (btn_w2 - bw2)//2, btn_y + 7), b_txt, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14), fill=(0, 0, 0))
+    
+    btn_x2 = btn_x + btn_w2 + 10
+    draw.rectangle([btn_x2, btn_y, btn_x2 + btn_w2, btn_y + btn_h2], fill=(192, 192, 192))
+    draw.line([(btn_x2, btn_y), (btn_x2 + btn_w2, btn_y)], fill=(255, 255, 255), width=2)
+    draw.line([(btn_x2, btn_y), (btn_x2, btn_y + btn_h2)], fill=(255, 255, 255), width=2)
+    draw.line([(btn_x2 + btn_w2, btn_y), (btn_x2 + btn_w2, btn_y + btn_h2)], fill=(0, 0, 0), width=2)
+    draw.line([(btn_x2, btn_y + btn_h2), (btn_x2 + btn_w2, btn_y + btn_h2)], fill=(0, 0, 0), width=2)
+    b_txt2 = "Отмена"
+    bw3 = draw.textlength(b_txt2, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14))
+    draw.text((btn_x2 + (btn_w2 - bw3)//2, btn_y + 7), b_txt2, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14), fill=(0, 0, 0))
+    
+    qr_target = f"https://t.me/{bot_username.lstrip('@')}"
+    qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#000080", back_color="#ffffff")
+    qr_w, qr_h = qr_img.size
+    qr_bx = wx2 - pad - qr_w - 6
+    qr_by = bot_y1
+    draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(255, 255, 255))
+    draw.line([(qr_bx - 4, qr_by - 4), (qr_bx + qr_w + 4, qr_by - 4)], fill=(128, 128, 128), width=2)
+    draw.line([(qr_bx - 4, qr_by - 4), (qr_bx - 4, qr_by + qr_h + 4)], fill=(128, 128, 128), width=2)
+    canvas.paste(qr_img, (qr_bx, qr_by))
+    
+    q_lbl = "Link_QR.lnk"
+    qw = draw.textlength(q_lbl, font=ImageFont.truetype(MAIN_FONT, 12))
+    draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 5), q_lbl, font=ImageFont.truetype(MAIN_FONT, 12), fill=(0, 0, 128))
+    
+    sb_y = wy2 - 24
+    draw.line([(wx1 + 4, sb_y), (wx2 - 4, sb_y)], fill=(128, 128, 128), width=1)
+    draw.line([(wx1 + 4, sb_y + 1), (wx2 - 4, sb_y + 1)], fill=(255, 255, 255), width=1)
+    draw.text((wx1 + 10, sb_y + 4), f"Ready | 1 Object(s) selected | {bot_username}", font=ImageFont.truetype(MAIN_FONT, 12), fill=(60, 60, 60))
+    draw.text((wx2 - 120, sb_y + 4), "My Computer", font=ImageFont.truetype(MAIN_FONT, 12), fill=(60, 60, 60))
+    
+    return canvas
+
+
+def _render_layout_schizo_collage(
+    base: Image.Image,
+    target_width: int,
+    target_height: int,
+    slogan_dict: Dict[str, str],
+    board_id: str,
+    bot_username: str,
+    tgach_logo: Image.Image
+) -> Image.Image:
+    """Layout 15: DIY Punk Xerox Zine / Schizo Riot collage with torn duct tape, high contrast b&w grain, and blood red stencil."""
+    canvas = Image.new("RGB", (target_width, target_height), (228, 224, 216))
+    draw = ImageDraw.Draw(canvas)
+    
+    draw.rectangle([6, 6, target_width - 7, target_height - 7], outline=(15, 15, 15), width=6)
+    
+    top_h = 56
+    draw.rectangle([12, 12, target_width - 12, top_h], fill=(16, 16, 18))
+    draw.polygon([(6, 12), (64, 6), (48, 36), (6, 32)], fill=(180, 30, 40))
+    draw.polygon([(target_width - 64, 6), (target_width - 6, 12), (target_width - 6, 32), (target_width - 48, 36)], fill=(180, 30, 40))
+    
+    logo_sz = 32
+    logo_res = tgach_logo.resize((logo_sz, logo_sz), Image.Resampling.LANCZOS)
+    canvas.paste(logo_res, (34, 16), logo_res)
+    
+    th_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 22)
+    draw.text((76, 18), f"ШИЗО-ВЕСТНИК /{board_id}/ : СВЕРХСЕКРЕТНО", font=th_font, fill=(255, 245, 230))
+    
+    pad = 18
+    img_w = target_width - pad * 2
+    img_h = int(target_height * 0.54)
+    im_crop = fit_and_crop(base.convert("RGB"), img_w, img_h)
+    im_bw = ImageOps.grayscale(im_crop)
+    im_bw = ImageEnhance.Contrast(im_bw).enhance(1.6)
+    im_bw = im_bw.convert("RGB")
+    canvas.paste(im_bw, (pad, top_h + 12))
+    
+    draw.rectangle([pad, top_h + 12, pad + img_w, top_h + 12 + img_h], outline=(15, 15, 15), width=4)
+    
+    stamp_w, stamp_h = 240, 40
+    stamp_x = pad + 14
+    stamp_y = top_h + 22
+    draw.rectangle([stamp_x, stamp_y, stamp_x + stamp_w, stamp_y + stamp_h], fill=(225, 29, 72))
+    st_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
+    st_clean = clean_text_for_font(slogan_dict.get("badge", "ОДОБРЕНО ШИЗОЙ")).upper()
+    draw.text((stamp_x + 12, stamp_y + 8), f"* {st_clean} *", font=st_font, fill=(255, 255, 255))
+    
+    bot_y = top_h + 12 + img_h + 10
+    draw.rectangle([pad, bot_y, target_width - pad, target_height - pad], fill=(20, 20, 22), outline=(15, 15, 15), width=3)
+    
+    headline_clean = clean_text_for_font(slogan_dict.get("headline", "САНИТАРЫ УЖЕ БЕССИЛЬНЫ")).upper()
+    subline_clean = clean_text_for_font(slogan_dict.get("subline", "Твой диагноз подтвержден на Дваче. Пиздуй в палату."))
+    
+    max_tw = target_width - 240
+    hl_font_size = 32
+    hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
+    hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+    while len(hl_lines) > 2 and hl_font_size > 20:
+        hl_font_size -= 4
+        hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
+        hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
+        
+    sub_font_size = 18
+    sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
+    sub_lines = wrap_text(subline_clean, sub_font, max_tw, draw)
+    
+    curr_y = bot_y + 14
+    for line in hl_lines:
+        lw = draw.textlength(line, font=hl_font)
+        draw.rectangle([pad + 14, curr_y - 2, pad + 18 + lw, curr_y + hl_font_size + 4], fill=(225, 29, 72))
+        draw.text((pad + 16, curr_y), line, font=hl_font, fill=(255, 255, 255))
+        curr_y += hl_font_size + 6
+        
+    curr_y += 4
+    for line in sub_lines:
+        draw.text((pad + 16, curr_y), line, font=sub_font, fill=(230, 225, 215))
+        curr_y += sub_font_size + 4
+        
+    draw.text((pad + 16, target_height - pad - 24), f"ZINE://DVACH_{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 13), fill=(225, 29, 72))
+    
+    qr_target = f"https://t.me/{bot_username.lstrip('@')}"
+    qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#e11d48", back_color="#121214")
+    qr_w, qr_h = qr_img.size
+    qr_bx = target_width - pad - qr_w - 14
+    qr_by = bot_y + 12
+    draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(12, 12, 14), outline=(225, 29, 72), width=2)
+    canvas.paste(qr_img, (qr_bx, qr_by))
+    
+    q_lbl = "SCHIZO_KEY"
+    qw = draw.textlength(q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11))
+    draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 5), q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11), fill=(225, 29, 72))
+    
+    return canvas
+
+
 # ==========================================
 # STYLE REGISTRY & ALIAS RESOLUTION
 # ==========================================
 
-INVITE_LAYOUT_STYLES = list(range(12))
+INVITE_LAYOUT_STYLES = list(range(16))
 
 STYLE_NAMES: Dict[int, str] = {
     0: "CYBER_BOARD",
@@ -1763,6 +2189,10 @@ STYLE_NAMES: Dict[int, str] = {
     9: "DARK_GOTHIC_SCROLL",
     10: "BRUTALIST_POSTER",
     11: "COMIC_BUBBLE",
+    12: "BIOHAZARD_ZONE",
+    13: "ASCII_TERMINAL",
+    14: "Y2K_WIN98",
+    15: "SCHIZO_COLLAGE",
 }
 
 STYLE_ALIASES: Dict[str, int] = {
@@ -1809,6 +2239,26 @@ STYLE_ALIASES: Dict[str, int] = {
     "comic_bubble": 11,
     "comic": 11,
     "popart": 11,
+    "biohazard_zone": 12,
+    "biohazard": 12,
+    "toxic": 12,
+    "stalker": 12,
+    "radiation": 12,
+    "ascii_terminal": 13,
+    "ascii": 13,
+    "terminal_dos": 13,
+    "dos": 13,
+    "bbs": 13,
+    "y2k_win98": 14,
+    "win98": 14,
+    "windows98": 14,
+    "y2k": 14,
+    "windows": 14,
+    "schizo_collage": 15,
+    "schizo": 15,
+    "punk_zine": 15,
+    "zine": 15,
+    "collage": 15,
 }
 
 def resolve_layout_style(layout: Optional[Union[int, str]]) -> int:
@@ -1819,6 +2269,7 @@ def resolve_layout_style(layout: Optional[Union[int, str]]) -> int:
         return layout if layout in STYLE_NAMES else 0
     clean_str = str(layout).strip().lower().replace("-", "_")
     return STYLE_ALIASES.get(clean_str, 0)
+
 
 # ==========================================
 # PUBLIC API
@@ -1887,6 +2338,14 @@ def build_invite_image_card(
         final_img = _render_layout_brutalist_poster(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
     elif resolved_style == 11:
         final_img = _render_layout_comic_bubble(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
+    elif resolved_style == 12:
+        final_img = _render_layout_biohazard_zone(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
+    elif resolved_style == 13:
+        final_img = _render_layout_ascii_terminal(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
+    elif resolved_style == 14:
+        final_img = _render_layout_y2k_win98(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
+    elif resolved_style == 15:
+        final_img = _render_layout_schizo_collage(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
     else:
         final_img = _render_layout_cyber_board(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
         

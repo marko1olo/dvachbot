@@ -612,7 +612,16 @@ async def _finish_rr_game(
     if p2:
         user_active_rr_game.pop(p2, None)
 
-    rake = max(5, int(pot * RR_RAKE_PERCENT))
+    is_burn_rake = pot > 50000
+    if is_burn_rake:
+        rake = max(5, int(pot * 0.10))
+        rake_label = f"🔥 <b>Сжигаемый рейк (10%):</b> <code>{rake:,} ₪</code> навсегда выведены из экономики!"
+        rake_short = f"сожжено {rake:,} ₪ (10% антиинфляционный рейк)"
+    else:
+        rake = max(5, int(pot * RR_RAKE_PERCENT))
+        rake_label = f"🐒 <b>Налог Абу (5%):</b> <code>{rake:,} ₪</code>"
+        rake_short = f"{rake:,} ₪ в Казну Абу"
+
     win_payout = pot - rake
     game["payout"] = win_payout
 
@@ -623,8 +632,10 @@ async def _finish_rr_game(
     async with db_lock:
         # Payout to winner
         await add_user_global_balance(db, winner_id, board_id, win_payout)
-        await add_to_abu_fund(db, rake)
-        await record_user_transaction(db, winner_id, win_payout, 'rr_pvp', f'Победа в Русской Рулетке #{game_id} против [{lose_anon}]')
+        if not is_burn_rake:
+            await add_to_abu_fund(db, rake)
+        tx_desc = f'Победа в Русской Рулетке #{game_id} против [{lose_anon}]' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
+        await record_user_transaction(db, winner_id, win_payout, 'rr_pvp', tx_desc)
 
         # Check PvP achievement for winner
         try:
@@ -664,6 +675,7 @@ async def _finish_rr_game(
             f"💥 <b>РУССКАЯ РУЛЕТКА: СМЕРТЕЛЬНЫЙ ВЫСТРЕЛ В ЛОБ!</b>\n\n"
             f"💀 Анон <code>[ID:{lose_anon}]</code> спустил курок на <b>{cur_ch + 1}-й каморе</b>... <b>БАХ!</b> Мозги забрызгали тред!\n"
             f"👑 <b>Победитель:</b> Анон <code>[ID:{win_anon}]</code> забирает банк <code>+{win_payout:,} ₪</code>!\n"
+            f"{rake_label}\n"
             f"🔇 Неудачник отправлен чистить парашу (<b>МУТ НА 30 МИНУТ</b>)!"
         )
     elif reason == "timeout":
@@ -671,6 +683,7 @@ async def _finish_rr_game(
             f"⏱️ <b>РУССКАЯ РУЛЕТКА: ЗАССАЛ И ПОТЕРЯЛ ВСЁ!</b>\n\n"
             f"🐔 Анон <code>[ID:{lose_anon}]</code> дрожал от страха и не нажал на спуск за <b>60 секунд</b>!\n"
             f"👑 <b>Победитель:</b> Анон <code>[ID:{win_anon}]</code> забирает банк <code>+{win_payout:,} ₪</code>!\n"
+            f"{rake_label}\n"
             f"🔇 Трус отправлен в <b>МУТ НА 30 МИНУТ</b> за срыв дуэли!"
         )
     else:  # surrender
@@ -678,13 +691,14 @@ async def _finish_rr_game(
             f"🏳️ <b>РУССКАЯ РУЛЕТКА: КАПИТУЛЯЦИЯ В СЛЕЗАХ!</b>\n\n"
             f"😭 Анон <code>[ID:{lose_anon}]</code> выронил револьвер и сдался без боя!\n"
             f"👑 <b>Победитель:</b> Анон <code>[ID:{win_anon}]</code> забирает банк <code>+{win_payout:,} ₪</code>!\n"
+            f"{rake_label}\n"
             f"🔇 Сдавшийся отправлен в <b>МУТ НА 30 МИНУТ</b>!"
         )
 
     if bot:
         win_notify_text = (
             f"👑 <b>ПОБЕДА В РУССКОЙ РУЛЕТКЕ #{game_id}!</b>\n\n"
-            f"💰 Твой чистый выигрыш: <b>+{win_payout:,} ₪</b> (банк {pot:,} ₪ за вычетом {rake:,} ₪ в Казну Абу) зачислен на баланс!"
+            f"💰 Твой чистый выигрыш: <b>+{win_payout:,} ₪</b> (банк {pot:,} ₪ за вычетом {rake_short}) зачислен на баланс!"
         )
         if reason == "shot":
             lose_notify_text = (

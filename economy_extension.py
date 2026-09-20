@@ -48,6 +48,7 @@ import random
 import re
 import asyncio
 import httpx
+from typing import Tuple, Optional, Dict, Any
 
 try:
     from main import cmd_mega
@@ -142,6 +143,44 @@ async def cmd_work_menu(message: types.Message, board_id: str | None = None):
         await cmd_work(message, board_id=board_id)
     except Exception:
         pass
+
+
+def check_flash_ultra_limit(active_items: dict, now: float = None) -> Tuple[bool, str]:
+    """
+    Checks Flash Ultra daily usage limit (max 2 per day, min 30 min cooldown between cans).
+    Returns (can_use: bool, error_msg: str)
+    """
+    from datetime import datetime, timezone
+    if now is None:
+        now = time.time()
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    stored_day = active_items.get("overtime_day")
+    if stored_day != today_str:
+        active_items["overtime_day"] = today_str
+        active_items["overtime_uses_today"] = 0
+
+    uses_today = active_items.get("overtime_uses_today", 0)
+    if uses_today >= 2:
+        return False, "❌ <b>Сердце не выдержит, долбоёб!</b> Лимит Flash Ultra исчерпан (максимум 2 банки в сутки, использовано 2/2). Приходи завтра!"
+
+    last_ot = active_items.get("last_overtime", 0)
+    min_cd = 1800  # 30 минут между банками
+    if now - last_ot < min_cd:
+        left = min_cd - (now - last_ot)
+        mins = max(1, int(left // 60))
+        return False, f"⏳ Пульс зашкаливает после прошлой банки! Вторую банку Flash Ultra можно въебать через {mins} мин."
+
+    return True, ""
+
+
+def record_flash_ultra_use(active_items: dict, now: float = None) -> int:
+    """Records one Flash Ultra usage today. Returns remaining uses today."""
+    if now is None:
+        now = time.time()
+    uses_today = active_items.get("overtime_uses_today", 0)
+    active_items["last_overtime"] = now
+    active_items["overtime_uses_today"] = uses_today + 1
+    return 2 - (uses_today + 1)
 
 
 @economy_router.callback_query(F.data.in_({
@@ -301,12 +340,9 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 ans_text = f"👵 Ты оформил онлайн-займ на паспорт бомжа Михалыча и залутал +{earned:,} ₪! (Долг коллекторам: {new_debt:,} ₪). Прячь шекели в банк!"
 
         elif action == "overtime":
-            last_ot = active_items.get("last_overtime", 0)
-            if now - last_ot < 43200:
-                left = 43200 - (now - last_ot)
-                hours = left // 3600
-                mins = (left % 3600) // 60
-                ans_text = f"⏳ Пульс зашкаливает! Энергетик можно въебать через {hours}ч {mins}м."
+            can_use, limit_err = check_flash_ultra_limit(active_items, now=now)
+            if not can_use:
+                ans_text = limit_err
             else:
                 from shared_state import get_user_work_cooldowns, set_user_work_cooldown
                 work_timers = active_items.setdefault("work_cooldowns", {})
@@ -333,14 +369,17 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                     target_jid, target_title = best_job
                     work_timers[target_jid] = 0
                     set_user_work_cooldown(user_id, target_jid, 0)
-                    active_items["last_overtime"] = now
+                    remaining_today = record_flash_ultra_use(active_items, now=now)
                     await db.execute(
                         "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
                         "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
                         (user_id, board_id, json.dumps(active_items))
                     )
                     await db.commit()
-                    ans_text = f"⚡ Ты залпом въебал банку Flash Ultra с таурином! Кулдаун с вакансии «{target_title}» мгновенно сброшен! Бегом на смену!"
+                    ans_text = (
+                        f"⚡ Ты залпом въебал банку Flash Ultra с таурином! Кулдаун с вакансии «{target_title}» мгновенно сброшен! Бегом на смену! "
+                        f"<i>(Осталось банок на сегодня: {remaining_today}/2)</i>"
+                    )
 
         elif action == "sell_mother":
             if active_items.get("mother_sold"):

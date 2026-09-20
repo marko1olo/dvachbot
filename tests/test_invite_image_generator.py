@@ -4,9 +4,9 @@ from PIL import Image
 import invite_image_generator as iig
 
 def test_styles_registry():
-    """Verify all 12 styles and alias resolution."""
-    assert len(iig.INVITE_LAYOUT_STYLES) == 12
-    assert len(iig.STYLE_NAMES) == 12
+    """Verify all 16 styles and alias resolution."""
+    assert len(iig.INVITE_LAYOUT_STYLES) == 16
+    assert len(iig.STYLE_NAMES) == 16
     
     expected_styles = [
         "CYBER_BOARD",
@@ -21,6 +21,10 @@ def test_styles_registry():
         "DARK_GOTHIC_SCROLL",
         "BRUTALIST_POSTER",
         "COMIC_BUBBLE",
+        "BIOHAZARD_ZONE",
+        "ASCII_TERMINAL",
+        "Y2K_WIN98",
+        "SCHIZO_COLLAGE",
     ]
     for idx, name in enumerate(expected_styles):
         assert iig.STYLE_NAMES[idx] == name
@@ -37,6 +41,14 @@ def test_alias_resolution():
     assert iig.resolve_layout_style("gothic") == 9
     assert iig.resolve_layout_style("brutalist_poster") == 10
     assert iig.resolve_layout_style("comic_bubble") == 11
+    assert iig.resolve_layout_style("biohazard_zone") == 12
+    assert iig.resolve_layout_style("toxic") == 12
+    assert iig.resolve_layout_style("ascii_terminal") == 13
+    assert iig.resolve_layout_style("dos") == 13
+    assert iig.resolve_layout_style("y2k_win98") == 14
+    assert iig.resolve_layout_style("windows98") == 14
+    assert iig.resolve_layout_style("schizo_collage") == 15
+    assert iig.resolve_layout_style("schizo") == 15
     assert iig.resolve_layout_style("retro_vaporwave") == 3
     assert iig.resolve_layout_style("neon_terminal") == 6
     assert iig.resolve_layout_style("newspaper_frontpage") == 4
@@ -65,9 +77,9 @@ def test_clean_text_for_font():
     assert "[!]" in cleaned or "!" in cleaned
     assert "*" in cleaned
 
-def test_all_12_styles_rendering_procedural():
+def test_all_16_styles_rendering_procedural():
     """Verify each layout style renders a valid 800x800 JPEG from procedural background."""
-    for style_id in range(12):
+    for style_id in range(16):
         slogan = iig.IMAGE_SLOGANS[style_id % len(iig.IMAGE_SLOGANS)]
         buf = iig.build_invite_image_card(
             base_image=None,
@@ -84,10 +96,10 @@ def test_all_12_styles_rendering_procedural():
         assert img.format == "JPEG"
         assert img.size == (800, 800)
 
-def test_all_12_styles_rendering_with_image():
+def test_all_16_styles_rendering_with_image():
     """Verify each layout style renders a valid 800x800 JPEG with custom base image."""
     base = Image.new("RGB", (640, 480), color=(100, 150, 200))
-    for style_id in range(12):
+    for style_id in range(16):
         buf = iig.build_invite_image_card(
             base_image=base,
             slogan_dict=None,

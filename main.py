@@ -11114,7 +11114,10 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
                 # VIP Table Rake
                 rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
                 if rake > 0:
-                    await add_to_abu_fund(db, rake)
+                    if casino_engine.is_burn_vip_rake(bet):
+                        await record_user_transaction(db, user_id, -rake, 'burn_rake', f'Сжигание VIP-рейка 10% в костях (ставка {bet} ₪)')
+                    else:
+                        await add_to_abu_fund(db, rake)
 
                 # Raid Chance
                 is_raid, raid_notice = check_casino_raid_trigger(balance=int(balance), bet=bet)
@@ -11697,8 +11700,12 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
         if rake > 0:
-            await add_to_abu_fund(db, rake)
-            rake_note = f"\n🎩 <b>VIP-рейк (2%):</b> -{rake} ₪ в фонд Абу."
+            if casino_engine.is_burn_vip_rake(bet):
+                await record_user_transaction(db, user_id, -rake, 'burn_rake', f'Сжигание VIP-рейка 10% в слотах (ставка {bet} ₪)')
+                rake_note = f"\n🔥 <b>Сжигаемый VIP-рейк (10%):</b> -{rake:,} ₪ навсегда сожжены!"
+            else:
+                await add_to_abu_fund(db, rake)
+                rake_note = f"\n🎩 <b>VIP-рейк (2%):</b> -{rake:,} ₪ в фонд Абу."
 
         reels, mult, title = casino_engine.roll_slots(user_id=user_id, balance=int(balance))
         win_amt = int(bet * mult)
@@ -11941,8 +11948,12 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
         if rake > 0:
-            await add_to_abu_fund(db, rake)
-            rake_note = f"\n🎩 <b>VIP-рейк (2%):</b> -{rake} ₪ в фонд Абу."
+            if casino_engine.is_burn_vip_rake(bet):
+                await record_user_transaction(db, user_id, -rake, 'burn_rake', f'Сжигание VIP-рейка 10% в монетке (ставка {bet} ₪)')
+                rake_note = f"\n🔥 <b>Сжигаемый VIP-рейк (10%):</b> -{rake:,} ₪ навсегда сожжены!"
+            else:
+                await add_to_abu_fund(db, rake)
+                rake_note = f"\n🎩 <b>VIP-рейк (2%):</b> -{rake:,} ₪ в фонд Абу."
 
         side_ru, is_win, mult, title = casino_engine.play_coinflip(chosen_side, user_id=user_id, balance=int(balance))
         win_amt = int(bet * mult)
@@ -12134,7 +12145,10 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
         if rake > 0:
-            await add_to_abu_fund(db, rake)
+            if casino_engine.is_burn_vip_rake(bet):
+                await record_user_transaction(db, user_id, -rake, 'burn_rake', f'Сжигание VIP-рейка 10% в блэкджеке (ставка {bet} ₪)')
+            else:
+                await add_to_abu_fund(db, rake)
 
         ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
         if not ok:
@@ -17042,7 +17056,10 @@ async def cmd_roll100(message: types.Message, board_id: str | None, stream: str 
                     # VIP Table Rake
                     rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
                     if rake > 0:
-                        await add_to_abu_fund(db, rake)
+                        if casino_engine.is_burn_vip_rake(bet):
+                            await record_user_transaction(db, user_id, -rake, 'burn_rake', f'Сжигание VIP-рейка 10% в костях (ставка {bet} ₪)')
+                        else:
+                            await add_to_abu_fund(db, rake)
 
                     # Raid Chance
                     is_raid, raid_notice = check_casino_raid_trigger(balance=int(balance), bet=bet)

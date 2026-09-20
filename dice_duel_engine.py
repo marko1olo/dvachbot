@@ -611,14 +611,23 @@ async def _finish_dice_game(
 
     else:
         total_pot = bet * 2
-        rake = max(5, int(total_pot * DICE_RAKE_PERCENT))
+        is_burn_rake = total_pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(total_pot * 0.10))
+            rake_label = f"🔥 <b>Сжигаемый рейк (10%):</b> <code>{rake:,} ₪</code> навсегда выведены из экономики!"
+        else:
+            rake = max(5, int(total_pot * DICE_RAKE_PERCENT))
+            rake_label = f"🐒 <b>Налог Абу (5%):</b> <code>{rake:,} ₪</code>"
+
         win_payout = total_pot - rake
 
         async with db_lock:
             if winner_id:
                 await add_user_global_balance(db, winner_id, board_id, win_payout)
-                await record_user_transaction(db, winner_id, win_payout, 'dice_duel', f'Выигрыш в Дайс-Дуэль #{game_id}')
-            await add_to_abu_fund(db, rake)
+                tx_desc = f'Выигрыш в Дайс-Дуэль #{game_id}' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
+                await record_user_transaction(db, winner_id, win_payout, 'dice_duel', tx_desc)
+            if not is_burn_rake:
+                await add_to_abu_fund(db, rake)
 
         game["outcome"] = "win"
         game["winner"] = winner_id
@@ -662,7 +671,7 @@ async def _finish_dice_game(
                 f">сыч испугался бросать кости и убежал в слезах\n"
                 f"😴 Анон <code>[ID:{loser_anon}]</code> пропустил таймер хода (45 сек)!\n"
                 f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code> забирает весь банк <b>+{win_payout:,} ₪</b>!\n"
-                f"🐒 Налог Абу: <code>{rake:,} ₪</code>"
+                f"{rake_label}"
             )
         elif reason == "surrender":
             announcement = (
@@ -684,7 +693,7 @@ async def _finish_dice_game(
                 f"🎲 Выкинул: {l_vis} — <i>{l_combo}</i>\n\n"
                 f"💰 <b>Банк игры:</b> <code>{total_pot:,} ₪</code>\n"
                 f"🏆 <b>Чистый выигрыш:</b> <code>+{win_payout:,} ₪</code> отправлен чемпиону!\n"
-                f"🐒 <b>Налог Абу (5%):</b> <code>{rake:,} ₪</code>"
+                f"{rake_label}"
             )
 
         if bot:

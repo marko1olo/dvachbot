@@ -114,13 +114,23 @@ def check_casino_cooldown(user_id: int) -> Tuple[bool, float]:
 
 def calculate_vip_table_rake(bet: int) -> Tuple[int, int]:
     """
-    Deducts a 2% VIP table fee for bets >= 2,000 ₪ sent straight to Abu's Fund.
+    VIP table fee:
+    - If bet > 50,000 ₪: 10% burned rake (deflationary currency sink).
+    - If bet >= 2,000 ₪: 2% VIP table fee sent straight to Abu's Fund.
     Returns: (rake_amount, active_bet)
     """
-    if bet >= 2000:
+    if bet > 50000:
+        rake = max(10, int(bet * 0.10))
+        return rake, bet - rake
+    elif bet >= 2000:
         rake = max(10, int(bet * 0.02))
         return rake, bet - rake
     return 0, bet
+
+
+def is_burn_vip_rake(bet: int) -> bool:
+    """True if bet is subject to 10% deflationary burn rather than Abu's fund."""
+    return bet > 50000
 
 
 def record_win_streak(user_id: int, is_win: bool) -> int:

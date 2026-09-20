@@ -255,6 +255,14 @@ ACHIEVEMENTS_CATALOG = {
         "reward_cash": 750,
         "icon": "📦",
         "category": "lootbox"
+    },
+    "ach_mmm_investor": {
+        "id": "ach_mmm_investor",
+        "name": "🎖️ Инвестор МММ",
+        "desc": "Попал под Великую Стрижку Абу депозитов свыше 500,000 ₪.",
+        "reward_cash": 0,
+        "icon": "🎖️",
+        "category": "bank"
     }
 }
 
