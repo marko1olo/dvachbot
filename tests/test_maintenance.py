@@ -75,5 +75,27 @@ class TestMaintenance(unittest.TestCase):
         runpy.run_module('maintenance', run_name='__main__')
         mock_print.assert_any_call("Операция отменена.")
 
+    @patch('sys.argv', ['maintenance.py', '--yes'])
+    @patch('builtins.print')
+    @patch('builtins.input')
+    def test_main_block_auto_yes(self, mock_input, mock_print):
+        with patch('maintenance.os.path.exists', return_value=False):
+            runpy.run_module('maintenance', run_name='__main__')
+        mock_input.assert_not_called()
+        mock_print.assert_any_call(f"Ошибка: Файл базы данных не найден по пути: {DB_NAME}")
+
+
+    def test_clean_old_postcopies_executes_delete(self):
+        from maintenance import clean_old_postcopies
+        mock_con = MagicMock()
+        mock_cur = MagicMock()
+        mock_con.cursor.return_value = mock_cur
+        mock_cur.fetchone.return_value = (500000,)
+
+        clean_old_postcopies(mock_con, retention_days=3)
+        mock_cur.execute.assert_any_call("DELETE FROM PostCopies WHERE post_num < ?", (500000,))
+        mock_con.commit.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()
+
