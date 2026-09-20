@@ -566,7 +566,7 @@ def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
-MEMORY_LIMIT_GB = 1.5  # RSS limit: bot starts ~450 MB RSS, private_bytes ~550 MB, allow growth before graceful restart
+MEMORY_LIMIT_GB = 3.0  # RSS limit: graceful restart before Windows OOM-kills the process
 # QUICK_QUOTE_POST_DISTANCE is canonical in shared_state.py
 class ThreadCreateStates(StatesGroup):
     waiting_for_op_post = State()      # Состояние ожидания текста ОП-поста
