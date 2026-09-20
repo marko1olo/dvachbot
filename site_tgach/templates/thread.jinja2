@@ -44,7 +44,7 @@
       "interactionStatistic": {
         "@type": "InteractionCounter",
         "interactionType": "https://schema.org/CommentAction",
-        "userInteractionCount": {{ posts|length }}
+        "userInteractionCount": {{ (replies|length + 1) if (replies is defined and replies) else (op_post.reply_count + 1 if (op_post is defined and op_post.reply_count is defined and op_post.reply_count) else 1) }}
       },
       {% if meta_image %}
       "image": "{{ meta_image }}",

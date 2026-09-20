@@ -1035,6 +1035,8 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_id ON Posts(board_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON Reports(status);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_num_text ON Posts(CAST(post_num AS TEXT));")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_usertransactions_ts ON UserTransactions(timestamp);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_usertransactions_cat_ts ON UserTransactions(category, timestamp);")
 
         # High-frequency activity & message indices
         try:
@@ -3648,42 +3650,28 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
                 
-                # 1. Читаем ID
+                # 1. Читаем ID без блокирующего файл BEGIN IMMEDIATE
                 async with db.execute("SELECT post_num FROM BroadcastQueue WHERE is_sent_to_tg = 0") as cursor:
                     rows = await cursor.fetchall()
                 
                 if not rows:
-                    await db.execute("COMMIT")
                     return []
                     
                 post_nums = [row[0] for row in rows]
 
-                # 2. Читаем контент постов ПАЧКАМИ.
-                # Раньше плейсхолдер строился на каждый пост сразу. У SQLite
-                # жёсткий предел SQLITE_LIMIT_VARIABLE_NUMBER (32766 в текущей
-                # сборке): при большем числе непереданных постов запрос падал с
-                # "too many SQL variables". Это OperationalError, но не
-                # locked/busy, поэтому ветка ретраев его не ловила — функция
-                # печатала ошибку и возвращала []. Мост сайт -> бот умирал
-                # НАВСЕГДА: очередь больше не разгребалась ни при одном цикле.
-                # В BroadcastQueue попадает КАЖДЫЙ пост (create_post), так что
-                # после долгого простоя это достижимо.
+                # 2. Читаем контент постов ПАЧКАМИ
                 columns = []
                 posts_data = []
                 for chunk in iter_sql_chunks(post_nums):
                     placeholders = ','.join('?' for _ in chunk)
                     post_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
-                    # Используем execute напрямую, так как мы внутри транзакции
                     async with db.execute(post_query, chunk) as post_cursor:
                         if not columns:
                             columns = [description[0] for description in post_cursor.description]
                         posts_data.extend(await post_cursor.fetchall())
 
-                await db.execute("COMMIT")
-                
-                # Обработка данных (уже вне транзакции, в памяти)
+                # Обработка данных (в памяти)
                 processed_posts = []
                 for post_row in posts_data:
                     post_dict = dict(zip(columns, post_row))
@@ -3698,17 +3686,12 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                 return processed_posts
 
             except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА в get_and_clear_broadcast_queue: {e}")
                 break
             except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
                 print(f"⛔ ОШИБКА в get_and_clear_broadcast_queue: {e}")
                 break
             

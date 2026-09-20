@@ -20098,10 +20098,20 @@ async def auto_memory_cleaner():
             except Exception:
                 pass
 
-            # 4.1. Очистка и подрезка message_to_post по актуальным post_to_messages
+            # 4.1. Очистка и подрезка RAM-кэша постов (messages_storage, post_to_messages, message_to_post)
             try:
                 async with storage_lock:
-                    valid_post_nums = set(post_to_messages.keys())
+                    limit = max(500, int(MAX_MESSAGES_IN_MEMORY or 1100))
+                    if len(messages_storage) > limit:
+                        excess = len(messages_storage) - limit
+                        sorted_pnums = sorted(messages_storage.keys())
+                        drop_pnums = sorted_pnums[:excess]
+                        for pnum in drop_pnums:
+                            messages_storage.pop(pnum, None)
+                            post_to_messages.pop(pnum, None)
+                        removed["evicted_posts_from_ram"] = len(drop_pnums)
+
+                    valid_post_nums = set(post_to_messages.keys()) | set(messages_storage.keys())
                     stale_msg_keys = [k for k, pnum in message_to_post.items() if pnum not in valid_post_nums]
                     for k in stale_msg_keys:
                         message_to_post.pop(k, None)
@@ -25744,10 +25754,11 @@ async def database_cleanup_task():
             
             # Оптимизация оперативной памяти (RAM): очистка message_to_post по валидным постам и ограничение размера
             async with storage_lock:
-                if len(messages_storage) > 10000:
-                    print(f"🚮 [Maintenance] Очистка RAM-кэша постов (было {len(messages_storage)})...")
+                limit = max(500, int(MAX_MESSAGES_IN_MEMORY or 1100))
+                if len(messages_storage) > limit:
+                    print(f"🚮 [Maintenance] Очистка RAM-кэша постов (было {len(messages_storage)}, лимит {limit})...")
                     sorted_nums = sorted(messages_storage.keys())
-                    to_delete = set(sorted_nums[:-10000])
+                    to_delete = set(sorted_nums[:-limit])
                     for pnum in to_delete:
                         messages_storage.pop(pnum, None)
                         post_to_messages.pop(pnum, None)

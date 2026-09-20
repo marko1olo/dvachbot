@@ -420,6 +420,9 @@ def is_ip_restricted(ip_str: str) -> bool:
 
 
 async def is_request_from_ru(request: Request) -> bool:
+    cookie_country = request.cookies.get("user_country")
+    if cookie_country:
+        return cookie_country == "RU"
     ip = get_real_ip(request)
     country = await get_country_by_ip(ip)
     return country == "RU"
@@ -1575,12 +1578,20 @@ class ConnectionManager:
         if self.ip_counts[client_ip] > 20:
             self.ip_counts[client_ip] -= 1
             logger.warning(f"⛔ WS Limit Reached for {client_ip}")
+            try:
+                await websocket.close(code=1008)
+            except Exception:
+                pass
             return
 
         try:
             await websocket.accept()
         except Exception:
             self.ip_counts[client_ip] -= 1
+            try:
+                await websocket.close()
+            except Exception:
+                pass
             return
 
         logger.info(f"🔌 WS Connect: {client_ip} | Board: {board_id}")
@@ -1603,9 +1614,9 @@ class ConnectionManager:
             ip = websocket.state_client_ip
             if self.ip_counts[ip] > 0:
                 self.ip_counts[ip] -= 1
-            if self.ip_counts[ip] == 0:
+            if self.ip_counts[ip] <= 0:
                 v_logger.info(f"[EXIT] {ip}")
-                del self.ip_counts[ip]
+                self.ip_counts.pop(ip, None)
 
     async def broadcast_post_update(self, post_data: dict):
         enriched = _convert_and_enrich_posts([post_data])[0]
@@ -1678,6 +1689,10 @@ class ConnectionManager:
                     self.active_connections[key].discard(connection)
                     if not self.active_connections[key]:
                         del self.active_connections[key]
+            except Exception:
+                pass
+            try:
+                await connection.close()
             except Exception:
                 pass
 
@@ -1942,18 +1957,19 @@ async def country_cookie_middleware(request: Request, call_next):
 
     response = await call_next(request)
 
-    try:
-        client_ip = get_real_ip(request)
-        country = await get_country_by_ip(client_ip)
-        response.set_cookie(
-            key="user_country",
-            value=country,
-            max_age=3600,
-            httponly=False,
-            samesite="lax",
-        )
-    except Exception:
-        import traceback; traceback.print_exc()
+    if "user_country" not in request.cookies:
+        try:
+            client_ip = get_real_ip(request)
+            country = await get_country_by_ip(client_ip)
+            response.set_cookie(
+                key="user_country",
+                value=country,
+                max_age=3600,
+                httponly=False,
+                samesite="lax",
+            )
+        except Exception:
+            pass
 
     return response
 
@@ -2375,13 +2391,27 @@ class CachedStaticFiles(StaticFiles):
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    return RedirectResponse(url="/static/favicon.ico", status_code=301)
+    fav_path = os.path.join(site_root, "static", "favicon.ico")
+    if os.path.exists(fav_path):
+        return FileResponse(
+            fav_path,
+            media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    return Response(status_code=404)
 
 
 @app.get("/{path:path}/apple-touch-icon.png", include_in_schema=False)
 @app.get("/apple-touch-icon.png", include_in_schema=False)
 async def apple_touch_icon_proxy(path: str = ""):
-    return RedirectResponse(url="/static/icons/icon-192.png", status_code=301)
+    icon_path = os.path.join(site_root, "static", "icons", "icon-192.png")
+    if os.path.exists(icon_path):
+        return FileResponse(
+            icon_path,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    return Response(status_code=404)
 
 
 class AdminDeleteAfterRequest(BaseModel):
@@ -4451,7 +4481,9 @@ async def overboard_page(
         "is_skeleton": is_skeleton,
     }
 
-    html_content = templates.get_template("overboard.jinja2").render(context)
+    html_content = await asyncio.to_thread(
+        templates.get_template("overboard.jinja2").render, context
+    )
 
     if is_bot and not user:
         backend = FastAPICache.get_backend()
@@ -6290,7 +6322,9 @@ async def read_board_threads(
         "is_skeleton": is_skeleton,  # Флаг для шаблона
     }
 
-    html_content = templates.get_template("board.jinja2").render(context)
+    html_content = await asyncio.to_thread(
+        templates.get_template("board.jinja2").render, context
+    )
 
     if is_bot and not user:
         backend = FastAPICache.get_backend()
@@ -6482,7 +6516,9 @@ async def read_thread(
         "meta_image": meta_image,
         "is_skeleton": is_skeleton,
     }
-    html_content = templates.get_template("thread.jinja2").render(context)
+    html_content = await asyncio.to_thread(
+        templates.get_template("thread.jinja2").render, context
+    )
 
     if not user and not is_skeleton:
         backend = FastAPICache.get_backend()

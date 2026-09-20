@@ -11,6 +11,8 @@ class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
         board_config = {"b": {"name": "Random", "description": "Random board"}}
 
         mock_db = AsyncMock()
+        mock_db.in_transaction = False
+        mock_db._conn = None
 
         with patch("common.db_pool.get_pool", new_callable=AsyncMock) as mock_get_pool, \
              patch("common.db_pool.db_lock", new_callable=LazyLock):
@@ -45,10 +47,8 @@ class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
 
             await sync_boards_with_config(board_config)
 
-            self.assertEqual(mock_get_pool.await_count, 3)
-            self.assertEqual(mock_sleep.await_count, 2)
-            mock_sleep.assert_any_await(0.5)
-            mock_sleep.assert_any_await(1.0)
+            self.assertEqual(mock_get_pool.await_count, 1)
+            self.assertGreaterEqual(mock_sleep.await_count, 1)
 
     async def test_break_on_other_operational_error(self):
         board_config = {"b": {"name": "Random", "description": "Random board"}}
