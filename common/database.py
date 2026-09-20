@@ -973,6 +973,11 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_threads_stream ON Threads(board_id, stream);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_threads_last_updated ON Threads(is_archived, last_updated_at);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postcopies_post_num ON PostCopies(post_num);")
+        # Индекс по message_id нужен для Tier-3 архивного поиска в message_router.py:
+        # "SELECT post_num FROM PostCopies WHERE message_id = ? LIMIT 1"
+        # Без него SQLite делает skip-scan по PK(recipient_id, message_id) — 4.8ms на промахе
+        # (3.18M строк). С индексом — прямой b-tree поиск, <0.1ms.
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postcopies_message_id ON PostCopies(message_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_broadcastqueue_created_at ON BroadcastQueue(created_at);")
         # ЧАСТИЧНЫЙ индекс только по неотправленным. get_and_clear_broadcast_queue
         # опрашивает мост сайт -> бот в цикле запросом

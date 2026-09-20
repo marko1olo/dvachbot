@@ -566,7 +566,7 @@ def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
-MEMORY_LIMIT_GB = 3.2
+MEMORY_LIMIT_GB = 0.6  # ~600 MB: graceful self-restart before Windows OOM-kills the process (bot starts ~462 MB RSS)
 # QUICK_QUOTE_POST_DISTANCE is canonical in shared_state.py
 class ThreadCreateStates(StatesGroup):
     waiting_for_op_post = State()      # Состояние ожидания текста ОП-поста
@@ -20250,8 +20250,7 @@ async def weekly_active_refresh_task():
             counts = {}
             for board_id in BOARDS:
                 users = await get_weekly_active_users(board_id, WEEKLY_ACTIVE_DAYS)
-                existing = weekly_active_users.get(board_id, set())
-                weekly_active_users[board_id] = existing.union(users)
+                weekly_active_users[board_id] = users
                 weekly_active_updated_at[board_id] = refreshed_at
                 counts[board_id] = len(weekly_active_users[board_id])
             total = sum(counts.values())
@@ -20315,7 +20314,7 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
     MEMORY_LIMIT_BYTES = MEMORY_LIMIT_GB * 1024 * 1024 * 1024
     print(f"✅ Мониторинг памяти запущен. Лимит: {MEMORY_LIMIT_GB} ГБ")
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
         try:
             info = process.memory_info()
             rss_usage = getattr(info, "rss", 0)

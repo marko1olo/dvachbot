@@ -99,10 +99,15 @@ async def _find_msg_info(file_id: str):
                 JOIN Posts p ON pf.post_num = p.post_num
                 LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
                 WHERE (pf.original_file_id = ? OR pf.thumbnail_file_id = ?)
-                ORDER BY p.post_num DESC
+                  AND p.post_num = (
+                      SELECT MAX(p2.post_num)
+                      FROM PostFiles pf2
+                      JOIN Posts p2 ON pf2.post_num = p2.post_num
+                      WHERE pf2.original_file_id = ? OR pf2.thumbnail_file_id = ?
+                  )
                 LIMIT 1
             """
-            async with db.execute(query, (file_id, file_id)) as cursor:
+            async with db.execute(query, (file_id, file_id, file_id, file_id)) as cursor:
                 return await cursor.fetchone()
     except Exception as e:
         logger.error(f"DB lookup error: {e}", exc_info=True)
