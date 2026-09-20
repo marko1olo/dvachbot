@@ -2,6 +2,7 @@ import random
 import io
 import os
 import glob
+import re
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
@@ -63,24 +64,41 @@ TEMPLATE_CONFIG = {
     'warhammer': [
         {
             'filename': 'ваха1.png',
-            'text_area': (112, 110, 396, 401),
-            'font_path': 'fonts/ocra.ttf', 'max_font_size': 28, 'text_color': (255, 180, 50),
-            'text_align': 'left', 
-            'text_stroke': {'width': 1, 'fill': (255, 180, 50, 20)}  
+            'text_area': (210, 230, 814, 750),
+            'font_path': 'fonts/Impact.ttf', 'max_font_size': 38, 'text_color': (255, 190, 50),
+            'text_align': 'center', 'text_stroke': {'width': 3, 'fill': (0, 0, 0, 255)}
         },
         {
             'filename': 'ваха2.png',
-            'text_area': (122, 180, 393, 323),
-            'font_path': 'fonts/ocra.ttf', 'max_font_size': 24, 'text_color': (255, 180, 50),
-            'text_align': 'left', 
-            'text_stroke': {'width': 1, 'fill': (255, 180, 50, 20)}
+            'text_area': (230, 300, 794, 620),
+            'font_path': 'fonts/Courier New.ttf', 'max_font_size': 28, 'text_color': (255, 200, 60),
+            'text_align': 'center', 'text_stroke': {'width': 1, 'fill': (0, 0, 0, 220)}
         },
         {
             'filename': 'ваха3.png',
-            'text_area': (170, 208, 345, 304),
-            'font_path': 'fonts/ocra.ttf', 'max_font_size': 16, 'text_color': (50, 255, 50),
-            'text_align': 'left', 
-            'text_stroke': {'width': 1, 'fill': (50, 255, 50, 12)}
+            'text_area': (310, 370, 715, 630),
+            'font_path': 'fonts/Courier New.ttf', 'max_font_size': 24, 'text_color': (60, 255, 80),
+            'text_align': 'center', 'text_stroke': {'width': 1, 'fill': (20, 80, 20, 180)}
+        },
+        {
+            'filename': 'ваха4.png',
+            'text_area': (320, 320, 620, 560),
+            'font_path': 'fonts/Courier New.ttf', 'max_font_size': 22, 'text_color': (90, 255, 110),
+            'text_align': 'center', 'bg_plate': {'fill': (5, 20, 10, 220), 'outline': (40, 160, 60, 180), 'radius': 8},
+            'text_stroke': {'width': 1, 'fill': (0, 0, 0, 255)}
+        },
+        {
+            'filename': 'ваха5.png',
+            'text_area': (365, 390, 635, 510),
+            'font_path': 'fonts/Courier New.ttf', 'max_font_size': 18, 'text_color': (255, 195, 60),
+            'text_align': 'center', 'bg_plate': {'fill': (15, 10, 8, 235), 'outline': (180, 130, 30, 180), 'radius': 6},
+            'text_stroke': {'width': 1, 'fill': (0, 0, 0, 220)}
+        },
+        {
+            'filename': 'ваха6.png',
+            'text_area': (350, 350, 680, 670),
+            'font_path': 'fonts/Impact.ttf', 'max_font_size': 32, 'text_color': (255, 160, 45),
+            'text_align': 'center', 'text_stroke': {'width': 3, 'fill': (0, 0, 0, 255)}
         },
     ]
 }
@@ -516,18 +534,57 @@ def create_visual_post(mode, text, header=None):
 
         else:
             x1, y1, x2, y2 = config['text_area']
-            full_text = f"{header.replace('<i>','').replace('</i>','')}\n\n{text}" if header else text
+            # Scale 512-based legacy template coords if rendered on 1024x1024
+            if max(x2, y2) <= 520 and img.size == (1024, 1024):
+                x1, y1, x2, y2 = x1 * 2, y1 * 2, x2 * 2, y2 * 2
+
+            clean_h = ""
+            if header:
+                clean_h = header.replace("<i>", "").replace("</i>", "").replace("###", "").strip()
+                # Strip high-plane emojis so TrueType fonts without color glyphs don't output square tofu boxes
+                clean_h = re.sub(r'[\U00010000-\U0010ffff]', '', clean_h).strip()
+
+            full_text = f"{clean_h}\n\n{text}" if clean_h else text
             fit_config = FontFitConfig(
                 font_path=config['font_path'],
-                max_width=x2-x1,
-                max_height=y2-y1,
+                max_width=x2 - x1,
+                max_height=y2 - y1,
                 max_font_size=config['max_font_size'],
                 text_align=config['text_align']
             )
             font, w_text = _find_best_font_size(draw, full_text, fit_config)
-            pos_x = x1 if config['text_align'] == 'left' else x2 if config['text_align'] == 'right' else x1 + (x2-x1)/2
+
+            # Compute text bounding box and vertical centering inside text_area
+            t_bbox = draw.multiline_textbbox((0, 0), w_text, font=font, align=config['text_align'])
+            t_w = t_bbox[2] - t_bbox[0]
+            t_h = t_bbox[3] - t_bbox[1]
+            vert_y = y1 + max(0, ((y2 - y1) - t_h) // 2)
+
+            # Optional semi-transparent background plate (for CRT tactical displays / HUDs)
+            if config.get('bg_plate'):
+                overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                pad_x = 12
+                pad_y = 10
+                plate_box = [
+                    max(x1, (img.width - t_w) // 2 - pad_x),
+                    vert_y - pad_y,
+                    min(x2, (img.width + t_w) // 2 + pad_x),
+                    vert_y + t_h + pad_y
+                ]
+                odraw.rounded_rectangle(
+                    plate_box,
+                    radius=config['bg_plate'].get('radius', 6),
+                    fill=config['bg_plate']['fill'],
+                    outline=config['bg_plate'].get('outline'),
+                    width=1
+                )
+                img = Image.alpha_composite(img, overlay)
+                draw = ImageDraw.Draw(img)
+
+            pos_x = x1 if config['text_align'] == 'left' else x2 if config['text_align'] == 'right' else x1 + (x2 - x1) / 2
             anchor = {"left": "la", "center": "ma", "right": "ra"}[config['text_align']]
-            draw.multiline_text((pos_x, y1), w_text, font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor, 
+            draw.multiline_text((pos_x, vert_y), w_text, font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor, 
                                 stroke_width=config.get('text_stroke', {}).get('width', 0) if config.get('text_stroke') else 0,
                                 stroke_fill=config.get('text_stroke', {}).get('fill') if config.get('text_stroke') else None)
 
