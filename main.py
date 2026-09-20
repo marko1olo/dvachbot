@@ -566,7 +566,7 @@ def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
-MEMORY_LIMIT_GB = 0.6  # ~600 MB: graceful self-restart before Windows OOM-kills the process (bot starts ~462 MB RSS)
+MEMORY_LIMIT_GB = 1.5  # RSS limit: bot starts ~450 MB RSS, private_bytes ~550 MB, allow growth before graceful restart
 # QUICK_QUOTE_POST_DISTANCE is canonical in shared_state.py
 class ThreadCreateStates(StatesGroup):
     waiting_for_op_post = State()      # Состояние ожидания текста ОП-поста
@@ -20327,7 +20327,7 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
                 )
             except Exception:
                 private_usage = rss_usage
-            mem_usage = max(rss_usage, private_usage)
+            mem_usage = rss_usage  # Use RSS only: Windows Private Bytes inflates ~2x vs RSS, causing false OOM triggers
         except psutil.NoSuchProcess:
             # Собственный процесс исчез — мониторить больше нечего.
             print("ℹ️ Мониторинг памяти остановлен: процесс завершается.")
