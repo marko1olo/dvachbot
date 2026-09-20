@@ -531,6 +531,17 @@ def get_banner_delivery_payload(
     return fname, None, img_bytes
 
 
+async def get_banner_delivery_payload_async(
+    category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = "start",
+    bot_id: Optional[int] = None,
+    banner_name: Optional[str] = None
+) -> Tuple[str, Optional[str], Optional[bytes]]:
+    """
+    Non-blocking async version of get_banner_delivery_payload that runs disk I/O in worker thread.
+    """
+    return await asyncio.to_thread(get_banner_delivery_payload, category=category, bot_id=bot_id, banner_name=banner_name)
+
+
 async def send_banner_message(
     bot: Bot,
     chat_id: int,

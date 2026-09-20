@@ -4429,6 +4429,7 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
             "wrong remote file identifier", "wrong file identifier",
             "can't unserialize", "media_invalid", "file_id_invalid",
             "bad request: wrong type of the web page content",
+            "webpage_media_empty", "failed to get http url content"
         ))
         logger.warning(f"[banners] Initial media group send failed (bad_file_id={is_bad_file_id}): {e}")
         # Invalidate cached file_ids ONLY when Telegram explicitly rejects them
@@ -14781,10 +14782,10 @@ async def dvach_thread_poster():
                     'subscribers': set(), 'is_archived': False, 'stream': 'ru'
                 })
             
-            from banner_manager import get_banner_delivery_payload, is_video_banner
+            from banner_manager import get_banner_delivery_payload_async, is_video_banner
             target_bot = GLOBAL_BOTS.get(destination_board_id) or shared_state.GLOBAL_BOTS.get(destination_board_id) or GLOBAL_BOTS.get('b')
             b_bot_id = getattr(target_bot, "id", None)
-            fname, fid, img_bytes = get_banner_delivery_payload(category="digest", bot_id=b_bot_id)
+            fname, fid, img_bytes = await get_banner_delivery_payload_async(category="digest", bot_id=b_bot_id)
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔗 Открыть на 2ch.hk", url=link)]
@@ -14994,9 +14995,7 @@ def _report_graph_save_result(future) -> None:
         logger.error(f"⛔ Поток сохранения graph.json упал: {type(e).__name__}: {e}", exc_info=True)
 
 
-def load_graph_stats():
-
-    global graph_stats
+def _sync_load_graph_stats() -> dict:
     for path, label in ((GRAPH_STATS_PATH, "graph.json"), (GRAPH_STATS_BACKUP_PATH, "graph.json.bak")):
         if not os.path.exists(path):
             continue
@@ -15014,14 +15013,25 @@ def load_graph_stats():
             continue
 
         dropped = _prune_graph_stats(loaded)
-        graph_stats = loaded
         points = sum(len(series) for series in loaded.values())
         suffix = f", отброшено {dropped} устаревших точек" if dropped else ""
         logger.info(f"✅ Статистика для графика ({label}) загружена: {len(loaded)} досок, {points} точек{suffix}.")
-        return
+        return loaded
 
     logger.info("ℹ️ graph.json отсутствует или повреждён — статистика графика начнётся с нуля.")
-    graph_stats = {}
+    return {}
+
+
+async def load_graph_stats_async():
+    """Асинхронная загрузка статистики графика в рабочем потоке без блокировки Event Loop."""
+    global graph_stats
+    graph_stats = await asyncio.to_thread(_sync_load_graph_stats)
+
+
+def load_graph_stats():
+    """Синхронный вызов для обратной совместимости."""
+    global graph_stats
+    graph_stats = _sync_load_graph_stats()
 async def graph_data_collector():
     """
     Фоновая задача, которая раз в час собирает статистику постов
@@ -22993,18 +23003,45 @@ async def _process_stacked_anime_command(
                         except Exception as retry_err:
                             runtime_logger.error(f"Failed retry sending event media group: {retry_err}")
                     except TelegramBadRequest as e:
-                        runtime_logger.warning(f"TelegramBadRequest sending event media group: {e}. Attempting individual items fallback...")
-                        caption_sent = False
-                        for m_item in media:
-                            try:
-                                cap = waifu_drop_caption if not caption_sent else None
-                                if isinstance(m_item, InputMediaVideo):
-                                    await message.bot.send_video(chat_id=message.chat.id, video=m_item.media, caption=cap, parse_mode='HTML', supports_streaming=True)
-                                else:
-                                    await message.bot.send_photo(chat_id=message.chat.id, photo=m_item.media, caption=cap, parse_mode='HTML')
-                                caption_sent = True
-                            except Exception as item_err:
-                                runtime_logger.debug(f"Skipping bad item in waifu drop: {item_err}")
+                        err_str = str(e)
+                        runtime_logger.warning(f"TelegramBadRequest sending event media group: {err_str}")
+                        handled_drop = False
+                        if "WEBPAGE_MEDIA_EMPTY" in err_str or "wrong type" in err_str.lower():
+                            # Extract the exact failed message index (#N) reported by Telegram
+                            m_idx = re.search(r'failed to send message #(\d+)', err_str)
+                            if m_idx:
+                                bad_idx = int(m_idx.group(1)) - 1
+                                if 0 <= bad_idx < len(media):
+                                    runtime_logger.info(f"Pruning broken media item #{bad_idx + 1} from event album")
+                                    media.pop(bad_idx)
+                                    if media:
+                                        # Re-assign caption to the first remaining item
+                                        media[0].caption = waifu_drop_caption
+                                        media[0].parse_mode = 'HTML'
+                                        try:
+                                            if len(media) == 1:
+                                                item = media[0]
+                                                if isinstance(item, InputMediaVideo):
+                                                    await message.bot.send_video(chat_id=message.chat.id, video=item.media, caption=item.caption, parse_mode='HTML', supports_streaming=True)
+                                                else:
+                                                    await message.bot.send_photo(chat_id=message.chat.id, photo=item.media, caption=item.caption, parse_mode='HTML')
+                                            else:
+                                                await message.bot.send_media_group(chat_id=message.chat.id, media=media)
+                                            handled_drop = True
+                                        except Exception as prune_retry_err:
+                                            runtime_logger.debug(f"Retry after pruning bad item failed: {prune_retry_err}")
+                        if not handled_drop:
+                            caption_sent = False
+                            for m_item in media:
+                                try:
+                                    cap = waifu_drop_caption if not caption_sent else None
+                                    if isinstance(m_item, InputMediaVideo):
+                                        await message.bot.send_video(chat_id=message.chat.id, video=m_item.media, caption=cap, parse_mode='HTML', supports_streaming=True)
+                                    else:
+                                        await message.bot.send_photo(chat_id=message.chat.id, photo=m_item.media, caption=cap, parse_mode='HTML')
+                                    caption_sent = True
+                                except Exception as item_err:
+                                    runtime_logger.debug(f"Skipping bad item in waifu drop: {item_err}")
                     except Exception as e:
                         runtime_logger.error(f"Failed to send event media group: {e}", exc_info=True)
                 for gif_url in gif_urls:
@@ -28626,7 +28663,7 @@ async def main():
         await create_pool()
         await sync_boards_with_config()
         await load_state()
-        load_graph_stats() 
+        await load_graph_stats_async()
         global ROULETTE_EVENTS
         ROULETTE_EVENTS = load_roulette_data("roulette_data.json")
         if ROULETTE_EVENTS:
