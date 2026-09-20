@@ -516,7 +516,7 @@ POST_RATE_LIMITER = deque()
 SITE_CACHE_CLEANUP_INTERVAL_SEC = int(
     os.getenv("SITE_CACHE_CLEANUP_INTERVAL_SEC", "300")
 )
-SITE_FASTAPI_CACHE_MAX_KEYS = int(os.getenv("SITE_FASTAPI_CACHE_MAX_KEYS", "5000"))
+SITE_FASTAPI_CACHE_MAX_KEYS = int(os.getenv("SITE_FASTAPI_CACHE_MAX_KEYS", "800"))
 SITE_THREAD_VERSION_TTL_SEC = int(os.getenv("SITE_THREAD_VERSION_TTL_SEC", "86400"))
 SITE_THREAD_VERSION_MAX_KEYS = int(os.getenv("SITE_THREAD_VERSION_MAX_KEYS", "5000"))
 SITE_FLOOD_TRACKER_TTL_SEC = int(os.getenv("SITE_FLOOD_TRACKER_TTL_SEC", "60"))
@@ -4066,8 +4066,8 @@ async def enrich_heavy_data(posts: List[dict]):
         tasks.append(get_mirrors_batch(all_fids))
 
     if poll_post_ids:
-        for pid in poll_post_ids:
-            tasks.append(get_poll_results(pid))
+        from common.database import get_poll_results_batch
+        tasks.append(get_poll_results_batch(poll_post_ids))
 
     # Бэклинки теперь тоже в пуле задач
     if all_post_ids:
@@ -4107,11 +4107,10 @@ async def enrich_heavy_data(posts: List[dict]):
 
     poll_results_map = {}
     if poll_post_ids:
-        for i, pid in enumerate(poll_post_ids):
-            val = results[res_idx + i]
-            if not isinstance(val, Exception):
-                poll_results_map[pid] = val
-        res_idx += len(poll_post_ids)
+        val = results[res_idx]
+        if not isinstance(val, Exception) and isinstance(val, dict):
+            poll_results_map = val
+        res_idx += 1
 
     # Достаем бэклинки из результатов gather
     backlinks_map = {}
@@ -8757,6 +8756,9 @@ async def cleanup_fastapi_cache_once() -> dict:
             await _cleanup_unlocked()
     else:
         await _cleanup_unlocked()
+    if expired_removed or cap_removed:
+        import gc
+        gc.collect()
     return {
         "keys": len(store),
         "expired_removed": expired_removed,
@@ -8863,11 +8865,20 @@ def cleanup_site_runtime_maps_once() -> dict:
 
 
 async def site_cache_cleanup_task():
-    await asyncio.sleep(SITE_CACHE_CLEANUP_INTERVAL_SEC)
+    await asyncio.sleep(30)
     while True:
         try:
             cache_result = await cleanup_fastapi_cache_once()
             map_result = cleanup_site_runtime_maps_once()
+
+            try:
+                proc_info = get_site_process_snapshot()
+                if proc_info.get("rss_mb", 0) > 400:
+                    import gc
+                    gc.collect()
+            except Exception:
+                pass
+
             if (
                 cache_result.get("expired_removed")
                 or cache_result.get("cap_removed")
@@ -9432,16 +9443,13 @@ async def api_transcribe_voice(file_id: str, request: Request):
     if not audio_bytes:
         raise HTTPException(status_code=404, detail="Audio file not found or unavailable.")
 
-    # 3. Вызываем Gemini API
+    # 3. Вызываем Gemini API с соблюдением безопасных кулдаунов и ротации
     import base64
-    # PROXY_URL берём модульный (объявлен выше в этом файле). В summarize его нет
-    # и никогда не было, поэтому `from summarize import ..., PROXY_URL` бросал
-    # ImportError, и эндпоинт транскрипции отвечал 500 на каждый запрос.
-    from summarize import _load_google_keys
     import time
+    from common.token_pool import google_pool
     
-    keys = _load_google_keys()
-    if not keys:
+    active_tokens = google_pool.get_all_active_tokens()
+    if not active_tokens:
         raise HTTPException(status_code=500, detail="Gemini API config missing.")
 
     b64_data = base64.b64encode(audio_bytes).decode('utf-8')
@@ -9464,8 +9472,12 @@ async def api_transcribe_voice(file_id: str, request: Request):
     }
 
     transcription_text = None
-    # Пробуем по очереди все ключи
-    for key in keys:
+    max_attempts = min(3, len(active_tokens))
+
+    for _ in range(max_attempts):
+        key, wait_sec = await google_pool.acquire_token_async(min_interval=3.0, max_wait=10.0)
+        if not key:
+            break
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
         for proxy in [None, PROXY_URL]:
             try:
@@ -9473,10 +9485,20 @@ async def api_transcribe_voice(file_id: str, request: Request):
                     resp = await client.post(url, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
-                        transcription_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-                        break
+                        candidates = data.get('candidates') or []
+                        if candidates:
+                            parts = candidates[0].get('content', {}).get('parts', [])
+                            if parts and 'text' in parts[0]:
+                                transcription_text = parts[0]['text'].strip()
+                                break
                     elif resp.status_code == 429:
-                        logger.warning("Gemini API rate limit exceeded during transcription. Trying next key...")
+                        logger.warning("Gemini API rate limit exceeded (429) during transcription. Penalizing token.")
+                        google_pool.penalize_token(key, 60.0)
+                        await asyncio.sleep(2.5)
+                        break
+                    elif resp.status_code in (401, 403):
+                        logger.warning(f"Gemini API key rejected ({resp.status_code}). Banning token.")
+                        google_pool.ban_token(key)
                         break
             except Exception as e:
                 logger.warning(f"Gemini API call failed with proxy={proxy}: {e}")

@@ -643,6 +643,10 @@ def _build_healthcheck_body() -> tuple[int, bytes]:
     except Exception:
         queue_total = -1
         queue_top = []
+    try:
+        mem_snapshot = _get_process_memory_snapshot()
+    except Exception:
+        mem_snapshot = {}
     body = json.dumps(
         {
             "status": "stale" if is_stale else ("shutting_down" if is_shutting_down else "ok"),
@@ -652,6 +656,7 @@ def _build_healthcheck_body() -> tuple[int, bytes]:
             "queues_total": queue_total,
             "queues_top": queue_top,
             "post_counter": state.get("post_counter"),
+            "memory": mem_snapshot,
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -20041,6 +20046,38 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
         for aid in empty_attackers:
             attackers.pop(aid, None)
 
+    target_attack_expired = [uid for uid, ts in list(shared_state._TARGET_LAST_ATTACKED_TS.items()) if ts <= now]
+    for uid in target_attack_expired:
+        shared_state._TARGET_LAST_ATTACKED_TS.pop(uid, None)
+    _note("_TARGET_LAST_ATTACKED_TS", len(target_attack_expired))
+
+    series_expired = []
+    for uid, history in list(shared_state._ATTACKER_SERIES_HISTORY.items()):
+        valid = [ts for ts in history if now - ts < 600]
+        if valid:
+            shared_state._ATTACKER_SERIES_HISTORY[uid] = valid
+        else:
+            series_expired.append(uid)
+    for uid in series_expired:
+        shared_state._ATTACKER_SERIES_HISTORY.pop(uid, None)
+    _note("_ATTACKER_SERIES_HISTORY", len(series_expired))
+
+    persona_dialogue_expired = [uid for uid, ts in list(shared_state._last_persona_dialogue_user_ts.items()) if now - ts > 86400]
+    for uid in persona_dialogue_expired:
+        shared_state._last_persona_dialogue_user_ts.pop(uid, None)
+    _note("_last_persona_dialogue_user_ts", len(persona_dialogue_expired))
+
+    work_expired_users = []
+    for uid, jobs in list(shared_state._GLOBAL_WORK_COOLDOWNS.items()):
+        active_jobs = {jid: ts for jid, ts in jobs.items() if ts > now}
+        if active_jobs:
+            shared_state._GLOBAL_WORK_COOLDOWNS[uid] = active_jobs
+        else:
+            work_expired_users.append(uid)
+    for uid in work_expired_users:
+        shared_state._GLOBAL_WORK_COOLDOWNS.pop(uid, None)
+    _note("_GLOBAL_WORK_COOLDOWNS", len(work_expired_users))
+
     # Per-board user tracking maps in board_data
     board_cleanups = 0
     for b_id, b_dict in board_data.items():
@@ -20074,10 +20111,9 @@ async def auto_memory_cleaner():
     Фоновая задача для периодической очистки закэшированных данных в глобальных словарях,
     чтобы предотвратить утечки памяти.
     """
+    await asyncio.sleep(60)  # Быстрый первый запуск через 60с после старта
     while True:
         try:
-            await asyncio.sleep(900)  # Запускаем раз в 15 минут (900с)
-
             # 1. Очистка stream_cache
             cache_size = len(stream_cache)
             stream_cache.clear()
@@ -20150,6 +20186,7 @@ async def auto_memory_cleaner():
                       f"устаревших записей: {total_stale}, GC объектов собрано: {gc_collected}"
                       + (f" ({detail})" if detail else ""))
 
+            await asyncio.sleep(300)
         except asyncio.CancelledError:
             break
         except Exception as e:

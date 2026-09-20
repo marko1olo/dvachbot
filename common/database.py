@@ -1047,6 +1047,9 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread_timestamp ON Posts(thread_id, timestamp);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_import_queue_pub_orig ON ImportQueue(publish_at ASC, original_post_num ASC);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_fileregistry_thumbnail_id ON FileRegistry(thumbnail_id);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_channel_message_id ON Posts(channel_message_id) WHERE channel_message_id IS NOT NULL;")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_channelcopies_channel_msg ON ChannelCopies(channel_id, message_id);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_channelcopies_msg ON ChannelCopies(message_id, post_num);")
 
         # High-frequency activity & message indices
         try:
@@ -8513,6 +8516,25 @@ async def get_poll_results(post_num: int) -> dict:
     except Exception:
         pass
     return results
+
+async def get_poll_results_batch(post_nums: list[int]) -> dict[int, dict[str, int]]:
+    """Собирает результаты голосований для списка постов одним пакетным запросом."""
+    if not post_nums:
+        return {}
+    db = await get_pool()
+    results: dict[int, dict[str, int]] = {p: {} for p in post_nums}
+    try:
+        placeholders = ",".join("?" for _ in post_nums)
+        query = f"SELECT post_num, option_index, COUNT(*) FROM PollVotes WHERE post_num IN ({placeholders}) GROUP BY post_num, option_index"
+        async with db.execute(query, post_nums) as cursor:
+            async for row in cursor:
+                p_num, opt_idx, cnt = row[0], str(row[1]), row[2]
+                if p_num in results:
+                    results[p_num][opt_idx] = cnt
+    except Exception:
+        pass
+    return results
+
 async def get_file_tags(file_id: str) -> list[str]:
     """Возвращает список тегов для файла."""
     from common.db_pool import get_pool, db_lock
@@ -8901,20 +8923,13 @@ def get_db_connection():
             self.conn = None
         async def __aenter__(self):
             self.conn = await aiosqlite.connect(DB_NAME, timeout=60.0, isolation_level=None)
-            try: await self.conn.execute('PRAGMA journal_mode=WAL')
-            except: pass
-            try: await self.conn.execute('PRAGMA synchronous=NORMAL')
-            except: pass
-            try: await self.conn.execute('PRAGMA busy_timeout=15000')
-            except: pass
-            try: await self.conn.execute('PRAGMA wal_autocheckpoint=500')
-            except: pass
             await self.conn.execute("PRAGMA busy_timeout = 60000;")
-            await self.conn.execute("PRAGMA journal_mode=WAL;")
+            await self.conn.execute("PRAGMA journal_mode = WAL;")
             await self.conn.execute("PRAGMA synchronous = NORMAL;")
             await self.conn.execute("PRAGMA temp_store = MEMORY;")
-            await self.conn.execute("PRAGMA mmap_size = 268435456;")
-            await self.conn.execute("PRAGMA cache_size = -60000;")
+            await self.conn.execute("PRAGMA wal_autocheckpoint = 500;")
+            await self.conn.execute("PRAGMA mmap_size = 33554432;")
+            await self.conn.execute("PRAGMA cache_size = -8192;")
             await self.conn.execute("PRAGMA foreign_keys = ON;")
             return self.conn
             

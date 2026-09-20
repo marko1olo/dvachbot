@@ -87,6 +87,13 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
                 row = await cursor.fetchone()
                 if row:
                     resolved_post_num = row[0]
+
+            # 2.5 Check ChannelCopies
+            if not resolved_post_num:
+                async with db.execute("SELECT post_num FROM ChannelCopies WHERE message_id = ? LIMIT 1", (raw_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        resolved_post_num = row[0]
             
             # 3. Check PostCopies
             if not resolved_post_num:
