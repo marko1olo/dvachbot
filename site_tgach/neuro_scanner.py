@@ -160,7 +160,6 @@ class NeuroScanner:
                     "INSERT INTO ImportRequests (user_id, url, target_board, comment, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (0, best_candidate['url'], target_board, "Neuro-Auto-Import", "approved", time.time())
                 )
-                await conn.commit()
         
         await self._notify_admin(best_candidate, interval_min, interval_max, target_board)
         
@@ -215,20 +214,22 @@ class NeuroScanner:
         """Проверяет, не импортировали ли мы этот тред ранее (по ID или URL)"""
         async with get_db_connection() as conn:
             # Проверяем в очереди импорта (active)
-            res = await conn.execute(
+            async with conn.execute(
                 "SELECT 1 FROM ImportQueue WHERE original_post_num = ? LIMIT 1", 
                 (orig_num,)
-            )
-            if await res.fetchone(): return True
+            ) as res:
+                if await res.fetchone():
+                    return True
             
             # Проверяем в выполненных заявках (history)
             # В ImportRequests мы храним URL.
             url_pattern = f"%/{orig_num}.html"
-            res2 = await conn.execute(
+            async with conn.execute(
                 "SELECT 1 FROM ImportRequests WHERE url LIKE ? LIMIT 1",
                 (url_pattern,)
-            )
-            if await res2.fetchone(): return True
+            ) as res2:
+                if await res2.fetchone():
+                    return True
             
         return False
 

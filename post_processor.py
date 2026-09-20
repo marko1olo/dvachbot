@@ -59,7 +59,7 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
                             (user_id, board_id)
                         )
                         
-                        cursor = await db.execute(
+                        async with db.execute(
                             """
                             UPDATE Users 
                             SET is_verified_b = 1 
@@ -67,9 +67,8 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
                             AND posts_count >= 10 AND is_verified_b = 0
                             """,
                             (user_id, board_id)
-                        )
-                        
-                        should_notify = cursor.rowcount > 0
+                        ) as cursor:
+                            should_notify = cursor.rowcount > 0
 
                 except Exception as e:
                     should_notify = False

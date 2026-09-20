@@ -1078,8 +1078,10 @@ async def _download_image_with_proxy(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
-    connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=_NO_VERIFY_SSL)
     for attempt in range(2):
+        connector = aiohttp.TCPConnector(
+            family=socket.AF_INET, ssl=_NO_VERIFY_SSL, force_close=True
+        )
         try:
             async with aiohttp.ClientSession(
                 timeout=timeout_config,
@@ -7939,11 +7941,12 @@ async def api_create_post(
         )
         raise HTTPException(status_code=403, detail=msg)
     async with get_db_connection() as conn:
-        cursor = await conn.execute(
+        async with conn.execute(
             "SELECT expires_at FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute' AND expires_at > ?",
             (author_id, board_id, time.time()),
-        )
-        if row := await cursor.fetchone():
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row:
             remaining = int(row[0] - time.time())
             raise HTTPException(
                 status_code=403, detail=t("err_mute_remaining").format(remaining)
@@ -8266,11 +8269,11 @@ async def api_create_post(
                 if not is_unlocked:
                     try:
                         db = await get_pool()
-                        await db.execute(
-                            "INSERT OR IGNORE INTO ThreadUnlocks (thread_id, user_id) VALUES (?, ?)",
-                            (str(thread_op_num), author_id),
-                        )
-                        await db.commit()
+                        async with db_lock:
+                            await db.execute(
+                                "INSERT OR IGNORE INTO ThreadUnlocks (thread_id, user_id) VALUES (?, ?)",
+                                (str(thread_op_num), author_id),
+                            )
                     except Exception as e:
                         local_logger.error(f"Failed to unlock thread for user: {e}", exc_info=True)
             elif not is_unlocked:
@@ -8589,7 +8592,6 @@ async def api_import_thread(
                 "INSERT INTO ImportRequests (user_id, url, target_board, comment, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (user["id"], url, board_id, f"Manual {mode}", "approved", time.time()),
             )
-            await conn.commit()
     except Exception as e:
         logger.warning(f"Warning logging import request: {e}")
 
@@ -9385,16 +9387,6 @@ async def api_transcribe_voice(file_id: str, request: Request):
     transcription = None
     try:
         async with get_db_connection() as conn:
-            # Создаем таблицу, если ее нет
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS VoiceTranscriptions (
-                    file_id TEXT PRIMARY KEY,
-                    transcription TEXT,
-                    created_at REAL
-                )
-            """)
-            await conn.commit()
-            
             async with conn.execute(
                 "SELECT transcription FROM VoiceTranscriptions WHERE file_id = ? LIMIT 1",
                 (file_id,),
@@ -9502,7 +9494,6 @@ async def api_transcribe_voice(file_id: str, request: Request):
                 "INSERT OR REPLACE INTO VoiceTranscriptions (file_id, transcription, created_at) VALUES (?, ?, ?)",
                 (file_id, transcription_text, time.time()),
             )
-            await conn.commit()
     except Exception as e:
         logger.error(f"Failed to save transcription to DB: {e}", exc_info=True)
 
@@ -11253,7 +11244,6 @@ async def api_shadow_ban(
                    VALUES (?, ?, ?, ?)""",
                 ("shadow_mute", user_id_to_ban, target_board, expires_at),
             )
-            await conn.commit()
         scope_log = (
             "ГЛОБАЛЬНО" if target_board == "ALL" else f"на доске /{target_board}/"
         )

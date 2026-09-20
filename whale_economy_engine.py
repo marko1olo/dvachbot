@@ -332,7 +332,7 @@ async def create_auction(
 
     async with db_lock:
         async with db_transaction(db):
-            cur = await db.execute("""
+            async with db.execute("""
                 INSERT INTO Auctions (
                     lot_type, title, description, start_price, min_bid_step,
                     current_bid, current_winner_id, current_winner_name,
@@ -341,8 +341,8 @@ async def create_auction(
             """, (
                 lot_type, title, description, float(start_price), float(min_bid_step),
                 float(start_price), board_id, now, ends_at, now
-            ))
-            return cur.lastrowid
+            )) as cur:
+                return cur.lastrowid
 
 
 async def place_auction_bid(

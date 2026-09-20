@@ -385,7 +385,7 @@ async def create_bank_deposit(
             cur_bal = await get_user_global_balance(db, user_id)
             return False, None, f"Недостаточно шекелей в кошельке (баланс: {cur_bal:,.0f} ₪, требуется: {amount:,.0f} ₪)."
 
-        cursor = await db.execute(
+        async with db.execute(
             """
             INSERT INTO BankDeposits (
                 user_id, board_id, tier_id, principal, daily_rate,
@@ -402,8 +402,8 @@ async def create_bank_deposit(
                 locked_until,
                 now,
             )
-        )
-        dep_id = cursor.lastrowid
+        ) as cursor:
+            dep_id = cursor.lastrowid
 
         await record_user_transaction(
             db,

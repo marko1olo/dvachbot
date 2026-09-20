@@ -114,6 +114,7 @@ class ThreadImporter:
         )
         try:
             async with db_lock, get_db_connection() as conn:
+                await conn.execute("BEGIN")
                 chunk_size = 900
                 for i in range(0, len(self.created_post_ids), chunk_size):
                     chunk = self.created_post_ids[i : i + chunk_size]
@@ -795,6 +796,7 @@ class ThreadImporter:
             )
 
         async with db_lock, get_db_connection() as conn:
+            await conn.execute("BEGIN")
             await conn.executemany(
                 """
                 INSERT INTO ImportQueue 
@@ -829,7 +831,7 @@ class ThreadImporter:
                         "type": "files" if op_data["files"] else "text",
                     }
                 )
-                cur = await conn.execute(
+                async with conn.execute(
                     """INSERT INTO posts 
                        (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
                        VALUES (?, NULL, ?, ?, ?, NULL, ?) RETURNING post_num""",
@@ -840,8 +842,8 @@ class ThreadImporter:
                         op_data["author_id"],
                         stream,
                     ),
-                )
-                new_op_id = (await cur.fetchone())[0]
+                ) as cur:
+                    new_op_id = (await cur.fetchone())[0]
                 self.created_post_ids.append(new_op_id)
                 new_thread_id = new_op_id
                 id_map[op_data["old_id"]] = new_op_id
@@ -901,13 +903,13 @@ class ThreadImporter:
                                 )
                             )
 
-                        cur = await conn.execute(
+                        async with conn.execute(
                             f"""INSERT INTO posts
                                (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
                                VALUES {','.join(values_placeholders)} RETURNING post_num""",
                             params,
-                        )
-                        rows = await cur.fetchall()
+                        ) as cur:
+                            rows = await cur.fetchall()
                         for idx, (new_id,) in enumerate(rows):
                             self.created_post_ids.append(new_id)
                             id_map[chunk[idx]["old_id"]] = new_id

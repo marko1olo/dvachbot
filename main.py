@@ -28178,11 +28178,11 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         # 24 hours ago
         target_timestamp = time.time() - 86400
         
-        rows = await db.execute(
+        async with db.execute(
             "SELECT content FROM Posts WHERE board_id = ? AND timestamp > ?",
             (board_id, target_timestamp)
-        )
-        posts = await rows.fetchall()
+        ) as rows:
+            posts = await rows.fetchall()
         
         def process_posts(posts_list):
             text_corpus = ""

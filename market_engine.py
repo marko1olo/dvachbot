@@ -481,7 +481,7 @@ async def create_market_listing(
         await _save_user_active_items(db, seller_id, board_id, active_items)
 
         now = time.time()
-        cursor = await db.execute(
+        async with db.execute(
             """
             INSERT INTO MarketListings (
                 seller_id, seller_board_id, item_id, item_type, item_name,
@@ -498,8 +498,8 @@ async def create_market_listing(
                 price,
                 now,
             )
-        )
-        lot_id = cursor.lastrowid
+        ) as cursor:
+            lot_id = cursor.lastrowid
 
         listing_record = {
             "id": lot_id,

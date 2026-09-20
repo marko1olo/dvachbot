@@ -2623,79 +2623,77 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
 
     raw_urls = []
     try:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
-            async with session.get(
-                "https://gelbooru.com/index.php", params=params,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    posts = data.get('post', [])
-                    for p in posts:
-                        url = p.get('file_url') or p.get('large_file_url')
-                        if url:
-                            raw_urls.append(url)
-    except Exception as e:
-        print(f"[events] Gelbooru failed for '{base_tags}': {e}")
-
-    # Danbooru fallback when Gelbooru returns nothing useful
-    if len(raw_urls) < count:
-        try:
-            db_rating = 'e' if is_nsfw else 'q'
-            db_params = {
-                'tags': f"{base_tags} rating:{db_rating} order:random",
-                'limit': str(count * 2)
-            }
-            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
-                async with session.get(
-                    "https://danbooru.donmai.us/posts.json", params=db_params,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL),
+            connector_owner=True,
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session:
+            try:
+                async with session.get("https://gelbooru.com/index.php", params=params) as resp:
                     if resp.status == 200:
-                        posts = await resp.json()
+                        data = await resp.json()
+                        posts = data.get('post', [])
                         for p in posts:
                             url = p.get('file_url') or p.get('large_file_url')
                             if url:
                                 raw_urls.append(url)
-        except Exception as e:
-            print(f"[events] Danbooru fallback failed for '{base_tags}': {e}")
+            except Exception as e:
+                print(f"[events] Gelbooru failed for '{base_tags}': {e}")
 
-    # Safebooru fallback for reliable SFW / Character images
-    if len(raw_urls) < count:
-        try:
-            safe_tag = base_tags.split()[0] if base_tags else "1girl"
-            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
-                async with session.get(
-                    f"https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit={count * 2}&tags={safe_tag}",
-                    timeout=aiohttp.ClientTimeout(total=8)
-                ) as resp:
-                    if resp.status == 200:
-                        posts = await resp.json()
-                        if isinstance(posts, list):
+            # Danbooru fallback when Gelbooru returns nothing useful
+            if len(raw_urls) < count:
+                try:
+                    db_rating = 'e' if is_nsfw else 'q'
+                    db_params = {
+                        'tags': f"{base_tags} rating:{db_rating} order:random",
+                        'limit': str(count * 2)
+                    }
+                    async with session.get("https://danbooru.donmai.us/posts.json", params=db_params) as resp:
+                        if resp.status == 200:
+                            posts = await resp.json()
                             for p in posts:
-                                d, img = p.get('directory'), p.get('image')
-                                if d and img:
-                                    raw_urls.append(f"https://safebooru.org/images/{d}/{img}")
-        except Exception as e:
-            print(f"[events] Safebooru fallback failed: {e}")
+                                url = p.get('file_url') or p.get('large_file_url')
+                                if url:
+                                    raw_urls.append(url)
+                except Exception as e:
+                    print(f"[events] Danbooru fallback failed for '{base_tags}': {e}")
 
-    # Yande.re fallback
-    if len(raw_urls) < count:
-        try:
-            r_tag = "rating:e" if is_nsfw else "rating:s"
-            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
-                async with session.get(
-                    f"https://yande.re/post.json?limit={count * 2}&tags={r_tag}",
-                    timeout=aiohttp.ClientTimeout(total=8)
-                ) as resp:
-                    if resp.status == 200:
-                        posts = await resp.json()
-                        if isinstance(posts, list):
-                            for p in posts:
-                                u = p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')
-                                if u: raw_urls.append(u)
-        except Exception as e:
-            print(f"[events] Yande.re fallback failed: {e}")
+            # Safebooru fallback for reliable SFW / Character images
+            if len(raw_urls) < count:
+                try:
+                    safe_tag = base_tags.split()[0] if base_tags else "1girl"
+                    async with session.get(
+                        f"https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit={count * 2}&tags={safe_tag}",
+                        timeout=aiohttp.ClientTimeout(total=8)
+                    ) as resp:
+                        if resp.status == 200:
+                            posts = await resp.json()
+                            if isinstance(posts, list):
+                                for p in posts:
+                                    d, img = p.get('directory'), p.get('image')
+                                    if d and img:
+                                        raw_urls.append(f"https://safebooru.org/images/{d}/{img}")
+                except Exception as e:
+                    print(f"[events] Safebooru fallback failed: {e}")
+
+            # Yande.re fallback
+            if len(raw_urls) < count:
+                try:
+                    r_tag = "rating:e" if is_nsfw else "rating:s"
+                    async with session.get(
+                        f"https://yande.re/post.json?limit={count * 2}&tags={r_tag}",
+                        timeout=aiohttp.ClientTimeout(total=8)
+                    ) as resp:
+                        if resp.status == 200:
+                            posts = await resp.json()
+                            if isinstance(posts, list):
+                                for p in posts:
+                                    u = p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')
+                                    if u: raw_urls.append(u)
+                except Exception as e:
+                    print(f"[events] Yande.re fallback failed: {e}")
+    except Exception as e:
+        print(f"[events] Shared booru session error: {e}")
 
     # Filter: only supported Telegram media types — drop .webm and unknown formats
     urls = [

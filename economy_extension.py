@@ -962,14 +962,14 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         return
         
     async with db_lock:
-        cursor = await db.execute(
+        async with db.execute(
             "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
-            (stolen, target_id, board_id, stolen))
-        rowcount = getattr(cursor, "rowcount", None)
+            (stolen, target_id, board_id, stolen)
+        ) as cursor:
+            rowcount = getattr(cursor, "rowcount", None)
         robbed = (rowcount == 1) if isinstance(rowcount, int) else True
         await db.execute("UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
                          (stolen if robbed else 0, json.dumps(active_items), user_id, board_id))
-        await db.commit()
 
     if not robbed:
         try: await message.bot.send_message(user_id, "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка потрачена впустую.", parse_mode="HTML")

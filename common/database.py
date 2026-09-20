@@ -341,6 +341,13 @@ async def _create_tables(db):
         );
         """)
         await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS VoiceTranscriptions (
+            file_id TEXT PRIMARY KEY,
+            transcription TEXT,
+            created_at REAL
+        );
+        """)
+        await cursor.execute("""
         CREATE TABLE IF NOT EXISTS FileOwners (
             file_id TEXT PRIMARY KEY,
             bot_id INTEGER NOT NULL
@@ -1037,6 +1044,9 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_num_text ON Posts(CAST(post_num AS TEXT));")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_usertransactions_ts ON UserTransactions(timestamp);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_usertransactions_cat_ts ON UserTransactions(category, timestamp);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread_timestamp ON Posts(thread_id, timestamp);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_import_queue_pub_orig ON ImportQueue(publish_at ASC, original_post_num ASC);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_fileregistry_thumbnail_id ON FileRegistry(thumbnail_id);")
 
         # High-frequency activity & message indices
         try:
@@ -9162,10 +9172,9 @@ async def clean_expired_mutes() -> int:
     async with db_lock:
         try:
             db = await get_pool()
-            cursor = await db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,))
-            deleted = cursor.rowcount
+            async with db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,)) as cursor:
+                deleted = cursor.rowcount
             if deleted > 0:
-                await db.commit()
                 logging.getLogger("database").info(f"🧹 [MUTES_CLEANUP] Удалено {deleted} просроченных мутов из базы данных.")
             return deleted
         except Exception as e:
@@ -9238,11 +9247,11 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
             curr_bal = float(row[0] or 0.0) if row and row[0] is not None else 0.0
 
         if curr_bal >= amount:
-            cursor = await db.execute(
+            async with db.execute(
                 "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
                 (amount, user_id, b_id, amount)
-            )
-            rowcount = getattr(cursor, "rowcount", None)
+            ) as cursor:
+                rowcount = getattr(cursor, "rowcount", None)
             if rowcount == 0:
                 async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_tot:
                     row_tot = await c_tot.fetchone()
@@ -9606,14 +9615,14 @@ async def record_user_transaction(
 
     async def _do_insert():
         try:
-            cursor = await db.execute(
+            async with db.execute(
                 """
                 INSERT INTO UserTransactions (user_id, amount, category, description, timestamp)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (user_id, round(float(amount), 2), category, clean_desc, ts)
-            )
-            return cursor.lastrowid
+            ) as cursor:
+                return cursor.lastrowid
         except Exception as e:
             # Table might not exist yet in tests
             return None

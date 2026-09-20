@@ -389,7 +389,6 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                             (new_blacklist,)
                         )
-                        await db.commit()
             except Exception as fw_err:
                 logger.error(f"Failed to sync IP bans to DB: {fw_err}")
 
@@ -403,7 +402,6 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                         "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
                         [(p, curr_ts) for p in affected_posts],
                     )
-                    await db.commit()
             except Exception as db_ex:
                 logger.error(f"BroadcastQueue update failed: {db_ex}")
 
@@ -432,7 +430,6 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                         "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
                         (pid, time.time()),
                     )
-                    await db.commit()
             except Exception as e:
                 logger.warning("Failed to insert into BroadcastQueue: %s", e)
 
@@ -453,7 +450,6 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                         "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
                         (pid, time.time()),
                     )
-                    await db.commit()
             except Exception as e:
                 logger.warning("Failed to insert into BroadcastQueue: %s", e)
 
