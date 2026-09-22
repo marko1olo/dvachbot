@@ -3618,10 +3618,11 @@ async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
         if results and results[0][1]:
             sent_messages = results[0][1]
             msg_to_pin = sent_messages[0] if isinstance(sent_messages, list) else sent_messages
+            msg_id_to_pin = msg_to_pin.message_id if hasattr(msg_to_pin, 'message_id') else int(msg_to_pin)
             try:
                 await bot.pin_chat_message(
                     chat_id=user_id,
-                    message_id=msg_to_pin.message_id,
+                    message_id=msg_id_to_pin,
                     disable_notification=True
                 )
             except Exception as e:
@@ -20153,14 +20154,24 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
         # Используем last_activity как прокси: если юзер неактивен >7 дней — чистим.
         la = b_dict.get('last_activity')
         if isinstance(la, dict):
+            def _get_ts_sec(val):
+                if isinstance(val, (int, float)):
+                    return float(val)
+                if hasattr(val, 'timestamp'):
+                    try:
+                        return val.timestamp()
+                    except Exception:
+                        pass
+                return 0.0
+
             # Сначала: удаляем записи last_activity старше 14 дней
-            la_expired = [u for u, ts in list(la.items()) if now - ts > 14 * 86400]
+            la_expired = [u for u, ts in list(la.items()) if (now - _get_ts_sec(ts)) > 14 * 86400]
             for u in la_expired:
                 la.pop(u, None)
             board_cleanups += len(la_expired)
 
             # Для юзеров неактивных >7 дней чистим тяжёлые текстовые буферы
-            inactive_7d = {u for u, ts in la.items() if now - ts > USER_INACTIVITY_TTL}
+            inactive_7d = {u for u, ts in la.items() if (now - _get_ts_sec(ts)) > USER_INACTIVITY_TTL}
             for field in ('last_texts', 'last_stickers', 'last_animations', 'last_audios'):
                 tracker = b_dict.get(field)
                 if isinstance(tracker, dict):
@@ -20180,7 +20191,7 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
         # last_user_msgs / last_activity — удаляем записи старше 14 дней
         lum = b_dict.get('last_user_msgs')
         if isinstance(lum, dict):
-            lum_expired = [u for u, ts in list(lum.items()) if isinstance(ts, (int, float)) and now - ts > 14 * 86400]
+            lum_expired = [u for u, ts in list(lum.items()) if (now - _get_ts_sec(ts)) > 14 * 86400]
             for u in lum_expired:
                 lum.pop(u, None)
             board_cleanups += len(lum_expired)

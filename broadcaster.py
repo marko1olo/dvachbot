@@ -594,15 +594,18 @@ class MessageBroadcaster:
                     else:
                         self.stats['errors'] += 1
                 elif res:
-                    # Store only message_id integers — NOT the full aiogram Message objects.
-                    # Full Message objects are heavy Pydantic models (~10–30 KB each); at 5k–20k
-                    # recipients that's 50–150 MB held in RAM until _save_copies_to_db completes.
-                    if isinstance(res, list):
-                        _ids = [m.message_id for m in res if hasattr(m, 'message_id')]
+                    # For targeted sends (<=10 recipients, e.g. author copy or pinned msg),
+                    # keep the full Message object so caller can inspect file_id or message properties.
+                    # For mass broadcasts (>10 recipients), store only integer message IDs to save 50-150 MB RAM.
+                    if len(self.recipients) <= 10:
+                        self.all_results.append((uid, res))
                     else:
-                        _ids = [res.message_id] if hasattr(res, 'message_id') else []
-                    if _ids:
-                        self.all_results.append((uid, _ids))
+                        if isinstance(res, list):
+                            _ids = [m.message_id for m in res if hasattr(m, 'message_id')]
+                        else:
+                            _ids = [res.message_id] if hasattr(res, 'message_id') else []
+                        if _ids:
+                            self.all_results.append((uid, _ids))
 
             if flood_wait_seconds > 0:
                 wait_real = flood_wait_seconds + 1.0
@@ -710,8 +713,9 @@ class MessageBroadcaster:
             trimmed_msg_storage = 0
             async with storage_lock:
                 keep_copy_maps_in_ram = self.post_num in messages_storage and MAX_COPY_MAP_POSTS_IN_MEMORY > 0
-                for uid, msg_ids in self.all_results:
-                    # msg_ids is already list[int] — see _process_delivery_queue
+                for uid, item in self.all_results:
+                    items = item if isinstance(item, list) else [item]
+                    msg_ids = [m.message_id if hasattr(m, 'message_id') else int(m) for m in items if m is not None]
                     if msg_ids:
                         for mid in msg_ids:
                             copies_for_db.append((uid, mid))

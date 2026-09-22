@@ -456,10 +456,14 @@ class NewPostProcessor:
                     new_media_items = []
                     for msg in messages_to_process:
                         item = {}
-                        if msg.photo: item = {'type': 'photo', 'file_id': msg.photo[-1].file_id}
-                        elif msg.video: item = {'type': 'video', 'file_id': msg.video.file_id}
-                        elif msg.document: item = {'type': 'document', 'file_id': msg.document.file_id}
-                        elif msg.audio: item = {'type': 'audio', 'file_id': msg.audio.file_id}
+                        p_attr = getattr(msg, 'photo', None)
+                        v_attr = getattr(msg, 'video', None)
+                        d_attr = getattr(msg, 'document', None)
+                        a_attr = getattr(msg, 'audio', None)
+                        if p_attr: item = {'type': 'photo', 'file_id': p_attr[-1].file_id}
+                        elif v_attr: item = {'type': 'video', 'file_id': v_attr.file_id}
+                        elif d_attr: item = {'type': 'document', 'file_id': d_attr.file_id}
+                        elif a_attr: item = {'type': 'audio', 'file_id': a_attr.file_id}
                         if item: new_media_items.append(item)
                     if new_media_items: 
                         self.final_content['media'] = new_media_items
@@ -474,19 +478,27 @@ class NewPostProcessor:
                 elif messages_to_process:
                     msg = messages_to_process[0]
                     file_id_to_persist = None
-                    if msg.photo: file_id_to_persist = msg.photo[-1].file_id
-                    elif msg.video: file_id_to_persist = msg.video.file_id
-                    elif msg.animation: file_id_to_persist = msg.animation.file_id
-                    elif msg.voice: file_id_to_persist = msg.voice.file_id
-                    elif msg.audio: file_id_to_persist = msg.audio.file_id
+                    p_attr = getattr(msg, 'photo', None)
+                    v_attr = getattr(msg, 'video', None)
+                    anim_attr = getattr(msg, 'animation', None)
+                    voice_attr = getattr(msg, 'voice', None)
+                    a_attr = getattr(msg, 'audio', None)
+                    if p_attr: file_id_to_persist = p_attr[-1].file_id
+                    elif v_attr: file_id_to_persist = v_attr.file_id
+                    elif anim_attr: file_id_to_persist = anim_attr.file_id
+                    elif voice_attr: file_id_to_persist = voice_attr.file_id
+                    elif a_attr: file_id_to_persist = a_attr.file_id
                     if file_id_to_persist:
                         self.final_content['file_id'] = file_id_to_persist
                         self.final_content.pop('image_url', None)
                         self.final_content.pop('image_bytes', None)
                         self.final_content.pop('voice_bytes', None)
                 await update_post_content(self.current_post_num, self.final_content)
-                author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
-                messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
+                author_message_ids_to_archive = [
+                    m.message_id if hasattr(m, 'message_id') else int(m)
+                    for m in messages_to_process if m is not None
+                ]
+                messages_to_save = messages_to_process
                 async with storage_lock:
                     stored = messages_storage.get(self.current_post_num)
                     if stored is not None:
@@ -499,7 +511,8 @@ class NewPostProcessor:
                         author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
                     )
                     for m in messages_to_save:
-                        message_to_post[(self.user_id, m.message_id)] = self.current_post_num
+                        mid = m.message_id if hasattr(m, 'message_id') else int(m)
+                        message_to_post[(self.user_id, mid)] = self.current_post_num
 
     async def _enqueue_and_notify(self):
         p_num = self.current_post_num
