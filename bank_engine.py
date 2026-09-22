@@ -783,20 +783,41 @@ def build_bank_dashboard_view(
     if not deposits:
         lines.append("<i>У тебя нет активных вкладов. Шекели в кошельке не приносят доход и могут быть украдены!</i>")
     else:
-        for idx, d in enumerate(deposits, 1):
+        tier_counts: Dict[str, Dict[str, Any]] = {}
+        for d in deposits:
+            tid = d["tier_id"]
+            if tid not in tier_counts:
+                tier_counts[tid] = {"count": 0, "principal": 0.0, "accrued": 0.0}
+            tier_counts[tid]["count"] += 1
+            tier_counts[tid]["principal"] += d["principal"]
+            tier_counts[tid]["accrued"] += d["accrued_interest"]
+
+        for tid, s in tier_counts.items():
+            t_icon = BANK_TIERS.get(tid, {}).get("icon", "📦")
+            t_name = BANK_TIERS.get(tid, {}).get("name", tid)
+            lines.append(
+                f"• {t_icon} <b>{t_name}</b> ({s['count']} шт): "
+                f"<code>{s['principal']:,.0f} ₪</code> (+{s['accrued']:,.2f} ₪)"
+            )
+
+        lines.append("\n<b>Последние вклады:</b>")
+        for idx, d in enumerate(deposits[:3], 1):
             lock_txt = ""
             if d["is_locked"]:
                 rem_h = int(d["remaining_lock_sec"] / 3600)
                 rem_m = int((d["remaining_lock_sec"] % 3600) / 60)
                 lock_txt = f" 🔒 <i>(блок {rem_h}ч {rem_m}м)</i>"
             else:
-                lock_txt = " 🔓 <i>(доступен к выводу)</i>"
+                lock_txt = " 🔓 <i>(готов)</i>"
 
             tier_icon = BANK_TIERS.get(d["tier_id"], {}).get("icon", "📦")
             lines.append(
                 f"{idx}. {tier_icon} <b>{d['short_name']}</b>: "
                 f"<code>{d['principal']:,.0f} ₪</code> (+{d['accrued_interest']:,.2f} ₪){lock_txt}"
             )
+
+        if len(deposits) > 3:
+            lines.append(f"<i>...и еще {len(deposits) - 3} вкладов (см. «📤 Снять шекели»)</i>")
 
     text = "\n".join(lines)
 
@@ -885,12 +906,35 @@ async def _render_bank_view(
     try:
         if isinstance(target, types.CallbackQuery):
             if target.message.caption is not None or target.message.photo:
-                await target.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+                # Если текст укладывается в 1024 символа (лимит caption в Telegram)
+                if len(text) <= 1024:
+                    await target.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+                    return
+                else:
+                    # Caption слишком длинный: удаляем фото-сообщение и шлем чистое
+                    try:
+                        await target.message.delete()
+                    except Exception:
+                        pass
+                    from banner_manager import send_banner_message
+                    await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                    return
             elif target.message.text is not None:
-                await target.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+                if len(text) <= 4096:
+                    await target.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+                    return
+                else:
+                    try:
+                        await target.message.delete()
+                    except Exception:
+                        pass
+                    from banner_manager import send_banner_message
+                    await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                    return
             else:
                 from banner_manager import send_banner_message
                 await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                return
         else:
             from banner_manager import send_banner_message
             await send_banner_message(bot=target.bot, chat_id=target.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
@@ -898,14 +942,15 @@ async def _render_bank_view(
                 await target.delete()
             except Exception:
                 pass
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[_render_bank_view] primary render failed: {e}, attempting fallback")
         try:
             if isinstance(target, types.CallbackQuery):
-                await target.message.answer(text=text, reply_markup=kb, parse_mode="HTML")
+                await target.message.answer(text=text[:4000], reply_markup=kb, parse_mode="HTML")
             else:
-                await target.answer(text=text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
+                await target.answer(text=text[:4000], reply_markup=kb, parse_mode="HTML")
+        except Exception as e2:
+            logger.error(f"[_render_bank_view] fallback render failed: {e2}")
 
 
 # -----------------------------------------------------------------------------
@@ -1194,13 +1239,20 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
     await callback.answer("✅ Вклад успешно открыт!", show_alert=False)
 
 
-@bank_router.callback_query(F.data == "bank_withdraw_menu")
+@bank_router.callback_query(F.data.in_(["bank_withdraw_menu"]) | F.data.startswith("bank_withdraw_page:"))
 async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | None = None):
-    """Список депозитов, доступных для вывода."""
+    """Список депозитов, доступных для вывода, с постраничной пагинацией."""
     clear_user_pending_deposit(callback.from_user.id)
     b_id = board_id or "b"
     user_id = callback.from_user.id
     db = await get_pool()
+
+    page = 0
+    if callback.data.startswith("bank_withdraw_page:"):
+        try:
+            page = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            page = 0
 
     total_p, total_a, deposits = await get_user_bank_summary(db, user_id)
 
@@ -1208,12 +1260,17 @@ async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | N
         await callback.answer("У вас нет активных вкладов для вывода.", show_alert=True)
         return
 
+    PER_PAGE = 5
+    total_pages = max(1, math.ceil(len(deposits) / PER_PAGE))
+    page = max(0, min(page, total_pages - 1))
+    page_deposits = deposits[page * PER_PAGE : (page + 1) * PER_PAGE]
+
     lines = [
-        "📤 <b>СНЯТИЕ ШЕКЕЛЕЙ ИЗ БАНКА АБУ</b>\n",
+        f"📤 <b>СНЯТИЕ ШЕКЕЛЕЙ ИЗ БАНКА АБУ (Стр. {page + 1}/{total_pages})</b>\n",
         "Нажмите на нужный депозит для вывода:\n",
     ]
     kb_rows = []
-    for d in deposits:
+    for d in page_deposits:
         lock_txt = "🔒 (досрочно)" if d["is_locked"] else "🔓 (готов)"
         lines.append(f"• Вклад <b>#{d['id']}</b> ({d['short_name']}): <code>{d['total_value']:,.2f} ₪</code> {lock_txt}")
         kb_rows.append([
@@ -1223,7 +1280,15 @@ async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | N
             )
         ])
 
-    kb_rows.append([InlineKeyboardButton(text="⬅️ Назад в Банк", callback_data="bank_main_hub")])
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"bank_withdraw_page:{page - 1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"bank_withdraw_page:{page + 1}"))
+    if nav_row:
+        kb_rows.append(nav_row)
+
+    kb_rows.append([InlineKeyboardButton(text="⬅️ Главная Банка", callback_data="bank_main_hub")])
     await _render_bank_view(callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows), category="bank")
     await callback.answer()
 

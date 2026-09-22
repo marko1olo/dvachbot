@@ -735,7 +735,10 @@ async def _send_text_with_fallback(
     parse_mode: Optional[str] = "HTML",
     reply_to_message_id: Optional[int] = None
 ) -> Optional[types.Message]:
-    """Helper to send text message with graceful fallback from HTML to plain text."""
+    # Telegram hard limit is 4096 chars. Truncate safely so reply_markup is never lost.
+    if len(text) > 4000:
+        text = text[:3900] + "\n\n<i>[Сообщение сокращено из-за лимита длины]</i>"
+
     try:
         return await bot.send_message(
             chat_id=chat_id,

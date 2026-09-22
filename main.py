@@ -8837,6 +8837,7 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
 
 
 _stats_cooldown_tracker = {}
+_STATS_TTL = 300  # 5 минут кэш графиков статистики
 
 
 @dp.message(Command("stats", "stat", "activity", "heatmap"))
