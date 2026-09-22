@@ -254,7 +254,6 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 ("gemini-3.6-flash", "gemini"),
                 ("gemini-3.7-flash", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
-                ("llama-3.3-70b-versatile", "groq"),
             ]
         )
         logger.info(
@@ -290,7 +289,6 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     elif model_preference in ("qwen", "llama", "groq"):
         models_cascade = [
             ("qwen/qwen3.8-27b", "groq"),
-            ("llama-3.3-70b-versatile", "groq"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-2.5-flash", "gemini"),
@@ -306,7 +304,6 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
-            ("llama-3.3-70b-versatile", "groq"),
         ]
 
     if model_preference not in ("persona", "persona_gemini"):

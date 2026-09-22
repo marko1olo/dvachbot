@@ -33,6 +33,7 @@ from common.database import (
     record_user_transaction,
 )
 from common.anon_identity import get_anon_id
+from common.task_manager import spawn_task
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,8 @@ logger = logging.getLogger(__name__)
 
 MIN_TTT_BET = 50
 MAX_TTT_BET = 1_000_000
-TURN_TIMEOUT_SECONDS = 60
-CHALLENGE_TIMEOUT_SECONDS = 120  # 2 minutes waiting for opponent to accept
+TURN_TIMEOUT_SECONDS = 180  # 3 minutes per turn
+CHALLENGE_TIMEOUT_SECONDS = 600  # 10 minutes waiting for opponent to accept
 
 ABU_WIN_RAKE_PERCENT = 0.05  # 5% commission on total pot upon victory
 ABU_DRAW_FEE_PERCENT = 0.02  # 2% fee per player upon draw
@@ -1307,10 +1308,10 @@ async def ttt_watchdog_step(bot=None):
         if bot_to_use and game.challenger_id:
             exp_dm_text = (
                 f"⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК</b>\n\n"
-                f"Ни один анон не принял твой вызов на <b>{game.bet:,} ₪</b> за 2 минуты.\n"
+                f"Ни один анон не принял твой вызов на <b>{game.bet:,} ₪</b> за 10 минут.\n"
                 f"Вызов аннулирован, ставка не списывалась."
             )
-            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, exp_dm_text))
+            spawn_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, exp_dm_text), name="pvp_notify_ttt_expired")
 
         if bot_to_use and game.chat_id and game.msg_id:
             try:
@@ -1319,7 +1320,7 @@ async def ttt_watchdog_step(bot=None):
                     message_id=game.msg_id,
                     text=(
                         "⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК!</b>\n\n"
-                        "Ни один анон не принял вызов за 2 минуты.\n"
+                        "Ни один анон не принял вызов за 10 минут.\n"
                         "Вызов аннулирован, ставка не списана."
                     ),
                     reply_markup=None,

@@ -39,6 +39,7 @@ from common.database import (
     apply_regular_mute
 )
 from common.anon_identity import get_anon_id
+from common.task_manager import spawn_task
 
 logger = logging.getLogger("runtime")
 runtime_logger = logger
@@ -49,8 +50,8 @@ runtime_logger = logger
 MIN_RR_BET = 50
 MAX_RR_BET = 10_000_000
 RR_CHAMBERS_COUNT = 6
-RR_TURN_TIMEOUT_SEC = 60.0
-RR_CHALLENGE_TIMEOUT_SEC = 120.0
+RR_TURN_TIMEOUT_SEC = 180.0  # 3 minutes per turn
+RR_CHALLENGE_TIMEOUT_SEC = 600.0  # 10 minutes waiting for opponent to accept
 RR_MUTE_DURATION_SEC = 600  # 10 minutes
 RR_RAKE_PERCENT = 0.05  # 5% to Abu's Fund
 
@@ -820,17 +821,17 @@ async def rr_watchdog_step(bot=None):
             continue
         expired_text = (
             "⏳ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ИСТЕК!</b>\n\n"
-            "Ни один анон не принял вызов на дуэль за 2 минуты.\n"
+            "Ни один анон не принял вызов на дуэль за 10 минут.\n"
             "Вызов аннулирован, ставка не списана."
         )
         ch_id = game.get("challenger_id")
         if bot and ch_id:
             exp_dm_text = (
                 f"⏳ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ИСТЕК</b>\n\n"
-                f"Ни один анон не принял твой вызов на дуэль (<b>{game.get('bet', 0):,} ₪</b>) за 2 минуты.\n"
+                f"Ни один анон не принял твой вызов на дуэль (<b>{game.get('bet', 0):,} ₪</b>) за 10 минут.\n"
                 f"Вызов аннулирован, ставка не списывалась."
             )
-            asyncio.create_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text))
+            spawn_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text), name="pvp_notify_rr_expired")
 
         # Edit all broadcast messages (challenger + all board copies)
         all_msgs = game.get("broadcast_msgs") or []

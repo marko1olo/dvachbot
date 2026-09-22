@@ -31,14 +31,15 @@ from common.database import (
     record_user_transaction
 )
 from common.anon_identity import get_anon_id
+from common.task_manager import spawn_task
 
 # -----------------------------------------------------------------------------
 # Configuration Constants
 # -----------------------------------------------------------------------------
 MIN_DICE_BET = 50
 MAX_DICE_BET = 50_000_000
-DICE_CHALLENGE_TIMEOUT_SEC = 120.0
-DICE_TURN_TIMEOUT_SEC = 45.0
+DICE_CHALLENGE_TIMEOUT_SEC = 600.0  # 10 minutes waiting for opponent to accept
+DICE_TURN_TIMEOUT_SEC = 120.0  # 2 minutes per roll
 DICE_RAKE_PERCENT = 0.05  # 5% house rake to Abu fund
 DICE_TIE_RAKE_PERCENT = 0.02  # 2% nominal rake on tied refund
 
@@ -896,10 +897,10 @@ async def dice_watchdog_step(bot=None):
         if bot and p1:
             exp_dm_text = (
                 f"⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК</b>\n\n"
-                f"Ни один анон не принял твой вызов на кости (<b>{bet:,} ₪</b>) за 2 минуты.\n"
+                f"Ни один анон не принял твой вызов на дуэль в кости (<b>{bet:,} ₪</b>) за 10 минут.\n"
                 f"Вызов аннулирован, ставка не списывалась."
             )
-            asyncio.create_task(send_pvp_direct_notification(bot, p1, exp_dm_text))
+            spawn_task(send_pvp_direct_notification(bot, p1, exp_dm_text), name="pvp_notify_dice_expired")
 
         if bot and chat_id and msg_id:
             try:
@@ -908,7 +909,7 @@ async def dice_watchdog_step(bot=None):
                     message_id=msg_id,
                     text=(
                         "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
-                        "Ни один анон не принял вызов на кости за 2 минуты.\n"
+                        "Ни один анон не принял вызов на кости за 10 минут.\n"
                         "Вызов аннулирован, ставка не списана."
                     ),
                     reply_markup=None,
