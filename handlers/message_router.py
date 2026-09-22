@@ -1854,6 +1854,15 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                 'source_message_ids': set()
             })
             group.pop('is_initializing', None)
+        except Exception as _mg_init_exc:
+            # Если инициализация упала — очищаем группу, иначе она зависнет навсегда
+            # с тяжёлыми raw_messages в RAM (media_group_key может содержать сотни МБ при пике).
+            current_media_groups.pop(media_group_key, None)
+            _mt = media_group_timers.pop(media_group_key, None)
+            if _mt and not _mt.done():
+                _mt.cancel()
+            print(f"⚠️ [media_group] Ошибка инициализации лидера {media_group_key}: {_mg_init_exc!r}")
+            raise
         finally:
             if 'init_event' in group:
                 group['init_event'].set()

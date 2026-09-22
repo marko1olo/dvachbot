@@ -631,7 +631,7 @@ class BoundedDict(OrderedDict):
     def __setitem__(self, key: Any, value: Any):
         super().__setitem__(key, value)
         super().move_to_end(key)
-        if len(self) > self.max_size:
+        while len(self) > self.max_size:
             self.popitem(last=False)
 
     def update(self, *args, **kwargs):
@@ -641,7 +641,7 @@ class BoundedDict(OrderedDict):
     def setdefault(self, key: Any, default: Any = None) -> Any:
         val = super().setdefault(key, default)
         super().move_to_end(key)
-        if len(self) > self.max_size:
+        while len(self) > self.max_size:
             self.popitem(last=False)
         return val
 

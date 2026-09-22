@@ -9854,7 +9854,7 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
                 f"Ни один анон не принял твой вызов на дуэль (<code>{duel.get('amount', 0):,} ₪</code>) за 2 минуты.\n"
                 f"Вызов аннулирован, шекели целы."
             )
-            asyncio.create_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text))
+            spawn_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text), name="pvp_notify_duel_expired")
 
         all_msgs = duel.get("broadcast_msgs") or []
         if not all_msgs and duel.get("chat_id") and duel.get("msg_id"):
@@ -17207,7 +17207,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
             f"🎁 <b>Администрация начислила вам бонус: {amount:,} ₪!</b>\n\n"
             f"💰 Проверить баланс: /wallet"
         )
-        asyncio.create_task(send_pvp_direct_notification(message.bot, target_id, grant_dm_text))
+        spawn_task(send_pvp_direct_notification(message.bot, target_id, grant_dm_text), name="pvp_notify_grant_shekels")
     except Exception as e:
         await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
@@ -20227,6 +20227,35 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
     except Exception:
         pass
 
+    # current_media_groups + media_group_timers — TTL 120с
+    # Зависшие группы (ошибка лидера, потеря сообщений, edge-cases) хранят списки сырых
+    # aiogram Message объектов (raw_messages) — тяжёлые Pydantic-модели. Без sweep они
+    # живут вечно. TTL 120с > максимально возможной задержки сбора медиагруппы.
+    try:
+        _now_mg = time.time()
+        from handlers.message_router import media_group_timers as _mg_timers
+        _mg_stale = []
+        for _mgk, _mgv in list(current_media_groups.items()):
+            _ts = _mgv.get('timestamp')
+            if _ts is not None:
+                try:
+                    _age = _now_mg - (_ts.timestamp() if hasattr(_ts, 'timestamp') else float(_ts))
+                    if _age > 120:
+                        _mg_stale.append(_mgk)
+                except Exception:
+                    pass
+            elif not _mgv.get('is_initializing'):
+                # Нет timestamp и не в процессе инициализации — зависшая группа
+                _mg_stale.append(_mgk)
+        for _mgk in _mg_stale:
+            current_media_groups.pop(_mgk, None)
+            _mgt = _mg_timers.pop(_mgk, None)
+            if _mgt and not _mgt.done():
+                _mgt.cancel()
+        _note("stale_media_groups", len(_mg_stale))
+    except Exception:
+        pass
+
     return removed
 
 
@@ -22753,7 +22782,7 @@ async def cb_loli_explain(callback: types.CallbackQuery, board_id: str | None):
                 f"💰 Возвращено на баланс: <b>+{refund:,.0f} ₪</b>\n"
                 f"💳 Текущий баланс: <b>{new_bal:,.2f} ₪</b>"
             )
-            asyncio.create_task(send_pvp_direct_notification(callback.bot, user_id, dm_text))
+            spawn_task(send_pvp_direct_notification(callback.bot, user_id, dm_text), name="pvp_notify_mayor_callback")
         else:
             new_bal = await get_user_global_balance(db, user_id)
 

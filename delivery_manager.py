@@ -507,6 +507,8 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     'board_id': db_post['board_id'],
                     'thread_id': db_post.get('thread_id')
                 }
+                if MAX_MESSAGES_IN_MEMORY > 0:
+                    _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
                 post_data = messages_storage.get(post_num)
 
     if not post_data:
@@ -1388,6 +1390,8 @@ async def board_help_worker(board_id: str):
                         'author_id': 0, 'timestamp': now_dt,
                         'content': content, 'board_id': board_id
                     }
+                    if MAX_MESSAGES_IN_MEMORY > 0:
+                        _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
                 await enqueue_board_message(board_id, {
                     'recipients': recipients, 'content': content,
                     'post_num': post_num, 'board_id': board_id
@@ -1794,6 +1798,8 @@ async def thread_notifier():
                         await update_post_content(pnum, content)
                         async with storage_lock:
                             messages_storage[pnum] = {'author_id': 0, 'timestamp': now_dt, 'content': content, 'board_id': board_id}
+                            if MAX_MESSAGES_IN_MEMORY > 0:
+                                _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
                         await enqueue_board_message(board_id, {
                             'recipients': recipients, 'content': content, 'post_num': pnum, 'board_id': board_id, 'keyboard': keyboard
                         })
@@ -1834,6 +1840,8 @@ async def thread_notifier():
                     await update_post_content(pnum, content)
                     async with storage_lock:
                         messages_storage[pnum] = {'author_id': 0, 'timestamp': now_dt, 'content': content, 'board_id': board_id}
+                        if MAX_MESSAGES_IN_MEMORY > 0:
+                            _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
                     await enqueue_board_message(board_id, {
                         'recipients': recipients_in_main, 'content': content, 'post_num': pnum, 'board_id': board_id, 'keyboard': keyboard
                     })
@@ -1949,6 +1957,8 @@ async def site_posts_broadcaster():
                                         'board_id': board_id,
                                         'thread_id': post.get('thread_id'),
                                     }
+                                    if MAX_MESSAGES_IN_MEMORY > 0:
+                                        _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
                         if skip_broadcast:
                             await mark_broadcast_posts_sent([post_num])
                             continue
