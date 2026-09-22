@@ -643,19 +643,20 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             except Exception as e:
                 runtime_logger.warning(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
                 return
-    tasks_to_run = []
-    for uid, msgs in user_messages_map.items():
-        if msgs:
-            target_mid = sorted(msgs)[0]
-            task = spawn_task(_edit_one(uid, target_mid))
-            tasks_to_run.append(task)
+    # Собираем список (uid, mid) без запуска тасок — чтобы chunking реально работал
+    recipients_list = [
+        (uid, sorted(msgs)[0])
+        for uid, msgs in user_messages_map.items()
+        if msgs
+    ]
 
     CHUNK_SIZE = 15
     DELAY_BETWEEN_CHUNKS = 0.6
-    for i in range(0, len(tasks_to_run), CHUNK_SIZE):
-        chunk_tasks = tasks_to_run[i:i + CHUNK_SIZE]
-        await asyncio.gather(*chunk_tasks, return_exceptions=True)
-        if i + CHUNK_SIZE < len(tasks_to_run):
+    for i in range(0, len(recipients_list), CHUNK_SIZE):
+        chunk = recipients_list[i:i + CHUNK_SIZE]
+        # Передаём голые корутины — gather запускает их сам, строго в пределах чанка
+        await asyncio.gather(*[_edit_one(uid, mid) for uid, mid in chunk], return_exceptions=True)
+        if i + CHUNK_SIZE < len(recipients_list):
             await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
 
 

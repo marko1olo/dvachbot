@@ -20080,6 +20080,7 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
 
     # Per-board user tracking maps in board_data
     board_cleanups = 0
+    USER_INACTIVITY_TTL = 7 * 86400  # 7 дней — порог инактивности для per-user полей
     for b_id, b_dict in board_data.items():
         st = b_dict.get('spam_tracker')
         if isinstance(st, dict):
@@ -20101,7 +20102,130 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
             for u in expired_info:
                 lic.pop(u, None)
             board_cleanups += len(expired_info)
+
+        # reaction_rate_tracker / single_photo_counter / last_photo_group_id — нет timestamp,
+        # чистим если размер чрезмерен (>5000 entries per board) чтобы не дать расти вечно.
+        for field in ('reaction_rate_tracker', 'single_photo_counter', 'last_photo_group_id'):
+            tracker = b_dict.get(field)
+            if isinstance(tracker, dict) and len(tracker) > 5000:
+                # Удаляем первые 20% ключей (FIFO-approx, т.к. timestamp нет)
+                to_drop = list(tracker.keys())[:len(tracker) // 5]
+                for k in to_drop:
+                    tracker.pop(k, None)
+                board_cleanups += len(to_drop)
+
+        # reaction_queue — чистим пустые очереди
+        rq = b_dict.get('reaction_queue')
+        if isinstance(rq, dict):
+            empty_rq = [u for u, dq in list(rq.items()) if not dq]
+            for u in empty_rq:
+                rq.pop(u, None)
+            board_cleanups += len(empty_rq)
+
+        # anime_daily_tracker — удаляем записи, у которых reset_at истёк более суток назад
+        adt = b_dict.get('anime_daily_tracker')
+        if isinstance(adt, dict):
+            adt_expired = [u for u, d in list(adt.items()) if isinstance(d, dict) and d.get('reset_at', 0) < now - 86400]
+            for u in adt_expired:
+                adt.pop(u, None)
+            board_cleanups += len(adt_expired)
+
+        # thread_locks — удаляем блокировки для тредов которых уже нет в threads_data
+        tl = b_dict.get('thread_locks')
+        td = b_dict.get('threads_data')
+        if isinstance(tl, dict) and isinstance(td, dict) and len(tl) > 50:
+            active_tids = set(td.keys())
+            stale_locks = [tid for tid in list(tl.keys()) if tid not in active_tids]
+            for tid in stale_locks:
+                tl.pop(tid, None)
+            board_cleanups += len(stale_locks)
+
+        # spam_violations — чистим если >3000 entries (нет timestamp)
+        sv = b_dict.get('spam_violations')
+        if isinstance(sv, dict) and len(sv) > 3000:
+            to_drop = list(sv.keys())[:len(sv) // 5]
+            for k in to_drop:
+                sv.pop(k, None)
+            board_cleanups += len(to_drop)
+
+        # last_texts/stickers/animations/audios — per-user deque без timestamp.
+        # Используем last_activity как прокси: если юзер неактивен >7 дней — чистим.
+        la = b_dict.get('last_activity')
+        if isinstance(la, dict):
+            # Сначала: удаляем записи last_activity старше 14 дней
+            la_expired = [u for u, ts in list(la.items()) if now - ts > 14 * 86400]
+            for u in la_expired:
+                la.pop(u, None)
+            board_cleanups += len(la_expired)
+
+            # Для юзеров неактивных >7 дней чистим тяжёлые текстовые буферы
+            inactive_7d = {u for u, ts in la.items() if now - ts > USER_INACTIVITY_TTL}
+            for field in ('last_texts', 'last_stickers', 'last_animations', 'last_audios'):
+                tracker = b_dict.get(field)
+                if isinstance(tracker, dict):
+                    for u in inactive_7d:
+                        if u in tracker:
+                            tracker.pop(u, None)
+                            board_cleanups += 1
+
+            # user_state — аналогично по last_activity
+            us = b_dict.get('user_state')
+            if isinstance(us, dict):
+                for u in inactive_7d:
+                    if u in us:
+                        us.pop(u, None)
+                        board_cleanups += 1
+
+        # last_user_msgs / last_activity — удаляем записи старше 14 дней
+        lum = b_dict.get('last_user_msgs')
+        if isinstance(lum, dict):
+            lum_expired = [u for u, ts in list(lum.items()) if isinstance(ts, (int, float)) and now - ts > 14 * 86400]
+            for u in lum_expired:
+                lum.pop(u, None)
+            board_cleanups += len(lum_expired)
+
     _note("board_data_stale_entries", board_cleanups)
+
+    # Partyvan cooldowns — не имели cleanup с момента создания
+    partyvan_user_expired = [uid for uid, exp in list(shared_state._USER_PARTYVAN_COOLDOWNS.items()) if exp <= now]
+    for uid in partyvan_user_expired:
+        shared_state._USER_PARTYVAN_COOLDOWNS.pop(uid, None)
+    _note("_USER_PARTYVAN_COOLDOWNS", len(partyvan_user_expired))
+
+    partyvan_immunity_expired = [uid for uid, exp in list(shared_state._VICTIM_PARTYVAN_IMMUNITY.items()) if exp <= now]
+    for uid in partyvan_immunity_expired:
+        shared_state._VICTIM_PARTYVAN_IMMUNITY.pop(uid, None)
+    _note("_VICTIM_PARTYVAN_IMMUNITY", len(partyvan_immunity_expired))
+
+    # _ATTACKER_ABUSE_WARNINGS — без TTL; сбрасываем юзеров у которых нет активных атак в истории
+    active_attackers = set(shared_state._ATTACKER_TARGET_HISTORY.keys())
+    abuse_stale = [aid for aid in list(shared_state._ATTACKER_ABUSE_WARNINGS.keys()) if aid not in active_attackers]
+    for aid in abuse_stale:
+        shared_state._ATTACKER_ABUSE_WARNINGS.pop(aid, None)
+    _note("_ATTACKER_ABUSE_WARNINGS", len(abuse_stale))
+
+    # _stats_cooldown_tracker (локальный в cmd_stats) — TTL 3600с.
+    # Объект определён в этом же модуле на уровне модуля, доступен напрямую.
+    stats_cd_expired = [k for k, ts in list(_stats_cooldown_tracker.items()) if now - ts > 3600]
+    for k in stats_cd_expired:
+        _stats_cooldown_tracker.pop(k, None)
+    _note("_stats_cooldown_tracker", len(stats_cd_expired))
+    # shared_state._stats_cooldown_tracker — тот же механизм, отдельный объект
+    sc2_expired = [k for k, ts in list(shared_state._stats_cooldown_tracker.items()) if now - ts > 3600]
+    for k in sc2_expired:
+        shared_state._stats_cooldown_tracker.pop(k, None)
+
+    # _DAILY_SHOP_PURCHASES — КРИТИЧЕСКАЯ УТЕЧКА: ключи содержат date_str, старые дни не чистились
+    try:
+        import datetime as _dt_module
+        today_str = _dt_module.datetime.utcnow().strftime('%Y-%m-%d')
+        shop_stale = [k for k in list(shared_state._DAILY_SHOP_PURCHASES.keys())
+                      if isinstance(k, tuple) and len(k) >= 3 and k[2] != today_str]
+        for k in shop_stale:
+            shared_state._DAILY_SHOP_PURCHASES.pop(k, None)
+        _note("_DAILY_SHOP_PURCHASES", len(shop_stale))
+    except Exception:
+        pass
 
     return removed
 
@@ -20123,8 +20247,22 @@ async def auto_memory_cleaner():
             for k in done_tasks:
                 pending_edit_tasks.pop(k, None)
 
-            # 3. Подрезка per-user трекеров, которые росли безгранично
             removed = _sweep_stale_runtime_maps()
+
+            # 2.1. Очистка orphaned cumulative_post_metrics (при ошибках/отмене .pop не вызывается)
+            try:
+                from delivery_manager import cumulative_post_metrics as _cpm
+                _now_cpm = time.time()
+                _cpm_stale = [k for k, v in list(_cpm.items())
+                              if _now_cpm - v.get('start_time', _now_cpm) > 7200]
+                for k in _cpm_stale:
+                    _cpm.pop(k, None)
+                if _cpm_stale:
+                    removed["orphaned_post_metrics"] = len(_cpm_stale)
+            except Exception:
+                pass
+
+
 
             # 4. Фоновый WAL checkpointing для сжатия базы
             try:
