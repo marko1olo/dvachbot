@@ -39,7 +39,7 @@ logger = logging.getLogger("neuro_mod")
 # === НАСТРОЙКИ ===
 PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
 # Groq Models for DeepCheck (MUST BE VISION MODELS!)
-GROQ_MODELS = ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]
+GROQ_MODELS = ["qwen/qwen3.8-27b", "llama-3.3-70b-versatile"]
 GROQ_MODEL = GROQ_MODELS[0]
 GROQ_TIMEOUT = 45.0
 

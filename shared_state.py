@@ -855,7 +855,7 @@ STOP_WORDS = set([
 
 # --- Extracted from main.py Phase 9 (Helpers) ---
 # reaction_ratelimit, author_reaction_notify_tracker, author_reaction_notify_lock initialized at top of file
-_DUEL_TIMEOUT = 120       # секунд на принятие
+_DUEL_TIMEOUT = 600       # 10 минут на принятие (адаптировано под темп борды)
 
 # Explicitly export helpers so 'from shared_state import *' picks them up.
 __all__ = [

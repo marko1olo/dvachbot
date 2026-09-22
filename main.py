@@ -9846,13 +9846,13 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
 
         expired_text = (
             f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК!</b>\n\n"
-            f"Ни один анон не принял вызов на <code>{duel['amount']:,} ₪</code> за 2 минуты.\n"
+            f"Ни один анон не принял вызов на <code>{duel['amount']:,} ₪</code> за 10 минут.\n"
             f"Вызов аннулирован, шекели целы."
         )
         if bot and ch_id:
             exp_dm_text = (
                 f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК</b>\n\n"
-                f"Ни один анон не принял твой вызов на дуэль (<code>{duel.get('amount', 0):,} ₪</code>) за 2 минуты.\n"
+                f"Ни один анон не принял твой вызов на дуэль (<code>{duel.get('amount', 0):,} ₪</code>) за 10 минут.\n"
                 f"Вызов аннулирован, шекели целы."
             )
             spawn_task(send_pvp_direct_notification(bot, ch_id, exp_dm_text), name="pvp_notify_duel_expired")
@@ -20525,9 +20525,8 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
                 )
             except Exception as e:
                 print(f"⚠️ Ошибка при остановке: {e}")
-            print("💀 KILL PROCESS")
-            import signal
-            os.kill(os.getpid(), signal.SIGINT)
+            print("💀 KILL PROCESS (EMERGENCY EXIT)")
+            os._exit(0)
 @dp.message(ThreadCreateStates.waiting_for_op_post, (F.text | F.caption))
 async def process_op_post_text(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """

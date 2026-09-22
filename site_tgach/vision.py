@@ -277,7 +277,6 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 ("gemini-2.5-flash", "gemini"),
                 ("gemini-3.5-flash-lite", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
-                ("qwen/qwen3.6-27b", "groq"),
             ]
             
             skip_gemini_models = False

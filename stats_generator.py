@@ -2587,7 +2587,7 @@ def _generate_chart_40(images):
         session.trust_env = False  # Avoid proxy deadlocks
 
         for key in groq_keys[:3]:
-            for model_candidate in ['qwen/qwen3.8-27b', 'qwen/qwen3.6-27b']:
+            for model_candidate in ['qwen/qwen3.8-27b', 'llama-3.3-70b-versatile']:
                 try:
                     resp = session.post(
                         'https://api.groq.com/openai/v1/chat/completions',
