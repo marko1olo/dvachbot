@@ -519,111 +519,180 @@ async def get_reply_target(message: types.Message):
 # ====================
 @economy_router.message(Command("heist"))
 async def cmd_heist(message: types.Message, board_id: str | None = None):
-    raw_text = message.text or message.caption or ""
-    parts = raw_text.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.reply("⚠️ Использование: /heist [как именно ты грабишь].\nПример: /heist Я спускаюсь с потолка на тросе и краду его кошелек, пока он спит.")
-        return
-        
-    plan = parts[1]
+    if not board_id:
+        board_id = "b"
     user_id = message.from_user.id
     target_message = message.reply_to_message
     if not target_message:
-        await message.reply("❌ Сделай Reply на сообщение того, кого хочешь ограбить.")
+        await message.reply("❌ Сделай Reply на сообщение того, кого хочешь ограбить.\nПример: <code>/heist Я тихо пробираюсь в его комнату</code>", parse_mode="HTML")
         return
-        
+
+    raw_text = message.text or message.caption or ""
+    parts = raw_text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("⚠️ <b>Использование:</b> <code>/heist [как именно ты грабишь]</code>\nПример: <i>/heist Я крадусь в носках по ковру и тащу кошелек</i>", parse_mode="HTML")
+        return
+
     target_id = None
     try:
         target_id = await get_reply_target(message)
     except Exception:
         pass
-        
+
     if not target_id or target_id == user_id:
         await message.reply("❌ Нельзя ограбить самого себя (или цель не найдена).")
         return
 
-    # Запрашиваем оценку у AI
-    await message.reply("🤖 <i>Отправляем твой гениальный план ИИ-Судье...</i>", parse_mode="HTML")
-    
+    from shared_state import (
+        get_combat_cooldown_remaining, set_combat_cooldown,
+        get_victim_rob_cooldown_remaining, set_victim_rob_cooldown
+    )
+    rem_cd = get_combat_cooldown_remaining(user_id)
+    if rem_cd > 0:
+        await message.reply(f"⏳ <b>Руки ещё трясутся после прошлого налёта!</b> Подожди <b>{int(rem_cd)} сек</b>.", parse_mode="HTML")
+        return
+
+    rem_victim = get_victim_rob_cooldown_remaining(target_id)
+    if rem_victim > 0:
+        rem_m = rem_victim // 60 + 1
+        await message.reply(f"🛡️ <b>Жертва ещё отходит от прошлого нападения!</b> Подожди <b>{int(rem_m)} мин</b>.", parse_mode="HTML")
+        return
+
+    db = await get_pool()
+    from common.bot_helpers import _get_user_active_items, is_admin
+
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.reply("🕶️ <i>Цель растворилась в тенях борды. Грабеж сорван.</i>", parse_mode="HTML")
+        return
+
+    # Check mute — shadow mute (silent) + DB mute
+    from common.database import is_shadow_muted as _sm_heist
+    from common.bot_helpers import check_user_is_muted
+    if await _sm_heist(user_id, board_id, db=db):
+        return
+    if await check_user_is_muted(db, user_id, board_id):
+        await message.reply("⛔ <b>В муте грабить запрещено!</b>", parse_mode="HTML")
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("knife_gun"):
+        await message.reply("🔪 У тебя нет Заточки! Купи её в /shop перед тем, как идти на дело.")
+        return
+
+    # Beginner protection check
+    async with db.execute("SELECT posts_count FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
+        row = await c.fetchone()
+        t_posts = row[0] if row and row[0] else 0
+    if t_posts < 50:
+        await message.reply("🔰 <b>ИММУНИТЕТ НОВИЧКА!</b> У цели меньше 50 постов на борде.", parse_mode="HTML")
+        return
+
+    set_combat_cooldown(user_id, 180)
+
+    # Sanitize user plan to prevent prompt injection
+    raw_plan = parts[1][:200].strip()
+    clean_plan = re.sub(r'[\'\"\{\}\[\]\<\>\\]', ' ', raw_plan).strip()
+
+    # Check target defenses
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    now_ts = int(time.time())
+
+    if t_items.get("pepperspray_charges", 0) > 0:
+        t_items["pepperspray_charges"] -= 1
+        active_items["peppersprayed_until"] = now_ts + 3600
+        active_items["knife_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+        await message.reply("🧯 <b>СТРУЯ В ЕБАЛО!</b> Жертва применила перцовый баллончик! Глаза залиты на 1 час, заточка сломана!", parse_mode="HTML")
+        return
+
+    if t_items.get("tinfoil_hat", 0) > now_ts:
+        destroyed, _, _, _ = apply_tinfoil_damage(t_items, now_ts, hours_damage=4.0, burn_chance=0.15)
+        active_items["knife_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+        foil_msg = "Шапочка жертвы спасла её, но сгорела дотла!" if destroyed else "Шапочка из фольги отразила твой налёт!"
+        await message.reply(f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b> {foil_msg} Заточка сломана!", parse_mode="HTML")
+        return
+
+    await message.reply("🤖 <i>Отправляем твой план ИИ-Судье...</i>", parse_mode="HTML")
+
     try:
         from common.token_pool import groq_pool
         prompt = (
-            "Ты — строгий, саркастичный и смешной ИИ-судья анонимной имиджборды. Игрок пытается ограбить другого игрока.\n"
-            f"План ограбления: '{plan}'\n"
-            "Оцени креативность, логику, абсурд и юмор плана. Строго верни чистый JSON без markdown (без ```json), с полями:\n"
-            '{"score": число от 0.0 до 1.0, "narrative": "Твой саркастичный комментарий на 2 предложения о том, как всё прошло."}'
+            "Ты — строгий, саркастичный ИИ-судья имиджборды. Игрок пытается ограбить другого игрока.\n"
+            f"План: {clean_plan}\n"
+            "Оцени реалистичность и юмор плана. Строго верни JSON без markdown: {\"score\": 0.0-1.0, \"narrative\": \"Комментарий на 2 предложения.\"}"
         )
-        
-        import json
-        import httpx
-        
         token = groq_pool.get_token() or os.getenv("GROQ_API_KEY")
-        if not token:
-            await message.reply("❌ API ключ ИИ не найден.")
-            return
-            
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        data = {
-            "model": "qwen/qwen3.8-27b",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200,
-            "temperature": 0.8
-        }
-        
         result = None
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
-                if resp.status_code == 200:
-                    raw_json = resp.json()["choices"][0]["message"]["content"].strip()
-                    if "<think>" in raw_json:
-                        raw_json = re.sub(r'<think>.*?</think>', '', raw_json, flags=re.DOTALL).strip()
-                    if "```" in raw_json:
-                        match = re.search(r"```(?:json)?(.*?)```", raw_json, re.DOTALL)
-                        if match:
-                            raw_json = match.group(1).strip()
-                    json_match = re.search(r"\{.*\}", raw_json, re.DOTALL)
-                    if json_match:
-                        raw_json = json_match.group(0).strip()
-                    result = json.loads(raw_json)
-        except Exception as e:
-            logger.warning(f"⚠️ [Economy] Groq rob judge request failed: {e}")
-                
+        if token:
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            data = {
+                "model": "qwen/qwen3.8-27b",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 150,
+                "temperature": 0.7
+            }
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
+                    if resp.status_code == 200:
+                        raw_json = resp.json()["choices"][0]["message"]["content"].strip()
+                        if "<think>" in raw_json:
+                            raw_json = re.sub(r'<think>.*?</think>', '', raw_json, flags=re.DOTALL).strip()
+                        if "```" in raw_json:
+                            match = re.search(r"```(?:json)?(.*?)```", raw_json, re.DOTALL)
+                            if match:
+                                raw_json = match.group(1).strip()
+                        json_match = re.search(r"\{.*\}", raw_json, re.DOTALL)
+                        if json_match:
+                            raw_json = json_match.group(0).strip()
+                        result = json.loads(raw_json)
+            except Exception as e:
+                logger.warning(f"⚠️ [Economy] Groq rob judge request failed: {e}")
+
         if not result:
-            result = {"score": random.uniform(0.1, 0.9), "narrative": "ИИ-Судья отвалился, так что кидаю кубик. Ограбление как ограбление."}
-            
-        score = result.get("score", 0.0)
-        narrative = result.get("narrative", "Что-то пошло не так.")
-        
-        db = await get_pool()
-        
+            result = {"score": random.uniform(0.1, 0.85), "narrative": "ИИ-Судья недоступен, исход определен волей рандома."}
+
+        score = float(result.get("score", 0.0))
+        narrative = str(result.get("narrative", "Что-то пошло не так."))
+
         if score > 0.7:
             stolen = 0
             async with db_lock:
                 t_balance = await get_user_global_balance(db, target_id)
                 if t_balance > 0:
-                    stolen = min(int(t_balance * 0.4), 1500)
+                    stolen = min(int(t_balance * 0.3), 1000)
                     if stolen > 0:
                         ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
                         if ok:
+                            active_items["knife_gun"] = False
                             await add_user_global_balance(db, user_id, board_id, stolen)
+                            await record_user_transaction(db, target_id, -stolen, 'heist', f'Теневое ограбление аноном {user_id}')
+                            await record_user_transaction(db, user_id, stolen, 'heist', f'Успешный heist анона {target_id}')
+                            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
                             await db.commit()
+                            set_victim_rob_cooldown(target_id, 1800)
                         else:
                             stolen = 0
-            
+
             if stolen > 0:
-                await message.reply(f"✅ **УСПЕХ! (Оценка ИИ: {int(score*100)}/100)**\n_{narrative}_\n\n💸 Ты виртуозно украл **{stolen}** шекелей!", parse_mode="Markdown")
+                await message.reply(f"✅ <b>УСПЕХ! (Оценка ИИ: {int(score*100)}/100)</b>\n<i>{narrative}</i>\n\n💸 Ты виртуозно украл <b>{stolen} ₪</b>!", parse_mode="HTML")
             else:
-                await message.reply(f"✅ **УСПЕХ! (Оценка ИИ: {int(score*100)}/100)**\n_{narrative}_\n\n💸 Но карманы жертвы оказались пусты. Ты украл ровно 0 шекелей.", parse_mode="Markdown")
+                await message.reply(f"✅ <b>УСПЕХ! (Оценка ИИ: {int(score*100)}/100)</b>\n<i>{narrative}</i>\n\n💸 Но карманы жертвы оказались пусты.", parse_mode="HTML")
         else:
             # Пативэн
-            import __main__ as main_module
-            await message.reply(f"❌ **ПРОВАЛ! (Оценка ИИ: {int(score*100)}/100)**\n_{narrative}_\n\n🚓 План оказался тупым. За тобой выехал Пативэн (мут на 3 часа)!", parse_mode="Markdown")
             if hasattr(main_module, 'apply_regular_mute'):
-                await main_module.apply_regular_mute(user_id, board_id, 3 * 3600)
-            
+                await main_module.apply_regular_mute(user_id, board_id, 1800)
+            await message.reply(f"❌ <b>ПРОВАЛ! (Оценка ИИ: {int(score*100)}/100)</b>\n<i>{narrative}</i>\n\n🚓 План оказался тупым. За тобой выехал Пативэн (мут на 30 мин)!", parse_mode="HTML")
+
     except Exception as e:
-        await message.reply(f"❌ Ошибка ИИ при ограблении: {e}")
+        await message.reply(f"❌ Ошибка при ограблении: {e}")
 
 
 # Note: Active /partyvan handler is registered on main.dp with full board announcements & protections

@@ -5,7 +5,7 @@ ttt_engine.py — High-Performance PvP Tic-Tac-Toe on Shekels (❌⭕ Крест
 Features:
 1. Challenge creation via Reply or Open Board Lobby (/ttt <bet>, /tictactoe, /кн, /крестики).
 2. Interactive 3x3 Inline Keyboard with real-time state visualization (❌, ⭕, ⬜).
-3. Strict 60-second turn timeout watchdog with auto-loss and pot transfer to opponent.
+3. Strict 120-second turn timeout watchdog with auto-loss and pot transfer to opponent.
 4. Flexible betting (50 ₪ to player's balance) with atomic escrow upon game start.
 5. Juicy authentic 2ch-style board announcements via `process_new_post` upon win/draw/timeout/forfeit.
 6. Fair draw mechanics with bet refund (minus 2% Abu micro-fee).
@@ -13,6 +13,7 @@ Features:
 """
 
 import time
+import re
 import asyncio
 import random
 import logging
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 MIN_TTT_BET = 50
 MAX_TTT_BET = 1_000_000
-TURN_TIMEOUT_SECONDS = 180  # 3 minutes per turn
+TURN_TIMEOUT_SECONDS = 120  # 2 minutes per turn
 CHALLENGE_TIMEOUT_SECONDS = 600  # 10 minutes waiting for opponent to accept
 
 ABU_WIN_RAKE_PERCENT = 0.05  # 5% commission on total pot upon victory
@@ -79,6 +80,42 @@ TTT_WIN_PUNCHLINES = [
     "«IQ 200 против IQ хлебушка. Исход был предрешен.»",
     "«Шекели карман не тянут, а проигравшему пора на завод.»",
     "«Диагональ смерти закрыта, касса зафиксирована.»",
+    "«Проиграть в крестики-нолики в 2026 году — это диагноз.»",
+    "«Вытри сопли и пиздуй в песочницу, омежка.»",
+    "«Размотал сыча на трех клетках без регистрации и смс.»",
+    "«Твой уровень аналитики — предсказывать вчерашнюю погоду.»",
+    "«Задоминировал над деревенским аутистом. Легчайшие шекели.»",
+    "«Линия замкнута, очко разорвано, деньги на базе.»",
+    "«Это было избиение младенца на координатной сетке 3х3.»",
+    "«С таким скиллом тебе только капчу в гугле кликать.»",
+    "«Даже нейросеть 90-х годов сыграла бы умнее этого сыча.»",
+    "«Уничтожен, деклассирован и пущен по кругу в три хода.»",
+    "«Спас твои шекели от инфляции, забрав их себе в карман.»",
+    "«Тактика галактического уровня разбила колхозный дефенс.»",
+    "«Спасибо за донат, лошок. Батя пошел пить пиво.»",
+    "«Три символа в ряд — и лузер отправляется плакать под плед.»",
+    "«Учи матчасть, сынуля. Здесь играют взрослые дяди.»",
+    "«Победа чистая, как слеза омежки, проебавшего баланс.»",
+    "«Классический блицкриг по диагонали. Сыч даже мяукнуть не успел.»",
+    "«Ты пытался думать, но перегрузил процессор и проебал.»",
+    "«Очередной комнатный гроссмейстер отправлен мыть парашу.»",
+    "«Твой дед в окопе и то лучше крестики чертил.»",
+    "«Просто нажал три кнопки и забрал чужие карманные деньги.»",
+    "«Крест поставлен не только на доске, но и на твоей карьере игрока.»",
+    "«Быстро, грязно и унизительно. Всё по канонам двача.»",
+    "«Скилл не пропьешь, а вот ты свои шекели только что проебал.»",
+    "«Математика борды беспощадна к гуманитариям.»",
+    "«Зашел, поставил крест/ноль, забрал банк. Изи пизи.»",
+    "«У тебя было всего 9 клеток, и ты умудрился обосраться.»",
+    "«Сычевать тебе теперь с нулевым балансом до следующего пейдея.»",
+    "«Тактическое превосходство подтверждено чеком в Казну Абу.»",
+    "«Такой позор даже в анонимном треде стыдно показать.»",
+    "«Отрицательный рост твоего кошелька зафиксирован.»",
+    "«Переигран по всем фронтам. Пшёл вон с поля боя.»",
+    "«Логика вышла из чата, забрав с собой твои последние шекели.»",
+    "«Этот гений думал, что клетка по центру его спасет. Наивный.»",
+    "«Слил партию со свистом. Касса закрыта, анон обоссан.»",
+    "«Победа на классе. Возвращайся, когда отрастишь мозг.»"
 ]
 
 TTT_DRAW_PUNCHLINES = [
@@ -86,19 +123,104 @@ TTT_DRAW_PUNCHLINES = [
     "«Борьба была равна — играли два гения.»",
     "«Абу забрал 2% за аренду клеток и довольно хрюкнул.»",
     "«Никто не победил, но Абу остался в плюсе.»",
+    "«Девять клеток тупости: ни победителя, ни мозгов.»",
+    "«Два сыча уперлись рогами в забор и поделили ноль на ноль.»",
+    "«Битва титанов специальной олимпиады закончилась пшиком.»",
+    "«Заставили всю доску мусором и разошлись ни с чем.»",
+    "«Великие стратеги перехитрили сами себя. Ничья, епта.»",
+    "«Абу довольно потирает лапки: 2% комиссии не пахнут.»",
+    "«Ничьей в 3х3 гордятся только выпускники коррекционных школ.»",
+    "«Столько пота ради того, чтобы просто покормить комиссию Абу.»",
+    "«Оба так боялись проиграть, что забыли, как побеждать.»",
+    "«Ни рыбы, ни мяса — два омежки скатали в тухлый пат.»",
+    "«Клетки кончились, фантазия тоже. Расходимся, пацаны.»",
+    "«Ничейный высер вселенского масштаба на 9 ячеек.»",
+    "«Суммарный IQ участников равен номеру последней пустой клетки.»",
+    "«Поздравляю, вы оба одинаково бездарны!»",
+    "«Два сверхразума заблокировали друг друга и потеряли шекели на комиссии.»",
+    "«Боевая ничья двух инвалидов логического фронта.»",
+    "«Сычевали 9 ходов, а в итоге только обогатили Казну Абу.»",
+    "«Так упорно блокировали ходы, будто защищали девственность.»",
+    "«Оба достойны параши за такую безыдейную игру.»",
+    "«Доска заполнена до отказа, тред зевает от скуки.»",
+    "«Паритет двух аутистов зафиксирован протоколом борды.»",
+    "«Ни один не смог нащупать победу даже с лупой.»",
+    "«Комиссия Абу списана, гордость утеряна, ничья оформлена.»",
+    "«Два барана на мосту 3х3. Итог предсказуемо уныл.»",
+    "«Играли на интерес, а получилось как всегда — ничья и стыд.»",
+    "«Слишком много осторожности для игры на девять клеток.»",
+    "«Ничья в крестиках — верный признак глубокого аутизма обоих.»",
+    "«Сухой остаток: минус 2% налога и ноль удовольствия.»"
 ]
 
 TTT_TIMEOUT_PUNCHLINES = [
     "«Уснул лицом в клавиатуру прямо во время ответственного хода.»",
-    "«Не выдержал накала страстей и откинулся в астрал.»",
-    "«Таймер 60 секунд оказался непреодолимым препятствием для сыча.»",
-    "«60 секунд тишины — и шекели испарились.»",
+    "«Не выдержал накала страстей и откинулся в астрал за 120 секунд.»",
+    "«Таймер 120 секунд оказался непреодолимым препятствием для сыча.»",
+    "«120 секунд тишины — и шекели испарились в чужой карман.»",
+    "«Думал над ходом целых 120 секунд в игре 3х3 и в итоге обосрался.»",
+    "«Слишком сложно для одноклеточного: 120 секунд пролетели, мозг не включился.»",
+    "«Сыч ушел варить пельмени и забыл, что на таймере всего 120 секунд.»",
+    "«Две минуты смотрел на три клетки как баран на новые ворота.»",
+    "«120 секунд позора! Даже улитка успела бы тыкнуть в крестик.»",
+    "«Завис намертво. Перезагрузите сыча, он сломался на 120-й секунде.»",
+    "«Время вышло, шекели тю-тю. Не щёлкай клювом 120 секунд!»",
+    "«Пока этот тормоз рожал ход 120 секунд, оппонент успел постареть.»",
+    "«Таймаут для дауна: 120 секунд на ход в крестиках-ноликах — это перебор.»",
+    "«Мамка позвала кушать борщ прямо посреди партии. Слив по таймауту!»",
+    "«120 секунд медитировал на пустую клетку и познал дзен поражения.»",
+    "«Просрал партию просто потому, что забыл, как дышать за 120 секунд.»",
+    "«Таймер тикал, очко играло, 120 секунд кончились — техлуз в копилку.»",
+    "«Пинг до мозга превысил допустимый лимит в 120 секунд.»",
+    "«Легчайшая победа над спящей омежкой за 120 секунд ожидания.»",
+    "«Не осилил тайм-менеджмент на 120 секунд. Шагай обратно в детсад.»",
+    "«Пока сыч тупил 120 секунд, соперник уже считал профит.»",
+    "«120 секунд апатии и депрессии привели к потере банка.»",
+    "«АФК-аутист подарил шекели бате без единого нажатия за 120 секунд.»",
+    "«Мыслительный процесс длиною в 120 секунд завершился полным крахом.»",
+    "«Две минуты гипнотизировал экран и всё равно проспал дедлайн.»",
+    "«120 секунд на ход — и всё равно тех-луз! Пора менять провайдера мозгов.»",
+    "«Уснул в луже собственной подливы за 120 секунд до победы.»",
+    "«Таймер безжалостен к тормозам: 120 секунд истекли, забирайте труп.»",
+    "«Казалось бы, 9 клеток, но сычу не хватило даже 120 секунд.»",
+    "«Технический нокаут лентяю, проспавшему ход на 120 секунд.»",
+    "«Слился по таймеру как последний казуал. 120 секунд коту под хвост!»",
+    "«120 секунд молчания в эфире. Трус признан недееспособным.»"
 ]
 
 TTT_SURRENDER_PUNCHLINES = [
     "«Выбросил белый флаг и позорно убежал с доски.»",
     "«Осознал бесперспективность бытия и нажал F.»",
     "«Сдался без боя, подарив сопернику легчайшие шекели.»",
+    "«Увидел диагональ оппонента и наложил в штаны прямо на доску.»",
+    "«Капитулировал, едва почувствовав запах тактического члена во рту.»",
+    "«Слишком больно для неокрепшей психики — сыч ливнул в слезах.»",
+    "«Нажал 'Сдаться', чтобы спасти остатки своего разбитого эго.»",
+    "«Дрогнула рука омежки — белый флаг взвился над полем боя.»",
+    "«Сбежал с доски быстрее, чем батя за хлебом.»",
+    "«Понял, что попал в вилку, и предпочел позорную сдачу честному мату.»",
+    "«Сдался в крестиках-ноликах... Ты вообще понимаешь, насколько ты жалок?»",
+    "«Самослив зафиксирован. Шекели у победителя, позор у беглеца.»",
+    "«Выронил мышку из вспотевших ладошек и нажал капитуляцию.»",
+    "«Так испугался чужого крестика, что нажал сдаться на втором ходу.»",
+    "«Позорный лив из дуэли. Смыть это пятно уже не получится.»",
+    "«Сложил полномочия гроссмейстера и уполз под плинтус.»",
+    "«Сдался досрочно. Видимо, вспомнил, что утюг дома не выключил.»",
+    "«Осознал глубину своего умственного дна и нажал кнопку сдачи.»",
+    "«Испугался неминуемого унижения и капитулировал заранее.»",
+    "«Слив засчитан, омежка. Иди поплачь в подушку.»",
+    "«Белый флаг на сукне! Досрочный финиш для безвольного сыча.»",
+    "«Подарил победу на блюдечке. Настоящий меценат для победителя!»",
+    "«Даже доиграть смелости не хватило. Полная капитуляция духа.»",
+    "«Ливнул из партии, как типичный школьник из доты.»",
+    "«Сдался, признав себя абсолютным нулем перед чужим крестиком.»",
+    "«Позорное бегство с поля 3х3. Тред аплодирует твоей трусости!»",
+    "«Не вывез морального прессинга и нажал кнопку капитуляции.»",
+    "«Сдался без сопротивления, лишь бы прекратить этот позор.»",
+    "«Убежал с доски, сверкая пятками и роняя кал.»",
+    "«Капитуляция оформлена по всем правилам омежьего этикета.»",
+    "«Позорная сдача — лучший подарок для твоего оппонента.»",
+    "«Сложил лапки и отдал банк. Ни капли чести, сплошной позор.»"
 ]
 
 
@@ -127,6 +249,8 @@ class TicTacToeGame:
     winning_line: Optional[Tuple[int, int, int]] = None
     timeout_task: Optional[asyncio.Task] = None
     bot_instance: Optional[Bot] = None
+    player_msgs: Dict[int, Tuple[int, int]] = field(default_factory=dict)
+    broadcast_msgs: List[Tuple[int, int]] = field(default_factory=list)
 
     @property
     def pot(self) -> int:
@@ -299,7 +423,7 @@ def render_game_text(game: TicTacToeGame) -> str:
             f"❌⭕ <b>КРЕСТИКИ-НОЛИКИ НА ШЕКЕЛИ</b>\n\n"
             f"💰 <b>Ставка:</b> <code>{game.bet:,} ₪</code> (Общий куш: <b>{game.pot:,} ₪</b>)\n"
             f"⚔️ <b>Создатель:</b> ❌ <b>Анон [{anon_x}]</b>{target_clause}\n\n"
-            f"⏳ <i>Вызов активен 2 минуты. Нажми кнопку ниже или напиши <code>/ttt accept</code>, чтобы принять бой!</i>"
+            f"⏳ <i>Вызов активен 10 минут. Нажми кнопку ниже или напиши <code>/ttt accept</code>, чтобы принять бой!</i>"
         )
 
     rem_time = game.get_remaining_time()
@@ -318,7 +442,7 @@ def render_game_text(game: TicTacToeGame) -> str:
             f"  ❌ <b>Анон [{anon_x}]</b>\n"
             f"  ⭕ <b>Анон [{anon_o}]</b>\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{time_warn}<b>На ход: 60 сек</b> (Осталось: <code>{rem_time}с</code>)\n"
+            f"{time_warn}<b>На ход: 120 сек</b> (Осталось: <code>{rem_time}с</code>)\n"
             f"👉 <b>Сейчас ходит:</b> {curr_emoji} <b>Анон [{curr_anon}]</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"<i>Нажимай на свободные клетки ⬜ на клавиатуре ниже:</i>"
@@ -358,7 +482,7 @@ def render_game_text(game: TicTacToeGame) -> str:
         rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
         net_win = game.pot - rake
         return (
-            f"⏰ <b>ИГРА ЗАВЕРШЕНА: ТАЙМАУТ (60 сек)!</b>\n\n"
+            f"⏰ <b>ИГРА ЗАВЕРШЕНА: ТАЙМАУТ (120 сек)!</b>\n\n"
             f"💤 <b>Анон [{loser_anon}]</b> пропустил время хода и получает тех-луз!\n"
             f"🏆 Техническая победа: <b>Анон [{winner_anon}]</b> (<code>+{net_win:,} ₪</code>)\n\n"
             f"<i>«{random.choice(TTT_TIMEOUT_PUNCHLINES)}»</i>"
@@ -379,6 +503,75 @@ def render_game_text(game: TicTacToeGame) -> str:
         return "❌ <b>Вызов в крестики-нолики был отменен создателем.</b>"
 
     return "❌⭕ <b>Крестики-Нолики</b>"
+
+
+async def sync_ttt_screens(bot: Bot, game: TicTacToeGame):
+    """
+    Simultaneously edits active game messages for BOTH players in their personal chats,
+    ensuring each player gets the updated 3x3 board and active turn status.
+    Also clears buttons for third-party broadcast viewers when challenge is accepted.
+    """
+    if not bot or not game:
+        return
+
+    p1 = game.challenger_id
+    p2 = game.opponent_id
+    player_msgs = getattr(game, "player_msgs", None)
+    if player_msgs is None:
+        game.player_msgs = {}
+        player_msgs = game.player_msgs
+
+    # Fallback for p1
+    if p1 and p1 not in player_msgs and game.chat_id and game.msg_id:
+        player_msgs[p1] = (game.chat_id, game.msg_id)
+
+    rendered_text = render_game_text(game)
+    kb = get_ttt_game_keyboard(game)
+
+    # 1. Update both active players' messages
+    for uid in (p1, p2):
+        if not uid or uid not in player_msgs:
+            continue
+        chat_id, msg_id = player_msgs[uid]
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=rendered_text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                logger.debug(f"[TTT] sync edit failed for user {uid}: {e}")
+        except Exception as e:
+            logger.debug(f"[TTT] sync unexpected error for user {uid}: {e}")
+
+    # 2. If game started or finished, neutralize other broadcast copies
+    if p2 and getattr(game, "broadcast_msgs", None):
+        anon_x = get_anon_id(p1)
+        anon_o = get_anon_id(p2)
+        other_text = (
+            f"❌⭕ <b>КРЕСТИКИ-НОЛИКИ: ВЫЗОВ ПРИНЯТ!</b>\n\n"
+            f"Партия на <code>{game.bet:,} ₪</code> уже началась между Аноном [{anon_x}] и Аноном [{anon_o}].\n"
+            f"Мест за столом больше нет."
+        )
+        remaining_bcast = []
+        for chat_id, msg_id in list(game.broadcast_msgs):
+            if any((chat_id, msg_id) == player_msgs.get(p) for p in (p1, p2) if p in player_msgs):
+                remaining_bcast.append((chat_id, msg_id))
+                continue
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=other_text,
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        game.broadcast_msgs = remaining_bcast
 
 
 # ============================================================================
@@ -432,14 +625,14 @@ async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> boo
 
 
 # ============================================================================
-# TIMEOUT WATCHDOG (60 Seconds Turn Timer)
+# TIMEOUT WATCHDOG (120 Seconds Turn Timer)
 # ============================================================================
 
 async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
-    """Asynchronous background watchdog enforcing strictly 60 seconds per turn with live dynamic countdown updates."""
+    """Asynchronous background watchdog enforcing strictly 120 seconds per turn with live dynamic countdown updates."""
     try:
         # Tick in 10-second increments for dynamic live countdown updates
-        for _ in range(6):
+        for _ in range(TURN_TIMEOUT_SECONDS // 10):
             await asyncio.sleep(10)
             async with ttt_lock:
                 game = active_ttt_games.get(game_id)
@@ -494,21 +687,12 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
             )
             await record_user_transaction(
                 db, loser_id, -game.bet, "ttt",
-                f"Техническое поражение (таймаут 60с) в КН против [{get_anon_id(winner_id)}]"
+                f"Техническое поражение (таймаут 120с) в КН против [{get_anon_id(winner_id)}]"
             )
 
-        # Update message in chat
-        if game.bot_instance and game.chat_id and game.msg_id:
-            try:
-                await game.bot_instance.edit_message_text(
-                    chat_id=game.chat_id,
-                    message_id=game.msg_id,
-                    text=render_game_text(game),
-                    reply_markup=get_ttt_game_keyboard(game),
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.debug(f"Failed to edit TTT timeout message: {e}")
+        # Update message in chats for BOTH players
+        if game.bot_instance:
+            await sync_ttt_screens(game.bot_instance, game)
 
         # Post 2ch announcement to board
         winner_anon = get_anon_id(winner_id)
@@ -516,7 +700,7 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
         punchline = random.choice(TTT_TIMEOUT_PUNCHLINES)
         announcement = (
             f"💤 <b>[КРЕСТИКИ-НОЛИКИ / ТАЙМАУТ]</b>\n"
-            f"<b>Анон [{loser_anon}]</b> не справился с таймером 60 сек в битве на <b>{game.pot:,} ₪</b>!\n\n"
+            f"<b>Анон [{loser_anon}]</b> не справился с таймером 120 сек в битве на <b>{game.pot:,} ₪</b>!\n\n"
             f"🏆 Техническая победа присуждается <b>Анону [{winner_anon}]</b>!\n"
             f"💰 Чистый занос: <code>+{net_win:,} ₪</code> <i>(Рейк Абу: {rake:,} ₪)</i>\n\n"
             f"<i>{punchline}</i>"
@@ -524,12 +708,12 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
         if game.bot_instance:
             win_notify_text = (
                 f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game_id}!</b>\n\n"
-                f"Соперник пропустил таймер хода (60 сек).\n"
+                f"Соперник пропустил таймер хода (120 сек).\n"
                 f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> (банк {game.pot:,} ₪ за вычетом рейка {rake:,} ₪ в Казну Абу) зачислен на баланс!"
             )
             lose_notify_text = (
                 f"⏱️ <b>ТАЙМАУТ В КРЕСТИКАХ-НОЛИКАХ #{game_id}</b>\n\n"
-                f"Ты не сделал ход за 60 секунд (техническое поражение).\n"
+                f"Ты не сделал ход за 120 секунд (техническое поражение).\n"
                 f"💸 Списано: <b>-{game.bet:,} ₪</b>."
             )
             asyncio.create_task(send_pvp_direct_notification(game.bot_instance, winner_id, win_notify_text))
@@ -543,7 +727,7 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
 
 
 def _reset_and_start_timer(game: TicTacToeGame) -> None:
-    """Cancels old timer task and spawns a fresh 60s turn timer task."""
+    """Cancels old timer task and spawns a fresh 120s turn timer task."""
     if game.timeout_task and not game.timeout_task.done():
         game.timeout_task.cancel()
     
@@ -573,6 +757,11 @@ async def create_ttt_challenge(
         return False, f"❌ Максимальная ставка: {MAX_TTT_BET:,} ₪", None
 
     db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
+        return False, "🔇 Замученным нельзя создавать игры в крестики-нолики.", None
+
     async with db_lock:
         bal = await get_user_global_balance(db, challenger_id)
     
@@ -634,12 +823,25 @@ async def accept_ttt_challenge(
         # Mark state to prevent double-accept race condition
         game.status = "accepting"
 
+
     def _ttt_rollback():
         g = active_ttt_games.get(game_id)
         if g and g.status == "accepting":
             g.status = "waiting"
 
+    # Mute guard: check opponent and challenger before committing escrow
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(opponent_id, game.board_id, db=db) or await check_user_is_muted(db, opponent_id, game.board_id):
+        _ttt_rollback()
+        return False, "🔇 Замученным нельзя принимать игры в крестики-нолики.", None
+    if await check_db_shadow_muted(game.challenger_id, game.board_id, db=db) or await check_user_is_muted(db, game.challenger_id, game.board_id):
+        game.status = "cancelled"
+        user_active_ttt_session.pop(game.challenger_id, None)
+        return False, "❌ Создатель вызова был замучен. Вызов отменён.", None
+
     async with ttt_lock:
+
         # Escrow verification under db_lock
         async with db_lock:
             ch_bal = await get_user_global_balance(db, game.challenger_id)
@@ -678,7 +880,7 @@ async def accept_ttt_challenge(
         game.bot_instance = bot
         user_active_ttt_session[opponent_id] = game_id
 
-        # Start 60s turn timer
+        # Start 120s turn timer
         _reset_and_start_timer(game)
 
     return True, "OK", game
@@ -930,6 +1132,19 @@ async def cancel_ttt_challenge(
 router = Router(name="ttt_engine")
 
 
+@router.message(F.text.regexp(r"^/(?:ttt|tictactoe|кн|крестики)(\d+[kк]?|all|всё|все)(?:\s+.*)?$", flags=re.IGNORECASE))
+async def cmd_ttt_shorthand(message: Message, board_id: Optional[str] = None, stream: str = "ru"):
+    if not message.text:
+        return
+    m = re.match(r"^/(?:ttt|tictactoe|кн|крестики)(\d+[kк]?|all|всё|все)(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
+    if not m:
+        return
+    amt = m.group(1)
+    rest = m.group(2)
+    message.text = f"/ttt {amt}" + (f" {rest}" if rest else "")
+    return await cmd_ttt(message, board_id=board_id, stream=stream)
+
+
 @router.message(Command("ttt", "tictactoe", "кн", "крестики", "крестикинолики", ignore_case=True, ignore_mention=True))
 async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str = "ru"):
     """Main command handler for /ttt [bet] / [accept]."""
@@ -1018,6 +1233,14 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
         await message.answer(msg)
         return
 
+    # Mute guard: zamuted users cannot accept, create, or open lobby
+    db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(user_id, board_id, db=db) or await check_user_is_muted(db, user_id, board_id):
+        await message.answer("🔇 Замученным нельзя играть в крестики-нолики.")
+        return
+
     # Target user via Reply (if any)
     target_user_id = None
     if message.reply_to_message:
@@ -1043,7 +1266,7 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
             f"💰 Выбранная ставка: <code>{default_bet:,} ₪</code>\n\n"
             f"Правила:\n"
             f"• Поле 3x3, ходы по очереди (❌ начинают первыми).\n"
-            f"• ⏳ <b>Строго 60 секунд на ход!</b> При таймауте — авто-луз и передача банка.\n"
+            f"• ⏳ <b>Строго 120 секунд на ход!</b> При таймауте — авто-луз и передача банка.\n"
             f"• При ничьей — возврат ставки (минус 2% сбор Абу).\n"
             f"• Победитель забирает банк (минус 5% рейк Абу).\n\n"
             f"Выбери ставку кнопками или напиши: <code>/ttt 500</code>"
@@ -1068,6 +1291,30 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
     kb = get_ttt_challenge_keyboard(game.game_id)
     sent = await message.answer(render_game_text(game), reply_markup=kb, parse_mode="HTML")
     game.msg_id = sent.message_id
+    game.player_msgs[user_id] = (sent.chat.id, sent.message_id)
+    game.broadcast_msgs.append((sent.chat.id, sent.message_id))
+
+    # Broadcast challenge to active board users
+    try:
+        from shared_state import board_data as _board_data
+        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+        for uid in active_users:
+            if uid == user_id:
+                continue
+            if target_user_id is not None and uid != target_user_id:
+                continue
+            try:
+                bcast_sent = await message.bot.send_message(
+                    chat_id=uid,
+                    text=render_game_text(game),
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                game.broadcast_msgs.append((uid, bcast_sent.message_id))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     try:
         await message.delete()
@@ -1152,7 +1399,31 @@ async def cb_ttt_create(callback: CallbackQuery, board_id: Optional[str] = None)
     kb = get_ttt_challenge_keyboard(game.game_id)
     sent = await callback.message.answer(render_game_text(game), reply_markup=kb, parse_mode="HTML")
     game.msg_id = sent.message_id
-    
+    game.player_msgs[user_id] = (sent.chat.id, sent.message_id)
+    game.broadcast_msgs.append((sent.chat.id, sent.message_id))
+
+    # Broadcast challenge to active board users
+    try:
+        from shared_state import board_data as _board_data
+        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+        for uid in active_users:
+            if uid == user_id:
+                continue
+            if target_user_id is not None and uid != target_user_id:
+                continue
+            try:
+                bcast_sent = await callback.bot.send_message(
+                    chat_id=uid,
+                    text=render_game_text(game),
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                game.broadcast_msgs.append((uid, bcast_sent.message_id))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     try:
         await callback.message.delete()
     except Exception:
@@ -1172,16 +1443,10 @@ async def cb_ttt_join(callback: CallbackQuery):
         await callback.answer(err, show_alert=True)
         return
 
-    game.msg_id = callback.message.message_id
-    try:
-        await callback.message.edit_text(
-            render_game_text(game),
-            reply_markup=get_ttt_game_keyboard(game),
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logger.debug(f"Failed to edit TTT message upon join: {e}")
+    # Track opponent's message so sync_ttt_screens can update both screens
+    game.player_msgs[user_id] = (callback.message.chat.id, callback.message.message_id)
 
+    await sync_ttt_screens(callback.bot, game)
     await callback.answer("⚔️ Игра началась! Первый ход за ❌")
 
 
@@ -1198,18 +1463,7 @@ async def cb_ttt_move(callback: CallbackQuery):
         await callback.answer(err, show_alert=True)
         return
 
-    try:
-        await callback.message.edit_text(
-            render_game_text(game),
-            reply_markup=get_ttt_game_keyboard(game),
-            parse_mode="HTML"
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower():
-            logger.debug(f"Edit move TelegramBadRequest: {e}")
-    except Exception as e:
-        logger.debug(f"Error editing TTT move message: {e}")
-
+    await sync_ttt_screens(callback.bot, game)
     await callback.answer()
 
 
@@ -1224,14 +1478,7 @@ async def cb_ttt_surrender(callback: CallbackQuery):
         await callback.answer(err, show_alert=True)
         return
 
-    try:
-        await callback.message.edit_text(
-            render_game_text(game),
-            reply_markup=get_ttt_game_keyboard(game),
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
+    await sync_ttt_screens(callback.bot, game)
     await callback.answer("🏳️ Ты сдался.")
 
 
@@ -1240,6 +1487,9 @@ async def cb_ttt_cancel(callback: CallbackQuery):
     """Challenger clicks Cancel Challenge."""
     user_id = callback.from_user.id
     game_id = callback.data.split(":")[2]
+
+    game = active_ttt_games.get(game_id)
+    broadcast_msgs = list(getattr(game, "broadcast_msgs", [])) if game else []
 
     ok, msg = await cancel_ttt_challenge(game_id, user_id)
     if not ok:
@@ -1250,6 +1500,21 @@ async def cb_ttt_cancel(callback: CallbackQuery):
         await callback.message.edit_text("❌ <b>Вызов в крестики-нолики отменен создателем.</b>", parse_mode="HTML")
     except Exception:
         pass
+
+    for chat_id, msg_id in broadcast_msgs:
+        if chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
+            continue
+        try:
+            await callback.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text="❌ <b>Вызов в крестики-нолики отменен создателем.</b>",
+                reply_markup=None,
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
     await callback.answer(msg)
 
 
@@ -1313,7 +1578,23 @@ async def ttt_watchdog_step(bot=None):
             )
             spawn_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, exp_dm_text), name="pvp_notify_ttt_expired")
 
-        if bot_to_use and game.chat_id and game.msg_id:
+        if bot_to_use and getattr(game, "broadcast_msgs", None):
+            for chat_id, msg_id in list(game.broadcast_msgs):
+                try:
+                    await bot_to_use.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=(
+                            "⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК!</b>\n\n"
+                            "Ни один анон не принял вызов за 10 минут.\n"
+                            "Вызов аннулирован, ставка не списана."
+                        ),
+                        reply_markup=None,
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+        elif bot_to_use and game.chat_id and game.msg_id:
             try:
                 await bot_to_use.edit_message_text(
                     chat_id=game.chat_id,

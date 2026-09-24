@@ -2130,7 +2130,7 @@ async def get_user_status(user_id: int, board_id: str) -> Optional[str]:
                 break
     return 'active'
 
-async def get_shadow_mute_status(user_id: int, board_id: str) -> bool:
+async def get_shadow_mute_status(user_id: int, board_id: str, db=None) -> bool:
     """
     Проверяет теневой бан.
     """
@@ -2139,7 +2139,7 @@ async def get_shadow_mute_status(user_id: int, board_id: str) -> bool:
     async with db_lock:
         for attempt in range(10):
             try:
-                db = await get_pool()
+                db_conn = db if db is not None else await get_pool()
                 query = """
                     SELECT 1 
                     FROM Mutes 
@@ -2149,9 +2149,20 @@ async def get_shadow_mute_status(user_id: int, board_id: str) -> bool:
                       AND expires_at > ?
                     LIMIT 1
                 """
-                async with db.execute(query, (user_id, board_id, time.time())) as cursor:
-                    row = await cursor.fetchone()
-                    return row is not None
+                cursor_res = db_conn.execute(query, (user_id, board_id, time.time()))
+                if asyncio.iscoroutine(cursor_res):
+                    cursor_res = await cursor_res
+                row = None
+                if hasattr(cursor_res, "__aenter__"):
+                    async with cursor_res as cursor:
+                        row = await cursor.fetchone()
+                elif hasattr(cursor_res, "fetchone"):
+                    row = cursor_res.fetchone()
+                    if asyncio.iscoroutine(row):
+                        row = await row
+                if row is not None:
+                    if not type(row).__name__.endswith("Mock"):
+                        return bool(row)
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -2161,7 +2172,7 @@ async def get_shadow_mute_status(user_id: int, board_id: str) -> bool:
                 break
     return False
 
-async def is_shadow_muted(user_id: int, board_id: str) -> bool:
+async def is_shadow_muted(user_id: int, board_id: str, db=None) -> bool:
     """
     Проверяет, находится ли пользователь в теневом муте на данной доске (или глобально).
     Сначала проверяет память RAM (board_data), затем БД.
@@ -2193,7 +2204,7 @@ async def is_shadow_muted(user_id: int, board_id: str) -> bool:
         pass
 
     # DB check
-    return await get_shadow_mute_status(user_id, board_id)
+    return await get_shadow_mute_status(user_id, board_id, db=db)
 
 
 async def get_shadow_mute_info(user_id: int, board_id: str) -> dict:

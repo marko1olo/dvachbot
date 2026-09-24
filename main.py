@@ -1925,6 +1925,102 @@ async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None
         logger.warning(f"⚠️ Записи на диск не уложились в {timeout:g} с — продолжаю остановку.")
 
 
+async def refund_all_pending_escrows():
+    """
+    Возвращает ставки всем участникам активных PvP-игр при остановке бота.
+    Вызывается в начале graceful_shutdown, пока пул БД ещё открыт.
+    """
+    try:
+        from russian_roulette_pvp import active_rr_games, rr_lock
+        from dice_duel_engine import active_dice_games, dice_engine_lock
+        from ttt_engine import active_ttt_games, ttt_lock
+        from shared_state import _active_duels
+        from common.database import add_user_global_balance, record_user_transaction
+        from common.db_pool import get_pool, db_lock
+
+        db = await get_pool()
+        refunded = 0
+
+        # Классические дуэли (ставка списана при создании, флаг escrowed=True)
+        async with classic_duel_lock:
+            for ch_id, duel in list(_active_duels.items()):
+                if duel.get("escrowed") and not duel.get("resolved"):
+                    board = duel.get("board_id", "b")
+                    amt = duel.get("amount", 0)
+                    try:
+                        async with db_lock:
+                            await add_user_global_balance(db, ch_id, board, amt)
+                            await record_user_transaction(db, ch_id, amt, 'duel', 'Возврат ставки: остановка бота')
+                        refunded += 1
+                    except Exception as e:
+                        print(f"⚠️ [Shutdown] Не удалось вернуть ставку дуэли для {ch_id}: {e}")
+
+        # Русская рулетка — только активные игры (обе стороны уже выплатили)
+        async with rr_lock:
+            for gid, game in list(active_rr_games.items()):
+                if game.get("state") == "active" and not game.get("finished"):
+                    board = game.get("board_id", "b")
+                    bet = game.get("bet", 0)
+                    ch_id = game.get("challenger_id")
+                    acc_id = game.get("acceptor_id")
+                    try:
+                        async with db_lock:
+                            if ch_id:
+                                await add_user_global_balance(db, ch_id, board, bet)
+                                await record_user_transaction(db, ch_id, bet, 'rr_pvp', 'Возврат ставки: остановка бота')
+                            if acc_id and acc_id != ch_id:
+                                await add_user_global_balance(db, acc_id, board, bet)
+                                await record_user_transaction(db, acc_id, bet, 'rr_pvp', 'Возврат ставки: остановка бота')
+                        game["finished"] = True
+                        refunded += 1
+                    except Exception as e:
+                        print(f"⚠️ [Shutdown] Не удалось вернуть ставку RR {gid}: {e}")
+
+        # Кубики — только активные игры (state == "playing")
+        async with dice_engine_lock:
+            for gid, game in list(active_dice_games.items()):
+                if game.get("state") == "playing" and not game.get("finished"):
+                    board = game.get("board_id", "b")
+                    bet = game.get("bet", 0)
+                    p1 = game.get("player_1")
+                    p2 = game.get("player_2")
+                    try:
+                        async with db_lock:
+                            if p1:
+                                await add_user_global_balance(db, p1, board, bet)
+                                await record_user_transaction(db, p1, bet, 'dice_duel', 'Возврат ставки: остановка бота')
+                            if p2 and p2 != p1:
+                                await add_user_global_balance(db, p2, board, bet)
+                                await record_user_transaction(db, p2, bet, 'dice_duel', 'Возврат ставки: остановка бота')
+                        game["finished"] = True
+                        refunded += 1
+                    except Exception as e:
+                        print(f"⚠️ [Shutdown] Не удалось вернуть ставку Dice {gid}: {e}")
+
+        # Крестики-нолики — только активные игры (status == "active")
+        async with ttt_lock:
+            for gid, game in list(active_ttt_games.items()):
+                if game.status == "active":
+                    board = game.board_id
+                    bet = game.bet
+                    try:
+                        async with db_lock:
+                            await add_user_global_balance(db, game.challenger_id, board, bet)
+                            await record_user_transaction(db, game.challenger_id, bet, 'ttt', 'Возврат ставки: остановка бота')
+                            if game.opponent_id:
+                                await add_user_global_balance(db, game.opponent_id, board, bet)
+                                await record_user_transaction(db, game.opponent_id, bet, 'ttt', 'Возврат ставки: остановка бота')
+                        game.status = "finished"
+                        game.finish_reason = "shutdown"
+                        refunded += 1
+                    except Exception as e:
+                        print(f"⚠️ [Shutdown] Не удалось вернуть ставку TTT {gid}: {e}")
+
+        print(f"💰 [Shutdown] Возвращено ставок: {refunded} активных PvP-игр.")
+    except Exception as e:
+        print(f"⚠️ [Shutdown] Ошибка при возврате ставок: {e}")
+
+
 async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | None = None, emergency: bool = False):
     """
     Корректное завершение работы.
@@ -1935,9 +2031,10 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
         return
     is_shutting_down = True
     shutdown_event.set()
-    
-    # Импортируем лок для безопасного доступа к БД
-    
+
+    # Возврат ставок всем участникам активных PvP-игр (до закрытия пула)
+    await refund_all_pending_escrows()
+
     reason = "АВАРИЙНЫЙ (OOM)" if emergency else "ШТАТНЫЙ"
     print(f"🛑 [{reason}] Начинаем процедуру остановки...")
     
@@ -6861,6 +6958,14 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
 async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
+    db = await get_pool()
+    from common.database import is_shadow_muted as _sm_rob
+    if await _sm_rob(user_id, board_id, db=db):
+        return
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(db, user_id, board_id):
+        await message.answer("⛔ <b>В муте грабить запрещено!</b> Отбывай наказание спокойно.", parse_mode="HTML")
+        return
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, которую хочешь ограбить!", parse_mode="HTML")
         return
@@ -6935,6 +7040,9 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         from common.debuff_phrases import get_victim_cooldown_excuse
         await message.answer(get_victim_cooldown_excuse(rem_min), parse_mode="HTML")
         return
+
+    # Ранняя временная блокировка цели (30с) для защиты от параллельного грабежа
+    set_victim_rob_cooldown(target_id, 30)
 
     t_items = await _get_user_active_items(db, target_id, board_id)
     current_time = int(time.time())
@@ -7134,11 +7242,29 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         stolen = max(1, int(round(stolen * (1.0 - stolen_red))))
 
     async with db_lock:
+        t_balance_current = await get_user_global_balance(db, target_id)
+        if t_balance_current <= 0:
+            active_items["knife_gun"] = True
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
+            )
+            await db.commit()
+            await message.answer("🔪 Пока ты замахивался, у жертвы кончились шекели. Ты сохранил заточку.", parse_mode="HTML")
+            return
+        stolen = min(int(t_balance_current * pct), 1000)
+        stolen_red = t_stats.get("rob_stolen_reduction_pct", 0.0)
+        if stolen_red > 0:
+            stolen = max(1, int(round(stolen * (1.0 - stolen_red))))
         ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
         if ok:
             await add_user_global_balance(db, user_id, board_id, stolen)
             await add_user_transaction(db, target_id, -stolen, 'rob', f'Тебя ограбил анон с заточкой (грабитель: {user_id})')
             await add_user_transaction(db, user_id, stolen, 'rob', f'Успешное ограбление анона (жертва: {target_id})')
+            set_victim_rob_cooldown(target_id)
+        else:
+            active_items["knife_gun"] = True
         await db.execute(
             "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
@@ -7149,7 +7275,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         await log_global_event('bot', f"🔪 ROB: Юзер {user_id} ограбил {target_id} на /{board_id}/ на {stolen} ₪")
     if not ok:
         await message.answer(
-            "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка сломалась впустую.",
+            "🔪 Не удалось провести ограбление, заточка осталась при тебе.",
             parse_mode="HTML")
         return
 
@@ -7198,6 +7324,11 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
 async def cmd_shit(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
+    db = await get_pool()
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(db, user_id, board_id):
+        await message.answer("⛔ <b>В муте обмазываться говном запрещено!</b>", parse_mode="HTML")
+        return
     if not message.reply_to_message:
         await message.answer("⚠️ Сделай Reply на пост того, кого хочешь обмазать говном!")
         return
@@ -9106,6 +9237,19 @@ async def _resolve_target_user_id(db, target_str: str) -> int | None:
     return None
 
 
+@dp.message(F.text.regexp(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+[kк]?|all|всё|все)(?:\s+.*)?$", flags=re.IGNORECASE))
+async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    if not message.text:
+        return
+    m = re.match(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+[kк]?|all|всё|все)(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
+    if not m:
+        return
+    amt = m.group(1)
+    rest = m.group(2)
+    message.text = f"/pay {amt}" + (f" {rest}" if rest else "")
+    return await cmd_pay(message, board_id=board_id, stream=stream)
+
+
 @dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат", "задонатить", "перевести", "поделиться", "пей", ignore_case=True, ignore_mention=True))
 async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -9212,6 +9356,44 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
     if is_target_banned:
         await message.reply("⛔ Пользователь забанен, переводы ему заблокированы.")
         return
+
+    now_ts = time.time()
+    now_dt = datetime.now(UTC)
+
+    # 1. Запрет переводов, если отправитель находится в муте
+    is_sender_muted = False
+    if (b_data.get('mutes', {}).get(sender_id) and b_data['mutes'][sender_id] > now_dt) or \
+       (board_data.get('ALL', {}).get('mutes', {}).get(sender_id) and board_data['ALL']['mutes'][sender_id] > now_dt):
+        is_sender_muted = True
+    else:
+        async with db.execute(
+            "SELECT 1 FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL' OR board_id IS NULL) AND expires_at > ? LIMIT 1",
+            (sender_id, board_id, now_ts)
+        ) as cursor:
+            if await cursor.fetchone():
+                is_sender_muted = True
+
+    if is_sender_muted:
+        await message.reply("⛔ <b>Вы находитесь в муте и не можете совершать переводы.</b>", parse_mode="HTML")
+        return
+
+    # 2. Запрет переводов, если получатель находится в муте (предотвращает обход наказания через взятки от третьих лиц)
+    is_target_muted = False
+    if (b_data.get('mutes', {}).get(target_user_id) and b_data['mutes'][target_user_id] > now_dt) or \
+       (board_data.get('ALL', {}).get('mutes', {}).get(target_user_id) and board_data['ALL']['mutes'][target_user_id] > now_dt):
+        is_target_muted = True
+    else:
+        async with db.execute(
+            "SELECT 1 FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL' OR board_id IS NULL) AND expires_at > ? LIMIT 1",
+            (target_user_id, board_id, now_ts)
+        ) as cursor:
+            if await cursor.fetchone():
+                is_target_muted = True
+
+    if is_target_muted:
+        await message.reply("⛔ <b>Пользователь находится в муте, переводы ему временно заблокированы.</b>", parse_mode="HTML")
+        return
+
 
     # Обработка edge cases сумм
     if amount is None or amount <= 0:
@@ -9495,6 +9677,13 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
     import time
     db = await get_pool()
 
+    # Мут-гард: замученным нельзя создавать дуэли
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(user_id, board_id, db=db) or await check_user_is_muted(db, user_id, board_id):
+        await message.answer("🔇 Замученным нельзя создавать дуэли.")
+        return
+
     try:
         amount = int(args[0]) if args else 0
     except Exception:
@@ -9703,6 +9892,15 @@ async def cb_duel_accept(callback: types.CallbackQuery, board_id: str | None):
     user_id = callback.from_user.id
     if user_id == challenger_id:
         await callback.answer("❌ Ты не можешь принять собственный вызов!", show_alert=True)
+        return
+    # Замученные (shadow) не могут принимать дуэли через кнопку
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    if await check_db_shadow_muted(user_id, board_id):
+        await callback.answer("🔇 Замученным нельзя принимать дуэли.", show_alert=True)
+        return
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(await get_pool(), user_id, board_id):
+        await callback.answer("🔇 Замученным нельзя принимать дуэли.", show_alert=True)
         return
     await accept_duel_logic(callback.message, challenger_id, board_id, user_id=user_id)
     try: await callback.answer()
@@ -11420,6 +11618,11 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
     db = await get_pool()
 
     if action == "claim":
+        # Замученные (shadow) не могут забирать дропы
+        from common.database import is_shadow_muted as check_db_shadow_muted
+        if await check_db_shadow_muted(user_id, board_id):
+            await callback.answer("🔇 Замученным нельзя забирать дропы.", show_alert=True)
+            return
         drop_id = data[2] if len(data) > 2 else ""
         claimer_name = f"Анон [{get_anon_id(user_id)}]"
         ok, msg, drop_rec = await drop_engine.claim_money_drop(
@@ -12464,7 +12667,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 bal = await get_user_global_balance(db, user_id)
             from russian_roulette_pvp import get_rr_lobby_keyboard, format_rr_lobby_message
             kb = get_rr_lobby_keyboard(100, balance=int(bal))
-            caption = format_rr_lobby_message(100, int(bal))
+            caption = format_rr_lobby_message(balance=int(bal), bet=100)
             try:
                 await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
             except Exception:
@@ -14597,29 +14800,36 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
 async def _board_motivation_worker(board_id: str):
     """
     Worker loop to check activity and periodically trigger motivation and invite card messages
-    regularly every 3-4 hours (with soft random jitter).
+    regularly every 8-12 hours (with quiet hours 00:00-08:00 MSK and activity threshold >= 10).
     """
     # Небольшая пауза при старте, чтобы все боты успели инициализироваться
-    await asyncio.sleep(random.randint(15, 60))
+    await asyncio.sleep(random.randint(30, 90))
 
     while True:
         try:
             now = time.time()
+
+            # Ночные тихие часы (00:00 - 08:00 MSK / UTC+3): не спамить инвайтами ночью
+            msk_hour = int((now + 3 * 3600) % 86400 // 3600)
+            if 0 <= msk_hour < 8:
+                await asyncio.sleep(1800)
+                continue
+
             last_time = _get_last_motivation_time(board_id)
-            # Регулярный интервал рассылки пичей: 3-4 часа (10800 - 14400 сек)
-            target_interval = 10800.0 # 3 часа минимум
+            # Регулярный интервал рассылки пичей: 8-12 часов (28800 - 43200 сек)
+            target_interval = 28800.0 # 8 часов минимум
 
             elapsed = now - last_time
             if elapsed < target_interval and last_time > 0:
                 # Если интервал еще не прошел с прошлой рассылки, спим оставшееся время
-                wait_time = max(30.0, min(target_interval - elapsed, 600.0))
+                wait_time = max(60.0, min(target_interval - elapsed, 1800.0))
                 await asyncio.sleep(wait_time)
                 continue
 
-            # Проверка активности: пропускаем только полностью мертвые доски (activity < 1)
+            # Проверка активности: не спамить доски с низкой активностью (< 10 постов за 12 часов)
             activity = await get_board_activity_last_hours(board_id, hours=12)
-            if activity < 1:
-                await asyncio.sleep(600)
+            if activity < 10:
+                await asyncio.sleep(1800)
                 continue
 
             b_data = board_data.get(board_id)
@@ -14651,11 +14861,11 @@ async def _board_motivation_worker(board_id: str):
 
             if sent_any:
                 _set_last_motivation_time(board_id, time.time())
-                # После успешной отправки следующая рассылка через 3-4 часа (10800 - 14400 сек)
-                next_sleep = random.randint(10800, 14400)
+                # После успешной отправки следующая рассылка через 8-12 часов (28800 - 43200 сек)
+                next_sleep = random.randint(28800, 43200)
                 await asyncio.sleep(next_sleep)
             else:
-                await asyncio.sleep(600)
+                await asyncio.sleep(1800)
 
         except Exception as e:
             logger.error(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}", exc_info=True)
@@ -28800,14 +29010,14 @@ async def cb_prof_ledger(callback: types.CallbackQuery, board_id: str | None):
 
 from market_engine import market_router
 from bank_engine import bank_router
-from handlers.message_router import message_router
 from auction_engine import auction_router
+from handlers.message_router import message_router
+
 dp.include_router(market_router)
 dp.include_router(bank_router)
-dp.include_router(message_router)
 dp.include_router(auction_router)
 
-# --- Fallback router: MUST be included LAST so all sub-routers get a chance first ---
+# --- Fallback router: catches unhandled /commands AFTER all functional routers, but BEFORE message_router ---
 from aiogram import Router as _Router
 _fallback_router = _Router(name="fallback_unknown_cmd")
 
@@ -28815,8 +29025,8 @@ _fallback_router = _Router(name="fallback_unknown_cmd")
 async def handle_unknown_command_spam(message: types.Message):
     """
     Отлавливает все неопознанные команды и применяет к ним анти-спам политику.
-    ВАЖНО: этот хэндлер теперь в отдельном router (а не на dp напрямую),
-    чтобы sub-routers (stats_hub_router, economy_router и др.) имели приоритет.
+    ВАЖНО: этот хэндлер регистрируется ДО message_router, чтобы неизвестные команды
+    никогда не утекали в публичную ленту борды.
     """
     user_id = message.from_user.id
     current_time = time.time()
@@ -28849,7 +29059,8 @@ async def handle_unknown_command_spam(message: types.Message):
     except TelegramBadRequest:
         pass
 
-dp.include_router(_fallback_router)  # LAST — catches unhandled /commands AFTER all other routers
+dp.include_router(_fallback_router)
+dp.include_router(message_router)  # Catch-all для постов борды регистрируется ПОСЛЕДНИМ
 
 async def main():
 

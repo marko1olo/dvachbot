@@ -225,6 +225,9 @@ def setup_event_loop():
         null_h = logging.NullHandler()
         log_obj.addHandler(null_h)
 
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     yield loop

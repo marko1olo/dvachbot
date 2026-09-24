@@ -1613,6 +1613,11 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     media_chunks = [all_media[i:i + CHUNK_SIZE] for i in range(0, len(all_media), CHUNK_SIZE)]
     is_large_group = len(media_chunks) > 1
     original_caption = group.get('caption')
+    if not is_shadow_muted and original_caption and not is_admin(user_id, board_id):
+        from common.spam_filter import is_spam_filtered
+        if is_spam_filtered(original_caption, board_id, user_id):
+            is_shadow_muted = True
+            runtime_logger.warning(f"🛡️ [MEDIAGRP] Spam/Dox detected in media group caption from {user_id}. Shadow muting album.")
     is_long_caption = original_caption and len(original_caption) > CAPTION_LENGTH_LIMIT
     send_caption_separately = is_large_group or is_long_caption
     first_post_num = None

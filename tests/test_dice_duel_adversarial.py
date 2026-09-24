@@ -42,6 +42,7 @@ from dice_duel_engine import (
     MAX_DICE_BET,
     DICE_RAKE_PERCENT,
     DICE_TIE_RAKE_PERCENT,
+    DICE_CHALLENGE_TIMEOUT_SEC,
 )
 from common.database import (
     get_user_global_balance,
@@ -440,7 +441,7 @@ async def test_watchdog_expired_pending_challenge_cleanup(isolated_test_db):
     assert p1 in user_active_dice_game
 
     async with dice_engine_lock:
-        active_dice_games[game_id]["created_ts"] = time.time() - 200.0
+        active_dice_games[game_id]["created_ts"] = time.time() - (DICE_CHALLENGE_TIMEOUT_SEC + 10.0)
         active_dice_games[game_id]["chat_id"] = 111
         active_dice_games[game_id]["msg_id"] = 222
 

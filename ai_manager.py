@@ -1702,17 +1702,22 @@ def _extract_music_roast_from_json(raw_text: str) -> tuple[str, str | None]:
         bm = re.search(r'(\{[\s\S]*\})', clean)
         if bm:
             json_candidate = bm.group(1).strip()
+        elif clean.endswith('}') and ':' in clean:
+            # Восстанавливаем обрезанный в начале JSON
+            if not clean.startswith('{'):
+                json_candidate = '{ "' + clean.lstrip(' "\'\t\r\n')
 
     if json_candidate:
         try:
             data = json.loads(json_candidate)
             if isinstance(data, dict):
                 r_text = (
-                    data.get("roast")
-                    or data.get("verdict")
+                    data.get("review_text")
+                    or data.get("roast")
                     or data.get("text")
                     or data.get("review")
                     or data.get("content")
+                    or (data.get("verdict") if len(str(data.get("verdict", ""))) > 15 else "")
                     or ""
                 )
                 r_score = (
@@ -1722,6 +1727,7 @@ def _extract_music_roast_from_json(raw_text: str) -> tuple[str, str | None]:
                     or data.get("grade")
                     or data.get("шкала")
                     or data.get("оценка")
+                    or (data.get("verdict") if len(str(data.get("verdict", ""))) <= 15 and re.search(r'\d+', str(data.get("verdict", ""))) else None)
                     or None
                 )
                 if r_text:
@@ -1734,18 +1740,22 @@ def _extract_music_roast_from_json(raw_text: str) -> tuple[str, str | None]:
     extracted_rating = None
 
     tm = re.search(
-        r'(?:"?(?:roast|verdict|text|review)"?\s*:\s*)"((?:[^"\\]|\\.)*)"',
+        r'(?:"?(?:review_text|roast|verdict|text|review|content)"?\s*:\s*)"((?:[^"\\]|\\.)*)"',
         clean,
         re.DOTALL | re.IGNORECASE
     )
     if not tm:
         tm = re.search(
-            r'(?:"?(?:roast|verdict|text|review)"?\s*:\s*)"?([^"\}]+)',
+            r'(?:"?(?:review_text|roast|verdict|text|review|content)"?\s*:\s*)"?([^"\}]+)',
             clean,
             re.IGNORECASE
         )
     if tm:
         extracted_text = _unescape_music_roast_json_str(tm.group(1)).strip()
+        if len(extracted_text) < 15:
+            tm_rev = re.search(r'(?:"?review_text"?\s*:\s*)"((?:[^"\\]|\\.)*)"', clean, re.DOTALL | re.IGNORECASE)
+            if tm_rev:
+                extracted_text = _unescape_music_roast_json_str(tm_rev.group(1)).strip()
 
     rm = re.search(
         r'(?:"?(?:rating|score|scale|grade|шкала|оценка)"?\s*:\s*)"?([^"\},]+)',
@@ -1756,7 +1766,7 @@ def _extract_music_roast_from_json(raw_text: str) -> tuple[str, str | None]:
         extracted_rating = _unescape_music_roast_json_str(rm.group(1)).strip()
 
     if extracted_text:
-        extracted_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:roast|verdict|text|review)"?\s*:\s*)?["\']?', '', extracted_text, flags=re.IGNORECASE).strip()
+        extracted_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:review_text|roast|verdict|text|review|content)"?\s*:\s*)?["\']?', '', extracted_text, flags=re.IGNORECASE).strip()
         extracted_text = re.sub(r'["\'\}\]]+\s*$', '', extracted_text).strip()
 
     if extracted_rating:
@@ -1840,6 +1850,14 @@ def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
                 if not s_part:
                     s_part = line.strip()
             elif not line.upper().startswith("ТРАНСКРИПЦИЯ:"):
+                # Filter out raw JSON metadata keys/syntax
+                if re.search(r'^\s*["\']?(?:anon_name|tone|audio_truth_note|diagnosis|verdict|rating|score|review_text|content|track)["\']?\s*:', line, re.IGNORECASE):
+                    rev_m = re.search(r'^\s*["\']?(?:review_text|roast)["\']?\s*:\s*["\']?(.*?)["\']?,?\s*$', line, re.IGNORECASE)
+                    if rev_m and rev_m.group(1):
+                        roast_lines.append(rev_m.group(1))
+                    continue
+                if line.strip() in ('{', '}', '},', '[', ']', '],'):
+                    continue
                 roast_lines.append(line)
         roast_text = "\n\n".join(roast_lines).strip()
 
@@ -1857,7 +1875,8 @@ def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
 
     roast_text = strip_cot_and_drafts(clean_html_tags(roast_text)).strip()
     # Защита от утечки JSON-ключей и концевых скобок / кавычек
-    roast_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:roast|verdict|text|review)"?\s*:\s*)?["\']?', '', roast_text, flags=re.IGNORECASE).strip()
+    roast_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:anon_name|tone|audio_truth_note|diagnosis|verdict|roast|review_text|text|review)"?\s*:\s*["\']?[^"\n\r]*["\']?,?\s*)+', '', roast_text, flags=re.IGNORECASE).strip()
+    roast_text = re.sub(r'^(?:\{?\s*)?(?:"?(?:roast|verdict|text|review|review_text)"?\s*:\s*)?["\']?', '', roast_text, flags=re.IGNORECASE).strip()
     roast_text = re.sub(r'["\'\}\]]+\s*$', '', roast_text).strip()
     roast_text = re.sub(r'^[«"\'\`]+|[»"\'\`]+$', '', roast_text).strip()
 

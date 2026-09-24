@@ -578,8 +578,10 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         b_data = board_data[board_id]
         
         if not is_admin(user_id, board_id):
-            is_shadow_muted = (user_id in b_data.get('shadow_mutes', {}) and 
-                               b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+            from common.database import is_shadow_muted as check_db_shadow_muted
+            is_shadow_muted = ((user_id in b_data.get('shadow_mutes', {}) and 
+                                b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
+                               await check_db_shadow_muted(user_id, board_id))
             if is_shadow_muted or user_id in b_data.get('reaction_banned_users', set()):
                 return
         post_num = None
@@ -865,9 +867,13 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
     except Exception as e:
         print(f"❌ Ошибка в handle_message_reaction: {e}")
 
-@message_router.message(~F.media_group_id)
+@message_router.message(~F.media_group_id, ~(F.text.startswith("/") | F.caption.startswith("/")))
 async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
     user_id = message.from_user.id
+    raw_content = (message.text or message.caption or "").strip()
+    if raw_content.startswith("/"):
+        # Команды и слэш-сообщения никогда не должны публиковаться как посты борды
+        return
     try:
         print(f"📩 [MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id} text={repr(message.text or message.caption or message.content_type)}")
     except Exception:
@@ -1775,6 +1781,12 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         return
     b_data = board_data[board_id]
     if not is_admin(user_id, board_id):
+        # Shadow mute — silent drop
+        from common.database import is_shadow_muted as _sm_mg
+        from common.db_pool import get_pool as _get_pool_mg
+        _db_mg = await _get_pool_mg()
+        if await _sm_mg(user_id, board_id, db=_db_mg):
+            return
         mutes = b_data.get('mutes', {})
         if user_id in b_data.get('users', {}).get('banned', set()) or \
            (mutes.get(user_id) and mutes[user_id] > datetime.now(UTC)):

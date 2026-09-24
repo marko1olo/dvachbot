@@ -365,7 +365,8 @@ class TestCommandDispatch(unittest.IsolatedAsyncioTestCase):
 
         # 3. Successful vote initialization on target
         msg_vote = create_mock_message(user_id=self.user_id, text="/votemute")
-        with patch("votemute_engine._resolve_target_from_message", new_callable=AsyncMock, return_value=(888, 999111)), \
+        with patch("votemute_engine.get_pool", return_value=self.db_conn), \
+             patch("votemute_engine._resolve_target_from_message", new_callable=AsyncMock, return_value=(888, 999111)), \
              patch("votemute_engine.check_user_unbribable_mute", new_callable=AsyncMock, return_value=(False, 0)), \
              patch("votemute_engine.start_or_add_vote", new_callable=AsyncMock, return_value=(True, "Vote added", 1, False)):
             await votemute_engine.cmd_votemute(msg_vote, board_id="b")

@@ -14,6 +14,7 @@ Features & Mechanics:
 """
 
 import os
+import re
 import io
 import time
 import json
@@ -50,9 +51,9 @@ runtime_logger = logger
 MIN_RR_BET = 50
 MAX_RR_BET = 10_000_000
 RR_CHAMBERS_COUNT = 6
-RR_TURN_TIMEOUT_SEC = 180.0  # 3 minutes per turn
+RR_TURN_TIMEOUT_SEC = 120.0  # 2 minutes per turn (balanced for async TG chat)
 RR_CHALLENGE_TIMEOUT_SEC = 600.0  # 10 minutes waiting for opponent to accept
-RR_MUTE_DURATION_SEC = 600  # 10 minutes
+RR_MUTE_DURATION_SEC = 1800  # 30 minutes mute for loser
 RR_RAKE_PERCENT = 0.05  # 5% to Abu's Fund
 
 # In-memory storage for active games & challenges
@@ -63,6 +64,184 @@ rr_lock = asyncio.Lock()
 # Router instance
 rr_router = Router(name="russian_roulette_pvp")
 router = rr_router
+
+
+# =============================================================================
+# AUTHENTIC 2CH PHRASE POOLS (RUSSIAN ROULETTE)
+# =============================================================================
+
+RR_CLICK_PHRASES = [
+    "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 пуста! У анона [ID:{user_anon}] очко сжалось в сингулярность, но бог рандома сегодня милостив.",
+    "💨 <b>ЩЁЛК!</b> Пустой щелчок... В штанах анона [ID:{user_anon}] ощутимо потеплело, но мозги пока на месте ({cur_ch}/6)!",
+    "💨 <b>ЩЁЛК!</b> Боёк ударил в пустоту ({cur_ch}/6). Анон [ID:{user_anon}] судорожно сглотнул ком в горле — сегодня без фарша!",
+    "💨 <b>ЩЁЛК!</b> Сухой щелчок каморы {cur_ch}/6! Анон [ID:{user_anon}] побелел как простыня, но черепная коробка пока цела.",
+    "💨 <b>ЩЁЛК!</b> Пусто ({cur_ch}/6)! Анон [ID:{user_anon}] чуть не высрал кирпичный завод, передавая ствол сопернику.",
+    "💨 <b>ЩЁЛК!</b> Повезло, сука! Камора {cur_ch}/6 не заряжена. Анон [ID:{user_anon}] дышит так, будто убежал от военкома.",
+    "💨 <b>ЩЁЛК!</b> Осечка судьбы ({cur_ch}/6)! Анон [ID:{user_anon}] вытирает холодный пот со лба. Смерть подождёт следующего хода.",
+    "💨 <b>ЩЁЛК!</b> Пустая камора ({cur_ch}/6)! Анон [ID:{user_anon}] издал сдавленный писк, но остался среди живых двачеров.",
+    "💨 <b>ЩЁЛК!</b> Барабан прокрутился вхолостую ({cur_ch}/6). Анон [ID:{user_anon}] заглянул в бездну, но бездна сплюнула.",
+    "💨 <b>ЩЁЛК!</b> Чистый звон бойка! Камора {cur_ch}/6 пуста. Анон [ID:{user_anon}] чудом сохранил остатки своего жидкого рассудка.",
+    "💨 <b>ЩЁЛК!</b> Пусто, блять! ({cur_ch}/6). Анон [ID:{user_anon}] шумно выдохнул перегар. Смерть лишь ухмыльнулась.",
+    "💨 <b>ЩЁЛК!</b> Пустая камора {cur_ch}/6! У анона [ID:{user_anon}] пронеслась перед глазами вся его никчемная сычевня.",
+    "💨 <b>ЩЁЛК!</b> Металлический лязг ({cur_ch}/6)! Никаких мозгов на стене, анон [ID:{user_anon}] выжил на волоске от параши.",
+    "💨 <b>ЩЁЛК!</b> Снова мимо ({cur_ch}/6)! Анон [ID:{user_anon}] перекрестился аватаркой Абу. Твоя очередь страдать, оппонент!",
+    "💨 <b>ЩЁЛК!</b> Барабан провернулся без выстрела ({cur_ch}/6). Анон [ID:{user_anon}] нервно хихикает, глядя на дуло.",
+    "💨 <b>ЩЁЛК!</b> Пустая ячейка {cur_ch}/6! Анон [ID:{user_anon}] спас свою глупую голову ещё на один раунд.",
+    "💨 <b>ЩЁЛК!</b> Тишина в эфире ({cur_ch}/6)! Анон [ID:{user_anon}] не стал биомусором в этот раз. Револьвер переходит дальше.",
+    "💨 <b>ЩЁЛК!</b> Пустота ({cur_ch}/6)! Анон [ID:{user_anon}] почувствовал, как седеют волосы на жопе, но выстрела не последовало.",
+    "💨 <b>ЩЁЛК!</b> Осечка! Камора {cur_ch}/6 пуста. Анон [ID:{user_anon}] выиграл еще пару минут унылой жизни.",
+    "💨 <b>ЩЁЛК!</b> Боёк бьёт по пустоте ({cur_ch}/6). Анон [ID:{user_anon}] трясущимися руками суёт револьвер оппоненту.",
+    "💨 <b>ЩЁЛК!</b> Пронесло ({cur_ch}/6)! Анон [ID:{user_anon}] едва не пустил струю от звона спуска, но камора пуста!",
+    "💨 <b>ЩЁЛК!</b> Сухой щелчок ({cur_ch}/6)! Анон [ID:{user_anon}] остаётся в игре, а шанс словить пулю вырос до небес!",
+    "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 свободна! Анон [ID:{user_anon}] вытер подливу и ехидно лыбится сопернику.",
+    "💨 <b>ЩЁЛК!</b> Пустой хлопок ({cur_ch}/6). Анон [ID:{user_anon}] жив, но очко играет похоронный марш.",
+    "💨 <b>ЩЁЛК!</b> Свинцовый подарок ждёт другого ({cur_ch}/6)! Анон [ID:{user_anon}] отдаёт волыну с дикой ухмылкой.",
+    "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 пустая! Анон [ID:{user_anon}] на миллиметр разминулся с могилой и санитарами.",
+    "💨 <b>ЩЁЛК!</b> Опять вхолостую ({cur_ch}/6)! Анон [ID:{user_anon}] судорожно дышит. Напряжение в треде гуще маня-мирка.",
+    "💨 <b>ЩЁЛК!</b> Звук металла по воздуху ({cur_ch}/6)! Анон [ID:{user_anon}] жив, держи револьвер, следующий смертник!",
+    "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 без патрона! Анон [ID:{user_anon}] отскочил от кладбища на один шаг.",
+    "💨 <b>ЩЁЛК!</b> Пусто ({cur_ch}/6)! Анон [ID:{user_anon}] моргнул и понял, что лоб пока не вентилируется.",
+    "💨 <b>ЩЁЛК!</b> Холостой клик каморы {cur_ch}/6! Анон [ID:{user_anon}] благодарит святого Двача за спасение тушки.",
+    "💨 <b>ЩЁЛК!</b> Щелчок без вспышки ({cur_ch}/6)! Анон [ID:{user_anon}] всё ещё коптит этот бренный мир.",
+    "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 девственно чиста! Анон [ID:{user_anon}] с облегчением выкатил шары.",
+    "💨 <b>ЩЁЛК!</b> Пустой звук ({cur_ch}/6)! Анон [ID:{user_anon}] удержал мочу и передал эстафету смерти.",
+    "💨 <b>ЩЁЛК!</b> Не в этот раз ({cur_ch}/6)! Анон [ID:{user_anon}] выжил, а в барабане остаётся всё меньше шансов!",
+    "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 пуста! Анон [ID:{user_anon}] услышал свист в ушах, но пуля осталась в барабане.",
+    "💨 <b>ЩЁЛК!</b> Боёк щёлкнул в пустоту ({cur_ch}/6)! Анон [ID:{user_anon}] жив, а градус шизы в дуэли пробил потолок!",
+    "💨 <b>ЩЁЛК!</b> Барабан {cur_ch}/6 пуст! Анон [ID:{user_anon}] оттянул неизбежное. Ход переходит оппоненту."
+]
+
+RR_SHOT_PHRASES = [
+    "💀 <b>БАХ! ВЫСТРЕЛ В ЛОБ!</b> Анон [ID:{lose_anon}] нажал на спуск на {cur_ch}-й каморе... Мозги со свистом разлетелись по треду, залив клавиатуру!",
+    "💀 <b>МОЗГИ В КАШУ!</b> Грохот выстрела оглушил тред! Анон [ID:{lose_anon}] ловит пулю 9мм точно между глаз на {cur_ch}-й каморе!",
+    "💥 <b>ФАТАЛЬНЫЙ ПРИЛЁТ!</b> Свинцовая маслина на {cur_ch}-й каморе разнесла череп анона [ID:{lose_anon}] на мелкие биоотходы!",
+    "🩸 <b>КРОВАВЫЙ САЛЮТ!</b> Камора {cur_ch}/6 оказалась роковой! Анон [ID:{lose_anon}] уронил бездыханную тушку прямо лицом в салат!",
+    "💀 <b>РЕШЕТО ВМЕСТО БАШКИ!</b> На {cur_ch}-й каморе патрон не подвёл. Анон [ID:{lose_anon}] отправился прямиком в Вальхаллу для омежек!",
+    "💥 <b>РАЗНОС ЧЕРЕПА!</b> На {cur_ch}-й каморе раздался оглушительный взрыв! Анон [ID:{lose_anon}] превратился в кровавый фарш на потеху двачерам!",
+    "💀 <b>ХЕДШОТ ГОДА!</b> Анон [ID:{lose_anon}] крутанул барабан до {cur_ch}-й каморы и успешно самовыпилился из треда!",
+    "💥 <b>БАБАХ!</b> Свинец прошил лобную кость насквозь! Анон [ID:{lose_anon}] на {cur_ch}-й каморе закончил свой жизненный путь у параши!",
+    "🩸 <b>ФАРШ И КОСТИ!</b> Выстрел разорвал тишину! Анон [ID:{lose_anon}] на {cur_ch}-й каморе окропил тред серой жижей вместо мозгов!",
+    "💀 <b>ОКОНЧАТЕЛЬНЫЙ РАСЧЁТ!</b> Анон [ID:{lose_anon}] нажал на спуск на {cur_ch}-й каморе — пуля нашла своего дегенерата!",
+    "💥 <b>ГРОМ СРЕДИ ЯСНОГО НЕБА!</b> {cur_ch}-я камора оказалась заряжена! Анон [ID:{lose_anon}] отправляется в вечный бан ногами вперед!",
+    "💀 <b>СПЛЭШ-УРОН В ЛОБ!</b> Анон [ID:{lose_anon}] дернул крючок на {cur_ch}-й каморе. Брызги мозгов забрызгали мониторы всего раздела!",
+    "💥 <b>ВЫНОС ТЕЛА!</b> Камора {cur_ch}/6 ставит жирную точку! Анон [ID:{lose_anon}] красиво улетел на перерождение в баобаб!",
+    "🩸 <b>КРОВИЩА ПО СТЕНАМ!</b> Анон [ID:{lose_anon}] на {cur_ch}-й каморе словил экспансивную пулю прямо в лобешник!",
+    "💀 <b>САМОВЫПИЛ ОФОРМЛЕН!</b> {cur_ch}-я камора сработала безупречно. Анон [ID:{lose_anon}] больше не оставит высеров в треде!",
+    "💥 <b>БАХ! МИНУС ДВАЧЕР!</b> Анон [ID:{lose_anon}] нажал на спуск ({cur_ch}/6) и моментально покинул чат в виде трупа!",
+    "💀 <b>ЧЕРЕП ВСМЯТКУ!</b> На {cur_ch}-й каморе револьвер сказал своё веское слово. Анон [ID:{lose_anon}] падает мешком с говном!",
+    "🩸 <b>МЯСОРУБКА!</b> Камора {cur_ch}/6 сдетонировала! Анон [ID:{lose_anon}] забрызгал своими недоразвитыми извилинами весь пол!",
+    "💥 <b>ГРОХОТ СМЕРТИ!</b> Анон [ID:{lose_anon}] нажал на спуск на {cur_ch}-й каморе и познал дзен через сквозное отверстие в черепе!",
+    "💀 <b>ДЫРА В ЛОБОВОЙ ДОЛЕ!</b> {cur_ch}-я камора не простила ошибки. Анон [ID:{lose_anon}] отправлен на корм червям!",
+    "💥 <b>ОТЗВЕНЕЛ СЫЧИК!</b> На {cur_ch}-й каморе боёк наколол капсюль! Анон [ID:{lose_anon}] падает замертво под улюлюканье треда!",
+    "🩸 <b>ЖИДКИЙ РАЗЛЁТ!</b> Анон [ID:{lose_anon}] нажал курок на {cur_ch}-й каморе. Мозгов там и так не было, но ошметки разлетелись красиво!",
+    "💀 <b>ГЛУХОЙ ВЫСТРЕЛ В УПОР!</b> На {cur_ch}-й каморе фортуна повернулась к анону [ID:{lose_anon}] волосатой жопой!",
+    "💥 <b>БАХ! АННИГИЛЯЦИЯ БАШКИ!</b> Анон [ID:{lose_anon}] на {cur_ch}-й каморе поймал свинцовый привет и рухнул под стол!",
+    "💀 <b>ПРЯМАЯ ТРАНСЛЯЦИЯ В АД!</b> Револьвер грохнул на {cur_ch}-й каморе. Анон [ID:{lose_anon}] откинул копыта без шансов!",
+    "🩸 <b>ОКРАСИЛ СТЕНУ В БОРДОВЫЙ!</b> Анон [ID:{lose_anon}] нажал на спуск ({cur_ch}/6) — теперь санитарам отмывать тред неделю!",
+    "💥 <b>КОНТРОЛЬНЫЙ В ГОЛОВУ!</b> Камора {cur_ch}/6 не оставила анону [ID:{lose_anon}] ни единого шанса на выживание!",
+    "💀 <b>ПУЛЯ-ДУРА, АНОН-ПОКОЙНИК!</b> На {cur_ch}-й каморе свинцовый шмель пробил тупую тыкву анона [ID:{lose_anon}]!",
+    "💥 <b>ВЫСТРЕЛ НА ГЛУХНЯК!</b> Анон [ID:{lose_anon}] спустил курок на {cur_ch}-й каморе и моментально сложился пополам!",
+    "🩸 <b>КРОВАВАЯ КАША!</b> {cur_ch}-я камора револьвера поставила крест на убогой жизни анона [ID:{lose_anon}]!",
+    "💀 <b>БАБАХ! ПРЕМИЯ ДАРВИНА!</b> Анон [ID:{lose_anon}] забрал главный приз на {cur_ch}-й каморе — свинец прямиком в темечко!",
+    "💥 <b>ЭКСПАНСИВНЫЙ ФИНИШ!</b> Револьвер разнёс башку анона [ID:{lose_anon}] на {cur_ch}-й каморе! Зрелище для истинных гурманов /b/!",
+    "💀 <b>МГНОВЕННЫЙ РИП!</b> Анон [ID:{lose_anon}] нажал на спуск на {cur_ch}-й каморе и отправился полировать котлы в преисподней!",
+    "🩸 <b>ВСПЫШКА И ТЕМНОТА!</b> {cur_ch}-я камора сработала на ура. Анон [ID:{lose_anon}] больше не подает признаков биологической активности!",
+    "💥 <b>ГРОМОВЫЙ РАСКАТ В ТРЕДЕ!</b> Анон [ID:{lose_anon}] на {cur_ch}-й каморе расплескал остатки интеллекта по всей комнате!",
+    "💀 <b>ПРОБИТИЕ БРОНИ!</b> Свинец прошил лоб анона [ID:{lose_anon}] на {cur_ch}-й каморе. Финита ля комедия, сычура!",
+    "💥 <b>БАХ! ТУШИТЕ СВЕТ!</b> На {cur_ch}-й каморе пуля поставила точку. Анон [ID:{lose_anon}] падает мордой в грязь!",
+    "💀 <b>РАЗЛЁТ ОСКОЛКОВ КОСТИ!</b> Анон [ID:{lose_anon}] словил ваншот на {cur_ch}-й каморе. Абу довольно потирает руки!"
+]
+
+RR_TIMEOUT_COWARD_PHRASES = [
+    "🐔 <b>ТРУСЛИВЫЙ ОМЕЖКА!</b> Анон [ID:{lose_anon}] трясся от страха 120 секунд, обосрался и не нажал на спуск! 🔇 Трус отправлен в МУТ НА 30 МИНУТ!",
+    "🐔 <b>ПОДЛИВА В ШТАНАХ!</b> Анон [ID:{lose_anon}] просидел 120 секунд, пуская пузыри под стол! Слился позорным таймаутом и улетел в МУТ НА 30 МИНУТ!",
+    "💩 <b>ЗАССАЛ И СЛИЛСЯ!</b> 120 секунд анон [ID:{lose_anon}] гипнотизировал ствол, пока очко не лопнуло от ужаса! Лови МУТ НА 30 МИНУТ!",
+    "🚼 <b>МАМКИН ДУЭЛЯНТ ОБГАДИЛСЯ!</b> Анон [ID:{lose_anon}] не осилил спустить курок за 120 секунд. С позором забанен в МУТ НА 30 МИНУТ!",
+    "🐔 <b>ЖАЛКИЙ ПЕТУШОК!</b> Анон [ID:{lose_anon}] 120 секунд молился богам рандома, но нажать кнопку побоялся! 🔇 МУТ НА 30 МИНУТ за трусость!",
+    "💩 <b>ОМЕЖИЙ СТУПОР!</b> 120 секунд анон [ID:{lose_anon}] сидел с полными штанами тёплой жижи. Автолуз и параша на замке (МУТ НА 30 МИНУТ)!",
+    "🐔 <b>ТАЙМАУТ ПОЗОРНИКА!</b> Анон [ID:{lose_anon}] тянул время 120 секунд, скуля как побитая псина. Отправляйся в МУТ НА 30 МИНУТ!",
+    "🚼 <b>СЫЧ СБЕЖАЛ К МАМКЕ!</b> Анон [ID:{lose_anon}] не выдержал 120 секунд тишины и забился под шконку! 🔇 Трус наказан: МУТ НА 30 МИНУТ!",
+    "💩 <b>СКУКОЖИЛСЯ ОТ УЖАСА!</b> Ровно 120 секунд понадобилось анону [ID:{lose_anon}], чтобы окончательно опозориться! Получай заслуженный МУТ НА 30 МИНУТ!",
+    "🐔 <b>КУРИНЫЙ ПОБЕГ!</b> Анон [ID:{lose_anon}] прокукарекал вызов, но за 120 секунд так и не рискнул стрелять! 🔇 МУТ НА 30 МИНУТ!",
+    "💩 <b>ГРЯЗНЫЙ СЛИВ!</b> Анон [ID:{lose_anon}] прождал 120 секунд в надежде на чудо, но наложил в трусы. Пшёл вон в МУТ НА 30 МИНУТ!",
+    "🐔 <b>ТРЕМОР В РУКАХ!</b> 120 секунд анон [ID:{lose_anon}] не мог попасть пальцем по кнопке спуска! За трусость оформлен МУТ НА 30 МИНУТ!",
+    "🚼 <b>БЕЗМОЗГЛЫЙ АФК-ШНИК!</b> Анон [ID:{lose_anon}] протупил 120 секунд и подарил победу оппоненту! 🔇 Отдыхай в МУТЕ НА 30 МИНУТ!",
+    "💩 <b>ДРОЖАЩИЙ ТРУС!</b> Анон [ID:{lose_anon}] моргнул, заплакал и просидел 120 секунд без движений! 🔇 МУТ НА 30 МИНУТ для омеги!",
+    "🐔 <b>СЛИВ В УНИТАЗ!</b> 120 секунд ожидания — и анон [ID:{lose_anon}] признан главным зассанцем треда! Получай МУТ НА 30 МИНУТ!",
+    "💩 <b>ПОЛНЫЙ ПАРАЛИЧ ОЧКА!</b> Анон [ID:{lose_anon}] окаменел на 120 секунд от страха перед револьвером! 🔇 МУТ НА 30 МИНУТ!",
+    "🐔 <b>СЛАБОХАРАКТЕРНЫЙ ЧЕРВЬ!</b> Анон [ID:{lose_anon}] 120 секунд сопли жевал, но нажать на спуск духу не хватило! Улетел в МУТ НА 30 МИНУТ!",
+    "🚼 <b>МАМКИН РУЛЕТОЧНИК СПЁКСЯ!</b> 120 секунд позора для анона [ID:{lose_anon}]. Деньги проёбаны, а впереди МУТ НА 30 МИНУТ!",
+    "💩 <b>ПОДЛИВНЫЙ НОКАУТ!</b> Анон [ID:{lose_anon}] побоялся рискнуть за 120 секунд и потерял всё! 🔇 Лови кляп и МУТ НА 30 МИНУТ!",
+    "🐔 <b>ПЕТУШИНЫЙ ТАЙМАУТ!</b> Анон [ID:{lose_anon}] зассал сделать выстрел за 120 секунд! Тред презирает тебя, отправляйся в МУТ НА 30 МИНУТ!",
+    "💩 <b>ПРОКИС ЗА 120 СЕКУНД!</b> Анон [ID:{lose_anon}] превратился в лужу страха и не нажал на курок! 🔇 МУТ НА 30 МИНУТ без права голоса!",
+    "🐔 <b>ТРУСЛИВАЯ СМЕРТЬ!</b> Даже пулю словить смелости не хватило! Анон [ID:{lose_anon}] зассал за 120 секунд и словил МУТ НА 30 МИНУТ!",
+    "🚼 <b>ДЕТСКИЙ ИСПУГ!</b> Анон [ID:{lose_anon}] 120 секунд звал маму на помощь. Технический луз и МУТ НА 30 МИНУТ!",
+    "💩 <b>ОБДРИСТАННЫЙ ДУЭЛЯНТ!</b> 120 секунд анон [ID:{lose_anon}] боролся с диареей страха, но проиграл! 🔇 На парашу в МУТ НА 30 МИНУТ!",
+    "🐔 <b>ЗАБЫЛ КАК ДЫШАТЬ!</b> Анон [ID:{lose_anon}] уставился в таймер на 120 секунд и профукал банк! 🔇 Наказание: МУТ НА 30 МИНУТ!",
+    "💩 <b>КАТАСТРОФА ДУХА!</b> 120 секунд хватило анону [ID:{lose_anon}], чтобы опозорить весь свой род! Слился в МУТ НА 30 МИНУТ!",
+    "🐔 <b>АФК-КУРИЦА!</b> Анон [ID:{lose_anon}] позорно пропустил ход длиною в 120 секунд! 🔇 Пшёл вон в МУТ НА 30 МИНУТ!",
+    "🚼 <b>СЛЁЗЫ НА КЛАВИАТУРЕ!</b> Анон [ID:{lose_anon}] 120 секунд ревел от ужаса и так и не выстрелил! 🔇 МУТ НА 30 МИНУТ!",
+    "💩 <b>ЖАЛКИЙ СЛИВ БЕЗ БОЯ!</b> 120 секунд позора для анона [ID:{lose_anon}]. Шекели у победителя, а трусу достаётся МУТ НА 30 МИНУТ!",
+    "🐔 <b>ДУХ ОМЕЖКИ СЛОМЛЕН!</b> Анон [ID:{lose_anon}] застыл на 120 секунд в позе эмбриона! 🔇 Лови клеймо труса и МУТ НА 30 МИНУТ!",
+    "💩 <b>ОПОЗОРИЛСЯ НА ВСЮ БОРДУ!</b> 120 секунд анон [ID:{lose_anon}] тряс губами от ужаса! Авто-луз и МУТ НА 30 МИНУТ!",
+    "🐔 <b>РЕКОРД ТРУСОСТИ!</b> Анон [ID:{lose_anon}] терпел 120 секунд и в итоге обосрался без единого выстрела! 🔇 МУТ НА 30 МИНУТ!"
+]
+
+RR_SURRENDER_PHRASES = [
+    "🏳️ <b>ПОЗОРНАЯ КАПИТУЛЯЦИЯ!</b> Анон [ID:{lose_anon}] зарыдал, бросил револьвер на пол и пополз к параше на карачках!",
+    "😭 <b>ВЫБРОСИЛ БЕЛЫЙ ФЛАГ!</b> Анон [ID:{lose_anon}] не выдержал запаха пороха и сдался без боя, обмочив свои треники!",
+    "🏳️ <b>ОМЕЖИЙ СЛИВ!</b> Анон [ID:{lose_anon}] добровольно сложил лапки и отдал банк, лишь бы не дырявить тупую башку!",
+    "💩 <b>БЕГСТВО С ПОЛЯ БОЯ!</b> Анон [ID:{lose_anon}] испугался собственного отражения в стволе и с позором нажал сдаться!",
+    "🏳️ <b>СДАЛСЯ В СЛЕЗАХ!</b> Анон [ID:{lose_anon}] упал на колени, умоляя пощадить его никчемную тушку, и отдал шекели!",
+    "😭 <b>ЖАЛКИЙ ПАДЕНИЕ!</b> Анон [ID:{lose_anon}] выронил револьвер из дрожащих лап и признал себя абсолютной омежкой!",
+    "🏳️ <b>СЫЧ СПАСАЕТ ШКУРУ!</b> Анон [ID:{lose_anon}] решил, что жизнь у параши слаще смерти, и добровольно сдался!",
+    "💩 <b>БЕЛЫЙ ФЛАГ ИЗ ТРУСОВ!</b> Анон [ID:{lose_anon}] сорвал с себя исподнее и капитулировал перед лицом соперника!",
+    "🏳️ <b>КАПИТУЛЯЦИЯ ДЕГЕНЕРАТА!</b> Анон [ID:{lose_anon}] понял, что удача ушла, и малодушно нажал кнопку сдачи!",
+    "😭 <b>СДАЛСЯ БЕЗ ЕДИНОГО ВЫСТРЕЛА!</b> Анон [ID:{lose_anon}] подарил сопернику победу, сбежав под дружный хохот треда!",
+    "🏳️ <b>СЛОМАЛСЯ КАК СПИЧКА!</b> Нервы анона [ID:{lose_anon}] не выдержали накала. Револьвер брошен, шекели слиты!",
+    "💩 <b>ПОЗОРНЫЙ ОТСТУП!</b> Анон [ID:{lose_anon}] поджал хвост и нажал сдаться, лишь бы не выковыривать свинец из черепа!",
+    "🏳️ <b>ОМЕЖИЙ ВЫБОР!</b> Анон [ID:{lose_anon}] предпочёл 30 минут молчания шансу рискнуть головой. Полная капитуляция!",
+    "😭 <b>РЫДАНИЯ В ЭФИРЕ!</b> Анон [ID:{lose_anon}] заскулил, выронил волыну и нажал F. Позор смыть не удастся никогда!",
+    "🏳️ <b>ДОБРОВОЛЬНЫЙ САМОСЛИВ!</b> Анон [ID:{lose_anon}] понял свой потолок IQ и сам отдал банк победителю!",
+    "💩 <b>ВЫКИНУЛ СТВОЛ!</b> Анон [ID:{lose_anon}] в панике отбросил револьвер подальше и сдался с потрохами!",
+    "🏳️ <b>БЕССЛАВНАЯ СДАЧА!</b> Анон [ID:{lose_anon}] признал превосходство оппонента и покорно поплёлся в мут!",
+    "😭 <b>ОТДАЛ ВСЁ БЕЗ БОЯ!</b> Анон [ID:{lose_anon}] расписался в собственной никчемности и нажал капитуляцию!",
+    "🏳️ <b>СДАЛСЯ НА МИЛОСТЬ ПОБЕДИТЕЛЯ!</b> Анон [ID:{lose_anon}] упал ниц и отдал банк. Смелости в этом теле ноль!",
+    "💩 <b>ЛЁГКИЙ КУШ ДЛЯ БАТИ!</b> Анон [ID:{lose_anon}] перепугался до полусмерти и нажал кнопку сдачи, позоря тред!",
+    "🏳️ <b>СБЕЖАЛ С РИНГА!</b> Анон [ID:{lose_anon}] бросил оружие в грязь и показал всем свою омежью натуру!",
+    "😭 <b>КАПИТУЛЯЦИЯ В ПРЯМОМ ЭФИРЕ!</b> Анон [ID:{lose_anon}] испугался громкого щелчка и сдал назад со слезами!",
+    "🏳️ <b>СЛИЛ ДУЭЛЬ!</b> Анон [ID:{lose_anon}] выбросил флаг капитуляции — шекели ушли, позор остался навечно!",
+    "💩 <b>НЕ ВЫДЕРЖАЛ ДАВЛЕНИЯ!</b> Анон [ID:{lose_anon}] дрогнул и нажал сдаться. Забирай свои сопли и шагай на завод!",
+    "🏳️ <b>ПОЗОРНАЯ СДАЧА!</b> Анон [ID:{lose_anon}] предпочёл жить омегой, чем умереть героем. Банк слит всухую!",
+    "😭 <b>СЫЧИК СДАЛСЯ!</b> Анон [ID:{lose_anon}] вытер нос рукавом и выбросил белый флаг. Тред смеётся над тобой!",
+    "🏳️ <b>БЕГСТВО С ДУЭЛИ!</b> Анон [ID:{lose_anon}] нажал капитуляцию, спасая свою никчемную жизнь от револьвера!",
+    "💩 <b>СДАЛСЯ СО СТРАХУ!</b> Анон [ID:{lose_anon}] понял, что смерть дышит в затылок, и позорно капитулировал!"
+]
+
+
+def build_rr_outcome_view(outcome: str, lose_anon: str, cur_ch: int = 1, win_anon: str = "???", payout: int = 0) -> str:
+    """Builds outcome description text using authentic flavor phrases."""
+    if outcome == "shot":
+        flavor = random.choice(RR_SHOT_PHRASES).format(lose_anon=lose_anon, cur_ch=cur_ch)
+        return (
+            f"{flavor}\n\n"
+            f"👑 <b>Победитель:</b> Анон <b>[ID:{win_anon}]</b> забирает банк <code>+{payout:,} ₪</code>!\n"
+            f"🔇 <b>Проигравший:</b> Анон <b>[ID:{lose_anon}]</b> отправлен в <b>МУТ НА 30 МИНУТ</b>!"
+        )
+    elif outcome == "timeout":
+        flavor = random.choice(RR_TIMEOUT_COWARD_PHRASES).format(lose_anon=lose_anon)
+        return (
+            f"{flavor}\n\n"
+            f"👑 <b>Победитель:</b> Анон <b>[ID:{win_anon}]</b> забирает банк <code>+{payout:,} ₪</code> за трусость оппонента!\n"
+            f"🔇 <b>Трус:</b> Анон <b>[ID:{lose_anon}]</b> отправлен в <b>МУТ НА 30 МИНУТ</b>!"
+        )
+    else:  # surrender
+        flavor = random.choice(RR_SURRENDER_PHRASES).format(lose_anon=lose_anon)
+        return (
+            f"{flavor}\n\n"
+            f"👑 <b>Победитель:</b> Анон <b>[ID:{win_anon}]</b> забирает банк <code>+{payout:,} ₪</code>!\n"
+            f"🔇 <b>Сдавшийся:</b> Анон <b>[ID:{lose_anon}]</b> отправлен в <b>МУТ НА 30 МИНУТ</b>!"
+        )
 
 
 def generate_game_id() -> str:
@@ -120,10 +299,10 @@ def format_rr_challenge_message(game: Dict[str, Any]) -> str:
         f"💰 <b>Ставка:</b> <code>{bet:,} ₪</code> | <b>Банк:</b> <code>{bet * 2:,} ₪</code>\n\n"
         f"📜 <b>Условия дуэли:</b>\n"
         f"• Револьвер: <b>6 камор, 1 боевой патрон</b>.\n"
-        f"• Поочередный спуск курка с таймером <b>60 секунд на ход</b>.\n"
+        f"• Поочередный спуск курка с таймером <b>120 секунд на ход</b>.\n"
         f"• 💥 <b>Проигравший:</b> получает пулю в лоб, теряет ставку и <b>МУТ НА 30 МИНУТ</b>!\n"
         f"• 👑 <b>Победитель:</b> забирает весь банк!\n\n"
-        f"⏳ <i>Вызов активен 2 минуты. Нажми кнопку ниже для принятия боя.</i>"
+        f"⏳ <i>Вызов активен 10 минут. Нажми кнопку ниже для принятия боя.</i>"
     )
     return text
 
@@ -154,26 +333,12 @@ def format_rr_game_message(game: Dict[str, Any], last_action_text: Optional[str]
 
         if outcome == "shot":
             header = "💥 <b>ДУЭЛЬ ЗАВЕРШЕНА: ВЫСТРЕЛ В ЛОБ!</b>"
-            status_desc = (
-                f"💀 <b>Анон [ID:{lose_anon}]</b> спустил курок на <b>{cur_ch + 1}-й каморе</b>...\n"
-                f"💥 <b>БАХ!</b> Мозги забрызгали стены треда!\n\n"
-                f"👑 <b>Победитель:</b> Анон <b>[ID:{win_anon}]</b> забирает банк <code>+{payout:,} ₪</code>!\n"
-                f"🔇 <b>Проигравший:</b> Анон <b>[ID:{lose_anon}]</b> отправлен в <b>МУТ НА 30 МИНУТ</b>!"
-            )
         elif outcome == "timeout":
             header = "⏱️ <b>ДУЭЛЬ ЗАВЕРШЕНА: ТАЙМАУТ / ТРУСОСТЬ!</b>"
-            status_desc = (
-                f"🐔 <b>Анон [ID:{lose_anon}]</b> зассал и не нажал на спуск за <b>60 секунд</b>!\n\n"
-                f"👑 <b>Победитель:</b> Анон <b>[ID:{win_anon}]</b> забирает банк <code>+{payout:,} ₪</code> за трусость оппонента!\n"
-                f"🔇 <b>Трус:</b> Анон <b>[ID:{lose_anon}]</b> отправлен в <b>МУТ НА 30 МИНУТ</b>!"
-            )
         else:  # surrender
             header = "🏳️ <b>ДУЭЛЬ ЗАВЕРШЕНА: ДОБРОВОЛЬНАЯ СДАЧА!</b>"
-            status_desc = (
-                f"😭 <b>Анон [ID:{lose_anon}]</b> выронил револьвер и сдался в слезах!\n\n"
-                f"👑 <b>Победитель:</b> Анон <b>[ID:{win_anon}]</b> забирает банк <code>+{payout:,} ₪</code>!\n"
-                f"🔇 <b>Сдавшийся:</b> Анон <b>[ID:{lose_anon}]</b> отправлен в <b>МУТ НА 30 МИНУТ</b>!"
-            )
+
+        status_desc = build_rr_outcome_view(outcome, lose_anon, cur_ch + 1, win_anon, payout)
 
         text = (
             f"{header}\n\n"
@@ -244,7 +409,7 @@ def format_rr_lobby_message(balance: int, bet: int, target_id: Optional[int] = N
         f"{target_str}\n"
         f"⚖️ <b>Правила:</b>\n"
         f"• Револьвер: <b>6 камор, ровно 1 боевой патрон</b>.\n"
-        f"• Поочередный спуск курка с таймером <b>60 секунд на ход</b>.\n"
+        f"• Поочередный спуск курка с таймером <b>120 секунд на ход</b>.\n"
         f"• 💥 <b>Проигравший:</b> теряет ставку и получает <b>МУТ НА 30 МИНУТ</b>!\n"
         f"• 👑 <b>Победитель:</b> забирает весь банк (минус 5% налог Абу).\n\n"
         f"Выбери ставку кнопками ниже или напиши: <code>/rr 500</code>"
@@ -294,14 +459,17 @@ def get_rr_challenge_keyboard(game_id: str, bet: int) -> InlineKeyboardMarkup:
     ])
 
 
-def get_rr_game_keyboard(game_id: str, is_finished: bool = False) -> InlineKeyboardMarkup:
-    """Keyboard during active game."""
+def get_rr_game_keyboard(game_id: str, is_finished: bool = False, is_my_turn: bool = True) -> InlineKeyboardMarkup:
+    """Keyboard during active game, personalized per player."""
     if is_finished:
         return InlineKeyboardMarkup(inline_keyboard=[])
+    if is_my_turn:
+        shoot_btn = InlineKeyboardButton(text="💥 СПУСТИТЬ КУРОК! (Твой ход)", callback_data=f"rr_shoot:{game_id}")
+    else:
+        shoot_btn = InlineKeyboardButton(text="⏳ Очередь соперника...", callback_data=f"rr_wait:{game_id}")
+
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="💥 Нажать на спуск! (60с)", callback_data=f"rr_shoot:{game_id}")
-        ],
+        [shoot_btn],
         [
             InlineKeyboardButton(text="🏳️ Сдаться / Зассать", callback_data=f"rr_surrender:{game_id}")
         ]
@@ -355,6 +523,76 @@ async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> boo
         return False
 
 
+async def sync_rr_screens(bot: Any, game: Dict[str, Any], last_action_text: Optional[str] = None):
+    """
+    Simultaneously edits active game messages for BOTH players in their personal chats,
+    ensuring each player gets the appropriate interactive button based on whose turn it is.
+    Also clears buttons for third-party broadcast viewers when challenge is accepted.
+    """
+    if not bot or not game:
+        return
+
+    is_finished = game.get("finished", False)
+    game_id = game["game_id"]
+    turn = game.get("turn")
+    p1 = game.get("challenger_id")
+    p2 = game.get("acceptor_id")
+    player_msgs = game.setdefault("player_msgs", {})
+
+    # Fallback: if p1 not in player_msgs, check legacy chat_id/msg_id
+    if p1 and p1 not in player_msgs and game.get("chat_id") and game.get("msg_id"):
+        player_msgs[p1] = (game["chat_id"], game["msg_id"])
+
+    game_text = format_rr_game_message(game, last_action_text=last_action_text)
+
+    # 1. Update both active players' screens simultaneously
+    for uid in (p1, p2):
+        if not uid or uid not in player_msgs:
+            continue
+        chat_id, msg_id = player_msgs[uid]
+        is_my_turn = (uid == turn)
+        kb = get_rr_game_keyboard(game_id, is_finished=is_finished, is_my_turn=is_my_turn)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=game_text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                logger.debug(f"[RR] sync_rr_screens edit failed for user {uid}: {e}")
+        except Exception as e:
+            logger.debug(f"[RR] sync_rr_screens error for user {uid}: {e}")
+
+    # 2. If game started or finished, neutralize any other broadcast copies
+    if p2 and game.get("broadcast_msgs"):
+        acc_anon = get_anon_id(p2)
+        other_text = (
+            f"⚔️ <b>РУССКАЯ РУЛЕТКА: ВЫЗОВ ПРИНЯТ!</b>\n\n"
+            f"Дуэль на <code>{game['bet']:,} ₪</code> уже началась между Аноном [ID:{get_anon_id(p1)}] и Аноном [ID:{acc_anon}].\n"
+            f"Мест за столом больше нет."
+        )
+        remaining_bcast = []
+        for chat_id, msg_id in list(game.get("broadcast_msgs", [])):
+            # Skip messages belonging to the active players
+            if any((chat_id, msg_id) == player_msgs.get(p) for p in (p1, p2) if p in player_msgs):
+                remaining_bcast.append((chat_id, msg_id))
+                continue
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=other_text,
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        game["broadcast_msgs"] = remaining_bcast
+
+
 # -----------------------------------------------------------------------------
 # Core Game Lifecycle & Business Logic
 # -----------------------------------------------------------------------------
@@ -374,6 +612,11 @@ async def create_rr_challenge(
         return False, f"❌ Максимальная ставка: <b>{MAX_RR_BET:,} ₪</b>.", None
 
     db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
+        return False, "🔇 Замученным нельзя создавать дуэли в Русскую Рулетку.", None
+
     async with db_lock:
         bal = await get_user_global_balance(db, challenger_id)
     if bal < bet:
@@ -407,6 +650,8 @@ async def create_rr_challenge(
             "payout": 0,
             "chat_id": None,
             "msg_id": None,
+            "player_msgs": {},
+            "broadcast_msgs": [],
             "history": []
         }
         user_active_rr_game[challenger_id] = game_id
@@ -447,6 +692,15 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
 
     # Escrow deduction
     db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(acceptor_id, board_id, db=db) or await check_user_is_muted(db, acceptor_id, board_id):
+        async with rr_lock: _rr_rollback()
+        return False, "🔇 Замученным нельзя принимать дуэли в Русскую Рулетку.", None
+    if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
+        async with rr_lock: _rr_rollback()
+        return False, "🔇 Создатель дуэли находится в муте. Игра отменена.", None
+
     async with db_lock:
         bal_c = await get_user_global_balance(db, challenger_id)
         bal_a = await get_user_global_balance(db, acceptor_id)
@@ -558,7 +812,7 @@ async def pull_rr_trigger(game_id: str, user_id: int, bot=None) -> Tuple[bool, s
         game["turn_deadline_ts"] = now + RR_TURN_TIMEOUT_SEC
         game["last_action_ts"] = now
 
-        click_msg = f"💨 <b>ЩЁЛК!</b> Пустая камора ({cur_chamber + 1}/6)! Анон [ID:{user_anon}] вытирает холодный пот со лба."
+        click_msg = random.choice(RR_CLICK_PHRASES).format(cur_ch=cur_chamber + 1, user_anon=user_anon)
         return True, click_msg, game
 
 
@@ -672,25 +926,28 @@ async def _finish_rr_game(
     # Build chat broadcast text
     cur_ch = game["current_chamber"]
     if reason == "shot":
+        flavor = random.choice(RR_SHOT_PHRASES).format(lose_anon=lose_anon, cur_ch=cur_ch + 1)
         announcement = (
             f"💥 <b>РУССКАЯ РУЛЕТКА: СМЕРТЕЛЬНЫЙ ВЫСТРЕЛ В ЛОБ!</b>\n\n"
-            f"💀 Анон <code>[ID:{lose_anon}]</code> спустил курок на <b>{cur_ch + 1}-й каморе</b>... <b>БАХ!</b> Мозги забрызгали тред!\n"
+            f"{flavor}\n\n"
             f"👑 <b>Победитель:</b> Анон <code>[ID:{win_anon}]</code> забирает банк <code>+{win_payout:,} ₪</code>!\n"
             f"{rake_label}\n"
             f"🔇 Неудачник отправлен чистить парашу (<b>МУТ НА 30 МИНУТ</b>)!"
         )
     elif reason == "timeout":
+        flavor = random.choice(RR_TIMEOUT_COWARD_PHRASES).format(lose_anon=lose_anon)
         announcement = (
             f"⏱️ <b>РУССКАЯ РУЛЕТКА: ЗАССАЛ И ПОТЕРЯЛ ВСЁ!</b>\n\n"
-            f"🐔 Анон <code>[ID:{lose_anon}]</code> дрожал от страха и не нажал на спуск за <b>60 секунд</b>!\n"
+            f"{flavor}\n\n"
             f"👑 <b>Победитель:</b> Анон <code>[ID:{win_anon}]</code> забирает банк <code>+{win_payout:,} ₪</code>!\n"
             f"{rake_label}\n"
             f"🔇 Трус отправлен в <b>МУТ НА 30 МИНУТ</b> за срыв дуэли!"
         )
     else:  # surrender
+        flavor = random.choice(RR_SURRENDER_PHRASES).format(lose_anon=lose_anon)
         announcement = (
             f"🏳️ <b>РУССКАЯ РУЛЕТКА: КАПИТУЛЯЦИЯ В СЛЕЗАХ!</b>\n\n"
-            f"😭 Анон <code>[ID:{lose_anon}]</code> выронил револьвер и сдался без боя!\n"
+            f"{flavor}\n\n"
             f"👑 <b>Победитель:</b> Анон <code>[ID:{win_anon}]</code> забирает банк <code>+{win_payout:,} ₪</code>!\n"
             f"{rake_label}\n"
             f"🔇 Сдавшийся отправлен в <b>МУТ НА 30 МИНУТ</b>!"
@@ -711,7 +968,7 @@ async def _finish_rr_game(
         elif reason == "timeout":
             lose_notify_text = (
                 f"⏱️ <b>ТАЙМАУТ В РУССКОЙ РУЛЕТКЕ #{game_id}!</b>\n\n"
-                f"Ты не спустил курок за 60 секунд (техническое поражение).\n"
+                f"Ты не спустил курок за 120 секунд (техническое поражение).\n"
                 f"💸 Списано: <b>-{bet:,} ₪</b>.\n"
                 f"🔇 Наложен <b>МУТ НА 30 МИНУТ</b> за трусость."
             )
@@ -774,25 +1031,15 @@ async def rr_watchdog_step(bot=None):
                 user_active_rr_game.pop(ch_id, None)
                 expired_pending.append(gid)
 
-    # 1. Update live countdown timer in playing games
+    # 1. Update live countdown timer in playing games for BOTH players
     for gid in live_tick_games:
         game = active_rr_games.get(gid)
         if not game or game.get("finished"):
             continue
-        if bot and game.get("chat_id") and game.get("msg_id"):
-            try:
-                updated_text = format_rr_game_message(game)
-                await bot.edit_message_text(
-                    chat_id=game["chat_id"],
-                    message_id=game["msg_id"],
-                    text=updated_text,
-                    reply_markup=get_rr_game_keyboard(gid),
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        if bot:
+            await sync_rr_screens(bot, game)
 
-    # 2. Finish expired turn games (timeout forfeit)
+    # 2. Finish expired turn games (timeout forfeit) for BOTH players
     for gid in expired_games:
         game = active_rr_games.get(gid)
         if not game or game.get("finished"):
@@ -800,19 +1047,8 @@ async def rr_watchdog_step(bot=None):
         loser_id = game["turn"]
         winner_id = game["acceptor_id"] if loser_id == game["challenger_id"] else game["challenger_id"]
         _, _, fin_game = await _finish_rr_game(gid, winner_id, loser_id, reason="timeout", bot=bot)
-
-        if bot and game.get("chat_id") and game.get("msg_id"):
-            try:
-                updated_text = format_rr_game_message(fin_game)
-                await bot.edit_message_text(
-                    chat_id=game["chat_id"],
-                    message_id=game["msg_id"],
-                    text=updated_text,
-                    reply_markup=get_rr_game_keyboard(gid, is_finished=True),
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        if bot:
+            await sync_rr_screens(bot, fin_game)
 
     # 3. Clean and edit expired pending challenges
     for gid in expired_pending:
@@ -900,6 +1136,19 @@ async def _resolve_reply_author(message: types.Message) -> Optional[int]:
     return None
 
 
+@rr_router.message(F.text.regexp(r"^/(?:duel_rr|rr|roulette_pvp)(\d+[kк]?|all|всё|все)(?:\s+.*)?$", flags=re.IGNORECASE))
+async def cmd_rr_shorthand(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    if not message.text:
+        return
+    m = re.match(r"^/(?:duel_rr|rr|roulette_pvp)(\d+[kк]?|all|всё|все)(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
+    if not m:
+        return
+    amt = m.group(1)
+    rest = m.group(2)
+    message.text = f"/rr {amt}" + (f" {rest}" if rest else "")
+    return await cmd_russian_roulette(message, board_id=board_id, stream=stream)
+
+
 @rr_router.message(Command("duel_rr", "rr", "roulette_pvp", "pvp_roulette", "рулетка_пвп", "дуэль_рулетка", ignore_case=True, ignore_mention=True))
 async def cmd_russian_roulette(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
@@ -914,27 +1163,13 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
 
     user_id = message.from_user.id
     args = (message.text or message.caption or "").split()[1:]
-
-    if not args:
-        target_id = await _resolve_reply_author(message)
-        if target_id == user_id:
-            target_id = None
-        db = await get_pool()
-        async with db_lock:
-            balance = await get_user_global_balance(db, user_id)
-        default_bet = 100 if balance >= 100 else (50 if balance >= 50 else MIN_RR_BET)
-        lobby_text = format_rr_lobby_message(balance=int(balance), bet=default_bet, target_id=target_id)
-        lobby_kb = get_rr_lobby_keyboard(bet=default_bet, balance=int(balance), target_id=target_id)
-        await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
-        return
-
-    subcmd = args[0].lower()
+    subcmd = args[0].lower() if args else None
 
     # HELP / RULES SHORTCUT
     if subcmd in ("help", "помощь", "правила", "rules", "?"):
         help_text = (
             "💀 <b>PvP РУССКАЯ РУЛЕТКА (6 КАМОР, 1 ПАТРОН)</b>\n\n"
-            "Смертельная дуэль на двоих с поочередным спуском курка и жестким таймером 60 секунд.\n\n"
+            "Смертельная дуэль на двоих с поочередным спуском курка и таймером 120 секунд.\n\n"
             "📌 <b>Команды:</b>\n"
             "• <code>/rr</code> — открыть лобби выбора ставки\n"
             "• <code>/rr 500</code> — создать открытый вызов на 500 ₪\n"
@@ -943,12 +1178,31 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
             "• <code>/rr decline</code> — отклонить или отменить вызов\n\n"
             "⚖️ <b>Правила:</b>\n"
             "• Револьвер: <b>6 камор, ровно 1 боевой патрон</b>.\n"
-            "• Поочередный спуск курка с таймером <b>60 секунд на ход</b>.\n"
+            "• Поочередный спуск курка с таймером <b>120 секунд на ход</b>.\n"
             "• 💥 <b>Проигравший:</b> теряет ставку и получает <b>МУТ НА 30 МИНУТ</b>!\n"
             "• 👑 <b>Победитель:</b> забирает весь банк!\n"
-            "• ⏱️ Если анон зассал и не нажал на спуск за 60с — авто-луз и мут!"
+            "• ⏱️ Если анон зассал и не нажал на спуск за 120с — авто-луз и мут!"
         )
         await message.answer(help_text, parse_mode="HTML")
+        return
+
+    db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(user_id, board_id) or await check_user_is_muted(db, user_id, board_id):
+        await message.answer("🔇 Замученным нельзя играть в Русскую Рулетку.")
+        return
+
+    if not args:
+        target_id = await _resolve_reply_author(message)
+        if target_id == user_id:
+            target_id = None
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+        default_bet = 100 if balance >= 100 else (50 if balance >= 50 else MIN_RR_BET)
+        lobby_text = format_rr_lobby_message(balance=int(balance), bet=default_bet, target_id=target_id)
+        lobby_kb = get_rr_lobby_keyboard(bet=default_bet, balance=int(balance), target_id=target_id)
+        await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
         return
 
     # ACCEPT SHORTCUT
@@ -971,11 +1225,13 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
             return
 
         game_text = format_rr_game_message(game)
-        kb = get_rr_game_keyboard(found_gid)
+        kb = get_rr_game_keyboard(found_gid, is_my_turn=(game["turn"] == user_id))
         sent = await message.answer(game_text, reply_markup=kb, parse_mode="HTML")
         async with rr_lock:
             game["chat_id"] = sent.chat.id
             game["msg_id"] = sent.message_id
+            game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
+        await sync_rr_screens(message.bot, game)
         return
 
     # DECLINE / CANCEL SHORTCUT
@@ -1038,6 +1294,7 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
     async with rr_lock:
         game["chat_id"] = sent.chat.id
         game["msg_id"] = sent.message_id
+        game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
         game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
 
     # Рассылаем карточку всем остальным активным юзерам борда
@@ -1130,12 +1387,14 @@ async def cb_rr_create(callback: types.CallbackQuery, board_id: str | None = Non
         async with rr_lock:
             game["chat_id"] = sent.chat.id
             game["msg_id"] = sent.message_id
+            game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
             game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
     except Exception:
         sent = await callback.message.answer(card_text, reply_markup=kb, parse_mode="HTML")
         async with rr_lock:
             game["chat_id"] = sent.chat.id
             game["msg_id"] = sent.message_id
+            game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
             game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
 
     # Рассылаем карточку всем остальным активным юзерам борда
@@ -1179,16 +1438,12 @@ async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = Non
         return
 
     await callback.answer("⚔️ Дуэль принята! Барабан заряжен.")
-    game_text = format_rr_game_message(game)
-    kb = get_rr_game_keyboard(game_id)
+    async with rr_lock:
+        game["chat_id"] = callback.message.chat.id
+        game["msg_id"] = callback.message.message_id
+        game.setdefault("player_msgs", {})[user_id] = (callback.message.chat.id, callback.message.message_id)
 
-    try:
-        await callback.message.edit_text(game_text, reply_markup=kb, parse_mode="HTML")
-        async with rr_lock:
-            game["chat_id"] = callback.message.chat.id
-            game["msg_id"] = callback.message.message_id
-    except TelegramBadRequest:
-        pass
+    await sync_rr_screens(callback.bot, game)
 
 
 @rr_router.callback_query(F.data.startswith("rr_decline:"))
@@ -1214,6 +1469,12 @@ async def cb_rr_decline(callback: types.CallbackQuery):
         pass
 
 
+@rr_router.callback_query(F.data.startswith("rr_wait:"))
+async def cb_rr_wait(callback: types.CallbackQuery):
+    """Alert when player taps wait button out of their turn."""
+    await callback.answer("⏳ Сейчас не твой ход! Соперник держит револьвер у виска.", show_alert=True)
+
+
 @rr_router.callback_query(F.data.startswith("rr_shoot:"))
 async def cb_rr_shoot(callback: types.CallbackQuery):
     """Callback when player pulls the trigger."""
@@ -1236,13 +1497,7 @@ async def cb_rr_shoot(callback: types.CallbackQuery):
     else:
         await callback.answer("💨 ЩЁЛК! Пустая камора!")
 
-    updated_text = format_rr_game_message(game, last_action_text=action_text)
-    kb = get_rr_game_keyboard(game_id, is_finished=is_finished)
-
-    try:
-        await callback.message.edit_text(updated_text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
+    await sync_rr_screens(callback.bot, game, last_action_text=action_text)
 
 
 @rr_router.callback_query(F.data.startswith("rr_surrender:"))
@@ -1262,13 +1517,8 @@ async def cb_rr_surrender(callback: types.CallbackQuery):
         return
 
     await callback.answer("🏳️ Ты сдался и получаешь мут на 30 минут!", show_alert=True)
-    updated_text = format_rr_game_message(game)
-    kb = get_rr_game_keyboard(game_id, is_finished=True)
+    await sync_rr_screens(callback.bot, game)
 
-    try:
-        await callback.message.edit_text(updated_text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
 
 cmd_duel_rr = cmd_russian_roulette
 

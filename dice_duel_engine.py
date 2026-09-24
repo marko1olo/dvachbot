@@ -12,6 +12,7 @@ Features:
 """
 
 import time
+import re
 import asyncio
 import random
 import secrets
@@ -59,6 +60,127 @@ DICE_GLYPHS = {
 active_dice_games: Dict[str, Dict[str, Any]] = {}
 user_active_dice_game: Dict[int, str] = {}
 dice_engine_lock = asyncio.Lock()
+
+# -----------------------------------------------------------------------------
+# Phrase Pools — финальные объявления дайс-дуэлей
+# -----------------------------------------------------------------------------
+DICE_TIMEOUT_ANNOUNCEMENTS = [
+    "⏱️ <b>PvP ДАЙС-ДУЭЛЬ: ТЕХНИЧЕСКИЙ НОКАУТ!</b>\n\n>сыч испугался бросать кости и убежал в слезах\n😴 Анон <code>[ID:{loser_anon}]</code> пропустил таймер хода (120 сек)!\n👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code> забирает весь банк <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🐔 <b>PvP ДАЙС: БОЯГУЗ СЛИЛСЯ ПО ТАЙМАУТУ!</b>\n\n>руки тряслись 120 секунд и так и не бросил\n😂 Анон <code>[ID:{loser_anon}]</code> обосрался и не решился кинуть кости!\n🏆 <b>Победа техническая:</b> Анон <code>[ID:{winner_anon}]</code> берёт <b>+{win_payout:,} ₪</b> за трусость оппонента!\n{rake_label}",
+    "💤 <b>PvP ДАЙС: УСНУЛ НА ХОДУ!</b>\n\n>120 секунд ждали броска — дождались только храпа\n🛌 Анон <code>[ID:{loser_anon}]</code> отрубился прямо на игровом сукне!\n💰 <b>Победитель не спит:</b> Анон <code>[ID:{winner_anon}]</code> уносит <b>+{win_payout:,} ₪</b> пока соперник дрыхнет.\n{rake_label}",
+    "🤦 <b>PvP ДАЙС: 120 СЕКУНД ПОЗОРА!</b>\n\n>сидел и смотрел на кости как баран на новые ворота\n😤 Анон <code>[ID:{loser_anon}]</code> не шевельнул и пальцем за 120 секунд!\n⚡ Анон <code>[ID:{winner_anon}]</code> не такой — берёт <b>+{win_payout:,} ₪</b> за активную жизненную позицию.\n{rake_label}",
+    "🏃 <b>PvP ДАЙС: ПОБЕГ С ПОЛЯ БОЯ!</b>\n\n>выбросил кости и побежал вместо того чтобы их бросить\n🐢 Анон <code>[ID:{loser_anon}]</code> ретировался по таймауту 120 сек!\n💎 <b>Победитель остался:</b> Анон <code>[ID:{winner_anon}]</code> получает <b>+{win_payout:,} ₪</b> за стойкость духа!\n{rake_label}",
+    "⌛ <b>PvP ДАЙС: ВРЕМЯ ВЫШЛО — ШЕКЕЛИ УШЛИ!</b>\n\n>120 секунд тишины вместо звона костей\n🔕 Анон <code>[ID:{loser_anon}]</code> игнорировал свой ход и проиграл по дефолту!\n💸 Анон <code>[ID:{winner_anon}]</code> получает <b>+{win_payout:,} ₪</b> ни за что!\n{rake_label}",
+    "😱 <b>PvP ДАЙС: ПАНИКА И БЕГСТВО!</b>\n\n>увидел банк и обосрался — не рискнул бросить\nАнон <code>[ID:{loser_anon}]</code> слился через 120 сек без броска!\n👑 Анон <code>[ID:{winner_anon}]</code> победил одним своим присутствием: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🥱 <b>PvP ДАЙС: СКУЧНЕЙШИЙ ТАЙМАУТ В ИСТОРИИ!</b>\n\n>все ждали, никто так и не дождался броска\n💤 Анон <code>[ID:{loser_anon}]</code> продемонстрировал максимальную неспособность принять решение за 120 сек.\n🎯 Анон <code>[ID:{winner_anon}]</code> уходит с <b>+{win_payout:,} ₪</b> пока сыч медитировал.\n{rake_label}",
+    "🚨 <b>PvP ДАЙС: ТРЕВОГА — ИГРОК ПОТЕРЯН!</b>\n\n>120 секунд поиска — найден только след от испуганных ягодиц\n🔦 Анон <code>[ID:{loser_anon}]</code> куда-то испарился вместо броска!\n💰 Анон <code>[ID:{winner_anon}]</code> единственный живой — забирает <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🗑️ <b>PvP ДАЙС: ПОЗОРНЫЙ ТАЙМАУТ ДЛЯ ИСТОРИИ!</b>\n\n>этот проигрыш запомнят дети и внуки\nАнон <code>[ID:{loser_anon}]</code> вошёл в летопись борды как самый нерешительный сыч за 120 сек без броска.\n🏆 Анон <code>[ID:{winner_anon}]</code> выигрывает <b>+{win_payout:,} ₪</b> за наличие яиц.\n{rake_label}",
+    "🎪 <b>PvP ДАЙС: КЛОУН УБЕЖАЛ С АРЕНЫ!</b>\n\n>публика ждала броска, клоун убежал за кулисы\n🤡 Анон <code>[ID:{loser_anon}]</code> пропустил 120 секунд своего звёздного часа!\n🎩 Анон <code>[ID:{winner_anon}]</code> поклоняется пустому залу и уносит <b>+{win_payout:,} ₪</b>.\n{rake_label}",
+    "🔇 <b>PvP ДАЙС: НЕМАЯ СЦЕНА 120 СЕКУНД!</b>\n\n>тишина, только тикают часы и воет ветер в треде\n📵 Анон <code>[ID:{loser_anon}]</code> онемел и окаменел на своём ходу!\n⚡ Анон <code>[ID:{winner_anon}]</code> пользуется этим и уводит <b>+{win_payout:,} ₪</b> из-под носа.\n{rake_label}",
+    "🏚️ <b>PvP ДАЙС: ХАТА ПУСТА — ИГРОКА НЕТ!</b>\n\n>постучали 120 раз — никто не открыл\n🚪 Анон <code>[ID:{loser_anon}]</code> не вернулся к своим костям — технический нокаут!\n💰 Анон <code>[ID:{winner_anon}]</code> вламывается и забирает <b>+{win_payout:,} ₪</b> как полноправный хозяин.\n{rake_label}",
+    "🌡️ <b>PvP ДАЙС: ХОЛОДНЫЙ ДУШ ОТ ТАЙМАУТА!</b>\n\n>вместо горячего броска — ледяное молчание 120 сек\n❄️ Анон <code>[ID:{loser_anon}]</code> остыл прямо перед броском и проиграл по умолчанию!\n🔥 Анон <code>[ID:{winner_anon}]</code> остался горячим и получает <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🧊 <b>PvP ДАЙС: ЗАМОРОЗКА ОППОНЕНТА!</b>\n\n>страх сковал руки — кости так и не полетели\nАнон <code>[ID:{loser_anon}]</code> превратился в ледяную статую на 120 секунд.\n🌋 Анон <code>[ID:{winner_anon}]</code> один остался горячим — <b>+{win_payout:,} ₪</b> законных шекелей!\n{rake_label}",
+    "📻 <b>PvP ДАЙС: РАДИОМОЛЧАНИЕ 120 СЕКУНД!</b>\n\n>всё что слышали — помехи и тишину\n📡 Анон <code>[ID:{loser_anon}]</code> отключился от реальности вместо броска!\n✅ Анон <code>[ID:{winner_anon}]</code> на связи и получает <b>+{win_payout:,} ₪</b> за присутствие духа.\n{rake_label}",
+    "🚁 <b>PvP ДАЙС: ЭВАКУАЦИЯ БЕЗ ПРЕДУПРЕЖДЕНИЯ!</b>\n\n>за 120 сек успел испугаться и улететь на вертолёте\nАнон <code>[ID:{loser_anon}]</code> покинул зону комфорта прямо во время своего хода!\n🎁 Анон <code>[ID:{winner_anon}]</code> получает брошенный банк: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "💔 <b>PvP ДАЙС: СЕРДЦЕ НЕ ВЫДЕРЖАЛО — СБЕЖАЛ!</b>\n\n>пульс 200 — кости не брошены — таймаут\nАнон <code>[ID:{loser_anon}]</code> рассыпался от напряжения за 120 секунд без действий!\n🏆 Анон <code>[ID:{winner_anon}]</code> из камня — и <b>+{win_payout:,} ₪</b> тоже его!\n{rake_label}",
+    "🧟 <b>PvP ДАЙС: ЗОМБИ НА ХОДУ!</b>\n\n>живой по документам, но явно уже не функционирует\nАнон <code>[ID:{loser_anon}]</code> стоит над костями 120 секунд, не шевелясь!\n⚡ Анон <code>[ID:{winner_anon}]</code> экзорцирует зомби и уносит <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎭 <b>PvP ДАЙС: ТЕАТРАЛЬНАЯ ПАУЗА ЗАТЯНУЛАСЬ!</b>\n\n>пауза 120 секунд — режиссёр уснул — занавес\nАнон <code>[ID:{loser_anon}]</code> так и не подал реплику на своём ходу!\n🏅 Анон <code>[ID:{winner_anon}]</code> единственный актёр в зале — <b>+{win_payout:,} ₪</b> ему!\n{rake_label}",
+    "🦗 <b>PvP ДАЙС: СЛЫШНО КАК СВЕРЧКИ ПОЮТ!</b>\n\n>120 секунд тишины — только сверчки и отчаяние\nАнон <code>[ID:{loser_anon}]</code> безмолвно созерцал кости весь таймаут!\n💰 Анон <code>[ID:{winner_anon}]</code> устал ждать и просто забирает <b>+{win_payout:,} ₪</b>.\n{rake_label}",
+    "🪦 <b>PvP ДАЙС: УПОКОИЛСЯ НА ХОД РАНЬШЕ СРОКА!</b>\n\n>время жизни истекло не дождавшись броска\nАнон <code>[ID:{loser_anon}]</code> скончался от нерешительности за 120 секунд!\n⚰️ Анон <code>[ID:{winner_anon}]</code> наследует банк покойного: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "📉 <b>PvP ДАЙС: АКЦИИ ИГРОКА УПАЛИ ДО НУЛЯ!</b>\n\n>рынок ждал новостей 120 секунд — новостей нет\nАнон <code>[ID:{loser_anon}]</code> обанкротился прямо на ходу без единого броска!\n📈 Анон <code>[ID:{winner_anon}]</code> скупает всё по дешёвке: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🌑 <b>PvP ДАЙС: ТЁМНАЯ МАТЕРИЯ ПОГЛОТИЛА ИГРОКА!</b>\n\n>сигнала нет, сыча нет, броска нет\nАнон <code>[ID:{loser_anon}]</code> ушёл в небытие на своём ходу — 120 сек без движения!\n✨ Анон <code>[ID:{winner_anon}]</code> остался во вселенной и получает <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🥱 <b>PvP ДАЙС: ЛЕТАРГИЧЕСКИЙ СОН ПРЯМО НА КУБИКАХ!</b>\n\n>заснул и не проснулся за всё время хода\nАнон <code>[ID:{loser_anon}]</code> впал в кому на 120 секунд вместо броска!\n🔔 Анон <code>[ID:{winner_anon}]</code> будить не стал — просто забрал <b>+{win_payout:,} ₪</b>.\n{rake_label}",
+    "🚽 <b>PvP ДАЙС: УШЁЛ В ТУАЛЕТ И НЕ ВЕРНУЛСЯ!</b>\n\n>120 секунд без броска — только звук смываемой воды\nАнон <code>[ID:{loser_anon}]</code> справил нужду и потерял право на ход!\n💩 Анон <code>[ID:{winner_anon}]</code> дождался, не зашёл в туалет и взял <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🤖 <b>PvP ДАЙС: СИСТЕМА ПЕРЕЗАГРУЗИЛАСЬ В ТАЙМАУТ!</b>\n\n>критическая ошибка принятия решений — 120 секунд перезагрузки\n⚙️ Анон <code>[ID:{loser_anon}]</code> завис и не кинул кости за всё отведённое время!\n✅ Анон <code>[ID:{winner_anon}]</code> без глюков берёт <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🦥 <b>PvP ДАЙС: ЛЕНИВЕЦ ПРОИГРАЛ ТАЙМАУТ!</b>\n\n>даже ленивец успел бы кинуть за 120 секунд — этот нет\nАнон <code>[ID:{loser_anon}]</code> побил рекорд ленивца по нерешительности!\n🏃 Анон <code>[ID:{winner_anon}]</code> шустрее и получает <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎲 <b>PvP ДАЙС: КОСТИ ОБИДЕЛИСЬ НА ИГНОР!</b>\n\n>120 секунд — кости ждали, кости не дождались\n😤 Кости Анона <code>[ID:{loser_anon}]</code> самостоятельно ушли к победителю!\n🎯 Анон <code>[ID:{winner_anon}]</code> принял их с распростёртыми объятиями и <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🏔️ <b>PvP ДАЙС: ГОРА РОДИЛА МЫШЬ, А ПОТОМ И ТУ НЕ РОДИЛА!</b>\n\n>120 секунд ожидания грандиозного броска — пшик\nАнон <code>[ID:{loser_anon}]</code> ничем не разродился — технический нокаут!\n🦅 Анон <code>[ID:{winner_anon}]</code> парит высоко: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+]
+
+DICE_SURRENDER_ANNOUNCEMENTS = [
+    "🏳️ <b>PvP ДАЙС-ДУЭЛЬ: КАПИТУЛЯЦИЯ!</b>\n\n>выкинул белый флаг прямо на игровое сукно\n👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code>\n💰 Выигрыш: <b>+{win_payout:,} ₪</b> (Ставка: {bet:,} ₪).",
+    "🙈 <b>PvP ДАЙС: СДАЛСЯ КАК КРЫСА!</b>\n\n>не смог вынести накал страстей и нажал /surrender\nАнон <code>[ID:{loser_anon}]</code> позорно слился!\n🎉 Анон <code>[ID:{winner_anon}]</code> ликует и получает <b>+{win_payout:,} ₪</b> от труса!",
+    "✌️ <b>PvP ДАЙС: «СТОП, Я БОЛЬШЕ НЕ ХОЧУ»!</b>\n\n>не наигрался — или наигрался слишком\nАнон <code>[ID:{loser_anon}]</code> добровольно отказался от борьбы!\n💸 Анон <code>[ID:{winner_anon}]</code> получает отказной банк: <b>+{win_payout:,} ₪</b>!",
+    "🐓 <b>PvP ДАЙС: ПЕТУХ СЛИЛСЯ!</b>\n\n>закукарекал и убежал с игрового стола\nАнон <code>[ID:{loser_anon}]</code> капитулировал не дождавшись конца!\n🦅 Анон <code>[ID:{winner_anon}]</code> орёл — берёт <b>+{win_payout:,} ₪</b>!",
+    "😭 <b>PvP ДАЙС: РЁВ ПОРАЖЁННОГО — СДАЧА ПРИНЯТА!</b>\n\n>слёзы на клавиатуре — ввёл /surrender дрожащими руками\nАнон <code>[ID:{loser_anon}]</code> сдался, не выдержав психологического давления!\n💰 Анон <code>[ID:{winner_anon}]</code> сух и спокоен: <b>+{win_payout:,} ₪</b>!",
+    "🛑 <b>PvP ДАЙС: СТОП-ИГРА! КАПИТУЛЯЦИЯ!</b>\n\n>поднял руки вверх прямо над игровым столом\nАнон <code>[ID:{loser_anon}]</code> добровольно сложил полномочия игрока!\n🏆 Анон <code>[ID:{winner_anon}]</code> единственный боец: <b>+{win_payout:,} ₪</b>!",
+    "🤡 <b>PvP ДАЙС: КЛОУН СДАЛСЯ!</b>\n\n>и смешно, и грустно — и всё равно проиграл\nАнон <code>[ID:{loser_anon}]</code> признал поражение раньше времени!\n🎯 Анон <code>[ID:{winner_anon}]</code> берёт приз клоуна: <b>+{win_payout:,} ₪</b>!",
+    "🪂 <b>PvP ДАЙС: КАТАПУЛЬТИРОВАЛСЯ ПРЯМО ИЗ ИГРЫ!</b>\n\n>вместо броска — прыжок с парашютом\nАнон <code>[ID:{loser_anon}]</code> покинул борт первым!\n🛫 Анон <code>[ID:{winner_anon}]</code> в кресле командира и получает <b>+{win_payout:,} ₪</b>!",
+    "🏚️ <b>PvP ДАЙС: СДАЛ ПОЗИЦИИ БЕЗ БОЯ!</b>\n\n>отдал всё добровольно как настоящий омежка\nАнон <code>[ID:{loser_anon}]</code> капитулировал как последний доходяга!\n💎 Анон <code>[ID:{winner_anon}]</code> входит в пустой замок и берёт <b>+{win_payout:,} ₪</b>!",
+    "🎪 <b>PvP ДАЙС: ARTISTA ПОКИНУЛ АРЕНУ!</b>\n\n>шоу не получилось — артист ушёл через чёрный ход\nАнон <code>[ID:{loser_anon}]</code> капитулировал, не закончив выступление!\n👏 Анон <code>[ID:{winner_anon}]</code> аплодирует и забирает <b>+{win_payout:,} ₪</b>!",
+    "🐢 <b>PvP ДАЙС: ЧЕРЕПАХА СПРЯТАЛАСЬ В ПАНЦИРЬ!</b>\n\n>угроза слишком велика — нырнул под защитную оболочку\nАнон <code>[ID:{loser_anon}]</code> втянул голову и капитулировал!\n🦅 Анон <code>[ID:{winner_anon}]</code> хватает черепаху: <b>+{win_payout:,} ₪</b>!",
+    "💣 <b>PvP ДАЙС: САПЁР СДАЛСЯ — НЕ РАЗМИНИРОВАЛ!</b>\n\n>мина слишком страшная — лучше отступить\nАнон <code>[ID:{loser_anon}]</code> предпочёл бегство разминированию банка!\n🏆 Анон <code>[ID:{winner_anon}]</code> смелее: <b>+{win_payout:,} ₪</b>!",
+    "📜 <b>PvP ДАЙС: ПАКТ О КАПИТУЛЯЦИИ ПОДПИСАН!</b>\n\n>официально и по всем правилам — сдача оформлена\nАнон <code>[ID:{loser_anon}]</code> пошёл на мировую, потеряв всё!\n⚔️ Анон <code>[ID:{winner_anon}]</code> принял безоговорочную сдачу: <b>+{win_payout:,} ₪</b>!",
+    "🌊 <b>PvP ДАЙС: ТОНУЩИЙ ПРИНЯЛ РЕШЕНИЕ ПЕРВЫМ!</b>\n\n>прыгнул в шлюпку до того как корабль пошёл ко дну\nАнон <code>[ID:{loser_anon}]</code> благоразумно сдался чуть раньше краха!\n⚓ Анон <code>[ID:{winner_anon}]</code> остался на капитанском мостике: <b>+{win_payout:,} ₪</b>!",
+    "🪦 <b>PvP ДАЙС: ПОХОРОНИЛ СЕБЯ ДОБРОВОЛЬНО!</b>\n\n>сам лёг в гроб и попросил закрыть крышку\nАнон <code>[ID:{loser_anon}]</code> капитулировал с достоинством обречённого!\n💰 Анон <code>[ID:{winner_anon}]</code> читает панихиду и берёт <b>+{win_payout:,} ₪</b>!",
+    "🔔 <b>PvP ДАЙС: ЗВОНОК ОБ ОКОНЧАНИИ БОЯ — СДАЧА!</b>\n\n>первым прекратил бой добровольно\nАнон <code>[ID:{loser_anon}]</code> отступил до гонга!\n🥊 Анон <code>[ID:{winner_anon}]</code> побеждает по очкам: <b>+{win_payout:,} ₪</b>!",
+    "🏁 <b>PvP ДАЙС: ФИНИШ ДОСРОЧНО — СДАЧА!</b>\n\n>не доехал до финиша — съехал на обочину\nАнон <code>[ID:{loser_anon}]</code> не завершил гонку!\n🏎️ Анон <code>[ID:{winner_anon}]</code> пересёк финишную черту: <b>+{win_payout:,} ₪</b>!",
+    "🎯 <b>PvP ДАЙС: СТРЕЛА ПОПАЛА — И ОН СДАЛСЯ!</b>\n\n>до попадания хватило одного взгляда на банк\nАнон <code>[ID:{loser_anon}]</code> психически сломлен и слился!\n🏹 Анон <code>[ID:{winner_anon}]</code> меткий: <b>+{win_payout:,} ₪</b>!",
+    "🌪️ <b>PvP ДАЙС: УНЕСЛО УРАГАНОМ СТРАХА!</b>\n\n>вихрь паники накрыл игрока и унёс из игры\nАнон <code>[ID:{loser_anon}]</code> капитулировал под давлением атмосферных явлений!\n🌤️ Анон <code>[ID:{winner_anon}]</code> погода нормальная: <b>+{win_payout:,} ₪</b>!",
+    "🧸 <b>PvP ДАЙС: МИШКА ПОШЁЛ ДОМОЙ!</b>\n\n>надул губы и ушёл к маме с игрушками\nАнон <code>[ID:{loser_anon}]</code> капитулировал по-детски!\n🔞 Анон <code>[ID:{winner_anon}]</code> играет по-взрослому: <b>+{win_payout:,} ₪</b>!",
+    "🦴 <b>PvP ДАЙС: ОТДАЛ КОСТЬ СОПЕРНИКУ БЕЗ БОЯ!</b>\n\n>испугался кусать и сам протянул добычу\nАнон <code>[ID:{loser_anon}]</code> сдался добровольно и без условий!\n🐶 Анон <code>[ID:{winner_anon}]</code> принял кость с удовольствием: <b>+{win_payout:,} ₪</b>!",
+    "🧊 <b>PvP ДАЙС: ЗАМЁРЗ НА МЕСТЕ И СДАЛСЯ!</b>\n\n>руки примёрзли к столу — не смог продолжать\nАнон <code>[ID:{loser_anon}]</code> превратился в лёд страха!\n🔥 Анон <code>[ID:{winner_anon}]</code> в огне победы: <b>+{win_payout:,} ₪</b>!",
+    "😤 <b>PvP ДАЙС: ПЫХ — И СДАЛСЯ!</b>\n\n>выдохнул, надул щёки и нажал /surrender\nАнон <code>[ID:{loser_anon}]</code> сдался с максимальным недовольством!\n😎 Анон <code>[ID:{winner_anon}]</code> спокоен и богаче: <b>+{win_payout:,} ₪</b>!",
+    "🎻 <b>PvP ДАЙС: РЕКВИЕМ ПО НАДЕЖДАМ — СДАЧА!</b>\n\n>музыка поражения заиграла раньше конца партии\nАнон <code>[ID:{loser_anon}]</code> услышал похоронный марш и сдался!\n🥁 Анон <code>[ID:{winner_anon}]</code> бьёт в барабаны победы: <b>+{win_payout:,} ₪</b>!",
+    "🔓 <b>PvP ДАЙС: ВСКРЫЛСЯ КАК КОНСЕРВА — СДАЧА!</b>\n\n>давление внешней среды оказалось слишком высоким\nАнон <code>[ID:{loser_anon}]</code> не выдержал и сдался!\n🥫 Анон <code>[ID:{winner_anon}]</code> вскрыл банк ключом победы: <b>+{win_payout:,} ₪</b>!",
+]
+
+DICE_WIN_ANNOUNCEMENTS = [
+    "🎲 <b>PvP ДАЙС-ДУЭЛЬ: РАЗНОС НА КОСТЯХ!</b>\n\n>сошлись два анона на сукне у параши\n>кости брошены, удача улыбнулась сильнейшему\n\n👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code>\n🎲 Выкинул: {w_vis} — <i>{w_combo}</i>\n\n💀 <b>Проигравший:</b> Анон <code>[ID:{loser_anon}]</code>\n🎲 Выкинул: {l_vis} — <i>{l_combo}</i>\n\n💰 <b>Банк игры:</b> <code>{total_pot:,} ₪</code>\n🏆 <b>Чистый выигрыш:</b> <code>+{win_payout:,} ₪</code> отправлен чемпиону!\n{rake_label}",
+    "🎯 <b>PvP ДАЙС: ТОЧНОЕ ПОПАДАНИЕ — ШЕКЕЛИ ВЗЯТЫ!</b>\n\n>кости решили всё за один бросок\n\n🏆 Анон <code>[ID:{winner_anon}]</code> бросил {w_vis} ({w_combo}) и вынес соперника!\n💀 Анон <code>[ID:{loser_anon}]</code> выкинул жалкие {l_vis} ({l_combo})!\n\n💸 Банк <code>{total_pot:,} ₪</code> → победителю <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🔥 <b>PvP ДАЙС: ОГОНЬ КОСТЕЙ — ЧЕМПИОН ОПРЕДЕЛЁН!</b>\n\n>раскалённые кубики решили судьбу двух анонов\n\n👑 Анон <code>[ID:{winner_anon}]</code>: {w_vis} — <i>{w_combo}</i> 🔥\n💀 Анон <code>[ID:{loser_anon}]</code>: {l_vis} — <i>{l_combo}</i> 🥀\n\n🏦 Куш <code>{total_pot:,} ₪</code>, чемпиону <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "⚔️ <b>PvP ДАЙС: БИТВА КУБИКОВ ЗАВЕРШЕНА!</b>\n\n>два анона скрестили дайсы и один вышел победителем\n\n🥇 Анон <code>[ID:{winner_anon}]</code> выкинул {w_vis}! Комбо: <i>{w_combo}</i>\n🥈 Анон <code>[ID:{loser_anon}]</code> проиграл с {l_vis} ({l_combo})!\n\n💰 Победитель уносит <b>+{win_payout:,} ₪</b> из банка {total_pot:,} ₪!\n{rake_label}",
+    "💎 <b>PvP ДАЙС: БРИЛЛИАНТОВЫЙ БРОСОК — ПОБЕДА!</b>\n\n>сукно в блёстках от идеального результата\n\n💍 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — шедевр!\n💩 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — провал!\n\n🏆 <b>+{win_payout:,} ₪</b> уходят победителю из общего котла {total_pot:,} ₪!\n{rake_label}",
+    "🎰 <b>PvP ДАЙС: ДЖЕКПОТ КУБИКОВ!</b>\n\n>барабаны остановились — и не в пользу одного из двух\n\n🃏 Анон <code>[ID:{winner_anon}]</code> сорвал куш: {w_vis} ({w_combo})!\n❌ Анон <code>[ID:{loser_anon}]</code> пролетел: {l_vis} ({l_combo})!\n\n💸 Выплата победителю: <b>+{win_payout:,} ₪</b>! Банк был: {total_pot:,} ₪!\n{rake_label}",
+    "🧨 <b>PvP ДАЙС: ВЗРЫВ — ПОБЕДИТЕЛЬ НАЙДЕН!</b>\n\n>бабах — кости разлетелись и один анон остался богаче\n\n💥 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — ВЗРЫВ МОЩИ!\n😵 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — осколки судьбы!\n\n🏆 Победитель покидает поле боя с <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🌊 <b>PvP ДАЙС: ЦУНАМИ УДАЧИ — ОДИН СМЫТ!</b>\n\n>волна рандома накрыла одного и возвысила другого\n\n🏄 Анон <code>[ID:{winner_anon}]</code> оседлал волну: {w_vis} ({w_combo})!\n🌀 Анон <code>[ID:{loser_anon}]</code> утонул: {l_vis} ({l_combo})!\n\n💰 Сёрфер уносит <b>+{win_payout:,} ₪</b> из банка {total_pot:,} ₪!\n{rake_label}",
+    "🦁 <b>PvP ДАЙС: ЦАРЬ ГОРЫ ОПРЕДЕЛЁН!</b>\n\n>за трон костей сразился и один стал Царём\n\n👑 Лев Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo})!\n🐁 Мышь Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo})!\n\n🏔️ Царь горы собирает дань: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎯 <b>PvP ДАЙС: ХЕДШОТ КУБИКОМ!</b>\n\n>прямое попадание по кошельку соперника\n\n🎯 Анон <code>[ID:{winner_anon}]</code>: {w_vis} — хедшот! ({w_combo})\n💀 Анон <code>[ID:{loser_anon}]</code>: {l_vis} — мимо! ({l_combo})\n\n💸 Хедшот обходится в <b>+{win_payout:,} ₪</b> для победителя!\n{rake_label}",
+    "🌋 <b>PvP ДАЙС: ИЗВЕРЖЕНИЕ — ЛАВА УДАЧИ НАКРЫЛА!</b>\n\n>расплавленный рандом вынес вердикт\n\n🔥 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — лава победы!\n❄️ Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — застыл в пепле!\n\n🏆 Победитель откопал <b>+{win_payout:,} ₪</b> из вулкана!\n{rake_label}",
+    "⚡ <b>PvP ДАЙС: МОЛНИЯ В КУБИК — ОДИН УБИТ!</b>\n\n>небеса указали пальцем\n\n⚡ Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — благословлён молнией!\n🌧️ Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — под дождём поражения!\n\n💰 Небесная выплата: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎪 <b>PvP ДАЙС: ШОУ ЗАКОНЧЕНО — ЗВЕЗДА НАЙДЕНА!</b>\n\n>публика ждала — и получила имя победителя\n\n⭐ Звезда Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo})!\n🎭 Статист Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo})!\n\n💎 Гонорар звезды: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🏆 <b>PvP ДАЙС: КУБОК ВЗЯТ — ЛЕГЕНДА ВПИСАНА!</b>\n\n>имя победителя выгравировано на серебряном кубке\n\n🥇 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — ЛЕГЕНДА!\n🥉 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — просто участник!\n\n🏅 Легенда получает <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🧠 <b>PvP ДАЙС: ИНТЕЛЛЕКТ КУБИКОВ — МУДРЕЙШИЙ ПОБЕДИЛ!</b>\n\n>удача любит подготовленных (или просто везучих)\n\n🎓 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — гений броска!\n🤡 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — слабоумие рандома!\n\n💰 IQ победителя оценивается в <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎸 <b>PvP ДАЙС: РОК-Н-РОЛЛ КУБИКОВ — РИФ ПОБЕДЫ!</b>\n\n>тяжёлый рандом сыграл для одного из двух\n\n🎵 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — хит сезона!\n🎵 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — b-side никому не нужен!\n\n🎤 Рокер уходит с <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🌠 <b>PvP ДАЙС: ЗВЕЗДА УПАЛА — ЖЕЛАНИЕ ИСПОЛНЕНО!</b>\n\n>рандом исполнил мечту одного и растоптал другого\n\n✨ Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — звезда зажглась!\n🌑 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — звезда угасла!\n\n💫 Желание стоит <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🐲 <b>PvP ДАЙС: ДРАКОН ВЫБРАЛ СВОЕГО!</b>\n\n>огнедышащий рандом дохнул на одного\n\n🔥 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — избранник дракона!\n🐣 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — зажаренный цыплёнок!\n\n💰 Дракон доволен: <b>+{win_payout:,} ₪</b> победителю!\n{rake_label}",
+    "🎲 <b>PvP ДАЙС: СВЯЩЕННЫЙ БРОСОК — ОРАКУЛ ОБЪЯВИЛ!</b>\n\n>боги рандома вынесли приговор\n\n🏛️ Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — благословлён богами!\n⚡ Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — проклят Зевсом!\n\n🏺 Дары богов: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🏴‍☠️ <b>PvP ДАЙС: ПИРАТСКИЙ КУШ — СОКРОВИЩА ВЗЯТЫ!</b>\n\n>карта сокровищ указала правильное направление\n\n☠️ Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — нашёл сундук!\n🌊 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — утонул без карты!\n\n💰 Пиратское золото: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎖️ <b>PvP ДАЙС: ОРДЕН ЗА ХРАБРОСТЬ ВРУЧЁН!</b>\n\n>самый смелый бросок принёс победу\n\n🏅 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — герой борды!\n💔 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — ранен в самолюбие!\n\n💰 Орден + <b>+{win_payout:,} ₪</b> победителю!\n{rake_label}",
+    "🌀 <b>PvP ДАЙС: ВИХРЬ РАНДОМА — ОДИН ВЫЖИЛ!</b>\n\n>из двух только один оказался в безопасной зоне\n\n🌪️ Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — в глазу бури!\n⚡ Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — унесён вихрём!\n\n💸 Выживший берёт <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎓 <b>PvP ДАЙС: ЭКЗАМЕН СДАН — ПРОВАЛИВШИЙСЯ ИЗВЕСТЕН!</b>\n\n>билет судьбы оказался лёгким только для одного\n\n✅ Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — отлично сдал!\n❌ Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — двоечник года!\n\n📚 Стипендия за отличную учёбу: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🥩 <b>PvP ДАЙС: МЯСНИК КУБИКОВ ПРОШЁЛСЯ ПО ИГРОКАМ!</b>\n\n>один ушёл с мясом, другой без костей\n\n🔪 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — шашлык из соперника!\n🩸 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — нарублен в фарш!\n\n🏆 Мясник получает <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🧲 <b>PvP ДАЙС: МАГНИТ УДАЧИ СРАБОТАЛ!</b>\n\n>шекели потянулись к сильнейшему\n\n🔵 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — притянул удачу!\n🔴 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — оттолкнул!\n\n💰 Магнит собрал <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎭 <b>PvP ДАЙС: ТРАГЕДИЯ И КОМЕДИЯ В ОДНОМ БРОСКЕ!</b>\n\n>судьба двух анонов разошлась в одну секунду\n\n😂 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — комедия!\n😢 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — трагедия!\n\n🎬 Главная роль стоит <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🚀 <b>PvP ДАЙС: ЗАПУСК УСПЕШЕН — ДРУГОЙ ОСТАЛСЯ НА ЗЕМЛЕ!</b>\n\n>один взлетел, другой смотрит в спину улетающему\n\n🛸 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — на орбите!\n🌍 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — в грязи на земле!\n\n🌌 Космический приз: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "⚗️ <b>PvP ДАЙС: АЛХИМИЯ КУБИКОВ — ЗОЛОТО ПОЛУЧЕНО!</b>\n\n>реакция рандома прошла успешно только для одного\n\n🧪 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — синтезировал золото!\n💀 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — взрыв в лаборатории!\n\n💰 Алхимическое золото: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+    "🎣 <b>PvP ДАЙС: РЫБАЛКА НА ШЕКЕЛИ — КРУПНАЯ РЫБА ПОЙМАНА!</b>\n\n>один закинул удочку, другой оказался на крючке\n\n🐟 Анон <code>[ID:{winner_anon}]</code>: {w_vis} ({w_combo}) — щука!\n🪱 Анон <code>[ID:{loser_anon}]</code>: {l_vis} ({l_combo}) — червяк на крючке!\n\n🏆 Улов дня: <b>+{win_payout:,} ₪</b>!\n{rake_label}",
+]
+
+DICE_DRAW_ANNOUNCEMENTS = [
+    "🤝 <b>PvP ДАЙС: МЁРТВАЯ НИЧЬЯ!</b>\n\n>кости брошены трижды, победитель не выявлен\n⚖️ Анон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> сошлись на равных на <b>{bet:,} ₪</b>!\n\n💰 Ставки возвращены за вычетом 2% в Казну Абу.",
+    "☯️ <b>PvP ДАЙС: РАВНОВЕСИЕ КУБИКОВ — НИЧЬЯ!</b>\n\n>вселенная не выбрала победителя\nДва анона — <code>[ID:{p1_anon}]</code> и <code>[ID:{p2_anon}]</code> — выбросили одинаково!\n💸 Бесполезная ничья. Ставка {bet:,} ₪ возвращается минус 2% Абу.",
+    "🤡 <b>PvP ДАЙС: ДВА КЛОУНА — ОДИН РЕЗУЛЬТАТ!</b>\n\n>оба кинули одно и то же — феерический провал\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> одинаково плохи (ставка: {bet:,} ₪)!\n🎪 Ничья. Абу берёт 2% за цирк.",
+    "😐 <b>PvP ДАЙС: СКУЧНЕЙШАЯ НИЧЬЯ В ИСТОРИИ БОРДЫ!</b>\n\n>никто не победил, все проиграли немного\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: {bet:,} ₪ — одинаковый результат!\n💤 2% в Казну Абу за потраченное время всей борды.",
+    "⚖️ <b>PvP ДАЙС: ВЕСЫ РАНДОМА ЗАМЕРЛИ — НИЧЬЯ!</b>\n\n>судьба не выбрала чемпиона — оба одинаково убоги\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> разделили поражение пополам!\n💰 Возврат ставки {bet:,} ₪ минус 2% тупого рандома.",
+    "🔄 <b>PvP ДАЙС: БЕСКОНЕЧНЫЙ ЦИКЛ — НИЧЬЯ!</b>\n\n>система зациклилась — победитель не найден\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: одинаковые кости, {bet:,} ₪ ставка!\n♾️ Бесконечная ничья завершена. 2% Абу за его терпение.",
+    "🤷 <b>PvP ДАЙС: РАНДОМ ПОЖАЛ ПЛЕЧАМИ — НИЧЬЯ!</b>\n\n>даже боги не решили чей бросок круче\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> одинаково посредственны!\n💸 Возвращено {bet:,} ₪ каждому минус 2% за бессмысленность.",
+    "🌀 <b>PvP ДАЙС: ВИХРЬ ЗАКОНЧИЛСЯ НИЧЬЕЙ!</b>\n\n>буря утихла, а победителя нет\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: {bet:,} ₪ сгорели в атмосфере ничьей!\n❄️ Тишина и 2% Абу за вихрь.",
+    "🙃 <b>PvP ДАЙС: МИР ПЕРЕВЁРНУТ НИЧЬЕЙ!</b>\n\n>когда никто не побеждает — все проигрывают\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> перевернули логику на {bet:,} ₪!\n💡 Философская ничья. Абу доволен 2%.",
+    "🤝 <b>PvP ДАЙС: ДЖЕНТЛЬМЕНСКОЕ СОГЛАШЕНИЕ — НИЧЬЯ!</b>\n\n>оба слишком вежливы чтобы победить\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> раскланялись над {bet:,} ₪!\n🎩 По одному поклону и 2% Абу за этикет.",
+    "🌑 <b>PvP ДАЙС: ТЁМНАЯ МАТЕРИЯ ПОГЛОТИЛА ПОБЕДУ!</b>\n\n>победа исчезла в квантовой неопределённости\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> одинаково провалились на {bet:,} ₪!\n⭐ 2% Абу за космическую глупость.",
+    "🎭 <b>PvP ДАЙС: ТРАГИКОМЕДИЯ — НИЧЬЯ!</b>\n\n>грустно, смешно, бесполезно — вот ничья\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: {bet:,} ₪ на кону, результат одинаков!\n🎪 Занавес, аплодисменты и 2% Абу.",
+    "🏁 <b>PvP ДАЙС: ФОТОФИНИШ — НИЧЬЯ!</b>\n\n>судьи смотрели фото и не нашли победителя\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> финишировали вместе с {bet:,} ₪!\n📷 Ничья. 2% Абу за фотоматериалы.",
+    "🔮 <b>PvP ДАЙС: ХРУСТАЛЬНЫЙ ШАР НЕ ОТВЕТИЛ — НИЧЬЯ!</b>\n\n>гадалка посмотрела в шар — победителя не видит\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: судьба {bet:,} ₪ неясна!\n🌫️ Туманная ничья. 2% Абу за предсказание.",
+    "💫 <b>PvP ДАЙС: ЗВЁЗДЫ НЕ СОШЛИСЬ — НИЧЬЯ!</b>\n\n>астрология не помогла ни тому ни другому\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> равно несчастливы на {bet:,} ₪!\n🌙 Ничья по гороскопу. 2% Абу за астрологическую консультацию.",
+    "🧩 <b>PvP ДАЙС: ПАЗЗЛ НЕ СЛОЖИЛСЯ — НИЧЬЯ!</b>\n\n>кусочки рандома встали одинаково для обоих\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: {bet:,} ₪ застряли в ничьей!\n🎯 Паззл завершён без победителя. 2% Абу за сложность.",
+    "🎵 <b>PvP ДАЙС: ДУЭТ БЕЗ СОЛИСТА — НИЧЬЯ!</b>\n\n>оба пели одну ноту, никто не солировал\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> исполнили дуэт ничьей на {bet:,} ₪!\n🎸 Концерт окончен. 2% Абу за бэк-вокал.",
+    "📐 <b>PvP ДАЙС: ГЕОМЕТРИЯ ПРОВАЛА — НИЧЬЯ!</b>\n\n>два вектора сложились в ноль\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: {bet:,} ₪ в точке симметрии!\n📏 Идеально симметричная ничья. 2% Абу за математику.",
+    "🌊 <b>PvP ДАЙС: ВОЛНА РАЗБИЛАСЬ В НИЧЬЮ!</b>\n\n>прилив рандома одинаково накрыл обоих\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> мокрые и без денег ({bet:,} ₪ ставка)!\n💧 2% Абу за жидкий результат.",
+    "🤖 <b>PvP ДАЙС: СИСТЕМА ЗАВИСЛА — НИЧЬЯ!</b>\n\n>процессор рандома выдал одинаковое значение для обоих\nАнон <code>[ID:{p1_anon}]</code> vs Анон <code>[ID:{p2_anon}]</code>: {bet:,} ₪ застряли в кэше!\n⚙️ Системная ничья. 2% Абу за дебаггинг.",
+    "🏔️ <b>PvP ДАЙС: ДВА АЛЬПИНИСТА НА ВЕРШИНЕ — НИЧЬЯ!</b>\n\n>оба добрались до одной точки одновременно\nАнон <code>[ID:{p1_anon}]</code> и Анон <code>[ID:{p2_anon}]</code> делят вершину на {bet:,} ₪!\n🌄 Горная ничья. 2% Абу за высотные работы.",
+]
+
 
 
 # -----------------------------------------------------------------------------
@@ -143,16 +265,26 @@ def get_dice_challenge_keyboard(game_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def get_dice_roll_keyboard(game_id: str, active_player_id: int) -> InlineKeyboardMarkup:
+def get_dice_roll_keyboard(game_id: str, is_my_turn: bool = True) -> InlineKeyboardMarkup:
     """Keyboard displayed during active rolling turns."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎲 Бросить кости!", callback_data=f"dice_roll:{game_id}")
-        ],
-        [
-            InlineKeyboardButton(text="🏳️ Сдаться", callback_data=f"dice_surrender:{game_id}")
-        ]
-    ])
+    if is_my_turn:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎲 БРОСИТЬ КОСТИ! (Твой ход)", callback_data=f"dice_roll:{game_id}")
+            ],
+            [
+                InlineKeyboardButton(text="🏳️ Сдаться", callback_data=f"dice_surrender:{game_id}")
+            ]
+        ])
+    else:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⏳ Очередь соперника...", callback_data=f"dice_wait:{game_id}")
+            ],
+            [
+                InlineKeyboardButton(text="🏳️ Сдаться", callback_data=f"dice_surrender:{game_id}")
+            ]
+        ])
 
 
 def get_dice_finished_keyboard(game_id: str, bet: int) -> InlineKeyboardMarkup:
@@ -290,6 +422,11 @@ async def create_dice_challenge(
         return False, f"❌ Максимальная ставка в Дайс-Дуэль: <b>{MAX_DICE_BET:,} ₪</b>.", None
 
     db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
+        return False, "🔇 Замученным нельзя создавать дайс-дуэли.", None
+
     async with db_lock:
         bal = await get_user_global_balance(db, challenger_id)
     
@@ -320,7 +457,9 @@ async def create_dice_challenge(
             "created_ts": time.time(),
             "finished": False,
             "chat_id": None,
-            "msg_id": None
+            "msg_id": None,
+            "player_msgs": {},
+            "broadcast_msgs": []
         }
         user_active_dice_game[challenger_id] = game_id
 
@@ -362,6 +501,15 @@ async def accept_dice_challenge(
             g["state"] = "pending"
 
     db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(acceptor_id, board_id, db=db) or await check_user_is_muted(db, acceptor_id, board_id):
+        async with dice_engine_lock: _rollback_state()
+        return False, "🔇 Замученным нельзя принимать дайс-дуэли.", None
+    if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
+        async with dice_engine_lock: _rollback_state()
+        return False, "🔇 Создатель дуэли находится в муте. Игра отменена.", None
+
     async with db_lock:
         bal_c = await get_user_global_balance(db, challenger_id)
         bal_a = await get_user_global_balance(db, acceptor_id)
@@ -600,14 +748,12 @@ async def _finish_dice_game(
         
         p1_anon_ann = get_anon_id(p1) if p1 else "???"
         p2_anon_ann = get_anon_id(p2) if p2 else "???"
-        announcement = (
-            f"🎲 <b>PvP ДАЙС-ДУЭЛЬ: МЁРТВАЯ НИЧЬЯ!</b>\n\n"
-            f">кости брошены трижды, победитель не выявлен\n"
-            f"⚖️ <b>Анон <code>[ID:{p1_anon_ann}]</code></b> и <b>Анон <code>[ID:{p2_anon_ann}]</code></b> сошлись на равных на <b>{bet:,} ₪</b>!\n\n"
-            f"💰 Ставки возвращены анонам за вычетом 2% в Казну Абу."
+        announcement = random.choice(DICE_DRAW_ANNOUNCEMENTS).format(
+            p1_anon=p1_anon_ann, p2_anon=p2_anon_ann, bet=bet, refund_amt=refund_amt
         )
         if bot:
             asyncio.create_task(broadcast_dice_announcement(bot, board_id, announcement))
+            await sync_dice_screens(bot, game)
         return True, "🤝 Ничья в дайс-дуэли!", game
 
     else:
@@ -654,7 +800,7 @@ async def _finish_dice_game(
                 asyncio.create_task(send_pvp_direct_notification(bot, winner_id, win_notify_text))
             if loser_id:
                 if reason == "timeout":
-                    lose_reason_str = "Таймаут броска (45 сек)"
+                    lose_reason_str = "Таймаут броска (120 сек)"
                 elif reason == "surrender":
                     lose_reason_str = "Капитуляция"
                 else:
@@ -667,34 +813,24 @@ async def _finish_dice_game(
                 asyncio.create_task(send_pvp_direct_notification(bot, loser_id, lose_notify_text))
 
         if reason == "timeout":
-            announcement = (
-                f"⏱️ <b>PvP ДАЙС-ДУЭЛЬ: ТЕХНИЧЕСКИЙ НОКАУТ!</b>\n\n"
-                f">сыч испугался бросать кости и убежал в слезах\n"
-                f"😴 Анон <code>[ID:{loser_anon}]</code> пропустил таймер хода (45 сек)!\n"
-                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code> забирает весь банк <b>+{win_payout:,} ₪</b>!\n"
-                f"{rake_label}"
+            announcement = random.choice(DICE_TIMEOUT_ANNOUNCEMENTS).format(
+                loser_anon=loser_anon, winner_anon=winner_anon,
+                win_payout=win_payout, rake_label=rake_label
             )
         elif reason == "surrender":
-            announcement = (
-                f"🏳️ <b>PvP ДАЙС-ДУЭЛЬ: КАПИТУЛЯЦИЯ!</b>\n\n"
-                f">выкинул белый флаг прямо на игровое сукно\n"
-                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code>\n"
-                f"💰 Выигрыш: <b>+{win_payout:,} ₪</b> (Ставка: {bet:,} ₪)."
+            announcement = random.choice(DICE_SURRENDER_ANNOUNCEMENTS).format(
+                loser_anon=loser_anon, winner_anon=winner_anon,
+                win_payout=win_payout, bet=bet, rake_label=rake_label
             )
         else:
             w_score, w_combo, w_flavor = evaluate_roll_combo(w_rolls) if w_rolls else (0, "", "")
             l_score, l_combo, l_flavor = evaluate_roll_combo(l_rolls) if l_rolls else (0, "", "")
-            announcement = (
-                f"🎲 <b>PvP ДАЙС-ДУЭЛЬ: РАЗНОС НА КОСТЯХ!</b>\n\n"
-                f">сошлись два анона на сукне у параши\n"
-                f">кости брошены, удача улыбнулась сильнейшему\n\n"
-                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code>\n"
-                f"🎲 Выкинул: {w_vis} — <i>{w_combo}</i>\n\n"
-                f"💀 <b>Проигравший:</b> Анон <code>[ID:{loser_anon}]</code>\n"
-                f"🎲 Выкинул: {l_vis} — <i>{l_combo}</i>\n\n"
-                f"💰 <b>Банк игры:</b> <code>{total_pot:,} ₪</code>\n"
-                f"🏆 <b>Чистый выигрыш:</b> <code>+{win_payout:,} ₪</code> отправлен чемпиону!\n"
-                f"{rake_label}"
+            announcement = random.choice(DICE_WIN_ANNOUNCEMENTS).format(
+                winner_anon=winner_anon, loser_anon=loser_anon,
+                w_vis=w_vis, w_combo=w_combo,
+                l_vis=l_vis, l_combo=l_combo,
+                total_pot=total_pot, win_payout=win_payout,
+                rake_label=rake_label
             )
 
         if bot:
@@ -716,6 +852,7 @@ async def _finish_dice_game(
                     ))
                 except Exception:
                     pass
+            await sync_dice_screens(bot, game)
         return True, "👑 Победа в дайс-дуэли!", game
 
 
@@ -782,6 +919,81 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
     return header + body + footer
 
 
+async def sync_dice_screens(bot: Any, game: Dict[str, Any]):
+    """
+    Simultaneously edits active game messages for BOTH players in their personal chats,
+    ensuring each player gets the updated roll statuses, turn indicator, and appropriate buttons.
+    Also clears buttons for third-party broadcast viewers when challenge is accepted or finished.
+    """
+    if not bot or not game:
+        return
+
+    p1 = game.get("player_1")
+    p2 = game.get("player_2")
+    game_id = game.get("game_id", "")
+    player_msgs = game.setdefault("player_msgs", {})
+    broadcast_msgs = game.setdefault("broadcast_msgs", [])
+
+    # Fallback for p1
+    if p1 and p1 not in player_msgs and game.get("chat_id") and game.get("msg_id"):
+        player_msgs[p1] = (game["chat_id"], game["msg_id"])
+
+    rendered_text = format_dice_game_message(game)
+    is_finished = game.get("finished", False) or game.get("state") in ("finished", "expired", "cancelled")
+    current_turn = game.get("current_turn")
+
+    # 1. Update both active players' messages
+    for uid in (p1, p2):
+        if not uid or uid not in player_msgs:
+            continue
+        chat_id, msg_id = player_msgs[uid]
+        if is_finished:
+            kb = get_dice_finished_keyboard(game_id, game.get("bet", 0))
+        else:
+            is_turn = (uid == current_turn)
+            kb = get_dice_roll_keyboard(game_id, is_my_turn=is_turn)
+
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=rendered_text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                shared_state.runtime_logger.debug(f"[DiceDuel] sync edit failed for user {uid}: {e}")
+        except Exception as e:
+            shared_state.runtime_logger.debug(f"[DiceDuel] sync unexpected error for user {uid}: {e}")
+
+    # 2. If game started or finished, neutralize other broadcast copies
+    if p2 and broadcast_msgs:
+        anon_1 = get_anon_id(p1)
+        anon_2 = get_anon_id(p2)
+        other_text = (
+            f"🎲 <b>PvP ДАЙС-ДУЭЛЬ: ВЫЗОВ ПРИНЯТ!</b>\n\n"
+            f"Дуэль на <code>{game.get('bet', 0):,} ₪</code> уже началась между Аноном [{anon_1}] и Аноном [{anon_2}].\n"
+            f"Мест за столом больше нет."
+        )
+        remaining_bcast = []
+        for chat_id, msg_id in list(broadcast_msgs):
+            if any((chat_id, msg_id) == player_msgs.get(p) for p in (p1, p2) if p in player_msgs):
+                remaining_bcast.append((chat_id, msg_id))
+                continue
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=other_text,
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        game["broadcast_msgs"] = remaining_bcast
+
+
 # -----------------------------------------------------------------------------
 # Background Watchdog & Live Dynamic Updates for Dice Duel
 # -----------------------------------------------------------------------------
@@ -837,26 +1049,27 @@ async def dice_watchdog_step(bot=None):
             game = active_dice_games.get(gid)
             if not game or game.get("finished"):
                 continue
-            chat_id = game.get("chat_id")
-            msg_id = game.get("msg_id")
-            if game["state"] == "playing":
-                turn_user = game.get("current_turn")
-                kb = get_dice_roll_keyboard(gid, turn_user)
-            else:
-                kb = get_dice_challenge_keyboard(gid)
-            updated_text = format_dice_game_message(game)
 
-        if bot and chat_id and msg_id:
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=updated_text,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        if bot and game:
+            if game["state"] == "playing":
+                await sync_dice_screens(bot, game)
+            else:
+                updated_text = format_dice_game_message(game)
+                kb = get_dice_challenge_keyboard(gid)
+                bcast_list = list(game.get("broadcast_msgs", []))
+                if not bcast_list and game.get("chat_id") and game.get("msg_id"):
+                    bcast_list = [(game["chat_id"], game["msg_id"])]
+                for chat_id, msg_id in bcast_list:
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg_id,
+                            text=updated_text,
+                            reply_markup=kb,
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
 
     # 2. Expired turn games (timeout forfeit)
     for gid in expired_games:
@@ -867,21 +1080,7 @@ async def dice_watchdog_step(bot=None):
             loser_id = game.get("current_turn")
             winner_id = game["player_2"] if loser_id == game["player_1"] else game["player_1"]
 
-        ok, msg, fin_game = await _finish_dice_game(gid, winner_id, loser_id, "timeout", bot)
-
-        if ok and bot and fin_game and fin_game.get("chat_id") and fin_game.get("msg_id"):
-            try:
-                updated_text = format_dice_game_message(fin_game)
-                kb = get_dice_finished_keyboard(gid, fin_game["bet"])
-                await bot.edit_message_text(
-                    chat_id=fin_game["chat_id"],
-                    message_id=fin_game["msg_id"],
-                    text=updated_text,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        await _finish_dice_game(gid, winner_id, loser_id, "timeout", bot)
 
     # 3. Expired pending challenges
     for gid in expired_pending:
@@ -889,10 +1088,11 @@ async def dice_watchdog_step(bot=None):
             game = active_dice_games.get(gid)
             if not game:
                 continue
-            chat_id = game.get("chat_id")
-            msg_id = game.get("msg_id")
             p1 = game.get("player_1")
             bet = game.get("bet", 0)
+            bcast_list = list(game.get("broadcast_msgs", []))
+            if not bcast_list and game.get("chat_id") and game.get("msg_id"):
+                bcast_list = [(game["chat_id"], game["msg_id"])]
 
         if bot and p1:
             exp_dm_text = (
@@ -902,21 +1102,22 @@ async def dice_watchdog_step(bot=None):
             )
             spawn_task(send_pvp_direct_notification(bot, p1, exp_dm_text), name="pvp_notify_dice_expired")
 
-        if bot and chat_id and msg_id:
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=(
-                        "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
-                        "Ни один анон не принял вызов на кости за 10 минут.\n"
-                        "Вызов аннулирован, ставка не списана."
-                    ),
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        if bot and bcast_list:
+            for chat_id, msg_id in bcast_list:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=(
+                            "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
+                            "Ни один анон не принял вызов на кости за 10 минут.\n"
+                            "Вызов аннулирован, ставка не списана."
+                        ),
+                        reply_markup=None,
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
 
 
 async def start_dice_watchdog_loop(bot):
@@ -944,6 +1145,18 @@ def register_dice_duel_handlers(dp: Any):
     Registers all commands, shortcuts, and callback query handlers into aiogram dispatcher.
     """
     global cmd_dice_duel_entry, cmd_dice_duel
+
+    @dp.message(F.text.regexp(r"^/(?:dice|diceduel|кости|дайсы)(\d+[kк]?|all|всё|все)(?:\s+.*)?$", flags=re.IGNORECASE))
+    async def cmd_dice_duel_shorthand(message: Message, board_id: str | None = None, stream: str = 'ru'):
+        if not message.text:
+            return
+        m = re.match(r"^/(?:dice|diceduel|кости|дайсы)(\d+[kк]?|all|всё|все)(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
+        if not m:
+            return
+        amt = m.group(1)
+        rest = m.group(2)
+        message.text = f"/dice {amt}" + (f" {rest}" if rest else "")
+        return await cmd_dice_duel_entry(message, board_id=board_id, stream=stream)
 
     @dp.message(Command("dice", "dice_duel", "diceduel", "дайс_дуэль", "кости_дуэль", "дайсдуэль", "костидуэль", "dices", "дайс", "дайсы", "кости", ignore_case=True, ignore_mention=True))
     async def cmd_dice_duel_entry(message: Message, board_id: str | None = None, stream: str = 'ru'):
@@ -979,6 +1192,12 @@ def register_dice_duel_handlers(dp: Any):
                 target_user_id = None
 
         db = await get_pool()
+        from common.database import is_shadow_muted as check_db_shadow_muted
+        from common.bot_helpers import check_user_is_muted
+        if await check_db_shadow_muted(user_id, board_id, db=db) or await check_user_is_muted(db, user_id, board_id):
+            await message.answer("🔇 Замученным нельзя играть в дайс-дуэли.")
+            return
+
         async with db_lock:
             user_bal = await get_user_global_balance(db, user_id)
 
@@ -1034,8 +1253,35 @@ def register_dice_duel_handlers(dp: Any):
         sent_msg = await message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
         async with dice_engine_lock:
             if game_id in active_dice_games:
-                active_dice_games[game_id]["msg_id"] = sent_msg.message_id
-                active_dice_games[game_id]["chat_id"] = sent_msg.chat.id
+                g = active_dice_games[game_id]
+                g["msg_id"] = sent_msg.message_id
+                g["chat_id"] = sent_msg.chat.id
+                g.setdefault("player_msgs", {})[user_id] = (sent_msg.chat.id, sent_msg.message_id)
+                g.setdefault("broadcast_msgs", []).append((sent_msg.chat.id, sent_msg.message_id))
+
+        # Broadcast challenge to active board users
+        try:
+            from shared_state import board_data as _board_data
+            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+            for uid in active_users:
+                if uid == user_id:
+                    continue
+                if target_user_id is not None and uid != target_user_id:
+                    continue
+                try:
+                    bcast_sent = await message.bot.send_message(
+                        chat_id=uid,
+                        text=msg_text,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    async with dice_engine_lock:
+                        if game_id in active_dice_games:
+                            active_dice_games[game_id]["broadcast_msgs"].append((uid, bcast_sent.message_id))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     async def handle_dice_accept_command(message: Message, board_id: str):
         user_id = message.from_user.id
@@ -1067,21 +1313,11 @@ def register_dice_duel_handlers(dp: Any):
             await message.answer(msg_text, parse_mode="HTML")
             return
 
-        # Update duel message
-        turn_user = game["current_turn"]
-        kb = get_dice_roll_keyboard(found_gid, turn_user)
-        updated_text = format_dice_game_message(game)
+        async with dice_engine_lock:
+            if found_gid in active_dice_games:
+                active_dice_games[found_gid].setdefault("player_msgs", {})[user_id] = (message.chat.id, message.message_id)
 
-        try:
-            await message.bot.edit_message_text(
-                chat_id=game["chat_id"],
-                message_id=game["msg_id"],
-                text=updated_text,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-        except Exception:
-            await message.answer(updated_text, reply_markup=kb, parse_mode="HTML")
+        await sync_dice_screens(message.bot, game)
 
     async def handle_dice_cancel_command(message: Message, board_id: str):
         user_id = message.from_user.id
@@ -1109,15 +1345,12 @@ def register_dice_duel_handlers(dp: Any):
             await callback.answer(msg_text, show_alert=True)
             return
 
-        await callback.answer("⚔️ Вызов принят! Кости на столе!")
-        turn_user = game["current_turn"]
-        kb = get_dice_roll_keyboard(game_id, turn_user)
-        content = format_dice_game_message(game)
+        async with dice_engine_lock:
+            if game_id in active_dice_games:
+                active_dice_games[game_id].setdefault("player_msgs", {})[user_id] = (callback.message.chat.id, callback.message.message_id)
 
-        try:
-            await callback.message.edit_text(content, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
+        await sync_dice_screens(callback.bot, game)
+        await callback.answer("⚔️ Вызов принят! Кости на столе!")
 
     @dp.callback_query(F.data.startswith("dice_decline:") | F.data.startswith("dice_cancel:"))
     async def cb_dice_decline(callback: CallbackQuery):
@@ -1133,13 +1366,25 @@ def register_dice_duel_handlers(dp: Any):
             if user_id != game["player_1"] and (not game.get("target_id") or user_id != game.get("target_id")):
                 await callback.answer("❌ Ты не можешь отменить чужой вызов!", show_alert=True)
                 return
+            bcast_list = list(game.get("broadcast_msgs", []))
 
         ok, msg = await cancel_dice_challenge(game_id, user_id, bot=callback.bot)
         await callback.answer(msg)
-        try:
-            await callback.message.edit_text(f"🗑 <b>Вызов на кости отменен.</b>", parse_mode="HTML")
-        except Exception:
-            pass
+        for chat_id, msg_id in bcast_list:
+            try:
+                await callback.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text="🗑 <b>Вызов на кости отменен.</b>",
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    @dp.callback_query(F.data.startswith("dice_wait:"))
+    async def cb_dice_wait(callback: CallbackQuery):
+        await callback.answer("⏳ Сейчас ход соперника! Жди пока он бросит кости.", show_alert=False)
 
     @dp.callback_query(F.data.startswith("dice_roll:"))
     async def cb_dice_roll(callback: CallbackQuery):
@@ -1190,18 +1435,7 @@ def register_dice_duel_handlers(dp: Any):
             return
 
         await callback.answer("🎲 Бросок сделан!")
-        final_content = format_dice_game_message(updated_game)
-
-        if updated_game.get("finished"):
-            kb = get_dice_finished_keyboard(game_id, updated_game["bet"])
-        else:
-            next_turn = updated_game.get("current_turn")
-            kb = get_dice_roll_keyboard(game_id, next_turn)
-
-        try:
-            await callback.message.edit_text(final_content, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
+        await sync_dice_screens(callback.bot, updated_game)
 
     @dp.callback_query(F.data.startswith("dice_surrender:"))
     async def cb_dice_surrender(callback: CallbackQuery):
@@ -1225,12 +1459,6 @@ def register_dice_duel_handlers(dp: Any):
             return
 
         await callback.answer("🏳️ Ты сдался.")
-        final_content = format_dice_game_message(res_game)
-        kb = get_dice_finished_keyboard(game_id, res_game["bet"])
-        try:
-            await callback.message.edit_text(final_content, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
 
     @dp.callback_query(F.data.startswith("dice_rematch:"))
     async def cb_dice_rematch(callback: CallbackQuery):
@@ -1275,8 +1503,24 @@ def register_dice_duel_handlers(dp: Any):
             sent_msg = await callback.message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
             async with dice_engine_lock:
                 if new_game_id in active_dice_games:
-                    active_dice_games[new_game_id]["msg_id"] = sent_msg.message_id
-                    active_dice_games[new_game_id]["chat_id"] = sent_msg.chat.id
+                    g = active_dice_games[new_game_id]
+                    g["msg_id"] = sent_msg.message_id
+                    g["chat_id"] = sent_msg.chat.id
+                    g.setdefault("player_msgs", {})[user_id] = (sent_msg.chat.id, sent_msg.message_id)
+                    g.setdefault("broadcast_msgs", []).append((sent_msg.chat.id, sent_msg.message_id))
+            if other_player:
+                try:
+                    bcast_sent = await callback.bot.send_message(
+                        chat_id=other_player,
+                        text=msg_text,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    async with dice_engine_lock:
+                        if new_game_id in active_dice_games:
+                            active_dice_games[new_game_id].setdefault("broadcast_msgs", []).append((other_player, bcast_sent.message_id))
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1345,8 +1589,34 @@ def register_dice_duel_handlers(dp: Any):
             sent_msg = await callback.message.answer(msg_text, reply_markup=kb, parse_mode="HTML")
             async with dice_engine_lock:
                 if game_id in active_dice_games:
-                    active_dice_games[game_id]["msg_id"] = sent_msg.message_id
-                    active_dice_games[game_id]["chat_id"] = sent_msg.chat.id
+                    g = active_dice_games[game_id]
+                    g["msg_id"] = sent_msg.message_id
+                    g["chat_id"] = sent_msg.chat.id
+                    g.setdefault("player_msgs", {})[user_id] = (sent_msg.chat.id, sent_msg.message_id)
+                    g.setdefault("broadcast_msgs", []).append((sent_msg.chat.id, sent_msg.message_id))
+
+            try:
+                from shared_state import board_data as _board_data
+                active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+                for uid in active_users:
+                    if uid == user_id:
+                        continue
+                    if target_id is not None and uid != target_id:
+                        continue
+                    try:
+                        bcast_sent = await callback.bot.send_message(
+                            chat_id=uid,
+                            text=msg_text,
+                            reply_markup=kb,
+                            parse_mode="HTML"
+                        )
+                        async with dice_engine_lock:
+                            if game_id in active_dice_games:
+                                active_dice_games[game_id].setdefault("broadcast_msgs", []).append((uid, bcast_sent.message_id))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         except Exception:
             pass
 

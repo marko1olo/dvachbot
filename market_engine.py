@@ -1076,6 +1076,13 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
     user_id = message.from_user.id if message.from_user else message.chat.id
     db = await get_pool()
 
+    # Мут-гард: замученным нельзя выставлять лоты
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(user_id, b_id, db=db) or await check_user_is_muted(db, user_id, b_id):
+        await message.answer("🔇 Замученным нельзя торговать на базаре.")
+        return
+
     parts = (message.text or "").split()[1:]
 
     # Если переданы аргументы: /sell <предмет> <цена>
@@ -1304,6 +1311,14 @@ async def cb_market_buy(callback: types.CallbackQuery, board_id: str | None = No
     lot_id = int(raw_id) if raw_id.isdigit() else 0
 
     db = await get_pool()
+
+    # Мут-гард: замученным нельзя покупать на базаре
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(buyer_id, b_id, db=db) or await check_user_is_muted(db, buyer_id, b_id):
+        await callback.answer("🔇 Замученным нельзя покупать на базаре.", show_alert=True)
+        return
+
     ok, seller_id, price, payout, fee, item_dict, err = await buy_market_listing(db, lot_id, buyer_id, b_id)
 
     if not ok:

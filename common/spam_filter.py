@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import re
 import difflib
+import unicodedata
 import logging
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict, deque
@@ -277,25 +278,76 @@ RE_PHONE_DOX = re.compile(
 )
 
 
+RE_ZERO_WIDTH = re.compile(
+    r'[\u200b-\u200f'  # Zero-width spaces, marks
+    r'\u2028-\u202f'  # Line/paragraph separators, directional overrides (LRE, RLE, RLO, etc.)
+    r'\u2060-\u206f'  # Word joiner, invisible operators
+    r'\ufeff'          # Byte Order Mark (ZWNBSP)
+    r'\u00ad'          # Soft hyphen
+    r'\u034f'          # Combining grapheme joiner
+    r'\u180e'          # Mongolian vowel separator
+    r']+',
+    re.UNICODE
+)
+
+HOMOGLYPH_LATIN_TO_CYRILLIC = str.maketrans({
+    'a': 'а', 'c': 'с', 'e': 'е', 'o': 'о', 'p': 'р', 'x': 'х', 'y': 'у',
+    'A': 'а', 'B': 'в', 'C': 'с', 'E': 'е', 'H': 'н', 'K': 'к', 'M': 'м',
+    'O': 'о', 'P': 'р', 'T': 'т', 'X': 'х', 'Y': 'у'
+})
+
+def canonicalize_spam_text(text: str, map_homoglyphs: bool = False) -> str:
+    """
+    Нормализует Unicode (NFKC), удаляет zero-width и RTL-override символы,
+    предотвращая обход спам-фильтра и Anti-Dox детектора.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    norm = unicodedata.normalize('NFKC', text)
+    norm = RE_ZERO_WIDTH.sub('', norm)
+    norm = norm.lower()
+    if map_homoglyphs:
+        norm = norm.translate(HOMOGLYPH_LATIN_TO_CYRILLIC)
+    return norm
+
+
 def contains_phone_number(text: str) -> bool:
     """Returns True if the text contains a leaked mobile phone number."""
     if not text or not isinstance(text, str):
         return False
-    return bool(RE_PHONE_DOX.search(text))
+    if bool(RE_PHONE_DOX.search(text)):
+        return True
+    cleaned = canonicalize_spam_text(text)
+    return bool(RE_PHONE_DOX.search(cleaned))
 
 
 def extract_phone_numbers(text: str) -> List[str]:
     """Extracts all matched mobile phone numbers from text."""
     if not text or not isinstance(text, str):
         return []
-    return [match.group(0) for match in RE_PHONE_DOX.finditer(text)]
+    res = [match.group(0) for match in RE_PHONE_DOX.finditer(text)]
+    if not res:
+        cleaned = canonicalize_spam_text(text)
+        res = [match.group(0) for match in RE_PHONE_DOX.finditer(cleaned)]
+    return res
 
 
 def mask_phone_numbers(text: str, replacement: str = DOX_MASK_REPLACEMENT) -> str:
     """Masks all mobile phone numbers in text with replacement label."""
     if not text or not isinstance(text, str):
         return text
-    return RE_PHONE_DOX.sub(replacement, text)
+    res = RE_PHONE_DOX.sub(replacement, text)
+    cleaned = canonicalize_spam_text(text)
+    if RE_PHONE_DOX.search(cleaned):
+        for match in RE_PHONE_DOX.finditer(cleaned):
+            leaked_raw = match.group(0)
+            escaped_chars = [re.escape(c) for c in leaked_raw]
+            loose_pattern = r'[\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff\u00ad]*'.join(escaped_chars)
+            try:
+                res = re.sub(loose_pattern, replacement, res, flags=re.IGNORECASE)
+            except Exception:
+                pass
+    return res
 
 
 def check_dox_content(
@@ -377,23 +429,32 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     except Exception:
         pass
     
+    clean_canonical = canonicalize_spam_text(text)
+
     # Check phone leak
-    if contains_phone_number(text):
+    if contains_phone_number(clean_canonical):
         return True
 
     # Check forbidden link / invite / promo / ad spam
-    is_link_spam, _ = check_link_or_ad_spam(user_id, board_id, text)
+    is_link_spam, _ = check_link_or_ad_spam(user_id, board_id, clean_canonical)
     if is_link_spam:
         return True
 
     banned_words = _spam_filter_words.get(board_id)
     if not banned_words:
         return False
-    lower_text = str(text or "").lower()
+
     for wl in ["tgach.top", "t.me/tgchan_archive", "t.me/tgach_archive", "tgchan_archive", "tgach_archive"]:
-        lower_text = lower_text.replace(wl, "")
-    if any(str(word).strip().lower() in lower_text for word in banned_words if str(word).strip()):
-        return True
+        clean_canonical = clean_canonical.replace(wl, "")
+
+    clean_with_homoglyphs = clean_canonical.translate(HOMOGLYPH_LATIN_TO_CYRILLIC)
+
+    for word in banned_words:
+        w = canonicalize_spam_text(str(word)).strip()
+        if not w:
+            continue
+        if w in clean_canonical or w in clean_with_homoglyphs:
+            return True
     return False
 
 
@@ -422,7 +483,8 @@ def _content_fingerprint(
             return f"media:{content.strip()}"
     if content:
         if isinstance(content, str):
-            normalized = " ".join(content.strip().lower().split())
+            cleaned = canonicalize_spam_text(content)
+            normalized = " ".join(cleaned.split())
             if len(normalized) < 4:
                 return ""  # Ignore short trivial text
             h = hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()[:16]
@@ -434,7 +496,8 @@ def _content_fingerprint(
             if f_id: return f"media:{f_id}"
             t = content.get('text') or content.get('caption')
             if t:
-                normalized = " ".join(str(t).strip().lower().split())
+                cleaned = canonicalize_spam_text(str(t))
+                normalized = " ".join(cleaned.split())
                 if len(normalized) >= 4:
                     h = hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()[:16]
                     return f"text:{h}"

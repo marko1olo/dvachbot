@@ -379,6 +379,17 @@ async def create_bank_deposit(
     now = time.time()
     locked_until = now + float(tier_info["lockup_seconds"])
 
+    MAX_ACTIVE_DEPOSITS_PER_USER = 15
+    async with db.execute(
+        "SELECT COUNT(*) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
+        (user_id,)
+    ) as c:
+        row = await c.fetchone()
+        active_count = row[0] if row and row[0] is not None else 0
+
+    if active_count >= MAX_ACTIVE_DEPOSITS_PER_USER:
+        return False, None, f"Достигнут лимит активных вкладов ({MAX_ACTIVE_DEPOSITS_PER_USER} шт). Снимите старые вклады перед открытием новых."
+
     async with db_transaction(db):
         ok, _ = await deduct_user_global_balance(db, user_id, b_id, amount)
         if not ok:
@@ -978,6 +989,11 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
     user_id = message.from_user.id if message.from_user else message.chat.id
     db = await get_pool()
 
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(db, user_id, b_id):
+        await message.answer("⛔ <b>Операция отклонена:</b> Вы находитесь в муте!", parse_mode="HTML")
+        return
+
     parts = (message.text or "").split()[1:]
 
     # Если переданы аргументы: /deposit [сумма] [тариф]
@@ -1108,7 +1124,8 @@ async def cmd_withdraw(message: types.Message, board_id: str | None = None, stre
 
     lines = ["📤 <b>ВЫБЕРИТЕ ДЕПОЗИТ ДЛЯ ВЫВОДА:</b>\n"]
     kb_rows = []
-    for d in deposits:
+    displayed = deposits[:15]
+    for d in displayed:
         lock_status = "🔒 (досрочно)" if d["is_locked"] else "🔓 (готов)"
         lines.append(f"• Вклад <b>#{d['id']}</b> ({d['short_name']}): <code>{d['total_value']:,.2f} ₪</code> {lock_status}")
         kb_rows.append([
@@ -1117,6 +1134,9 @@ async def cmd_withdraw(message: types.Message, board_id: str | None = None, stre
                 callback_data=f"bank_withdraw_sel:{d['id']}"
             )
         ])
+
+    if len(deposits) > 15:
+        lines.append(f"\n<i>... и ещё {len(deposits) - 15} вкладов. Закройте текущие для просмотра остальных.</i>")
 
     kb_rows.append([InlineKeyboardButton(text="⬅️ Назад в Банк", callback_data="bank_main_hub")])
     await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")

@@ -666,3 +666,29 @@ class TestHandleMusicRoastAsyncExecution:
 
         mock_msg.reply.assert_called_once()
         mock_msg.answer.assert_called_once()
+
+
+def test_parse_music_roast_malformed_json_with_metadata_keys():
+    """Verify that malformed JSON with metadata keys like anon_name, tone, audio_truth_note doesn't leak into roast text."""
+    from ai_manager import parse_music_roast_response
+
+    malformed_input = '''anon_name": "Киберчед",
+
+"tone": "Брезгливое разочарование",
+
+"audio_truth_note": "Based on metadata and known context.",
+
+"review_text": "Этот трек звучит как предсмертная агония расстроенного ведра.",
+
+"diagnosis": "Диванный идиот.",
+
+"verdict": "Говно"
+
+}'''
+    roast_text, rating = parse_music_roast_response(malformed_input)
+    assert "anon_name" not in roast_text
+    assert "tone" not in roast_text
+    assert "audio_truth_note" not in roast_text
+    assert "Этот трек звучит как предсмертная агония" in roast_text
+    assert "Говно" not in roast_text or len(roast_text) > 20
+

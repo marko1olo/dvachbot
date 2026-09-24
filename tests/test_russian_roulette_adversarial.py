@@ -401,7 +401,8 @@ class TestRussianRouletteAdversarial(unittest.IsolatedAsyncioTestCase):
         self.assertIn(p1, user_active_rr_game)
 
         # Backdate created_ts past timeout
-        active_rr_games[gid]["created_ts"] = time.time() - 150.0
+        from russian_roulette_pvp import RR_CHALLENGE_TIMEOUT_SEC
+        active_rr_games[gid]["created_ts"] = time.time() - (RR_CHALLENGE_TIMEOUT_SEC + 10.0)
 
         mock_bot = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
