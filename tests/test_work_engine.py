@@ -209,7 +209,7 @@ def test_wardrobe_set_bonuses_all():
          patch("random.random", return_value=0.5):
         succ, change, msg, drop = execute_job_action("factory", items_skuf)
         assert succ is True
-        assert "Сет Скуфа: +35% получки" in msg
+        assert "Сет Сыча: +35% получки" in msg
         assert change >= int(320 * 1.35)
 
     # C. Neo Set (+25%)

@@ -20,10 +20,14 @@ def reset_vision_module_state():
     v._GLOBAL_GEMINI_LAST_CALL = 0.0
     v._GLOBAL_GROQ_LAST_CALL = 0.0
     v._LAST_VISION_CALL_TIME.clear()
+    v._MODEL_503_COOLDOWN.clear()
+    v._MODEL_404_COOLDOWN.clear()
     yield
     v._GLOBAL_GEMINI_LAST_CALL = 0.0
     v._GLOBAL_GROQ_LAST_CALL = 0.0
     v._LAST_VISION_CALL_TIME.clear()
+    v._MODEL_503_COOLDOWN.clear()
+    v._MODEL_404_COOLDOWN.clear()
 
 
 class TestVisionCascade:

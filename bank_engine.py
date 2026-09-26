@@ -53,8 +53,8 @@ BANK_TIERS: Dict[str, Dict[str, Any]] = {
     },
     "skuf": {
         "id": "skuf",
-        "name": "🍺 Депозит Скуфа (3-Day Term)",
-        "short_name": "Депозит Скуфа",
+        "name": "🍺 Депозит Сыча (3-Day Term)",
+        "short_name": "Депозит Сыча",
         "daily_rate": 0.025,           # 2.5% в сутки (0.025 / 86400 в сек, 7.5% за 3 дня)
         "lockup_seconds": 72 * 3600,   # 72 часа (259 200 сек)
         "withdrawal_fee_pct": 0.0,     # 0% комиссия по истечении срока
@@ -91,7 +91,7 @@ TIER_ALIASES: Dict[str, str] = {
     "skuf": "skuf",
     "term_3d": "skuf",
     "deposit_skuf": "skuf",
-    "скуф": "skuf",
+    "сыч": "skuf",
     "mmm_abu": "mmm_abu",
     "mmm": "mmm_abu",
     "pyramid": "mmm_abu",
@@ -529,7 +529,7 @@ async def withdraw_bank_deposit(
                 rem_h = int(state["remaining_lock_sec"] / 3600)
                 rem_m = int((state["remaining_lock_sec"] % 3600) / 60)
                 return False, 0.0, 0.0, 0.0, 0.0, False, (
-                    f"Депозит Скуфа заблокирован (осталось {rem_h}ч {rem_m}м). "
+                    f"Депозит Сыча заблокирован (осталось {rem_h}ч {rem_m}м). "
                     f"При досрочном снятии все начисленные проценты (+{total_accrued:,.2f} ₪) сгорят, "
                     f"а с тела вклада удержится штраф 3% ({round(principal * 0.03, 2):,.2f} ₪)."
                 )
@@ -541,7 +541,7 @@ async def withdraw_bank_deposit(
                 final_status = "broken_early"
 
                 if fee_or_penalty > 0:
-                    await add_to_abu_fund(db, fee_or_penalty, donor_id=user_id, reason=f"Штраф за досрочное снятие Депозита Скуфа #{deposit_id}")
+                    await add_to_abu_fund(db, fee_or_penalty, donor_id=user_id, reason=f"Штраф за досрочное снятие Депозита Сыча #{deposit_id}")
             else:
                 interest_paid = round(total_accrued, 2)
                 fee_or_penalty = 0.0
@@ -776,17 +776,17 @@ def build_bank_dashboard_view(
     total_accrued: float,
     deposits: List[Dict[str, Any]]
 ) -> Tuple[str, InlineKeyboardMarkup]:
-    """Генерирует текст и клавиатуру главного экрана Банка Абу."""
+    """Генерирует текст и клавиатуру главного экрана Банка Абу (всегда < 900 символов для безопасного caption)."""
     total_bank = round(total_principal + total_accrued, 2)
     total_wealth = round(wallet_balance + total_bank, 2)
 
     lines = [
         "🏦 <b>БАНК АБУ — ЗАЩИЩЕННЫЙ СЕЙФ</b>\n",
-        f"💰 <b>Кошелек на руках:</b> <code>{wallet_balance:,.2f} ₪</code> <i>(уязвим для /rob)</i>",
+        f"💰 <b>Кошелек:</b> <code>{wallet_balance:,.2f} ₪</code> <i>(уязвим для /rob)</i>",
         f"🔒 <b>Вклады в сейфе:</b> <code>{total_principal:,.2f} ₪</code> 🛡️ <b>(ЗАЩИЩЕНО)</b>",
         f"📈 <b>Накопленные %:</b> <code>+{total_accrued:,.2f} ₪</code>",
         f"💵 <b>Всего в Банке:</b> <code>{total_bank:,.2f} ₪</code>",
-        f"💎 <b>Общий капитал:</b> <code>{total_wealth:,.2f} ₪</code>\n",
+        f"💎 <b>Капитал:</b> <code>{total_wealth:,.2f} ₪</code>\n",
         "<code>────────────────────────</code>",
         "📊 <b>ТВОИ ДЕПОЗИТЫ:</b>",
     ]
@@ -808,11 +808,11 @@ def build_bank_dashboard_view(
             t_name = BANK_TIERS.get(tid, {}).get("name", tid)
             lines.append(
                 f"• {t_icon} <b>{t_name}</b> ({s['count']} шт): "
-                f"<code>{s['principal']:,.0f} ₪</code> (+{s['accrued']:,.2f} ₪)"
+                f"<code>{s['principal']:,.0f} ₪</code> (+{s['accrued']:,.1f} ₪)"
             )
 
         lines.append("\n<b>Последние вклады:</b>")
-        for idx, d in enumerate(deposits[:3], 1):
+        for idx, d in enumerate(deposits[:2], 1):
             lock_txt = ""
             if d["is_locked"]:
                 rem_h = int(d["remaining_lock_sec"] / 3600)
@@ -823,14 +823,26 @@ def build_bank_dashboard_view(
 
             tier_icon = BANK_TIERS.get(d["tier_id"], {}).get("icon", "📦")
             lines.append(
-                f"{idx}. {tier_icon} <b>{d['short_name']}</b>: "
-                f"<code>{d['principal']:,.0f} ₪</code> (+{d['accrued_interest']:,.2f} ₪){lock_txt}"
+                f"{idx}. {tier_icon} <b>#{d['id']}</b>: "
+                f"<code>{d['principal']:,.0f} ₪</code> (+{d['accrued_interest']:,.1f} ₪){lock_txt}"
             )
 
-        if len(deposits) > 3:
-            lines.append(f"<i>...и еще {len(deposits) - 3} вкладов (см. «📤 Снять шекели»)</i>")
+        if len(deposits) > 2:
+            lines.append(f"<i>...и еще {len(deposits) - 2} вкладов (см. «📤 Снять шекели»)</i>")
 
     text = "\n".join(lines)
+
+    # Жесткая гарантия: текст экрана Банка Абу никогда не превышает 900 символов
+    if len(text) > 900:
+        lines = [
+            "🏦 <b>БАНК АБУ — ЗАЩИЩЕННЫЙ СЕЙФ</b>\n",
+            f"💰 <b>Кошелек:</b> <code>{wallet_balance:,.2f} ₪</code> <i>(уязвим для /rob)</i>",
+            f"🔒 <b>В сейфе:</b> <code>{total_principal:,.2f} ₪</code> 🛡️ <i>(+{total_accrued:,.2f} ₪ %)</i>",
+            f"💎 <b>Капитал:</b> <code>{total_wealth:,.2f} ₪</code>\n",
+            f"📊 <b>Всего активных вкладов:</b> {len(deposits)} шт.",
+            "<i>(детализация и управление в меню «📤 Снять шекели»)</i>"
+        ]
+        text = "\n".join(lines)
 
     kb = [
         [
@@ -856,7 +868,7 @@ def build_deposit_tiers_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📦 Сейф Сыча (0.5%/день, Flex)", callback_data="bank_deposit_tier:sych"),
         ],
         [
-            InlineKeyboardButton(text="🍺 Депозит Скуфа (2.5%/день, 72ч)", callback_data="bank_deposit_tier:skuf"),
+            InlineKeyboardButton(text="🍺 Депозит Сыча (2.5%/день, 72ч)", callback_data="bank_deposit_tier:skuf"),
         ],
         [
             InlineKeyboardButton(text="🚀 МММ Абу (6.0%/день, 24ч)", callback_data="bank_deposit_tier:mmm_abu"),
@@ -913,35 +925,44 @@ async def _render_bank_view(
     kb: InlineKeyboardMarkup,
     category: str = "bank"
 ):
-    """Универсально отображает или обновляет представление Банка."""
+    """Универсально отображает или обновляет представление Банка с сохранением клавиатуры."""
     try:
         if isinstance(target, types.CallbackQuery):
             if target.message.caption is not None or target.message.photo:
                 # Если текст укладывается в 1024 символа (лимит caption в Telegram)
                 if len(text) <= 1024:
-                    await target.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-                    return
-                else:
-                    # Caption слишком длинный: удаляем фото-сообщение и шлем чистое
                     try:
-                        await target.message.delete()
-                    except Exception:
-                        pass
-                    from banner_manager import send_banner_message
-                    await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-                    return
+                        await target.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+                        return
+                    except Exception as edit_err:
+                        if "not modified" in str(edit_err).lower():
+                            return
+                        logger.warning(f"[_render_bank_view] edit_caption failed: {edit_err}")
+                
+                # Если edit_caption не удался или длина > 1024:
+                try:
+                    await target.message.delete()
+                except Exception:
+                    pass
+                from banner_manager import send_banner_message
+                await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                return
             elif target.message.text is not None:
                 if len(text) <= 4096:
-                    await target.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
-                    return
-                else:
                     try:
-                        await target.message.delete()
-                    except Exception:
-                        pass
-                    from banner_manager import send_banner_message
-                    await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-                    return
+                        await target.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+                        return
+                    except Exception as edit_err:
+                        if "not modified" in str(edit_err).lower():
+                            return
+                        logger.warning(f"[_render_bank_view] edit_text failed: {edit_err}")
+                try:
+                    await target.message.delete()
+                except Exception:
+                    pass
+                from banner_manager import send_banner_message
+                await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                return
             else:
                 from banner_manager import send_banner_message
                 await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
@@ -1046,7 +1067,7 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
         "🏦 <b>ОФОРМЛЕНИЕ ВКЛАДА В БАНК АБУ</b>\n\n"
         "Выбери один из доступных тарифов для надежного сохранения и преумножения шекелей:\n\n"
         "1. 📦 <b>Сейф Сыча (0.5%/сутки)</b> — бессрочный, вывод в любой момент (1% комиссия)\n"
-        "2. 🍺 <b>Депозит Скуфа (2.5%/сутки)</b> — заморозка 72ч (7.5% за срок), 0% комиссия\n"
+        "2. 🍺 <b>Депозит Сыча (2.5%/сутки)</b> — заморозка 72ч (7.5% за срок), 0% комиссия\n"
         "3. 🚀 <b>Пирамида МММ Абу (6.0%/сутки)</b> — заморозка 24ч, 3% риск облавы ОБЭП (-50%)\n\n"
         "<i>Нажми на нужный тариф ниже или просто отправь сумму сообщением в чат:</i>"
     )
@@ -1185,7 +1206,7 @@ async def cb_bank_deposit_menu(callback: types.CallbackQuery, board_id: str | No
         "🏦 <b>ОФОРМЛЕНИЕ ВКЛАДА В БАНК АБУ</b>\n\n"
         "Выбери один из доступных тарифов для надежного сохранения и преумножения шекелей:\n\n"
         "1. 📦 <b>Сейф Сыча (0.5%/сутки)</b> — бессрочный, вывод в любой момент (1% комиссия)\n"
-        "2. 🍺 <b>Депозит Скуфа (2.5%/сутки)</b> — заморозка 72ч (7.5% за срок), 0% комиссия\n"
+        "2. 🍺 <b>Депозит Сыча (2.5%/сутки)</b> — заморозка 72ч (7.5% за срок), 0% комиссия\n"
         "3. 🚀 <b>Пирамида МММ Абу (6.0%/сутки)</b> — заморозка 24ч, 3% риск облавы ОБЭП (-50%)\n\n"
         "<i>Нажми на нужный тариф ниже или напиши сумму сообщением прямо в чат:</i>"
     )

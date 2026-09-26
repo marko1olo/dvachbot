@@ -332,11 +332,14 @@ def _queue_has_full_message(queue: asyncio.Queue) -> bool:
 
 
 def _split_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int], list[int]]:
+    import random
     recipient_list = list(recipients)
     if not PRIORITY_DELIVERY_ENABLED or not recipient_list:
+        random.shuffle(recipient_list)
         return [], recipient_list
     priority_set = weekly_active_users.get(board_id, set())
     if not priority_set:
+        random.shuffle(recipient_list)
         return [], recipient_list
     priority = []
     passive = []
@@ -345,6 +348,8 @@ def _split_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int]
             priority.append(uid)
         else:
             passive.append(uid)
+    random.shuffle(priority)
+    random.shuffle(passive)
     return priority, passive
 
 
@@ -824,6 +829,8 @@ class MessageDeliveryTask:
 
         if self.post_num in posts_pending_deletion:
             runtime_logger.info(f"[{self.board_id}] Worker пропустил пост #{self.post_num}, т.к. он помечен на удаление.")
+            if self.msg_data.get("durable_delivery_id"):
+                await _delete_durable_delivery_item(self.msg_data, "post_pending_deletion")
             return
 
         if self.msg_data.get("durable_delivery_id"):

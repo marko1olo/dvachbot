@@ -114,7 +114,7 @@ class TestStatsGenerator(unittest.TestCase):
             cringe_factor=10,
             rank=2,
             total_users=3,
-            slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.',
+            slang_comment='ОП-хуй и бог тредов! База сертифицирована, сычи падают ниц.',
             fav_board='test',
             chronotype='Ночной сыч',
             post_style='Базовые мысли',

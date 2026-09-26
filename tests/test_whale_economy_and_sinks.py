@@ -154,7 +154,7 @@ class TestWhaleSafes:
             total_cash_returned += base_cash
 
             nominal = base_cash
-            if "[👑 Золотой Анон]" in payload.get("grant_title", ""):
+            if payload.get("grant_title") in ("[👑 Золотой Анон]", "👑👑"):
                 nominal += 15000
             elif payload.get("vip_pin_voucher"):
                 nominal += 12000

@@ -119,7 +119,7 @@ class TestAnalyticsChallengerStress(unittest.TestCase):
             board = ["b", "vg", "po", "mmo"][i % 4]
             conn.execute(
                 "INSERT INTO Posts (post_num, board_id, author_id, timestamp, content, reply_to_post_num) VALUES (?, ?, ?, ?, ?, ?)",
-                (i, board, author, now - (i * 60), f"Тестовый пост #{i} сленг скуф гойда база", reply_to)
+                (i, board, author, now - (i * 60), f"Тестовый пост #{i} сленг сыч гойда база", reply_to)
             )
 
         for i in range(1, 201):

@@ -155,7 +155,7 @@ def test_wardrobe_set_bonuses_calculation():
     assert gop_stats["rob_fear_chance"] == 0.40
     assert gop_stats["tips_mult"] == 1.35
     assert gop_stats["compact_post_icon"] == "👑 "
-    assert "Скуф" in gop_stats["active_set_name"]
+    assert "Сыч" in gop_stats["active_set_name"]
 
     # 4. Set Ward 6 (body_straitjacket + hat_tinfoil)
     w6_items = {
@@ -369,7 +369,7 @@ async def test_rob_wardrobe_deflection_and_fear(isolated_test_db):
         with patch("random.random", return_value=0.10):
             await main.cmd_rob(fake_msg, board_id, stream="ru")
             called_text = fake_msg.answer.call_args[0][0]
-            assert "СКУФ НАПУГАЛ ГРАБИТЕЛЯ" in called_text or "Заточка сломалась от страха" in called_text
+            assert "СЫЧ НАПУГАЛ ГРАБИТЕЛЯ" in called_text or "Заточка сломалась от страха" in called_text
 
         # 2. Target with set_neo -> stealth_profile hides balance
         target_neo_items = {

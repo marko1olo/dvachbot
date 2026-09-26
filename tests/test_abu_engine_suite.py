@@ -57,8 +57,9 @@ class TestAbuEngineSuite(unittest.TestCase):
             out = fmt(sample)
             self.assertIsInstance(out, str)
             self.assertGreater(len(out), 40, f"Output from {fmt.__name__} was too short")
+            clean_out = re.sub(r'\[(?:id:|\bанон\b|\banon\b)[^\]]+\]', '', out, flags=re.IGNORECASE)
             for ban in ZOOMER_BAN_WORDS:
-                self.assertNotIn(ban, out.lower(), f"Zoomer word '{ban}' found in {fmt.__name__} output")
+                self.assertNotIn(ban, clean_out.lower(), f"Zoomer word '{ban}' found in {fmt.__name__} output")
 
     def test_html_safety(self):
         """Verifies that malicious or broken HTML tags in input are safely neutralized."""
@@ -95,8 +96,9 @@ class TestAbuEngineSuite(unittest.TestCase):
                 mode, out = transform_abu_mode(s)
                 self.assertEqual(mode, "text")
                 self.assertGreater(len(out), 50)
+                clean_out = re.sub(r'\[(?:id:|\bанон\b|\banon\b)[^\]]+\]', '', out, flags=re.IGNORECASE)
                 for ban in ZOOMER_BAN_WORDS:
-                    self.assertNotIn(ban, out.lower())
+                    self.assertNotIn(ban, clean_out.lower())
 
 if __name__ == '__main__':
     unittest.main()

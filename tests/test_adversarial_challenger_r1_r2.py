@@ -346,7 +346,8 @@ class TestAdversarialR1ConcurrencyAndIsolationFuzzing:
                 content=f"Concurrent message {idx}",
                 msg_type="text",
                 raw_content_type="text",
-                now_ts=t0 + (idx * 0.05)
+                now_ts=t0 + (idx * 0.05),
+                posts_count=0
             )
 
         tasks = [fire_msg(i) for i in range(40)]

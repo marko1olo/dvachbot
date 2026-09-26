@@ -96,7 +96,24 @@ def _add_signature(text: str, profile: dict) -> str:
 def _decorate(text: str, profile: dict) -> str:
     if not text or not text.strip():
         return text
-    return _swap_words(text, profile)
+    text = _swap_words(text, profile)
+    text = _inject(text, profile)
+    
+    if random.random() <= profile.get("prefix_chance", 0.15):
+        prefixes = profile.get("prefixes")
+        if prefixes:
+            text = f"{random.choice(prefixes)} {text}"
+            
+    if random.random() <= profile.get("suffix_chance", 0.15):
+        suffixes = profile.get("suffixes")
+        if suffixes:
+            if text.endswith((".", "!", "?")):
+                text = f"{text} {random.choice(suffixes)}"
+            else:
+                text = f"{text}. {random.choice(suffixes)}"
+                
+    text = _add_signature(text, profile)
+    return text
 
 
 
@@ -153,10 +170,10 @@ for _mode_name, _profile in MODE_PUNCHUP_PROFILES.items():
         _profile.setdefault("replacements", {})[_key_raw] = _value
     _apply_cross_topic_vocabulary(_profile, _vocab)
     _profile["replace_chance"] = max(_profile.get("replace_chance", 0.0), 0.42)
-    _profile["inject_chance"] = max(_profile.get("inject_chance", 0.0), 0.46)
-    _profile["prefix_chance"] = max(_profile.get("prefix_chance", 0.0), 0.30)
-    _profile["suffix_chance"] = max(_profile.get("suffix_chance", 0.0), 0.30)
-    _profile["signature_chance"] = max(_profile.get("signature_chance", 0.0), 0.16)
+    _profile["inject_chance"] = min(_profile.get("inject_chance", 0.15), 0.15)
+    _profile["prefix_chance"] = min(_profile.get("prefix_chance", 0.15), 0.15)
+    _profile["suffix_chance"] = min(_profile.get("suffix_chance", 0.15), 0.15)
+    _profile["signature_chance"] = min(_profile.get("signature_chance", 0.10), 0.10)
     _profile["max_injections"] = max(_profile.get("max_injections", 0), 3)
 
 

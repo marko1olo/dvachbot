@@ -118,11 +118,11 @@ class TestPromptStrictConstraints:
         assert bullet_count >= 80, f"Expected >= 80 degradation descriptions, got {bullet_count}"
 
     def test_system_prompt_strictly_bans_tiktok_slop(self):
-        """MUSIC_ROAST_SYSTEM_PROMPT must ban tiktok slang ('скуф', 'альтушка', 'дединсайд', 'вайб')."""
+        """MUSIC_ROAST_SYSTEM_PROMPT must ban tiktok slang ('сыч', 'шкура', 'дединсайд', 'вайб')."""
         p_lower = MUSIC_ROAST_SYSTEM_PROMPT.lower()
-        assert "запрет на тиктокерский мусор" in p_lower or "тиктокерский" in p_lower
-        assert "скуф" in p_lower
-        assert "альтушка" in p_lower
+        assert "запрет на говноедский мусор" in p_lower or "говноедский" in p_lower
+        assert "сыч" in p_lower
+        assert "шкура" in p_lower
         assert "дединсайд" in p_lower
         assert "вайб" in p_lower
 

@@ -459,3 +459,49 @@ def safe_tg_caption(text: str, max_len: int = 1024) -> str:
 
     return res
 
+
+def extract_post_num_from_message_text(text: str) -> tuple[int | None, int | None]:
+    """
+    Извлекает номер поста из заголовка сообщения Telegram (из текста или подписи).
+    Возвращает (post_num, local_thread_num).
+    Если это обычный пост, возвращает (post_num, None).
+    Если это заголовок поста в треде (напр. №15/500), возвращает (None, local_thread_num).
+    Гарантированно отсекает цитаты (>>12345), реплаи и цифры внутри тела поста.
+    """
+    if not text:
+        return None, None
+
+    clean_text = re.sub(r'<[^>]+>', '', text)
+    header_block = clean_text.split('\n\n')[0].strip()
+    first_line = header_block.split('\n')[0].strip()
+
+    thread_match = re.search(
+        r'(?:Пост|Post|Пiст|Повiдомлення|レス番|投稿)?\s*(?:№|#|No\.?)?\s*(\d+)\s*/\s*(\d+)',
+        first_line,
+        re.IGNORECASE
+    )
+    if thread_match:
+        local_num = int(thread_match.group(1))
+        return None, local_num
+
+    patterns = [
+        r'(?:Пост|Post|Пiст|Повiдомлення|Малява|Депеша|Донесение|Пакет|Подарок|Казус|Сообщение|СИГНАЛ)\s*(?:№|#|No\.?)\s*(\d+)',
+        r'(?:Пост|Post|Пiст|Повiдомлення)\s*(\d+)',
+        r'投稿\s*(\d+)\s*番',
+        r'レス番\s*(\d+)',
+        r'(?:№|No\.)\s*(\d+)',
+        r'(?:^|[^\w#])#(\d{3,})(?:[^\w#]|$)'
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, first_line, re.IGNORECASE)
+        if m:
+            return int(m.group(1)), None
+
+    for pat in patterns:
+        m = re.search(pat, header_block, re.IGNORECASE)
+        if m:
+            return int(m.group(1)), None
+
+    return None, None
+

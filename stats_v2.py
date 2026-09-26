@@ -599,9 +599,9 @@ def generate_bayan_memetics_poster() -> io.BytesIO:
             # 3. Slang Life Cycle (Single-pass efficient query)
             c.execute("""
                 SELECT 
-                    SUM(CASE WHEN content LIKE '%скуф%' THEN 1 ELSE 0 END) as skuf,
+                    SUM(CASE WHEN content LIKE '%сыч%' THEN 1 ELSE 0 END) as skuf,
                     SUM(CASE WHEN content LIKE '%гойда%' THEN 1 ELSE 0 END) as goyda,
-                    SUM(CASE WHEN content LIKE '%альтушка%' THEN 1 ELSE 0 END) as alt,
+                    SUM(CASE WHEN content LIKE '%шкура%' THEN 1 ELSE 0 END) as alt,
                     SUM(CASE WHEN content LIKE '%база%' THEN 1 ELSE 0 END) as baza,
                     SUM(CASE WHEN content LIKE '%сояк%' THEN 1 ELSE 0 END) as soyak,
                     SUM(CASE WHEN content LIKE '%сигма%' THEN 1 ELSE 0 END) as sigma
@@ -609,7 +609,7 @@ def generate_bayan_memetics_poster() -> io.BytesIO:
                 WHERE timestamp > (strftime('%s', 'now') - 30 * 86400)
             """)
             slang_row = c.fetchone()
-            slang_words = ["скуф", "гойда", "альтушка", "база", "сояк", "сигма"]
+            slang_words = ["сыч", "гойда", "шкура", "база", "сояк", "сигма"]
             if slang_row:
                 slang_counts = [
                     (slang_row['skuf'] or 0),

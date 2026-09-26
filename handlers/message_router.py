@@ -1274,24 +1274,53 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     except TelegramBadRequest: pass
     reply_to_post = None
     if message.reply_to_message:
+        lookup_key = (message.chat.id, message.reply_to_message.message_id)
         async with storage_lock:
-            lookup_key = (message.chat.id, message.reply_to_message.message_id)
             reply_to_post = message_to_post.get(lookup_key)
         if not reply_to_post:
             info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
             if info:
                 reply_to_post = info[0]
+                async with storage_lock:
+                    message_to_post[lookup_key] = reply_to_post
         if not reply_to_post:
-            replied_msg = message.reply_to_message
-            text_to_scan = replied_msg.text or replied_msg.caption or ""
-            match = re.search(r"(?:№|#|Post No\.|Пост №|レス番)\s*(\d+)", text_to_scan, re.IGNORECASE)
-            if match:
-                potential_id = int(match.group(1))
-                if await get_post_by_num(potential_id):
-                    reply_to_post = potential_id
-                    async with storage_lock:
-                        message_to_post[lookup_key] = reply_to_post
-                    print(f"👀 ID #{reply_to_post} восстановлен через чтение текста сообщения!")
+            from post_helpers import extract_post_num_from_message
+            potential_id = extract_post_num_from_message(message.reply_to_message)
+            if potential_id and await get_post_by_num(potential_id):
+                reply_to_post = potential_id
+                async with storage_lock:
+                    message_to_post[lookup_key] = reply_to_post
+                try:
+                    print(f"👀 ID #{reply_to_post} восстановлен через заголовок/метаданные сообщения!")
+                except Exception:
+                    pass
+
+    if reply_to_post:
+        # Динамическое подтягивание из БД в RAM при ответе на старый/вытесненный пост
+        async with storage_lock:
+            in_storage = reply_to_post in messages_storage
+        if not in_storage:
+            parent_post = await get_post_by_num(reply_to_post)
+            if parent_post:
+                c_data = parent_post.get('content')
+                if isinstance(c_data, str):
+                    try:
+                        import json
+                        c_data = json.loads(c_data)
+                    except Exception:
+                        c_data = {}
+                ts_val = parent_post.get('timestamp')
+                dt_val = datetime.fromtimestamp(ts_val, tz=UTC) if isinstance(ts_val, (int, float)) else ts_val
+                async with storage_lock:
+                    if reply_to_post not in messages_storage:
+                        messages_storage[reply_to_post] = {
+                            "author_id": parent_post.get("author_id"),
+                            "timestamp": dt_val or datetime.now(UTC),
+                            "content": c_data or {},
+                            "board_id": parent_post.get("board_id"),
+                            "thread_id": parent_post.get("thread_id"),
+                            "reply_to_post_num": parent_post.get("reply_to_post_num"),
+                        }
     is_fwd_bot = is_forwarded_from_bot(message, message.bot)
     is_fwd_msg = is_forward_message(message)
     is_forward = is_fwd_bot or is_fwd_msg
@@ -1344,7 +1373,10 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 content['text'] = sanitize_html(cleaned_corpus_text)
             elif 'caption' in content:
                 content['caption'] = sanitize_html(cleaned_corpus_text)
-            print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
+            try:
+                print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
+            except Exception:
+                pass
 
     if not is_shadow_muted and text_for_corpus and not is_admin(user_id, board_id):
         if is_spam_filtered(text_for_corpus, board_id, user_id):
@@ -1846,6 +1878,11 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                     info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
                     if info:
                         reply_to_post = info[0]
+                if not reply_to_post:
+                    from post_helpers import extract_post_num_from_message
+                    p_id = extract_post_num_from_message(message.reply_to_message)
+                    if p_id and await get_post_by_num(p_id):
+                        reply_to_post = p_id
             raw_caption_html = getattr(message, 'caption_html_text', message.caption or "")
             safe_caption_html = sanitize_html(raw_caption_html)
             is_fwd_group = is_forwarded_from_bot(message, message.bot) or is_forward_message(message)
@@ -1858,7 +1895,10 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                     safe_caption_html = sanitize_html(cleaned_cap)
                     if is_fwd_group or contains_board_post_header(safe_caption_html):
                         safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_fwd_group)
-                    print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки в подписи медиагруппы!")
+                    try:
+                        print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки в подписи медиагруппы!")
+                    except Exception:
+                        pass
             group.update({
                 'board_id': board_id, 'author_id': user_id, 'stream': stream,
                 'timestamp': datetime.now(UTC), 'raw_messages':[], 'caption': safe_caption_html,

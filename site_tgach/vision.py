@@ -51,6 +51,7 @@ VISION_MODEL_FALLBACKS: dict[str, str] = {
     "gemini-3.8-flash": "gemini-2.5-flash",
 }
 _MODEL_503_COOLDOWN: dict[str, float] = {}  # model_name -> cooldown timestamp
+_MODEL_404_COOLDOWN: dict[str, float] = {}  # model_name -> cooldown timestamp
 
 
 def _env_int(name, default):
@@ -309,8 +310,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as http_client:
                 for raw_model_name, provider in models_cascade:
                     model_name = VISION_MODEL_FALLBACKS.get(raw_model_name, raw_model_name)
-                    if time.time() < _MODEL_503_COOLDOWN.get(model_name, 0.0):
-                        logger.debug(f"ℹ️ [VISION] [{source}] Model {model_name} in 503 cooldown, skipping.")
+                    if time.time() < _MODEL_503_COOLDOWN.get(model_name, 0.0) or time.time() < _MODEL_404_COOLDOWN.get(model_name, 0.0):
+                        logger.debug(f"ℹ️ [VISION] [{source}] Model {model_name} in cooldown, skipping.")
                         continue
                     if provider == "gemini" and skip_gemini_models:
                         continue
@@ -526,7 +527,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 break
                             if "413" in err_str: return "error_413"
                             if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str:
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} not found (404). Applying 2.5s cooldown and skipping model.")
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} not found (404). Silencing model for 24h.")
+                                _MODEL_404_COOLDOWN[model_name] = time.time() + 86400.0
                                 permanent_model_failures += 1
                                 pool.penalize_token(selected_key, 2.5)
                                 async with _KEY_RATE_LOCK:

@@ -114,7 +114,7 @@ class ThreadImporter:
         )
         try:
             async with db_lock, get_db_connection() as conn:
-                await conn.execute("BEGIN")
+                await conn.execute("BEGIN IMMEDIATE")
                 chunk_size = 900
                 for i in range(0, len(self.created_post_ids), chunk_size):
                     chunk = self.created_post_ids[i : i + chunk_size]
@@ -796,7 +796,7 @@ class ThreadImporter:
             )
 
         async with db_lock, get_db_connection() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             await conn.executemany(
                 """
                 INSERT INTO ImportQueue 
@@ -822,7 +822,7 @@ class ThreadImporter:
 
         async with db_lock, get_db_connection() as conn:
             try:
-                await conn.execute("BEGIN")
+                await conn.execute("BEGIN IMMEDIATE")
                 op_data = prepared_posts[0]
                 op_content = json.dumps(
                     {

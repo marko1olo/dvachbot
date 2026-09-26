@@ -8,7 +8,7 @@ import time
 import json
 import httpx
 from openai import AsyncOpenAI
-from common.token_pool import groq_pool
+from common.token_pool import groq_pool, google_pool
 from common.database import (
     create_post, 
     get_thread_by_op_post, 
@@ -139,7 +139,7 @@ PERSONAS = {
     },
     "normie": {
         "weight": 7,
-        "prompt": "Ты — Нормис (Залетный). Ты не понимаешь местного сленга. Пиши слишком нормально, вежливо или наивно. Используй скобочки))), эмодзи 😂. Давай тупые житейские советы. Ты 'мимо проходил'."
+        "prompt": "Ты — Рак (Залетный). Ты не понимаешь местного сленга. Пиши слишком нормально, вежливо или наивно. Используй скобочки))), эмодзи 😂. Давай тупые житейские советы. Ты 'мимо проходил'."
     },
     "oldfag": {
         "weight": 5,
@@ -251,7 +251,36 @@ class NeuroManager:
             # Если вышли из цикла стратегий без return и без break (т.е. обе стратегии упали, но не из-за лимитов)
             # то пробуем следующий ключ
         
-        logger.error("❌ Groq: All attempts failed.")
+        # Fallback to Google Gemini if Groq failed
+        google_key = google_pool.get_token()
+        if google_key:
+            gemini_models = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+            for g_model in gemini_models:
+                try:
+                    async with httpx.AsyncClient(verify=False, timeout=25.0) as http_client:
+                        async with AsyncOpenAI(
+                            api_key=google_key,
+                            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                            http_client=http_client,
+                            max_retries=0
+                        ) as g_client:
+                            completion = await _execute_completion(g_client, g_model, messages, max_tokens, temperature)
+                            if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
+                                content = completion.choices[0].message.content
+                                if content:
+                                    import re
+                                    content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                    content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                    content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                    content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+                                    if content:
+                                        logger.info(f"✅ Neuro-poster fallback success via Gemini ({g_model})")
+                                        return content
+                except Exception as g_err:
+                    logger.warning(f"⚠️ Gemini fallback failed for {g_model}: {g_err}")
+                    continue
+
+        logger.error("❌ Groq & Gemini: All attempts failed.")
         return None
 
     async def run_cycle(self):
@@ -386,7 +415,15 @@ class NeuroManager:
 
         response_text = await self._generate_text(context_prompt, instruction, settings["style"], stream)
         
-        if not response_text: return "⚠️ Пустая генерация"
+        if not response_text or len(response_text.strip()) < 3:
+            logger.warning(f"⚠️ [Neuro-Poster] All LLMs failed on /{board_id}/ [{stream}]. Using troll phrase fallback.")
+            try:
+                from troll_phrases import get_random_troll_phrase
+                victim_sample = v_text if 'v_text' in locals() else None
+                response_text = get_random_troll_phrase(context_type="normal", quote_text=victim_sample)
+            except Exception as tp_err:
+                logger.error(f"Troll phrase fallback failed: {tp_err}")
+                response_text = "Лол, ну и кринж в треде."
         
         prefix = ""
         if target_ids:
@@ -447,8 +484,15 @@ class NeuroManager:
                 temperature=1.1
             )
             
-            if not result:
-                return "⚠️ Ошибка генерации треда (API)"
+            if not result or len(result.strip()) < 3:
+                logger.warning(f"⚠️ [Neuro-Poster] Thread creation LLM failed. Using troll phrase fallback.")
+                try:
+                    from troll_phrases import get_random_troll_phrase
+                    title = "Аноны, поясните за жизнь"
+                    text = get_random_troll_phrase(context_type="normal")
+                    result = f"{title} | {text}"
+                except Exception:
+                    result = "Сап, Двач | Поясните за жизнь в треде."
 
             title, text = "Thread", result
             if "|" in result:

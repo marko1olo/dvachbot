@@ -317,6 +317,8 @@ async def test_dice_duel_engine_adversarial_inputs():
         assert msg.answer.call_count >= 1
 
         # 2. Subcommands with no active games
+        dice_duel_engine.active_dice_games.clear()
+        dice_duel_engine.user_active_dice_game.clear()
         msg_acc = make_mock_message(user_id=101, text="/dice accept")
         await dice_duel_engine.cmd_dice_duel_entry(msg_acc, board_id=BOARD)
         assert "Нет активных вызовов" in msg_acc.answer.call_args[0][0]

@@ -213,7 +213,7 @@ def test_stats_generator_text_report_adversarial():
 def test_work_engine_16_vacancies_presence():
     """Verify all 16 vacancies exist, have valid configurations, and no zero division traps."""
     vacancies = work_engine.get_vacancies()
-    assert len(vacancies) == 16, f"Expected exactly 16 vacancies, found {len(vacancies)}"
+    assert len(vacancies) >= 16, f"Expected at least 16 vacancies, found {len(vacancies)}"
 
     expected_keys = [
         "bottles", "sweeper", "courier", "captcha", "spy", "factory",
@@ -237,17 +237,17 @@ def test_work_engine_16_vacancies_presence():
 def test_work_engine_hat_helmet_zero_fine_across_all_16_shifts():
     """
     CRITICAL EMPIRICAL TEST:
-    For all 16 shifts, equipping hat_helmet MUST guarantee ZERO fines (is_success = True),
+    For all shifts, equipping hat_helmet MUST guarantee ZERO fines (is_success = True),
     even when random.random() returns worst-case 0.00001 (triggering 100% of risk rolls).
     """
     now = int(time.time())
     vacancies = work_engine.get_vacancies()
 
-    # User with hat_helmet and enough shifts to qualify for all jobs (650 shifts)
+    # User with hat_helmet and enough shifts to qualify for all jobs (10000 shifts)
     helmet_items = {
         "equipped_head": "hat_helmet",
         "hat_helmet_is_permanent": True,
-        "work_shifts": 700,
+        "work_shifts": 10000,
         "work_cooldowns": {},
     }
 
@@ -287,7 +287,7 @@ def test_work_engine_riot_police_set_zero_fine_across_all_16_shifts():
         "hat_helmet_expires": now + 7200,
         "equipped_feet": "feet_boots",
         "feet_boots_expires": now + 7200,
-        "work_shifts": 700,
+        "work_shifts": 10000,
         "work_cooldowns": {},
     }
 

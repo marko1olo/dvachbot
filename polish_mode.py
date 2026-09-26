@@ -387,7 +387,7 @@ POLISH_DATA = {
         'шаурма':['kebab', 'kebab na cienkim', 'kebab u Turka', 'kapsalon'],
         'омега':['przegryw', 'stuleja', 'cwel', 'pizda'],
         'альфа':['Oskarek', 'kozak', 'szef', 'byczek'],
-        'нормис':['normik', 'zwykły Polak', 'Janusz', 'zwyklak'],
+        'рак':['normik', 'zwykły Polak', 'Janusz', 'zwyklak'],
         'чмо':['śmieć', 'zjeb', 'chuj', 'kurwi syn'],
         'пиздабол':['kłamca', 'bajerant', 'pierdolnik', 'farmazon'],
         'деанон':['dojazd', 'wystalkowanie', 'ujebanie w necie'],

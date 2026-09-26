@@ -82,7 +82,7 @@ for i, p in enumerate(album_ru):
         print(f"Replaced in ALBUM_EDUCATION_PHRASES: {p} -> {album_ru[i]}")
 
 # CONTEXTUAL_REPLIES for tiktok/reddit
-tiktok_key = r"\b(тикток|реддит|пикабу|нормис|вк|инста|станкс|мемчики|хайп)\b"
+tiktok_key = r"\b(тикток|реддит|пикабу|рак|вк|инста|станкс|мемчики|хайп)\b"
 if tiktok_key in data["CONTEXTUAL_REPLIES"]:
     tiktok_phrases = data["CONTEXTUAL_REPLIES"][tiktok_key]
     for i, p in enumerate(tiktok_phrases):

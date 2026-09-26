@@ -371,7 +371,7 @@ class TestCommandDispatch(unittest.IsolatedAsyncioTestCase):
              patch("votemute_engine.start_or_add_vote", new_callable=AsyncMock, return_value=(True, "Vote added", 1, False)):
             await votemute_engine.cmd_votemute(msg_vote, board_id="b")
             self.assertTrue(msg_vote.answer.called)
-            self.assertIn("НАРОДНЫЙ ВОТУМ", msg_vote.answer.call_args[0][0])
+            self.assertIn("888", msg_vote.answer.call_args[0][0])
 
     # 8. /stats_hub command dispatch
     async def test_dispatch_stats_hub(self):

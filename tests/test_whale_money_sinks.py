@@ -94,7 +94,7 @@ class TestWhaleSafes:
             total_cash_returned += base_cash
 
             nominal = base_cash
-            if "[👑 Золотой Анон]" in payload.get("grant_title", ""):
+            if payload.get("grant_title") in ("[👑 Золотой Анон]", "👑👑"):
                 nominal += 15000
             elif payload.get("vip_pin_voucher"):
                 nominal += 12000
@@ -132,7 +132,7 @@ class TestWhaleSafes:
 
         for _ in range(2000):
             tier, title, desc, payload, base_cash = roll_whale_safe()
-            if payload.get("grant_title") == "[👑 Золотой Анон]":
+            if payload.get("grant_title") in ("[👑 Золотой Анон]", "👑👑"):
                 found["title_golden_anon"] = True
             if payload.get("vip_pin_voucher"):
                 found["vip_pin_voucher"] = True
@@ -228,7 +228,7 @@ class TestAtomicAuctions:
 
         # Create auction
         auc_id = await create_auction(
-            db, lot_type="custom_role", title="[Главный Скуф]",
+            db, lot_type="custom_role", title="[Главный Сыч]",
             description="Кастомный титул на 30 дней",
             start_price=50000.0, min_bid_step=5000.0, duration_sec=3600.0
         )

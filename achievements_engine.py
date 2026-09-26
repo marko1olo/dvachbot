@@ -115,7 +115,7 @@ ACHIEVEMENTS_CATALOG = {
     "ach_set_skuf": {
         "id": "ach_set_skuf",
         "name": "🩲 Повелитель Пивнухи",
-        "desc": "Собрать и надеть Сет Подъездного Скуфа (Корона + Треники).",
+        "desc": "Собрать и надеть Сет Подъездного Сыча (Корона + Треники).",
         "reward_cash": 300,
         "icon": "🩲",
         "category": "wardrobe"

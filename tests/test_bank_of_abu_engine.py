@@ -16,7 +16,7 @@ Coverage Matrix:
     * Double-withdrawal prevention (cannot withdraw already closed deposit).
 - Tier 3 (Lockup Enforcement, Early Penalties & Pyramid Risk):
     * Tier 'sych' (Сейф Сыча): 0.5% daily yield (0.005 / 86400 per sec), 0 lockup, 1% withdrawal fee, 0% risk.
-    * Tier 'skuf' (Депозит Скуфа): 2.5% daily yield, 72h lockup (259200 sec).
+    * Tier 'skuf' (Депозит Сыча): 2.5% daily yield, 72h lockup (259200 sec).
         - Premature withdrawal (< 72h): loses all accrued interest + 3% principal penalty deducted.
         - Mature withdrawal (>= 72h): 0% penalty, full principal + full accrued interest.
     * Tier 'mmm_abu' (МММ Абу): 6.0% daily yield, 24h lockup (86400 sec).

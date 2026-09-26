@@ -464,7 +464,7 @@ class TestMusicRoastPromptAndFormatting:
         dur_str = "4 мин"
         lyrics_sample = "Весь мой рэп, если коротко..."
         roast_text = "Кусок ностальгического бумерского пафоса."
-        rating = "3/10 💩 (Для скуфов)"
+        rating = "3/10 💩 (Для сычей)"
 
         formatted = (
             f"🎵 <b>Трек:</b> {escape_html(artist)} — {escape_html(title)} (<i>{dur_str}</i>)\n\n"

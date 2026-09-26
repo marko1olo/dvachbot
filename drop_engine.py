@@ -570,7 +570,11 @@ async def init_drop_engine(db_conn) -> int:
                 d_id, donor, board, amt, c_at = r
                 exp_at = c_at + 600.0
                 if now < exp_at:
-                    donor_name = "Анон"
+                    try:
+                        from common.anon_identity import get_anon_id
+                        donor_name = f"Анон [{get_anon_id(donor)}]"
+                    except Exception:
+                        donor_name = "Анон"
                     active_drops[d_id] = DropRecord(
                         drop_id=d_id,
                         donor_id=donor,

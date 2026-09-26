@@ -49,7 +49,7 @@ CLOTHING_CATALOG = {
         "id": "hat_crown",
         "slot": "head",
         "tier": 2,
-        "name": "👑 Корона VIP-Скуфа",
+        "name": "👑 Корона VIP-Сыча",
         "price": 350,
         "duration_days": 14,
         "duration_hours": 336,
@@ -368,7 +368,7 @@ SET_BONUSES = {
     },
     "set_gop_skuf": {
         "id": "set_gop_skuf",
-        "name": "🩲 Сет «Подъездный Скуф»",
+        "name": "🩲 Сет «Подъездный Сыч»",
         "items": ["hat_crown", "body_tracksuit"],
         "bonus_desc": "40% шанс отпугнуть грабителя в /rob и +35% к чаевым на работе.",
         "rob_fear_chance": 0.40,

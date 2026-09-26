@@ -624,7 +624,7 @@ async def cmd_votemute(message: types.Message, board_id: Optional[str] = None):
     from common.database import is_shadow_muted as check_db_shadow_muted
     from common.bot_helpers import check_user_is_muted
     db = await get_pool()
-    if await check_db_shadow_muted(voter_id, board_id) or await check_user_is_muted(db, voter_id, board_id):
+    if await check_db_shadow_muted(voter_id, board_id, db=db) or await check_user_is_muted(db, voter_id, board_id):
         await message.answer("🔇 Замученным нельзя запускать народный вотум.", parse_mode="HTML")
         return
 
@@ -672,7 +672,7 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
     from common.database import is_shadow_muted as check_db_shadow_muted
     from common.bot_helpers import check_user_is_muted
     db = await get_pool()
-    if await check_db_shadow_muted(voter_id, board_id) or await check_user_is_muted(db, voter_id, board_id):
+    if await check_db_shadow_muted(voter_id, board_id, db=db) or await check_user_is_muted(db, voter_id, board_id):
         await callback.answer("🔇 Замученным нельзя голосовать в народном вотуме.", show_alert=True)
         return
 

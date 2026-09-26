@@ -293,6 +293,14 @@ class NewPostProcessor:
         locally_created_posts.append(self.current_post_num)
         self.final_content['post_num'] = self.current_post_num
         self.author_content['post_num'] = self.current_post_num
+        async with storage_lock:
+            state['post_counter'] = max(state.get('post_counter', 0), self.current_post_num)
+            messages_storage[self.current_post_num] = {
+                'author_id': self.user_id, 'timestamp': now_dt,
+                'content': self.final_content.copy(),
+                'author_message_id': None, 'board_id': self.board_id, 'thread_id': self.thread_id,
+                'chain_depth': 0
+            }
         return True
 
     async def _format_and_update_headers(self):
@@ -300,7 +308,7 @@ class NewPostProcessor:
             if self.thread_id:
                 thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
                 local_post_num = len(thread_info.get('posts', [])) + 1
-                header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream)
+                header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream, global_post_num=self.current_post_num)
             else:
                 header_text = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
             # Метка баяна идёт первой строкой заголовка. Заголовок и так собирается

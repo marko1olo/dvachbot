@@ -70,7 +70,7 @@ class TestBankChatDepositAmountParsing(unittest.TestCase):
     def test_parse_amount_and_tier_extraction(self):
         self.assertEqual(parse_amount_and_tier("50000", "sych"), ("50000", "sych"))
         self.assertEqual(parse_amount_and_tier("50000 skuf", "sych"), ("50000", "skuf"))
-        self.assertEqual(parse_amount_and_tier("100к скуф", "sych"), ("100к", "skuf"))
+        self.assertEqual(parse_amount_and_tier("100к сыч", "sych"), ("100к", "skuf"))
         self.assertEqual(parse_amount_and_tier("все в ммм", "sych"), ("все", "mmm_abu"))
         self.assertIsNone(parse_amount_and_tier("обычное сообщение в тред на борде"))
         self.assertIsNone(parse_amount_and_tier("/help"))

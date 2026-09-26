@@ -467,7 +467,7 @@ class TestM2RoutersAndHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertIn("БАНК АБУ — ЗАЩИЩЕННЫЙ СЕЙФ", sent_text)
         self.assertIn("2,500.00 ₪", sent_text)  # 3500 - 1000 in safe
         self.assertIn("1,000.00 ₪", sent_text)  # In safe
-        self.assertIn("Депозит Скуфа", sent_text)
+        self.assertIn("Депозит Сыча", sent_text)
 
         cb_datas = [btn.callback_data for row in sent_kb.inline_keyboard for btn in row]
         self.assertIn("bank_deposit_menu", cb_datas)

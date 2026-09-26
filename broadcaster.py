@@ -435,16 +435,42 @@ class MessageBroadcaster:
                 db_post = await get_post_by_num(self.post_num_for_replies)
                 if db_post:
                     self.reply_to_post_author_id = db_post.get('author_id')
+                    async with storage_lock:
+                        if self.post_num_for_replies not in messages_storage:
+                            c_data = db_post.get('content')
+                            if isinstance(c_data, str):
+                                try: c_data = json.loads(c_data)
+                                except Exception: c_data = {}
+                            messages_storage[self.post_num_for_replies] = {
+                                "author_id": db_post.get("author_id"),
+                                "timestamp": db_post.get("timestamp"),
+                                "content": c_data or {},
+                                "board_id": db_post.get("board_id"),
+                                "thread_id": db_post.get("thread_id"),
+                                "reply_to_post_num": db_post.get("reply_to_post_num"),
+                            }
 
-            in_ram = False
+            # Проверяем, есть ли полные копии в RAM для всех получателей.
+            # Если нет в RAM или не хватает кого-то из recipients — подтягиваем из БД.
+            needs_db_copies = False
             async with storage_lock:
-                if self.post_num_for_replies in post_to_messages:
-                    in_ram = True
+                ram_copies = post_to_messages.get(self.post_num_for_replies)
+                if not ram_copies:
+                    needs_db_copies = True
+                elif any(uid not in ram_copies for uid in self.recipients):
+                    needs_db_copies = True
 
-            if not in_ram:
+            if needs_db_copies:
                 db_copies = await get_post_copies(self.post_num_for_replies)
-                for rec_id, msg_id in db_copies:
-                    self.db_replies_map[rec_id] = msg_id
+                if db_copies:
+                    for rec_id, msg_id in db_copies:
+                        self.db_replies_map[rec_id] = msg_id
+                    async with storage_lock:
+                        p_map = post_to_messages.setdefault(self.post_num_for_replies, {})
+                        for rec_id, msg_id in db_copies:
+                            if rec_id not in p_map:
+                                p_map[rec_id] = msg_id
+                            message_to_post[(rec_id, msg_id)] = self.post_num_for_replies
 
         self.common_formatted_body = await _format_message_body(
             content=self.content_for_common,
@@ -465,7 +491,7 @@ class MessageBroadcaster:
         self.highlight_head_html = f"<i>{escape_html(highlight_header_text)}</i>"
 
         has_reply_markers = ">>" in self.raw_text
-        self.users_settings = self.b_data.get('user_settings', {})
+        self.users_settings = self.b_data.get('user_settings', {}) if self.b_data else {}
         # Текст для проверки /hide одинаков для всех получателей, а считался
         # заново в _send_one на каждого — конкатенация плюс .lower() по всему
         # телу поста. Готовим один раз на рассылку.
@@ -911,7 +937,9 @@ class MessageBroadcaster:
                     if raw: reply_to_mid = raw[0] if isinstance(raw, list) else raw
 
         if reply_to_mid is None and self.post_num_for_replies:
-            reply_to_mid = self.db_replies_map.get(uid)
+            raw_db = self.db_replies_map.get(uid)
+            if raw_db:
+                reply_to_mid = raw_db[0] if isinstance(raw_db, list) else raw_db
 
         is_sage = send_content.get('is_sage', False)
         has_spoiler = u_set['nsfw']

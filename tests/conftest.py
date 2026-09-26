@@ -6,6 +6,20 @@ from pathlib import Path
 import sys
 from unittest import mock
 
+# Must be set at module level — pytest-asyncio STRICT creates per-test event loops
+# before any fixture runs, so setting it inside a fixture is too late on Windows.
+if sys.platform == "win32":
+    _orig_set_policy = asyncio.set_event_loop_policy
+    _selector_policy = asyncio.WindowsSelectorEventLoopPolicy()
+    _orig_set_policy(_selector_policy)
+
+    def _guarded_set_policy(policy):
+        if isinstance(policy, asyncio.WindowsProactorEventLoopPolicy):
+            return
+        _orig_set_policy(policy)
+
+    asyncio.set_event_loop_policy = _guarded_set_policy
+
 import pytest
 
 # --- Корень проекта ---

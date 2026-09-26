@@ -35,11 +35,11 @@
     {
       "@context": "https://schema.org",
       "@type": "DiscussionForumPosting",
-      "headline": "{{ op_post.content.text | clean_title | truncate(110) | replace('\"', '\\\"') }}",
-      "articleBody": "{{ op_post.content.text | striptags | replace('\"', '\\\"') }}",
+      "headline": {{ (op_post.content.text | clean_title | truncate(110)) | tojson }},
+      "articleBody": {{ (op_post.content.text | striptags) | tojson }},
       "author": {
         "@type": "Person",
-        "name": "{% if op_post.content.author_name %}{{ op_post.content.author_name | replace('\"', '\\\"') }}{% else %}Аноним{% endif %}"
+        "name": {{ (op_post.content.author_name if op_post.content.author_name else "Аноним") | tojson }}
       },
       "interactionStatistic": {
         "@type": "InteractionCounter",

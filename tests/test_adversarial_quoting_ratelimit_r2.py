@@ -288,33 +288,32 @@ class TestAdversarialRateLimitTimingPrecision(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mock_pnp.call_count, 0)
             self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 777)], t0)
 
-            # --- 2. Second trigger at t = 59.9s (0.1s before limit expires) ---
-            mock_time.return_value = t0 + 59.9
+            # --- 2. Second trigger at t = 29.9s (0.1s before 30s limit expires) ---
+            mock_time.return_value = t0 + 29.9
             res2 = await trigger_cyberchad_with_rate_limit(
                 self.mock_bot, "b", 777, "киберчед, ауууу", post_num=101, reply_to_post=None
             )
             self.assertFalse(res2)
             # CRITICAL: Intervention handler must NOT be called again (Gemini protected)
             self.assertEqual(mock_intervene.call_count, 1)
-            # Offline voice reject must be triggered
-            self.assertEqual(mock_tts.call_count, 1)
-            self.assertEqual(mock_pnp.call_count, 1)
-            self.assertEqual(_CYBERCHAD_USER_LAST_REJECT[("b", 777)], t0 + 59.9)
+            # Silent rejection: ordinary users do not get voice note bombs
+            self.assertEqual(mock_tts.call_count, 0)
+            self.assertEqual(mock_pnp.call_count, 0)
+            self.assertEqual(_CYBERCHAD_USER_LAST_REJECT[("b", 777)], t0 + 29.9)
             # Last direct call timestamp must still be t0!
             self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 777)], t0)
 
-            # --- 3. Third trigger at t = 60.1s (0.1s after 60s limit expires from t0) ---
-            mock_time.return_value = t0 + 60.1
+            # --- 3. Third trigger at t = 30.1s (0.1s after 30s limit expires from t0) ---
+            mock_time.return_value = t0 + 30.1
             res3 = await trigger_cyberchad_with_rate_limit(
                 self.mock_bot, "b", 777, "киберчед, минута прошла!", post_num=102, reply_to_post=None
             )
             self.assertTrue(res3)
             # Intervention handler MUST be called (second allowed call)
             self.assertEqual(mock_intervene.call_count, 2)
-            # TTS call count must remain 1 (no new voice reject)
-            self.assertEqual(mock_tts.call_count, 1)
-            self.assertEqual(mock_pnp.call_count, 1)
-            self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 777)], t0 + 60.1)
+            self.assertEqual(mock_tts.call_count, 0)
+            self.assertEqual(mock_pnp.call_count, 0)
+            self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 777)], t0 + 30.1)
 
     async def test_precision_anti_flood_boundary_14_9s_and_15_1s(self):
         """
@@ -328,6 +327,7 @@ class TestAdversarialRateLimitTimingPrecision(unittest.IsolatedAsyncioTestCase):
         with patch("handlers.message_router.register_post_and_maybe_trigger_cyberchad_intervention", new_callable=AsyncMock) as mock_intervene, \
              patch("handlers.message_router.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock) as mock_tts, \
              patch("handlers.message_router.process_new_post", new_callable=AsyncMock) as mock_pnp, \
+             patch("common.bot_helpers._get_user_active_items", new_callable=AsyncMock, return_value={"cyberchad_amulet": True}), \
              patch("handlers.message_router.time.time") as mock_time:
 
             mock_tts.return_value = (b"mock_voice_data", MagicMock())
@@ -407,6 +407,7 @@ class TestAdversarialAudioDOSAndFloodStorm(unittest.IsolatedAsyncioTestCase):
         with patch("handlers.message_router.register_post_and_maybe_trigger_cyberchad_intervention", new_callable=AsyncMock) as mock_intervene, \
              patch("handlers.message_router.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock) as mock_tts, \
              patch("handlers.message_router.process_new_post", new_callable=AsyncMock) as mock_pnp, \
+             patch("common.bot_helpers._get_user_active_items", new_callable=AsyncMock, return_value={"cyberchad_amulet": True}), \
              patch("handlers.message_router.time.time") as mock_time:
 
             mock_tts.return_value = (b"rejection_voice_stream", MagicMock())
@@ -468,6 +469,7 @@ class TestAdversarialAudioDOSAndFloodStorm(unittest.IsolatedAsyncioTestCase):
         with patch("handlers.message_router.register_post_and_maybe_trigger_cyberchad_intervention", new_callable=AsyncMock) as mock_intervene, \
              patch("handlers.message_router.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock) as mock_tts, \
              patch("handlers.message_router.process_new_post", new_callable=AsyncMock) as mock_pnp, \
+             patch("common.bot_helpers._get_user_active_items", new_callable=AsyncMock, return_value={"cyberchad_amulet": True}), \
              patch("handlers.message_router.time.time") as mock_time:
 
             mock_tts.return_value = (b"concurrent_voice", MagicMock())

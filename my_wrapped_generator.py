@@ -78,7 +78,7 @@ def fetch_user_wrapped_data(user_id: int) -> Dict[str, Any]:
                 chronotype = f"Ночной Сыч ({peak_hour:02d}:00)"
                 archetype = "Хронический Полуночный Шизоид"
             elif 6 <= peak_hour < 12:
-                chronotype = f"Утренний Скуф ({peak_hour:02d}:00)"
+                chronotype = f"Утренний Сыч ({peak_hour:02d}:00)"
                 archetype = "Бодрый Утренний Эксперт"
             elif 12 <= peak_hour < 18:
                 chronotype = f"Дневной Офисник ({peak_hour:02d}:00)"
