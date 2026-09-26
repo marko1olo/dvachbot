@@ -4,6 +4,7 @@ import time
 import re
 from functools import lru_cache
 from aiogram import Bot
+from typing import Any, Optional
 from shared_state import *
 try:
     from moderation_config import *
@@ -13,7 +14,8 @@ from broadcaster import MessageBroadcaster, DeliveryResults, _trim_post_copy_map
 from utils import split_text
 from common.text_utils import clean_html_for_tg
 from summarize import summarize_text_with_hf
-from common.database import create_post, update_post_content
+from common.database import create_post, update_post_content, get_all_channel_copies, get_post_copies, delete_post_by_num
+from common.db_pool import get_pool
 import itertools
 from common.task_manager import spawn_task
 import faulthandler
@@ -103,7 +105,88 @@ COLOR_EMOJIS = {
     "gold": "🟡", "orange": "🟠", "white": "⚪", "black": "🏴", "rainbow": "🌈"
 }
 
-async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru') -> str:
+ZW_ZERO = '\u200b'  # Zero-width space (binary 0)
+ZW_ONE = '\u200c'   # Zero-width non-joiner (binary 1)
+ZW_FRAME = '\u2060' # Word joiner (frame delimiter)
+
+RE_HEADER_POST_NUM = re.compile(
+    r'(?:(?:Пост|Пiст|Post|Freedom Post|Повiдомлення|Малява|Донесение|Депеша|Пакет|Подарок|Сообщение|Казус)\s*(?:№|No\.?|#)|レス番|СИГНАЛ\s*#|投稿)\s*(\d+)(?![\d/])',
+    re.IGNORECASE
+)
+
+def encode_post_num_zw(post_num: int | None) -> str:
+    """Encodes a post number into an invisible zero-width unicode string."""
+    if not post_num or not isinstance(post_num, int) or post_num <= 0:
+        return ""
+    b = bin(post_num)[2:]
+    zw_bits = b.replace('0', ZW_ZERO).replace('1', ZW_ONE)
+    return f"{ZW_FRAME}{zw_bits}{ZW_FRAME}"
+
+def decode_post_num_zw(text: str | None) -> int | None:
+    """Extracts and decodes an invisible post number from zero-width unicode characters."""
+    if not text or ZW_FRAME not in text:
+        return None
+    m = re.search(f"{ZW_FRAME}([{ZW_ZERO}{ZW_ONE}]+){ZW_FRAME}", text)
+    if not m:
+        return None
+    raw_bits = m.group(1).replace(ZW_ZERO, '0').replace(ZW_ONE, '1')
+    try:
+        val = int(raw_bits, 2)
+        return val if val > 0 else None
+    except ValueError:
+        return None
+
+def extract_post_num_from_message(message: Any) -> int | None:
+    r"""
+    100% reliable post number extraction from a Telegram Message or string:
+    1. Zero-width invisible metadata frame (immune to language/modes/thread counts).
+    2. text_link entities (https://tgach.top/p/{num} or tg://post/{num}).
+    3. Comprehensive header regex on first line (avoiding user quotes like >>12345).
+    4. Full text header regex with strict boundary (?![\d/]).
+    """
+    if not message:
+        return None
+    raw_text = getattr(message, 'text', None) or getattr(message, 'caption', None) or ""
+    if not raw_text and isinstance(message, str):
+        raw_text = message
+
+    # 1. Zero-width metadata
+    zw_num = decode_post_num_zw(raw_text)
+    if zw_num is not None:
+        return zw_num
+
+    # 2. Text link entities
+    entities = getattr(message, 'entities', None) or getattr(message, 'caption_entities', None) or []
+    for ent in entities:
+        url = getattr(ent, 'url', None) or ""
+        if 'tgach.top/p/' in url or 'tg://post/' in url:
+            m = re.search(r'(?:tgach\.top/p/|tg://post/)(\d+)', url)
+            if m:
+                try:
+                    return int(m.group(1))
+                except ValueError:
+                    pass
+
+    # 3. First-line header regex
+    if raw_text:
+        first_line = raw_text.split('\n', 1)[0]
+        m = RE_HEADER_POST_NUM.search(first_line)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                pass
+        # 4. Full text search
+        m = RE_HEADER_POST_NUM.search(raw_text)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                pass
+
+    return None
+
+async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru', global_post_num: int | None = None) -> str:
 
     b_data = board_data[board_id]
     op_marker = " (OP)" if author_id != 0 and author_id == thread_info.get('op_id') else ""
@@ -144,26 +227,28 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
         except Exception:
             pass
 
-    if b_data.get('slavaukraine_mode'): return f"{author_prefix}💙💛 Пост №{post_num_formatted}"
-    if b_data.get('zaputin_mode'): return f"{author_prefix}🇷🇺 Пост №{post_num_formatted}"
-    if b_data.get('anime_mode'): return f"{author_prefix}🌸 投稿 {post_num_formatted} 番"
-    if b_data.get('suka_blyat_mode'): return f"{author_prefix}💥 Пост №{post_num_formatted}"
-    if b_data.get('polish_mode'): return f"{author_prefix}🇵🇱 Post №{post_num_formatted}"
-    if b_data.get('schizo_mode'): return f"{author_prefix}++ СИГНАЛ #{post_num_formatted} ++"
-    if b_data.get('warhammer_mode'): return f"{author_prefix}⚡ Донесение №{post_num_formatted}"
-    if b_data.get('imperial_mode'): return f"{author_prefix}📜 Депеша №{post_num_formatted}"
-    if b_data.get('matrix_mode'): return f"{author_prefix}🟩 Пакет №{post_num_formatted}"
-    if b_data.get('america_mode'): return f"{author_prefix}🦅 Freedom Post №{post_num_formatted}"
-    if b_data.get('holiday_mode'): return f"{author_prefix}🎅 Подарок №{post_num_formatted}"
-    if b_data.get('oldweb_mode'): return f"{author_prefix}🖥️ Сообщение #{post_num_formatted}"
-    if b_data.get('jewish_mode'): return f"{author_prefix}📜 Казус №{post_num_formatted}"
+    zw_prefix = encode_post_num_zw(global_post_num) if global_post_num else ""
+
+    if b_data.get('slavaukraine_mode'): return zw_prefix + f"{author_prefix}💙💛 Пост №{post_num_formatted}"
+    if b_data.get('zaputin_mode'): return zw_prefix + f"{author_prefix}🇷🇺 Пост №{post_num_formatted}"
+    if b_data.get('anime_mode'): return zw_prefix + f"{author_prefix}🌸 投稿 {post_num_formatted} 番"
+    if b_data.get('suka_blyat_mode'): return zw_prefix + f"{author_prefix}💥 Пост №{post_num_formatted}"
+    if b_data.get('polish_mode'): return zw_prefix + f"{author_prefix}🇵🇱 Post №{post_num_formatted}"
+    if b_data.get('schizo_mode'): return zw_prefix + f"{author_prefix}++ СИГНАЛ #{post_num_formatted} ++"
+    if b_data.get('warhammer_mode'): return zw_prefix + f"{author_prefix}⚡ Донесение №{post_num_formatted}"
+    if b_data.get('imperial_mode'): return zw_prefix + f"{author_prefix}📜 Депеша №{post_num_formatted}"
+    if b_data.get('matrix_mode'): return zw_prefix + f"{author_prefix}🟩 Пакет №{post_num_formatted}"
+    if b_data.get('america_mode'): return zw_prefix + f"{author_prefix}🦅 Freedom Post №{post_num_formatted}"
+    if b_data.get('holiday_mode'): return zw_prefix + f"{author_prefix}🎅 Подарок №{post_num_formatted}"
+    if b_data.get('oldweb_mode'): return zw_prefix + f"{author_prefix}🖥️ Сообщение #{post_num_formatted}"
+    if b_data.get('jewish_mode'): return zw_prefix + f"{author_prefix}📜 Казус №{post_num_formatted}"
     prefix = _get_random_header_prefix(lang=stream)
     if stream == 'en':
-        return f"{author_prefix}{circle}{prefix}Post No.{post_num_formatted}"
+        return zw_prefix + f"{author_prefix}{circle}{prefix}Post No.{post_num_formatted}"
     elif stream == 'jp':
-        return f"{author_prefix}{circle}{prefix}レス番 {post_num_formatted}"
+        return zw_prefix + f"{author_prefix}{circle}{prefix}レス番 {post_num_formatted}"
     else:
-        return f"{author_prefix}{circle}{prefix}Пост №{post_num_formatted}"
+        return zw_prefix + f"{author_prefix}{circle}{prefix}Пост №{post_num_formatted}"
 
 async def format_header(board_id: str, post_num: int, author_id: int = 0, stream: str = 'ru') -> str:
     """
@@ -213,13 +298,16 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                     except Exception:
                         pass
                 if row[1] and row[2] and now_ts < row[2]:
-                    prefix_str = f"{row[1]} "
+                    p_val = row[1]
+                    if "[👑 Золотой Анон]" in p_val or "Золотой Анон" in p_val:
+                        p_val = "👑👑"
+                    prefix_str = f"{p_val} "
         
         debuff_icons = ("💩 " if has_poop else "") + ("🤮 " if has_vomit else "") + ("🇺🇦 " if has_flag_ua else "") + ("🇷🇺 " if has_flag_ru else "")
         custom_prefix = badge_emoji + debuff_icons + prefix_str
                     
     res = await _format_header_inner(board_id, post_num, stream)
-    return custom_prefix + res
+    return encode_post_num_zw(post_num) + custom_prefix + res
 
 def apply_shadow_autoreplace(content: dict) -> dict:
     if not content:
@@ -586,6 +674,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
     """
     board_id = None
+    posts_pending_deletion.add(post_num)
     try:
         db = await get_pool()
         async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
@@ -596,10 +685,9 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
         import traceback; traceback.print_exc()
 
     channel_copies = await get_all_channel_copies(post_num)
-    messages_to_delete_info = await get_post_copies(post_num)
+    raw_copies = await get_post_copies(post_num)
+    messages_to_delete_info = list(raw_copies) if raw_copies else []
     deleted_from_db = await delete_post_by_num(post_num)
-    if not deleted_from_db and not messages_to_delete_info and not channel_copies:
-        return 0
     async with storage_lock:
         post_data = messages_storage.pop(post_num, None)
         if post_data:
@@ -621,8 +709,14 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             if isinstance(mid_or_list, list):
                 for mid in mid_or_list:
                     message_to_post.pop((uid, mid), None)
+                    if (uid, mid) not in messages_to_delete_info:
+                        messages_to_delete_info.append((uid, mid))
             else:
                 message_to_post.pop((uid, mid_or_list), None)
+                if (uid, mid_or_list) not in messages_to_delete_info:
+                    messages_to_delete_info.append((uid, mid_or_list))
+    if not deleted_from_db and not messages_to_delete_info and not channel_copies:
+        return 0
     if channel_copies:
         archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
         deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(board_id) or bot_instance)
@@ -902,6 +996,9 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         if not posts_to_delete_nums:
             return 0
 
+        for p_num in posts_to_delete_nums:
+            posts_pending_deletion.add(p_num)
+
         await _clean_posts_from_ram(posts_to_delete_nums, board_id)
         _clean_posts_from_caches(posts_to_delete_nums)
         await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
@@ -1175,17 +1272,44 @@ async def get_reply_target(message):
     """Resolves the author user_id of the message being replied to."""
     if not message or not getattr(message, 'reply_to_message', None):
         return None
+    target_chat_id = message.chat.id
+    reply_mid = message.reply_to_message.message_id
+    lookup_key = (target_chat_id, reply_mid)
+
+    # 1. In-memory message_to_post lookup
+    async with storage_lock:
+        post_num = message_to_post.get(lookup_key)
+        if post_num and post_num in messages_storage:
+            author_id = messages_storage[post_num].get("author_id")
+            if author_id is not None:
+                return author_id
+
+    # 2. SQLite PostCopies lookup
     try:
         from common.db_pool import get_pool
         db = await get_pool()
         async with db.execute(
             "SELECT author_id FROM PostCopies JOIN Posts ON PostCopies.post_num = Posts.post_num WHERE recipient_id = ? AND message_id = ?",
-            (message.chat.id, message.reply_to_message.message_id)
+            (target_chat_id, reply_mid)
         ) as c:
             row = await c.fetchone()
             if row:
                 return row[0]
     except Exception:
         pass
+
+    # 3. Fallback: extract post number from message text/caption/metadata
+    post_num = extract_post_num_from_message(message.reply_to_message)
+    if post_num:
+        async with storage_lock:
+            if post_num in messages_storage:
+                author_id = messages_storage[post_num].get("author_id")
+                if author_id is not None:
+                    return author_id
+        from common.database import get_post_by_num
+        db_post = await get_post_by_num(post_num)
+        if db_post and 'author_id' in db_post:
+            return db_post['author_id']
+
     return None
 

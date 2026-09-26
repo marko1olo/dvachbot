@@ -16,6 +16,7 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, Tuple, Dict, List, Union, Set, Any
 from aiogram import Bot, types
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import FSInputFile
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ CATEGORY_PATTERNS = {
         "holding_purple_crystal", "holding_apples", "record_store"
     ],
     "roulette": [
-        "vortex", "fire_vortex", "cyberpunk", "anime_style_scene", "pop-art", "fantasy_field",
+        "banner_roulette", "roulette", "vortex", "fire_vortex", "cyberpunk", "anime_style_scene", "pop-art", "fantasy_field",
         "scissor", "floating_tools", "witch", "tongue", "crimson", "arcade", "dark",
         "red", "crystal", "canister", "twilight", "code", "matrix", "duel", "game",
         "card", "shinjuku", "surreal", "rooftop", "alien_sky", "cathedral", "graveyard",
@@ -104,15 +105,15 @@ CATEGORY_PATTERNS = {
         "before_fire_vortex", "against_fire_vortex", "fire_vortex_poster", "sticking_out_tongue"
     ],
     "cyberpunk": [
-        "cyberpunk", "cyber", "grid", "matrix", "code", "digital", "neon", "shinjuku",
+        "banner_tictactoe", "banner_roulette", "cyberpunk", "cyber", "grid", "matrix", "code", "digital", "neon", "shinjuku",
         "tokyo_alleyway", "vaporwave", "vaporwave_grid", "turning_head_with_code", "glowing"
     ],
     "retro": [
-        "retro", "arcade", "retro_arcade", "record_store", "vinyl", "vaporwave", "retro_desktop",
+        "banner_tictactoe", "retro", "arcade", "retro_arcade", "record_store", "vinyl", "vaporwave", "retro_desktop",
         "80s", "90s", "album_cover", "sketch_studio", "pop-art"
     ],
     "matrix": [
-        "matrix", "code", "digital", "grid", "cyber", "turning_head_with_code", "glowing_c",
+        "banner_tictactoe", "matrix", "code", "digital", "grid", "cyber", "turning_head_with_code", "glowing_c",
         "surreal_space", "floating_tools"
     ],
     "anime": [
@@ -132,7 +133,7 @@ CATEGORY_PATTERNS = {
         "soap", "tool", "floating_tools", "box", "print", "layout"
     ],
     "games": [
-        "arcade", "retro_arcade", "game", "card", "roulette", "duel", "dice", "pop-art",
+        "banner_tictactoe", "banner_roulette", "tictactoe", "arcade", "retro_arcade", "game", "card", "roulette", "duel", "dice", "pop-art",
         "floating_tools", "scissor"
     ],
     "cards": [
@@ -140,7 +141,7 @@ CATEGORY_PATTERNS = {
         "print_layout", "graphic_design"
     ],
     "duel": [
-        "duel", "vortex", "fire_vortex", "scissor", "tongue", "witch", "crimson", "danger",
+        "banner_roulette", "duel", "vortex", "fire_vortex", "scissor", "tongue", "witch", "crimson", "danger",
         "action", "red", "bold_text", "blood"
     ]
 }
@@ -585,6 +586,7 @@ async def send_banner_message(
 
     # If caption exceeds 1024 chars, send media first (no caption), then reply with text.
     if len(caption) > 1024:
+        media_msg = None
         try:
             if is_vid:
                 media_msg = await bot.send_video(chat_id=chat_id, video=media_payload, supports_streaming=True)
@@ -594,17 +596,8 @@ async def send_banner_message(
             if fid and fname and bot_id:
                 _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                 save_cache()
-            # Reply to the media with the full text
-            return await _send_text_with_fallback(
-                bot=bot,
-                chat_id=chat_id,
-                text=caption,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                reply_to_message_id=media_msg.message_id
-            )
         except Exception as e:
-            logger.warning(f"[banner_manager] Media+reply failed for {fname}: {e}. Retrying local file...")
+            logger.warning(f"[banner_manager] Initial media send failed for {fname}: {e}. Retrying local file...")
             local_path = BANNERS_DIR / fname
             if local_path.exists() and not isinstance(media_payload, FSInputFile):
                 try:
@@ -616,16 +609,35 @@ async def send_banner_message(
                     if fid and bot_id:
                         _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                         save_cache()
+                except Exception as e2:
+                    logger.warning(f"[banner_manager] Local media retry failed: {e2}")
+
+        if media_msg:
+            # Media was sent. Now send text + keyboard attached
+            try:
+                return await _send_text_with_fallback(
+                    bot=bot,
+                    chat_id=chat_id,
+                    text=caption,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode,
+                    reply_to_message_id=media_msg.message_id
+                )
+            except Exception as e_reply:
+                logger.warning(f"[banner_manager] Reply to media failed: {e_reply}, retrying without reply_to")
+                try:
                     return await _send_text_with_fallback(
                         bot=bot,
                         chat_id=chat_id,
                         text=caption,
                         reply_markup=reply_markup,
-                        parse_mode=parse_mode,
-                        reply_to_message_id=media_msg.message_id
+                        parse_mode=parse_mode
                     )
-                except Exception as e2:
-                    logger.warning(f"[banner_manager] Local media retry failed: {e2}")
+                except Exception as e_plain:
+                    logger.error(f"[banner_manager] Failed to send text after media: {e_plain}")
+                    return media_msg
+        else:
+            # Media failed completely, deliver pure text message with keyboard intact
             return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
 
     try:
@@ -653,8 +665,14 @@ async def send_banner_message(
             save_cache()
             
         return msg
+    except TelegramRetryAfter:
+        raise
     except Exception as e:
         err_text = str(e).lower()
+
+        # If user blocked bot, chat deleted, or deactivated, do NOT fallback to text!
+        if any(term in err_text for term in ("forbidden", "blocked", "chat not found", "user is deactivated", "deactivated")):
+            return None
 
         # 1. If Telegram failed due to unclosed HTML tag in caption, retry with plain text caption
         if "can't parse entities" in err_text and parse_mode:
@@ -679,6 +697,8 @@ async def send_banner_message(
                         parse_mode=None
                     )
                 return msg
+            except TelegramRetryAfter:
+                raise
             except Exception as pe_err:
                 logger.warning(f"[banner_manager] Plain caption retry failed for {fname}: {pe_err}")
 
@@ -720,6 +740,8 @@ async def send_banner_message(
                         _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                         save_cache()
                     return msg
+                except TelegramRetryAfter:
+                    raise
                 except Exception as retry_e:
                     logger.warning(f"[banner_manager] Local media retry also failed for {fname}: {retry_e}")
 
@@ -748,7 +770,16 @@ async def _send_text_with_fallback(
             reply_to_message_id=reply_to_message_id,
             disable_web_page_preview=True
         )
+    except TelegramRetryAfter:
+        raise
     except Exception as e1:
+        err_msg1 = str(e1).lower()
+        if any(ign in err_msg1 for ign in ["forbidden", "blocked", "chat not found", "user is deactivated", "deactivated"]):
+            return None
+        if any(fl in err_msg1 for fl in ["flood", "too many requests", "retry after"]):
+            m = re.search(r"retry in (\d+)", err_msg1)
+            retry_sec = int(m.group(1)) if m else 5
+            raise TelegramRetryAfter(method=None, message=str(e1), retry_after=retry_sec)
         if parse_mode is not None:
             # HTML parse error or entity mismatch: retry without parse mode (plain text)
             try:
@@ -762,9 +793,11 @@ async def _send_text_with_fallback(
                     reply_to_message_id=reply_to_message_id,
                     disable_web_page_preview=True
                 )
+            except TelegramRetryAfter:
+                raise
             except Exception as e2:
-                err_msg = str(e2).lower()
-                if not any(ign in err_msg for ign in ["forbidden", "blocked", "deactivated", "not found"]):
+                err_msg2 = str(e2).lower()
+                if not any(ign in err_msg2 for ign in ["forbidden", "blocked", "deactivated", "not found", "too many requests", "retry after", "flood"]):
                     logger.error(f"[banner_manager] Text fallback without parse_mode failed for {chat_id}: {e2}")
         return None
 
@@ -778,7 +811,68 @@ def get_all_banners_summary() -> Dict[str, Any]:
     }
 
 
+async def broadcast_banner_to_users(
+    bot: Bot,
+    user_ids: list,
+    exclude_uid: int,
+    caption: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+    category: str = "start",
+    parse_mode: str = "HTML",
+    on_sent=None,
+) -> List[Tuple[int, int]]:
+    """
+    Throttled broadcast: sends banner to each user in user_ids (skipping exclude_uid).
+    Respects Telegram rate limits (sleep between sends), skips dead/blocked chats.
+    on_sent(uid, message_id) — optional async callback per successful send.
+    Returns list of (chat_id, message_id) pairs.
+    """
+    import asyncio
+    import random
+    user_list = list(user_ids)
+    random.shuffle(user_list)
+    results: List[Tuple[int, int]] = []
+    for uid in user_list:
+        if uid == exclude_uid:
+            continue
+        try:
+            sent = await send_banner_message(
+                bot=bot,
+                chat_id=uid,
+                caption=caption,
+                reply_markup=reply_markup,
+                category=category,
+                parse_mode=parse_mode,
+            )
+            if not sent:
+                sent = await _send_text_with_fallback(bot, uid, caption, reply_markup, parse_mode)
+            if sent:
+                results.append((uid, sent.message_id))
+                if on_sent:
+                    await on_sent(uid, sent.message_id)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after + 0.5)
+            try:
+                sent = await send_banner_message(
+                    bot=bot, chat_id=uid, caption=caption,
+                    reply_markup=reply_markup, category=category, parse_mode=parse_mode,
+                )
+                if sent:
+                    results.append((uid, sent.message_id))
+                    if on_sent:
+                        await on_sent(uid, sent.message_id)
+            except Exception:
+                pass
+        except Exception as e:
+            err_s = str(e).lower()
+            if any(x in err_s for x in ["forbidden", "blocked", "chat not found", "deactivated", "kicked"]):
+                continue
+        await asyncio.sleep(0.05)
+    return results
+
+
 async def _send_banners_page(*args, **kwargs):
     """Bridge forwarder to main._send_banners_page for backward compatibility and resilience."""
     import main
     return await main._send_banners_page(*args, **kwargs)
+

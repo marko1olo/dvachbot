@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 from common.db_pool import get_pool, db_lock
 from common.database import (
@@ -251,6 +251,7 @@ class TicTacToeGame:
     bot_instance: Optional[Bot] = None
     player_msgs: Dict[int, Tuple[int, int]] = field(default_factory=dict)
     broadcast_msgs: List[Tuple[int, int]] = field(default_factory=list)
+    last_tick_ts: float = 0.0
 
     @property
     def pot(self) -> int:
@@ -505,6 +506,207 @@ def render_game_text(game: TicTacToeGame) -> str:
     return "❌⭕ <b>Крестики-Нолики</b>"
 
 
+async def safe_edit_ttt_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None
+) -> bool:
+    """
+    Safely edits a Telegram message: tries edit_message_text first (which satisfies
+    text messages and unit test mocks), and if Telegram reports 'there is no text'
+    or 'no caption', falls back to edit_message_caption for photo/video banners.
+    Silently ignores 'message is not modified'.
+    """
+    if not bot or not chat_id or not message_id:
+        return False
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+        return True
+    except TelegramBadRequest as e:
+        err = str(e).lower()
+        if "message is not modified" in err:
+            return True
+        if "there is no text" in err or "message to edit has no text" in err or "no text" in err:
+            try:
+                await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                return True
+            except TelegramBadRequest as e2:
+                if "message is not modified" in str(e2).lower():
+                    return True
+                logger.debug(f"[TTT] safe_edit caption failed for {chat_id}/{message_id}: {e2}")
+            except Exception as e2:
+                logger.debug(f"[TTT] safe_edit caption error for {chat_id}/{message_id}: {e2}")
+        else:
+            logger.debug(f"[TTT] safe_edit text failed for {chat_id}/{message_id}: {e}")
+    except TelegramRetryAfter as e:
+        logger.warning(f"[TTT] Flood control hit: retry after {e.retry_after}s")
+    except Exception as e:
+        logger.debug(f"[TTT] safe_edit unexpected error for {chat_id}/{message_id}: {e}")
+    return False
+
+
+async def safe_edit_callback_message(
+    callback: CallbackQuery,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None
+) -> bool:
+    """Safely edits the message associated with a CallbackQuery."""
+    if not callback or not callback.message:
+        return False
+    return await safe_edit_ttt_message(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text=text,
+        reply_markup=reply_markup
+    )
+
+
+async def start_active_ttt_game_screens(
+    bot: Bot,
+    game: TicTacToeGame,
+    opponent_chat_id: Optional[int] = None,
+    opponent_msg_id: Optional[int] = None
+) -> None:
+    """
+    Transitions game to active state:
+    1. Neutralizes old challenge cards for spectators: 'ВЫЗОВ ПРИНЯТ'.
+    2. Neutralizes old challenge cards for both players: 'ИГРА НАЧАЛАСЬ, листайте вниз'.
+    3. Sends a FRESH interactive game board banner to the bottom of the chat for BOTH players.
+    4. Records new message IDs in game.player_msgs.
+    """
+    from banner_manager import send_banner_message
+
+    p1 = game.challenger_id
+    p2 = game.opponent_id
+    if not p1 or not p2:
+        return
+
+    player_msgs = getattr(game, "player_msgs", None)
+    if player_msgs is None:
+        game.player_msgs = {}
+        player_msgs = game.player_msgs
+
+    # Identify old message locations
+    p1_old = player_msgs.get(p1) or ((game.chat_id, game.msg_id) if game.chat_id and game.msg_id else None)
+    p2_old = (opponent_chat_id, opponent_msg_id) if opponent_chat_id and opponent_msg_id else player_msgs.get(p2)
+
+    anon_x = get_anon_id(p1)
+    anon_o = get_anon_id(p2)
+
+    # 1. Neutralize broadcast messages for spectators
+    if getattr(game, "broadcast_msgs", None):
+        spectator_text = (
+            f"❌⭕ <b>КРЕСТИКИ-НОЛИКИ: ВЫЗОВ ПРИНЯТ!</b>\n\n"
+            f"Партия на <code>{game.bet:,} ₪</code> уже началась между Аноном [{anon_x}] и Аноном [{anon_o}].\n"
+            f"Мест за столом больше нет."
+        )
+        for chat_id, msg_id in list(game.broadcast_msgs):
+            if p1_old and (chat_id, msg_id) == p1_old:
+                continue
+            if p2_old and (chat_id, msg_id) == p2_old:
+                continue
+            await safe_edit_ttt_message(bot, chat_id, msg_id, spectator_text, reply_markup=None)
+        game.broadcast_msgs = []
+
+    # 2. Update players' old challenge messages so they know to look at the new message below
+    player_old_text = "🎮 <b>ИГРА НАЧАЛАСЬ!</b>\n\nСвежая доска отправлена новым сообщением вниз чата ⬇️"
+    if p1_old:
+        await safe_edit_ttt_message(bot, p1_old[0], p1_old[1], player_old_text, reply_markup=None)
+    if p2_old and p2_old != p1_old:
+        await safe_edit_ttt_message(bot, p2_old[0], p2_old[1], player_old_text, reply_markup=None)
+
+    # 3. Send new fresh banner message(s) to the bottom of the chat
+    rendered_text = render_game_text(game)
+    kb = get_ttt_game_keyboard(game)
+
+    # If both players are in the same chat (e.g. group):
+    if p1_old and p2_old and p1_old[0] == p2_old[0]:
+        target_chat = p1_old[0]
+        sent_msg = await send_banner_message(
+            bot=bot,
+            chat_id=target_chat,
+            caption=rendered_text,
+            reply_markup=kb,
+            category="ttt",
+            parse_mode="HTML"
+        )
+        if not sent_msg:
+            try:
+                sent_msg = await bot.send_message(
+                    chat_id=target_chat,
+                    text=rendered_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_msg:
+            player_msgs[p1] = (target_chat, sent_msg.message_id)
+            player_msgs[p2] = (target_chat, sent_msg.message_id)
+            game.chat_id = target_chat
+            game.msg_id = sent_msg.message_id
+    else:
+        # Separate direct chats (DMs)
+        # P1 (Challenger)
+        sent_p1 = await send_banner_message(
+            bot=bot,
+            chat_id=p1,
+            caption=rendered_text,
+            reply_markup=kb,
+            category="ttt",
+            parse_mode="HTML"
+        )
+        if not sent_p1:
+            try:
+                sent_p1 = await bot.send_message(
+                    chat_id=p1,
+                    text=rendered_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_p1:
+            player_msgs[p1] = (p1, sent_p1.message_id)
+
+        # P2 (Opponent)
+        sent_p2 = await send_banner_message(
+            bot=bot,
+            chat_id=p2,
+            caption=rendered_text,
+            reply_markup=kb,
+            category="ttt",
+            parse_mode="HTML"
+        )
+        if not sent_p2:
+            try:
+                sent_p2 = await bot.send_message(
+                    chat_id=p2,
+                    text=rendered_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_p2:
+            player_msgs[p2] = (p2, sent_p2.message_id)
+
+
 async def sync_ttt_screens(bot: Bot, game: TicTacToeGame):
     """
     Simultaneously edits active game messages for BOTH players in their personal chats,
@@ -528,24 +730,17 @@ async def sync_ttt_screens(bot: Bot, game: TicTacToeGame):
     rendered_text = render_game_text(game)
     kb = get_ttt_game_keyboard(game)
 
-    # 1. Update both active players' messages
+    # 1. Update both active players' messages (avoiding duplicate edits if in same chat)
+    updated_locations = set()
     for uid in (p1, p2):
         if not uid or uid not in player_msgs:
             continue
-        chat_id, msg_id = player_msgs[uid]
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=rendered_text,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e).lower():
-                logger.debug(f"[TTT] sync edit failed for user {uid}: {e}")
-        except Exception as e:
-            logger.debug(f"[TTT] sync unexpected error for user {uid}: {e}")
+        loc = player_msgs[uid]
+        if loc in updated_locations:
+            continue
+        updated_locations.add(loc)
+        chat_id, msg_id = loc
+        await safe_edit_ttt_message(bot, chat_id, msg_id, rendered_text, kb)
 
     # 2. If game started or finished, neutralize other broadcast copies
     if p2 and getattr(game, "broadcast_msgs", None):
@@ -561,16 +756,7 @@ async def sync_ttt_screens(bot: Bot, game: TicTacToeGame):
             if any((chat_id, msg_id) == player_msgs.get(p) for p in (p1, p2) if p in player_msgs):
                 remaining_bcast.append((chat_id, msg_id))
                 continue
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=other_text,
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+            await safe_edit_ttt_message(bot, chat_id, msg_id, other_text, reply_markup=None)
         game.broadcast_msgs = remaining_bcast
 
 
@@ -629,27 +815,22 @@ async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> boo
 # ============================================================================
 
 async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
-    """Asynchronous background watchdog enforcing strictly 120 seconds per turn with live dynamic countdown updates."""
+    """Asynchronous background watchdog enforcing strictly 120 seconds per turn with safe interval countdown updates."""
     try:
-        # Tick in 10-second increments for dynamic live countdown updates
-        for _ in range(TURN_TIMEOUT_SECONDS // 10):
-            await asyncio.sleep(10)
+        # Tick in 15-second increments to avoid Telegram edit flood control
+        for _ in range(TURN_TIMEOUT_SECONDS // 15):
+            await asyncio.sleep(15)
             async with ttt_lock:
                 game = active_ttt_games.get(game_id)
                 if not game or game.status != "active" or game.current_turn != turn_user_id:
                     return
-            # Dynamic live message edit if game is still running
-            if game.get_remaining_time() > 0 and game.bot_instance and game.chat_id and game.msg_id:
+            # Dynamic live message edit for BOTH players if game is still running
+            bot_to_use = game.bot_instance
+            if game.get_remaining_time() > 0 and bot_to_use:
                 try:
-                    await game.bot_instance.edit_message_text(
-                        chat_id=game.chat_id,
-                        message_id=game.msg_id,
-                        text=render_game_text(game),
-                        reply_markup=get_ttt_game_keyboard(game),
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
+                    await sync_ttt_screens(bot_to_use, game)
+                except Exception as e:
+                    logger.debug(f"[TTT] _turn_timeout_watcher sync error for {game_id}: {e}")
 
         async with ttt_lock:
             game = active_ttt_games.get(game_id)
@@ -954,6 +1135,19 @@ async def process_ttt_move(
             _reset_and_start_timer(game)
 
     # Handle financial settlement outside ttt_lock
+    if is_win or is_draw:
+        return await finish_ttt_game(game, is_win=is_win, is_draw=is_draw, bot=bot)
+
+    return True, "OK", game
+
+
+async def finish_ttt_game(
+    game: TicTacToeGame,
+    is_win: bool = False,
+    is_draw: bool = False,
+    bot: Optional[Bot] = None
+) -> Tuple[bool, str, Optional[TicTacToeGame]]:
+    """Handles financial settlement, broadcast announcements, and private DMs for finished TTT game."""
     db = await get_pool()
     if is_win:
         rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
@@ -1198,29 +1392,13 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
             await message.answer(err)
             return
 
-        # Update challenge message in challenger's chat
-        if game and game.msg_id:
-            try:
-                await message.bot.edit_message_text(
-                    chat_id=game.chat_id,
-                    message_id=game.msg_id,
-                    text=render_game_text(game),
-                    reply_markup=get_ttt_game_keyboard(game),
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-
-        # Send interactive game board to the accepting player
-        try:
-            whose_turn = "Ход соперника (❌)" if game.current_turn != user_id else "Твой ход!"
-            await message.answer(
-                f"⚔️ <b>Вызов принят!</b> {whose_turn}\n\n" + render_game_text(game),
-                reply_markup=get_ttt_game_keyboard(game),
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
+        # Transition game screens: neutralize old challenge messages and send fresh banners down
+        await start_active_ttt_game_screens(
+            bot=message.bot,
+            game=game,
+            opponent_chat_id=message.chat.id,
+            opponent_msg_id=message.reply_to_message.message_id if message.reply_to_message else None
+        )
         return
 
     # Handle "/ttt cancel"
@@ -1271,7 +1449,17 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
             f"• Победитель забирает банк (минус 5% рейк Абу).\n\n"
             f"Выбери ставку кнопками или напиши: <code>/ttt 500</code>"
         )
-        await message.answer(caption, reply_markup=kb, parse_mode="HTML")
+        from banner_manager import send_banner_message
+        sent = await send_banner_message(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            caption=caption,
+            reply_markup=kb,
+            category="ttt",
+            parse_mode="HTML"
+        )
+        if not sent:
+            await message.answer(caption, reply_markup=kb, parse_mode="HTML")
         return
 
     bet = int(args[0])
@@ -1289,32 +1477,45 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
         return
 
     kb = get_ttt_challenge_keyboard(game.game_id)
-    sent = await message.answer(render_game_text(game), reply_markup=kb, parse_mode="HTML")
+    from banner_manager import send_banner_message
+    sent = await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=render_game_text(game),
+        reply_markup=kb,
+        category="ttt",
+        parse_mode="HTML"
+    )
+    if not sent:
+        sent = await message.answer(render_game_text(game), reply_markup=kb, parse_mode="HTML")
     game.msg_id = sent.message_id
     game.player_msgs[user_id] = (sent.chat.id, sent.message_id)
     game.broadcast_msgs.append((sent.chat.id, sent.message_id))
 
-    # Broadcast challenge to active board users
-    try:
-        from shared_state import board_data as _board_data
-        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
-        for uid in active_users:
-            if uid == user_id:
-                continue
-            if target_user_id is not None and uid != target_user_id:
-                continue
-            try:
-                bcast_sent = await message.bot.send_message(
-                    chat_id=uid,
-                    text=render_game_text(game),
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
-                game.broadcast_msgs.append((uid, bcast_sent.message_id))
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # Рассылаем карточку активным юзерам борда (throttled background task)
+    async def _do_broadcast():
+        try:
+            from shared_state import board_data as _board_data
+            from banner_manager import broadcast_banner_to_users
+            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+            if target_user_id is not None:
+                active_users = [uid for uid in active_users if uid == target_user_id]
+            async def _on_sent(uid, mid):
+                game.broadcast_msgs.append((uid, mid))
+            await broadcast_banner_to_users(
+                bot=message.bot,
+                user_ids=active_users,
+                exclude_uid=user_id,
+                caption=render_game_text(game),
+                reply_markup=kb,
+                category="ttt",
+                parse_mode="HTML",
+                on_sent=_on_sent,
+            )
+        except Exception:
+            pass
+    import asyncio
+    asyncio.create_task(_do_broadcast())
 
     try:
         await message.delete()
@@ -1338,10 +1539,26 @@ async def cb_casino_ttt_menu(callback: CallbackQuery, board_id: Optional[str] = 
         f"💰 Выбранная ставка: <code>{default_bet:,} ₪</code>\n\n"
         f"Выбери размер ставки и создай открытый вызов на доску:"
     )
+    edited = False
     try:
-        await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+        await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = True
     except Exception:
-        await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
+        try:
+            await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+            edited = True
+        except Exception:
+            pass
+    if not edited:
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            caption=caption,
+            reply_markup=kb,
+            category="ttt",
+            parse_mode="HTML"
+        )
     await callback.answer()
 
 
@@ -1368,9 +1585,12 @@ async def cb_ttt_lobby_change_bet(callback: CallbackQuery):
         f"Выбери размер ставки и создай вызов на доску:"
     )
     try:
-        await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+        await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        pass
+        try:
+            await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
     await callback.answer()
 
 
@@ -1397,37 +1617,55 @@ async def cb_ttt_create(callback: CallbackQuery, board_id: Optional[str] = None)
         return
 
     kb = get_ttt_challenge_keyboard(game.game_id)
-    sent = await callback.message.answer(render_game_text(game), reply_markup=kb, parse_mode="HTML")
-    game.msg_id = sent.message_id
-    game.player_msgs[user_id] = (sent.chat.id, sent.message_id)
-    game.broadcast_msgs.append((sent.chat.id, sent.message_id))
-
-    # Broadcast challenge to active board users
+    sent = None
     try:
-        from shared_state import board_data as _board_data
-        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
-        for uid in active_users:
-            if uid == user_id:
-                continue
-            if target_user_id is not None and uid != target_user_id:
-                continue
-            try:
-                bcast_sent = await callback.bot.send_message(
-                    chat_id=uid,
-                    text=render_game_text(game),
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
-                game.broadcast_msgs.append((uid, bcast_sent.message_id))
-            except Exception:
-                pass
+        sent = await callback.message.edit_caption(caption=render_game_text(game), reply_markup=kb, parse_mode="HTML")
     except Exception:
-        pass
+        try:
+            sent = await callback.message.edit_text(render_game_text(game), reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            from banner_manager import send_banner_message
+            sent = await send_banner_message(
+                bot=callback.bot,
+                chat_id=callback.message.chat.id,
+                caption=render_game_text(game),
+                reply_markup=kb,
+                category="ttt",
+                parse_mode="HTML"
+            )
+            if not sent:
+                sent = await callback.message.answer(render_game_text(game), reply_markup=kb, parse_mode="HTML")
 
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    if sent:
+        game.msg_id = sent.message_id
+        game.player_msgs[user_id] = (sent.chat.id, sent.message_id)
+        game.broadcast_msgs.append((sent.chat.id, sent.message_id))
+
+    # Рассылаем карточку активным юзерам борда (throttled background task)
+    async def _do_broadcast():
+        try:
+            from shared_state import board_data as _board_data
+            from banner_manager import broadcast_banner_to_users
+            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+            if target_user_id is not None:
+                active_users = [uid for uid in active_users if uid == target_user_id]
+            async def _on_sent(uid, mid):
+                game.broadcast_msgs.append((uid, mid))
+            await broadcast_banner_to_users(
+                bot=callback.bot,
+                user_ids=active_users,
+                exclude_uid=user_id,
+                caption=render_game_text(game),
+                reply_markup=kb,
+                category="ttt",
+                parse_mode="HTML",
+                on_sent=_on_sent,
+            )
+        except Exception:
+            pass
+    import asyncio
+    asyncio.create_task(_do_broadcast())
+
     await callback.answer("⚔️ Вызов выставлен на доску!")
 
 
@@ -1443,11 +1681,16 @@ async def cb_ttt_join(callback: CallbackQuery):
         await callback.answer(err, show_alert=True)
         return
 
-    # Track opponent's message so sync_ttt_screens can update both screens
-    game.player_msgs[user_id] = (callback.message.chat.id, callback.message.message_id)
-
-    await sync_ttt_screens(callback.bot, game)
-    await callback.answer("⚔️ Игра началась! Первый ход за ❌")
+    # Transition game screens: neutralize old challenge messages and send fresh banners down
+    opp_chat_id = callback.message.chat.id if callback.message else None
+    opp_msg_id = callback.message.message_id if callback.message else None
+    await start_active_ttt_game_screens(
+        bot=callback.bot,
+        game=game,
+        opponent_chat_id=opp_chat_id,
+        opponent_msg_id=opp_msg_id
+    )
+    await callback.answer("⚔️ Игра началась! Свежая доска отправлена вниз чата ⬇️")
 
 
 @router.callback_query(F.data.startswith("ttt:mv:"))
@@ -1496,24 +1739,19 @@ async def cb_ttt_cancel(callback: CallbackQuery):
         await callback.answer(msg, show_alert=True)
         return
 
-    try:
-        await callback.message.edit_text("❌ <b>Вызов в крестики-нолики отменен создателем.</b>", parse_mode="HTML")
-    except Exception:
-        pass
+    cancel_text = "❌ <b>Вызов в крестики-нолики отменен создателем.</b>"
+    await safe_edit_callback_message(callback, cancel_text, reply_markup=None)
 
     for chat_id, msg_id in broadcast_msgs:
-        if chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
+        if callback.message and chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
             continue
-        try:
-            await callback.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text="❌ <b>Вызов в крестики-нолики отменен создателем.</b>",
-                reply_markup=None,
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
+        await safe_edit_ttt_message(
+            bot=callback.bot,
+            chat_id=chat_id,
+            message_id=msg_id,
+            text=cancel_text,
+            reply_markup=None
+        )
 
     await callback.answer(msg)
 
@@ -1526,15 +1764,14 @@ async def cb_ttt_refresh(callback: CallbackQuery):
     if not game:
         await callback.answer("Игра завершена", show_alert=False)
         return
-    try:
-        await callback.message.edit_text(
-            render_game_text(game),
-            reply_markup=get_ttt_game_keyboard(game),
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
-    await callback.answer(f"⏳ Осталось времени: {game.get_remaining_time()}с")
+    await safe_edit_callback_message(
+        callback,
+        text=render_game_text(game),
+        reply_markup=get_ttt_game_keyboard(game)
+    )
+    rem = game.get_remaining_time()
+    turn_str = "Твой ход!" if callback.from_user and callback.from_user.id == game.current_turn else "Ход соперника"
+    await callback.answer(f"⏳ Осталось: {rem}с ({turn_str})", show_alert=False)
 
 
 @router.callback_query(F.data.startswith("ttt:noop:"))
@@ -1548,9 +1785,14 @@ async def cb_ttt_noop(callback: CallbackQuery):
 # ============================================================================
 
 async def ttt_watchdog_step(bot=None):
-    """Checks for expired pending challenges in TTT (120s) and cleans them up with message edits."""
+    """
+    Checks active TTT games: cleans expired pending challenges (10 min)
+    and removes finished games after 60 seconds.
+    Turn timeout countdown is handled strictly by _turn_timeout_watcher.
+    """
     now = time.time()
     expired_pending = []
+    live_tick_games = []
     async with ttt_lock:
         for gid, game in list(active_ttt_games.items()):
             if game.status == "finished":
@@ -1558,13 +1800,29 @@ async def ttt_watchdog_step(bot=None):
                 if now - fin_ts > 60:
                     active_ttt_games.pop(gid, None)
                 continue
-            if game.status == "waiting" and (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
+            if game.status == "active":
+                last_tick = getattr(game, 'last_tick_ts', 0.0) or game.turn_start_time
+                if now - last_tick >= 15.0:
+                    game.last_tick_ts = now
+                    live_tick_games.append(gid)
+            elif game.status == "waiting" and (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
                 game.status = "finished"
                 game.finished_at = now
                 game.finish_reason = "cancelled"
                 user_active_ttt_session.pop(game.challenger_id, None)
                 expired_pending.append(gid)
 
+    # 1. Live countdown updates (active)
+    for gid in live_tick_games:
+        async with ttt_lock:
+            game = active_ttt_games.get(gid)
+            if not game or game.status != "active":
+                continue
+        bot_to_use = bot or game.bot_instance
+        if bot_to_use and game:
+            await sync_ttt_screens(bot_to_use, game)
+
+    # 2. Handle expired challenges
     for gid in expired_pending:
         game = active_ttt_games.get(gid)
         if not game:
@@ -1578,41 +1836,32 @@ async def ttt_watchdog_step(bot=None):
             )
             spawn_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, exp_dm_text), name="pvp_notify_ttt_expired")
 
+        exp_board_text = (
+            "⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК!</b>\n\n"
+            "Ни один анон не принял вызов за 10 минут.\n"
+            "Вызов аннулирован, ставка не списана."
+        )
         if bot_to_use and getattr(game, "broadcast_msgs", None):
             for chat_id, msg_id in list(game.broadcast_msgs):
-                try:
-                    await bot_to_use.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=(
-                            "⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК!</b>\n\n"
-                            "Ни один анон не принял вызов за 10 минут.\n"
-                            "Вызов аннулирован, ставка не списана."
-                        ),
-                        reply_markup=None,
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
-        elif bot_to_use and game.chat_id and game.msg_id:
-            try:
-                await bot_to_use.edit_message_text(
-                    chat_id=game.chat_id,
-                    message_id=game.msg_id,
-                    text=(
-                        "⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК!</b>\n\n"
-                        "Ни один анон не принял вызов за 10 минут.\n"
-                        "Вызов аннулирован, ставка не списана."
-                    ),
-                    reply_markup=None,
-                    parse_mode="HTML"
+                await safe_edit_ttt_message(
+                    bot=bot_to_use,
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=exp_board_text,
+                    reply_markup=None
                 )
-            except Exception:
-                pass
+        elif bot_to_use and game.chat_id and game.msg_id:
+            await safe_edit_ttt_message(
+                bot=bot_to_use,
+                chat_id=game.chat_id,
+                message_id=game.msg_id,
+                text=exp_board_text,
+                reply_markup=None
+            )
 
 
 async def start_ttt_watchdog_loop(bot):
-    """Continuous background watchdog loop for TTT challenge expiration."""
+    """Continuous background watchdog loop for TTT challenge expiration and live updates."""
     logger.info("TTT watchdog loop started.")
     while True:
         try:
@@ -1621,4 +1870,4 @@ async def start_ttt_watchdog_loop(bot):
             break
         except Exception as e:
             logger.error(f"Error in ttt_watchdog_loop: {e}")
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(2.5)

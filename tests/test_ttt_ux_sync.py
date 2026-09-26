@@ -72,6 +72,7 @@ async def test_ttt_accept_sends_board_to_acceptor():
     msg.answer = AsyncMock()
     msg.bot = MagicMock()
     msg.bot.edit_message_text = AsyncMock()
+    msg.bot.send_message = AsyncMock()
     msg.reply_to_message = None
 
     async def mock_accept(bot, gid, uid):
@@ -80,16 +81,24 @@ async def test_ttt_accept_sends_board_to_acceptor():
         game.current_turn = 2001
         return True, "OK", game
 
-    with patch("ttt_engine.accept_ttt_challenge", side_effect=mock_accept):
+    fake_sent = MagicMock()
+    fake_sent.chat.id = 2002
+    fake_sent.message_id = 888
+
+    with patch("ttt_engine.accept_ttt_challenge", side_effect=mock_accept), \
+         patch("banner_manager.send_banner_message", new_callable=AsyncMock) as mock_banner:
+        mock_banner.return_value = fake_sent
 
         try:
             await cmd_ttt(msg, board_id="b")
-            # Challenger's original message was edited
+            # Challenger's original message was edited to inform players to scroll down
             msg.bot.edit_message_text.assert_called_once()
-            # Acceptor's chat received the board
-            msg.answer.assert_called_once()
-            call_text = msg.answer.call_args[1].get("text", msg.answer.call_args[0][0])
-            assert "Вызов принят!" in call_text
+            call_text = msg.bot.edit_message_text.call_args[1].get("text", msg.bot.edit_message_text.call_args[0][2] if len(msg.bot.edit_message_text.call_args[0]) > 2 else "")
+            assert "ИГРА НАЧАЛАСЬ" in call_text
+            # Fresh game banner sent to players
+            assert mock_banner.call_count >= 1
+            # Player messages registered
+            assert 2001 in game.player_msgs or 2002 in game.player_msgs
         finally:
             active_ttt_games.pop(gid, None)
             user_active_ttt_session.pop(2001, None)

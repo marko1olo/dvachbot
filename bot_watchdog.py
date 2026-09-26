@@ -319,6 +319,22 @@ def _start_child() -> subprocess.Popen:
         print(banner, end="", flush=True)
     except Exception:
         pass
+
+    # Rotate stdout log if it exceeds 25 MB
+    try:
+        if STDOUT_LOG.exists() and STDOUT_LOG.stat().st_size >= 25 * 1024 * 1024:
+            for i in range(4, 0, -1):
+                old = STDOUT_LOG.with_name(f"{STDOUT_LOG.name}.{i}")
+                new = STDOUT_LOG.with_name(f"{STDOUT_LOG.name}.{i+1}")
+                if old.exists():
+                    try: old.replace(new)
+                    except OSError: pass
+            target = STDOUT_LOG.with_name(f"{STDOUT_LOG.name}.1")
+            try: STDOUT_LOG.replace(target)
+            except OSError: pass
+    except Exception:
+        pass
+
     stdout_fh = STDOUT_LOG.open("a", encoding="utf-8", buffering=1)
     stdout_fh.write(banner)
     child = subprocess.Popen(

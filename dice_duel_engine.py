@@ -20,7 +20,7 @@ from typing import Dict, Optional, Tuple, Any, List
 from aiogram import types, F, Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 import shared_state
 from common.db_pool import get_pool, db_lock
@@ -265,26 +265,28 @@ def get_dice_challenge_keyboard(game_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def get_dice_roll_keyboard(game_id: str, is_my_turn: bool = True) -> InlineKeyboardMarkup:
+def get_dice_roll_keyboard(
+    game_id: str,
+    is_my_turn: bool = True,
+    is_shared_chat: bool = False,
+    turn_anon: Optional[str] = None
+) -> InlineKeyboardMarkup:
     """Keyboard displayed during active rolling turns."""
-    if is_my_turn:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🎲 БРОСИТЬ КОСТИ! (Твой ход)", callback_data=f"dice_roll:{game_id}")
-            ],
-            [
-                InlineKeyboardButton(text="🏳️ Сдаться", callback_data=f"dice_surrender:{game_id}")
-            ]
-        ])
+    if is_shared_chat:
+        tag = f" (Анон [{turn_anon}])" if turn_anon else ""
+        roll_btn = InlineKeyboardButton(text=f"🎲 БРОСИТЬ КОСТИ!{tag}", callback_data=f"dice_roll:{game_id}")
+    elif is_my_turn:
+        roll_btn = InlineKeyboardButton(text="🎲 БРОСИТЬ КОСТИ! (Твой ход)", callback_data=f"dice_roll:{game_id}")
     else:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="⏳ Очередь соперника...", callback_data=f"dice_wait:{game_id}")
-            ],
-            [
-                InlineKeyboardButton(text="🏳️ Сдаться", callback_data=f"dice_surrender:{game_id}")
-            ]
-        ])
+        roll_btn = InlineKeyboardButton(text="⏳ Очередь соперника...", callback_data=f"dice_wait:{game_id}")
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [roll_btn],
+        [
+            InlineKeyboardButton(text="🏳️ Сдаться", callback_data=f"dice_surrender:{game_id}"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"dice_refresh:{game_id}")
+        ]
+    ])
 
 
 def get_dice_finished_keyboard(game_id: str, bet: int) -> InlineKeyboardMarkup:
@@ -580,6 +582,9 @@ async def cancel_dice_challenge(
             )
             asyncio.create_task(send_pvp_direct_notification(bot, p1, dec_dm))
         return True, f"❌ Вызов на дуэль отклонен Аноном [ID:{get_anon_id(user_id)}]."
+
+
+decline_or_cancel_dice_challenge = cancel_dice_challenge
 
 
 # -----------------------------------------------------------------------------
@@ -919,10 +924,215 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
     return header + body + footer
 
 
+async def safe_edit_dice_message(
+    bot: Any,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None
+) -> bool:
+    """
+    Safely edits a Telegram message: tries edit_message_text first (which satisfies
+    standard unit tests mocking edit_message_text). If it fails with 'there is no text'
+    or caption error, falls back to edit_message_caption for photo/video banners.
+    Silently ignores 'message is not modified', catches TelegramRetryAfter and network errors.
+    """
+    if not bot or not chat_id or not message_id:
+        return False
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+        return True
+    except TelegramBadRequest as e:
+        err_str = str(e).lower()
+        if "message is not modified" in err_str:
+            return True
+        if "there is no text" in err_str or "message to edit not found" in err_str or "caption" in err_str:
+            try:
+                await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                return True
+            except TelegramBadRequest as e2:
+                if "message is not modified" in str(e2).lower():
+                    return True
+                shared_state.runtime_logger.debug(f"[DiceDuel] safe_edit caption failed for {chat_id}/{message_id}: {e2}")
+            except Exception as e2:
+                shared_state.runtime_logger.debug(f"[DiceDuel] safe_edit caption error for {chat_id}/{message_id}: {e2}")
+        else:
+            shared_state.runtime_logger.debug(f"[DiceDuel] safe_edit text failed for {chat_id}/{message_id}: {e}")
+    except TelegramRetryAfter as e:
+        shared_state.runtime_logger.warning(f"[DiceDuel] Flood control hit: retry after {e.retry_after}s")
+    except Exception as e:
+        shared_state.runtime_logger.debug(f"[DiceDuel] safe_edit unexpected error for {chat_id}/{message_id}: {e}")
+    return False
+
+
+async def safe_edit_callback_message(
+    callback: CallbackQuery,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None
+) -> bool:
+    """Safely edits the message associated with a CallbackQuery."""
+    if not callback or not callback.message:
+        return False
+    return await safe_edit_dice_message(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text=text,
+        reply_markup=reply_markup
+    )
+
+
+async def start_active_dice_game_screens(
+    bot: Any,
+    game: Dict[str, Any],
+    opponent_chat_id: Optional[int] = None,
+    opponent_msg_id: Optional[int] = None
+) -> None:
+    """
+    Transitions Dice Duel game to active playing state:
+    1. Neutralizes old challenge cards for spectators: 'ВЫЗОВ ПРИНЯТ'.
+    2. Neutralizes old challenge cards for both players: 'ДАЙС-ДУЭЛЬ НАЧАЛАСЬ, листайте вниз'.
+    3. Sends a FRESH interactive game banner to the bottom of the chat for BOTH players.
+    4. Records new message IDs in game['player_msgs'].
+    """
+    from banner_manager import send_banner_message
+
+    p1 = game.get("player_1")
+    p2 = game.get("player_2")
+    if not p1 or not p2:
+        return
+
+    player_msgs = game.setdefault("player_msgs", {})
+    broadcast_msgs = game.setdefault("broadcast_msgs", [])
+
+    # Identify old message locations
+    p1_old = player_msgs.get(p1) or ((game["chat_id"], game["msg_id"]) if game.get("chat_id") and game.get("msg_id") else None)
+    p2_old = (opponent_chat_id, opponent_msg_id) if opponent_chat_id and opponent_msg_id else player_msgs.get(p2)
+
+    anon_1 = get_anon_id(p1)
+    anon_2 = get_anon_id(p2)
+
+    # 1. Neutralize broadcast messages for spectators
+    if broadcast_msgs:
+        spectator_text = (
+            f"🎲 <b>PvP ДАЙС-ДУЭЛЬ: ВЫЗОВ ПРИНЯТ!</b>\n\n"
+            f"Дуэль на <code>{game.get('bet', 0):,} ₪</code> уже началась между Аноном [{anon_1}] и Аноном [{anon_2}].\n"
+            f"Мест за столом больше нет."
+        )
+        for chat_id, msg_id in list(broadcast_msgs):
+            if p1_old and (chat_id, msg_id) == p1_old:
+                continue
+            if p2_old and (chat_id, msg_id) == p2_old:
+                continue
+            await safe_edit_dice_message(bot, chat_id, msg_id, spectator_text, reply_markup=None)
+        game["broadcast_msgs"] = []
+
+    # 2. Update players' old challenge messages so they know to look at the new message below
+    player_old_text = "🎲 <b>ДАЙС-ДУЭЛЬ НАЧАЛАСЬ!</b>\n\nСвежие кости отправлены новым сообщением вниз чата ⬇️"
+    if p1_old:
+        await safe_edit_dice_message(bot, p1_old[0], p1_old[1], player_old_text, reply_markup=None)
+    if p2_old and p2_old != p1_old:
+        await safe_edit_dice_message(bot, p2_old[0], p2_old[1], player_old_text, reply_markup=None)
+
+    # 3. Send new fresh banner message(s) to the bottom of the chat
+    game_text = format_dice_game_message(game)
+    game_id = game.get("game_id", "")
+    current_turn = game.get("current_turn")
+    turn_anon = get_anon_id(current_turn) if current_turn else None
+
+    # If both players are in the same chat (e.g. group):
+    if p1_old and p2_old and p1_old[0] == p2_old[0]:
+        target_chat = p1_old[0]
+        kb = get_dice_roll_keyboard(game_id, is_my_turn=True, is_shared_chat=True, turn_anon=turn_anon)
+        sent_msg = await send_banner_message(
+            bot=bot,
+            chat_id=target_chat,
+            caption=game_text,
+            reply_markup=kb,
+            category="dice",
+            parse_mode="HTML"
+        )
+        if not sent_msg:
+            try:
+                sent_msg = await bot.send_message(
+                    chat_id=target_chat,
+                    text=game_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_msg:
+            player_msgs[p1] = (target_chat, sent_msg.message_id)
+            player_msgs[p2] = (target_chat, sent_msg.message_id)
+            game["chat_id"] = target_chat
+            game["msg_id"] = sent_msg.message_id
+    else:
+        # Separate direct chats (DMs)
+        # P1
+        kb_p1 = get_dice_roll_keyboard(game_id, is_my_turn=(p1 == current_turn))
+        sent_p1 = await send_banner_message(
+            bot=bot,
+            chat_id=p1,
+            caption=game_text,
+            reply_markup=kb_p1,
+            category="dice",
+            parse_mode="HTML"
+        )
+        if not sent_p1:
+            try:
+                sent_p1 = await bot.send_message(
+                    chat_id=p1,
+                    text=game_text,
+                    reply_markup=kb_p1,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_p1:
+            player_msgs[p1] = (p1, sent_p1.message_id)
+
+        # P2
+        kb_p2 = get_dice_roll_keyboard(game_id, is_my_turn=(p2 == current_turn))
+        sent_p2 = await send_banner_message(
+            bot=bot,
+            chat_id=p2,
+            caption=game_text,
+            reply_markup=kb_p2,
+            category="dice",
+            parse_mode="HTML"
+        )
+        if not sent_p2:
+            try:
+                sent_p2 = await bot.send_message(
+                    chat_id=p2,
+                    text=game_text,
+                    reply_markup=kb_p2,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_p2:
+            player_msgs[p2] = (p2, sent_p2.message_id)
+
+
 async def sync_dice_screens(bot: Any, game: Dict[str, Any]):
     """
     Simultaneously edits active game messages for BOTH players in their personal chats,
     ensuring each player gets the updated roll statuses, turn indicator, and appropriate buttons.
+    Avoids duplicate edits when both players are in the same chat.
     Also clears buttons for third-party broadcast viewers when challenge is accepted or finished.
     """
     if not bot or not game:
@@ -942,30 +1152,34 @@ async def sync_dice_screens(bot: Any, game: Dict[str, Any]):
     is_finished = game.get("finished", False) or game.get("state") in ("finished", "expired", "cancelled")
     current_turn = game.get("current_turn")
 
-    # 1. Update both active players' messages
+    is_shared = False
+    if p1 in player_msgs and p2 in player_msgs:
+        is_shared = (player_msgs[p1][0] == player_msgs[p2][0])
+
+    turn_anon = get_anon_id(current_turn) if current_turn else None
+
+    # 1. Update active players' messages without duplicate edits for same location
+    updated_locations = set()
     for uid in (p1, p2):
         if not uid or uid not in player_msgs:
             continue
-        chat_id, msg_id = player_msgs[uid]
+        loc = player_msgs[uid]
+        if loc in updated_locations:
+            continue
+        updated_locations.add(loc)
+        chat_id, msg_id = loc
         if is_finished:
             kb = get_dice_finished_keyboard(game_id, game.get("bet", 0))
         else:
             is_turn = (uid == current_turn)
-            kb = get_dice_roll_keyboard(game_id, is_my_turn=is_turn)
-
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=rendered_text,
-                reply_markup=kb,
-                parse_mode="HTML"
+            kb = get_dice_roll_keyboard(
+                game_id,
+                is_my_turn=is_turn,
+                is_shared_chat=is_shared,
+                turn_anon=turn_anon
             )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e).lower():
-                shared_state.runtime_logger.debug(f"[DiceDuel] sync edit failed for user {uid}: {e}")
-        except Exception as e:
-            shared_state.runtime_logger.debug(f"[DiceDuel] sync unexpected error for user {uid}: {e}")
+
+        await safe_edit_dice_message(bot, chat_id, msg_id, rendered_text, kb)
 
     # 2. If game started or finished, neutralize other broadcast copies
     if p2 and broadcast_msgs:
@@ -981,16 +1195,7 @@ async def sync_dice_screens(bot: Any, game: Dict[str, Any]):
             if any((chat_id, msg_id) == player_msgs.get(p) for p in (p1, p2) if p in player_msgs):
                 remaining_bcast.append((chat_id, msg_id))
                 continue
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=other_text,
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+            await safe_edit_dice_message(bot, chat_id, msg_id, other_text, reply_markup=None)
         game["broadcast_msgs"] = remaining_bcast
 
 
@@ -1020,9 +1225,9 @@ async def dice_watchdog_step(bot=None):
                 if now > game["turn_deadline_ts"]:
                     expired_games.append(gid)
                 else:
-                    # Live countdown auto-update every 10 seconds
+                    # Live countdown auto-update every 15 seconds (prevents Telegram flood rate limit)
                     last_tick = game.get("last_tick_ts", game["turn_deadline_ts"] - DICE_TURN_TIMEOUT_SEC)
-                    if now - last_tick >= 10.0:
+                    if now - last_tick >= 15.0:
                         game["last_tick_ts"] = now
                         live_tick_games.append(gid)
             elif game["state"] == "pending":
@@ -1036,14 +1241,8 @@ async def dice_watchdog_step(bot=None):
                     if game.get("target_id"):
                         user_active_dice_game.pop(game["target_id"], None)
                     expired_pending.append(gid)
-                else:
-                    # Live countdown update for pending challenges every 15 seconds
-                    last_tick = game.get("last_tick_ts", game["created_ts"])
-                    if now - last_tick >= 15.0:
-                        game["last_tick_ts"] = now
-                        live_tick_games.append(gid)
 
-    # 1. Live countdown updates (playing + pending)
+    # 1. Live countdown updates (playing)
     for gid in live_tick_games:
         async with dice_engine_lock:
             game = active_dice_games.get(gid)
@@ -1051,7 +1250,7 @@ async def dice_watchdog_step(bot=None):
                 continue
 
         if bot and game:
-            if game["state"] == "playing":
+            if game["state"] in ("playing", "rolling"):
                 await sync_dice_screens(bot, game)
             else:
                 updated_text = format_dice_game_message(game)
@@ -1060,16 +1259,7 @@ async def dice_watchdog_step(bot=None):
                 if not bcast_list and game.get("chat_id") and game.get("msg_id"):
                     bcast_list = [(game["chat_id"], game["msg_id"])]
                 for chat_id, msg_id in bcast_list:
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=msg_id,
-                            text=updated_text,
-                            reply_markup=kb,
-                            parse_mode="HTML"
-                        )
-                    except Exception:
-                        pass
+                    await safe_edit_dice_message(bot, chat_id, msg_id, updated_text, kb)
 
     # 2. Expired turn games (timeout forfeit)
     for gid in expired_games:
@@ -1103,21 +1293,13 @@ async def dice_watchdog_step(bot=None):
             spawn_task(send_pvp_direct_notification(bot, p1, exp_dm_text), name="pvp_notify_dice_expired")
 
         if bot and bcast_list:
+            exp_text = (
+                "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
+                "Ни один анон не принял вызов на кости за 10 минут.\n"
+                "Вызов аннулирован, ставка не списана."
+            )
             for chat_id, msg_id in bcast_list:
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=(
-                            "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
-                            "Ни один анон не принял вызов на кости за 10 минут.\n"
-                            "Вызов аннулирован, ставка не списана."
-                        ),
-                        reply_markup=None,
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
+                await safe_edit_dice_message(bot, chat_id, msg_id, exp_text, reply_markup=None)
 
 
 async def start_dice_watchdog_loop(bot):
@@ -1259,29 +1441,32 @@ def register_dice_duel_handlers(dp: Any):
                 g.setdefault("player_msgs", {})[user_id] = (sent_msg.chat.id, sent_msg.message_id)
                 g.setdefault("broadcast_msgs", []).append((sent_msg.chat.id, sent_msg.message_id))
 
-        # Broadcast challenge to active board users
-        try:
-            from shared_state import board_data as _board_data
-            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
-            for uid in active_users:
-                if uid == user_id:
-                    continue
-                if target_user_id is not None and uid != target_user_id:
-                    continue
-                try:
-                    bcast_sent = await message.bot.send_message(
-                        chat_id=uid,
-                        text=msg_text,
-                        reply_markup=kb,
-                        parse_mode="HTML"
-                    )
+        # Рассылаем карточку активным юзерам борда (throttled background task)
+        async def _do_broadcast():
+            try:
+                from shared_state import board_data as _board_data
+                from banner_manager import broadcast_banner_to_users
+                active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+                if target_user_id is not None:
+                    active_users = [uid for uid in active_users if uid == target_user_id]
+                async def _on_sent(uid, mid):
                     async with dice_engine_lock:
                         if game_id in active_dice_games:
-                            active_dice_games[game_id]["broadcast_msgs"].append((uid, bcast_sent.message_id))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                            active_dice_games[game_id]["broadcast_msgs"].append((uid, mid))
+                await broadcast_banner_to_users(
+                    bot=message.bot,
+                    user_ids=active_users,
+                    exclude_uid=user_id,
+                    caption=msg_text,
+                    reply_markup=kb,
+                    category="games",
+                    parse_mode="HTML",
+                    on_sent=_on_sent,
+                )
+            except Exception:
+                pass
+        import asyncio
+        asyncio.create_task(_do_broadcast())
 
     async def handle_dice_accept_command(message: Message, board_id: str):
         user_id = message.from_user.id
@@ -1313,11 +1498,13 @@ def register_dice_duel_handlers(dp: Any):
             await message.answer(msg_text, parse_mode="HTML")
             return
 
-        async with dice_engine_lock:
-            if found_gid in active_dice_games:
-                active_dice_games[found_gid].setdefault("player_msgs", {})[user_id] = (message.chat.id, message.message_id)
-
-        await sync_dice_screens(message.bot, game)
+        opp_msg_id = message.reply_to_message.message_id if message.reply_to_message else None
+        await start_active_dice_game_screens(
+            bot=message.bot,
+            game=game,
+            opponent_chat_id=message.chat.id,
+            opponent_msg_id=opp_msg_id
+        )
 
     async def handle_dice_cancel_command(message: Message, board_id: str):
         user_id = message.from_user.id
@@ -1345,12 +1532,15 @@ def register_dice_duel_handlers(dp: Any):
             await callback.answer(msg_text, show_alert=True)
             return
 
-        async with dice_engine_lock:
-            if game_id in active_dice_games:
-                active_dice_games[game_id].setdefault("player_msgs", {})[user_id] = (callback.message.chat.id, callback.message.message_id)
-
-        await sync_dice_screens(callback.bot, game)
-        await callback.answer("⚔️ Вызов принят! Кости на столе!")
+        opp_chat_id = callback.message.chat.id if callback.message else None
+        opp_msg_id = callback.message.message_id if callback.message else None
+        await start_active_dice_game_screens(
+            bot=callback.bot,
+            game=game,
+            opponent_chat_id=opp_chat_id,
+            opponent_msg_id=opp_msg_id
+        )
+        await callback.answer("⚔️ Вызов принят! Свежие кости отправлены вниз чата ⬇️")
 
     @dp.callback_query(F.data.startswith("dice_decline:") | F.data.startswith("dice_cancel:"))
     async def cb_dice_decline(callback: CallbackQuery):
@@ -1369,18 +1559,13 @@ def register_dice_duel_handlers(dp: Any):
             bcast_list = list(game.get("broadcast_msgs", []))
 
         ok, msg = await cancel_dice_challenge(game_id, user_id, bot=callback.bot)
-        await callback.answer(msg)
+        cancel_text = "🗑 <b>Вызов на кости отменен.</b>"
+        await safe_edit_callback_message(callback, cancel_text, reply_markup=None)
         for chat_id, msg_id in bcast_list:
-            try:
-                await callback.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text="🗑 <b>Вызов на кости отменен.</b>",
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+            if callback.message and chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
+                continue
+            await safe_edit_dice_message(callback.bot, chat_id, msg_id, cancel_text, reply_markup=None)
+        await callback.answer(msg)
 
     @dp.callback_query(F.data.startswith("dice_wait:"))
     async def cb_dice_wait(callback: CallbackQuery):
@@ -1459,6 +1644,47 @@ def register_dice_duel_handlers(dp: Any):
             return
 
         await callback.answer("🏳️ Ты сдался.")
+
+    @dp.callback_query(F.data.startswith("dice_refresh:"))
+    async def cb_dice_refresh(callback: CallbackQuery):
+        """Refreshes remaining turn time and dice duel status."""
+        game_id = callback.data.split(":", 1)[1]
+        async with dice_engine_lock:
+            game = active_dice_games.get(game_id)
+        if not game:
+            await callback.answer("Дуэль завершена", show_alert=False)
+            return
+
+        p1 = game.get("player_1")
+        p2 = game.get("player_2")
+        p_msgs = game.get("player_msgs", {})
+        is_shared = False
+        if p1 in p_msgs and p2 in p_msgs:
+            is_shared = (p_msgs[p1][0] == p_msgs[p2][0])
+
+        current_turn = game.get("current_turn")
+        turn_anon = get_anon_id(current_turn) if current_turn else None
+        is_my_turn = (callback.from_user.id == current_turn)
+
+        is_finished = game.get("finished", False) or game.get("state") in ("finished", "expired", "cancelled")
+        if is_finished:
+            kb = get_dice_finished_keyboard(game_id, game.get("bet", 0))
+        else:
+            kb = get_dice_roll_keyboard(
+                game_id,
+                is_my_turn=is_my_turn,
+                is_shared_chat=is_shared,
+                turn_anon=turn_anon
+            )
+
+        await safe_edit_callback_message(
+            callback,
+            text=format_dice_game_message(game),
+            reply_markup=kb
+        )
+        rem = max(0, int(game.get("turn_deadline_ts", 0) - time.time()))
+        turn_str = "Твой ход!" if is_my_turn else f"Ход: [{turn_anon}]"
+        await callback.answer(f"⏳ Осталось: {rem}с ({turn_str})", show_alert=False)
 
     @dp.callback_query(F.data.startswith("dice_rematch:"))
     async def cb_dice_rematch(callback: CallbackQuery):
@@ -1595,28 +1821,32 @@ def register_dice_duel_handlers(dp: Any):
                     g.setdefault("player_msgs", {})[user_id] = (sent_msg.chat.id, sent_msg.message_id)
                     g.setdefault("broadcast_msgs", []).append((sent_msg.chat.id, sent_msg.message_id))
 
-            try:
-                from shared_state import board_data as _board_data
-                active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
-                for uid in active_users:
-                    if uid == user_id:
-                        continue
-                    if target_id is not None and uid != target_id:
-                        continue
-                    try:
-                        bcast_sent = await callback.bot.send_message(
-                            chat_id=uid,
-                            text=msg_text,
-                            reply_markup=kb,
-                            parse_mode="HTML"
-                        )
+            # Рассылаем карточку активным юзерам борда (throttled background task)
+            async def _do_broadcast():
+                try:
+                    from shared_state import board_data as _board_data
+                    from banner_manager import broadcast_banner_to_users
+                    active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+                    if target_id is not None:
+                        active_users = [uid for uid in active_users if uid == target_id]
+                    async def _on_sent(uid, mid):
                         async with dice_engine_lock:
                             if game_id in active_dice_games:
-                                active_dice_games[game_id].setdefault("broadcast_msgs", []).append((uid, bcast_sent.message_id))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                                active_dice_games[game_id].setdefault("broadcast_msgs", []).append((uid, mid))
+                    await broadcast_banner_to_users(
+                        bot=callback.bot,
+                        user_ids=active_users,
+                        exclude_uid=user_id,
+                        caption=msg_text,
+                        reply_markup=kb,
+                        category="games",
+                        parse_mode="HTML",
+                        on_sent=_on_sent,
+                    )
+                except Exception:
+                    pass
+            import asyncio
+            asyncio.create_task(_do_broadcast())
         except Exception:
             pass
 

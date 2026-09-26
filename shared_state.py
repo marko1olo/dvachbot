@@ -141,14 +141,14 @@ def get_target_grief_protection_remaining(target_id: int) -> int:
         return int(last_attack - now)
     return 0
 
-def register_target_attack(target_id: int, duration_seconds: int = 300, attacker_id: int | None = None):
+def register_target_attack(target_id: int, duration_seconds: int = 2700, attacker_id: int | None = None):
     """
-    Регистрирует атаку на цель, включая 5-минутное окно анти-гриферской защиты (diminishing returns).
+    Регистрирует атаку на цель, включая окно анти-гриферской защиты (по умолчанию 45 минут / 2700 сек).
     Защищает от эксплойта самоатаки: если attacker_id == target_id, иммунитет не дается.
     """
     if attacker_id is not None and attacker_id == target_id:
         return
-    _TARGET_LAST_ATTACKED_TS[target_id] = time.time() + duration_seconds
+    _TARGET_LAST_ATTACKED_TS[target_id] = max(_TARGET_LAST_ATTACKED_TS.get(target_id, 0.0), time.time() + duration_seconds)
 
 def get_victim_rob_cooldown_remaining(target_id: int) -> int:
     """
@@ -249,8 +249,15 @@ def get_partyvan_victim_immunity(user_id: int) -> float:
     return _VICTIM_PARTYVAN_IMMUNITY.get(user_id, 0.0)
 
 def set_partyvan_victim_immunity(user_id: int, expires_at: float):
-    """Выставляет иммунитет от пативэна для жертвы на 2ч после освобождения."""
-    _VICTIM_PARTYVAN_IMMUNITY[user_id] = expires_at
+    """Выставляет иммунитет от пативэна/мута для жертвы (в памяти и персистентно в SQLite)."""
+    _VICTIM_PARTYVAN_IMMUNITY[user_id] = float(expires_at)
+    try:
+        loop = asyncio.get_running_loop()
+        if loop and loop.is_running():
+            from common.database import record_user_immunity
+            loop.create_task(record_user_immunity(None, user_id, "partyvan", float(expires_at)))
+    except (RuntimeError, Exception):
+        pass
 
 # --- Legacy-функции с delta-интерфейсом (оставляем для обратной совместимости) ---
 def get_user_partyvan_cooldown_remaining(user_id: int) -> int:
@@ -305,7 +312,7 @@ CANONICAL_SHOP_ITEM_ALIASES = {
 }
 
 SHOP_DAILY_LIMITS = {
-    "mute": 6,
+    "mute": 3,
     "partyvan": 2,
     "knife": 10,
     "shit": 20,
@@ -451,12 +458,10 @@ def _drop_post_copy_maps_unlocked(post_num: int) -> int:
     copies_map = post_to_messages.pop(post_num, None)
     if not copies_map:
         return 0
-    removed = 0
-    for uid, mid_or_list in copies_map.items():
-        for mid in _iter_message_ids_for_copy(mid_or_list):
-            if message_to_post.pop((uid, mid), None) is not None:
-                removed += 1
-    return removed
+    # post_to_messages is pruned to conserve RAM, but message_to_post retains reverse
+    # mappings as an independent LRU bounded dictionary (up to BOT_MESSAGE_TO_POST_LIMIT=50000)
+    # so replies to older posts continue to resolve without DB overhead.
+    return len(copies_map)
 
 def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     if max_posts < 0:
@@ -656,7 +661,7 @@ class BoundedDict(OrderedDict):
         return f"BoundedDict(max_size={self.max_size}, {super().__repr__()})"
 
 
-BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "20000"))
+BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
 message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
 
 @dataclass
@@ -764,7 +769,7 @@ _stats_cooldown_tracker = {}
 _duel_cooldowns: dict = {} # user_id -> timestamp
 _PASSPORT_DATA = {
     'ru': {
-        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
+        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Ньюфаг с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
         'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
         'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
     },

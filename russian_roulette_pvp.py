@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 import shared_state
 from common.db_pool import get_pool, db_lock
@@ -459,11 +459,20 @@ def get_rr_challenge_keyboard(game_id: str, bet: int) -> InlineKeyboardMarkup:
     ])
 
 
-def get_rr_game_keyboard(game_id: str, is_finished: bool = False, is_my_turn: bool = True) -> InlineKeyboardMarkup:
-    """Keyboard during active game, personalized per player."""
+def get_rr_game_keyboard(
+    game_id: str,
+    is_finished: bool = False,
+    is_my_turn: bool = True,
+    is_shared_chat: bool = False,
+    turn_anon: Optional[str] = None
+) -> InlineKeyboardMarkup:
+    """Keyboard during active game, personalized per player or shared in group."""
     if is_finished:
         return InlineKeyboardMarkup(inline_keyboard=[])
-    if is_my_turn:
+    if is_shared_chat:
+        tag = f" (Анон [ID:{turn_anon}])" if turn_anon else ""
+        shoot_btn = InlineKeyboardButton(text=f"💥 СПУСТИТЬ КУРОК!{tag}", callback_data=f"rr_shoot:{game_id}")
+    elif is_my_turn:
         shoot_btn = InlineKeyboardButton(text="💥 СПУСТИТЬ КУРОК! (Твой ход)", callback_data=f"rr_shoot:{game_id}")
     else:
         shoot_btn = InlineKeyboardButton(text="⏳ Очередь соперника...", callback_data=f"rr_wait:{game_id}")
@@ -471,7 +480,8 @@ def get_rr_game_keyboard(game_id: str, is_finished: bool = False, is_my_turn: bo
     return InlineKeyboardMarkup(inline_keyboard=[
         [shoot_btn],
         [
-            InlineKeyboardButton(text="🏳️ Сдаться / Зассать", callback_data=f"rr_surrender:{game_id}")
+            InlineKeyboardButton(text="🏳️ Сдаться / Зассать", callback_data=f"rr_surrender:{game_id}"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"rr_refresh:{game_id}")
         ]
     ])
 
@@ -523,10 +533,214 @@ async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> boo
         return False
 
 
+async def safe_edit_rr_message(
+    bot: Any,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None
+) -> bool:
+    """
+    Safely edits a Telegram message: tries edit_message_text first (which satisfies
+    standard unit tests mocking edit_message_text). If it fails with 'there is no text'
+    or caption error, falls back to edit_message_caption for photo/video banners.
+    Silently ignores 'message is not modified', catches TelegramRetryAfter and network errors.
+    """
+    if not bot or not chat_id or not message_id:
+        return False
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+        return True
+    except TelegramBadRequest as e:
+        err_str = str(e).lower()
+        if "message is not modified" in err_str:
+            return True
+        if "there is no text" in err_str or "message to edit not found" in err_str or "caption" in err_str:
+            try:
+                await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                return True
+            except TelegramBadRequest as e2:
+                if "message is not modified" in str(e2).lower():
+                    return True
+                logger.debug(f"[RR] safe_edit caption failed for {chat_id}/{message_id}: {e2}")
+            except Exception as e2:
+                logger.debug(f"[RR] safe_edit caption error for {chat_id}/{message_id}: {e2}")
+        else:
+            logger.debug(f"[RR] safe_edit text failed for {chat_id}/{message_id}: {e}")
+    except TelegramRetryAfter as e:
+        logger.warning(f"[RR] Flood control hit: retry after {e.retry_after}s")
+    except Exception as e:
+        logger.debug(f"[RR] safe_edit unexpected error for {chat_id}/{message_id}: {e}")
+    return False
+
+
+async def safe_edit_callback_message(
+    callback: types.CallbackQuery,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None
+) -> bool:
+    """Safely edits the message associated with a CallbackQuery."""
+    if not callback or not callback.message:
+        return False
+    return await safe_edit_rr_message(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text=text,
+        reply_markup=reply_markup
+    )
+
+
+async def start_active_rr_game_screens(
+    bot: Any,
+    game: Dict[str, Any],
+    opponent_chat_id: Optional[int] = None,
+    opponent_msg_id: Optional[int] = None
+) -> None:
+    """
+    Transitions Russian Roulette game to active playing state:
+    1. Neutralizes old challenge cards for spectators: 'ВЫЗОВ ПРИНЯТ'.
+    2. Neutralizes old challenge cards for both players: 'ДУЭЛЬ НАЧАЛАСЬ, листайте вниз'.
+    3. Sends a FRESH interactive game banner to the bottom of the chat for BOTH players.
+    4. Records new message IDs in game['player_msgs'].
+    """
+    from banner_manager import send_banner_message
+
+    p1 = game.get("challenger_id")
+    p2 = game.get("acceptor_id")
+    if not p1 or not p2:
+        return
+
+    player_msgs = game.setdefault("player_msgs", {})
+
+    # Identify old message locations
+    p1_old = player_msgs.get(p1) or ((game["chat_id"], game["msg_id"]) if game.get("chat_id") and game.get("msg_id") else None)
+    p2_old = (opponent_chat_id, opponent_msg_id) if opponent_chat_id and opponent_msg_id else player_msgs.get(p2)
+
+    anon_c = get_anon_id(p1)
+    anon_a = get_anon_id(p2)
+
+    # 1. Neutralize broadcast messages for spectators
+    if game.get("broadcast_msgs"):
+        spectator_text = (
+            f"⚔️ <b>РУССКАЯ РУЛЕТКА: ВЫЗОВ ПРИНЯТ!</b>\n\n"
+            f"Дуэль на <code>{game['bet']:,} ₪</code> уже началась между Аноном [ID:{anon_c}] и Аноном [ID:{anon_a}].\n"
+            f"Мест за столом больше нет."
+        )
+        for chat_id, msg_id in list(game["broadcast_msgs"]):
+            if p1_old and (chat_id, msg_id) == p1_old:
+                continue
+            if p2_old and (chat_id, msg_id) == p2_old:
+                continue
+            await safe_edit_rr_message(bot, chat_id, msg_id, spectator_text, reply_markup=None)
+        game["broadcast_msgs"] = []
+
+    # 2. Update players' old challenge messages so they know to look at the new message below
+    player_old_text = "💀 <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\nСвежий револьвер отправлен новым сообщением вниз чата ⬇️"
+    if p1_old:
+        await safe_edit_rr_message(bot, p1_old[0], p1_old[1], player_old_text, reply_markup=None)
+    if p2_old and p2_old != p1_old:
+        await safe_edit_rr_message(bot, p2_old[0], p2_old[1], player_old_text, reply_markup=None)
+
+    # 3. Send new fresh banner message(s) to the bottom of the chat
+    game_text = format_rr_game_message(game)
+    game_id = game["game_id"]
+    turn = game.get("turn")
+    turn_anon = get_anon_id(turn)
+
+    # If both players are in the same chat (e.g. group):
+    if p1_old and p2_old and p1_old[0] == p2_old[0]:
+        target_chat = p1_old[0]
+        kb = get_rr_game_keyboard(game_id, is_finished=False, is_my_turn=True, is_shared_chat=True, turn_anon=turn_anon)
+        sent_msg = await send_banner_message(
+            bot=bot,
+            chat_id=target_chat,
+            caption=game_text,
+            reply_markup=kb,
+            category="russian_roulette",
+            parse_mode="HTML"
+        )
+        if not sent_msg:
+            try:
+                sent_msg = await bot.send_message(
+                    chat_id=target_chat,
+                    text=game_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_msg:
+            player_msgs[p1] = (target_chat, sent_msg.message_id)
+            player_msgs[p2] = (target_chat, sent_msg.message_id)
+            game["chat_id"] = target_chat
+            game["msg_id"] = sent_msg.message_id
+    else:
+        # Separate direct chats (DMs)
+        # P1 (Challenger)
+        kb_p1 = get_rr_game_keyboard(game_id, is_finished=False, is_my_turn=(p1 == turn))
+        sent_p1 = await send_banner_message(
+            bot=bot,
+            chat_id=p1,
+            caption=game_text,
+            reply_markup=kb_p1,
+            category="russian_roulette",
+            parse_mode="HTML"
+        )
+        if not sent_p1:
+            try:
+                sent_p1 = await bot.send_message(
+                    chat_id=p1,
+                    text=game_text,
+                    reply_markup=kb_p1,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_p1:
+            player_msgs[p1] = (p1, sent_p1.message_id)
+
+        # P2 (Opponent)
+        kb_p2 = get_rr_game_keyboard(game_id, is_finished=False, is_my_turn=(p2 == turn))
+        sent_p2 = await send_banner_message(
+            bot=bot,
+            chat_id=p2,
+            caption=game_text,
+            reply_markup=kb_p2,
+            category="russian_roulette",
+            parse_mode="HTML"
+        )
+        if not sent_p2:
+            try:
+                sent_p2 = await bot.send_message(
+                    chat_id=p2,
+                    text=game_text,
+                    reply_markup=kb_p2,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        if sent_p2:
+            player_msgs[p2] = (p2, sent_p2.message_id)
+
+
 async def sync_rr_screens(bot: Any, game: Dict[str, Any], last_action_text: Optional[str] = None):
     """
     Simultaneously edits active game messages for BOTH players in their personal chats,
     ensuring each player gets the appropriate interactive button based on whose turn it is.
+    Avoids duplicate edits when both players are in the same chat.
     Also clears buttons for third-party broadcast viewers when challenge is accepted.
     """
     if not bot or not game:
@@ -545,26 +759,31 @@ async def sync_rr_screens(bot: Any, game: Dict[str, Any], last_action_text: Opti
 
     game_text = format_rr_game_message(game, last_action_text=last_action_text)
 
-    # 1. Update both active players' screens simultaneously
+    is_shared = False
+    if p1 in player_msgs and p2 in player_msgs:
+        is_shared = (player_msgs[p1][0] == player_msgs[p2][0])
+
+    turn_anon = get_anon_id(turn) if turn else None
+
+    # 1. Update active players' screens without duplicate edits for same location
+    updated_locations = set()
     for uid in (p1, p2):
         if not uid or uid not in player_msgs:
             continue
-        chat_id, msg_id = player_msgs[uid]
+        loc = player_msgs[uid]
+        if loc in updated_locations:
+            continue
+        updated_locations.add(loc)
+        chat_id, msg_id = loc
         is_my_turn = (uid == turn)
-        kb = get_rr_game_keyboard(game_id, is_finished=is_finished, is_my_turn=is_my_turn)
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=game_text,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e).lower():
-                logger.debug(f"[RR] sync_rr_screens edit failed for user {uid}: {e}")
-        except Exception as e:
-            logger.debug(f"[RR] sync_rr_screens error for user {uid}: {e}")
+        kb = get_rr_game_keyboard(
+            game_id,
+            is_finished=is_finished,
+            is_my_turn=is_my_turn,
+            is_shared_chat=is_shared,
+            turn_anon=turn_anon
+        )
+        await safe_edit_rr_message(bot, chat_id, msg_id, game_text, kb)
 
     # 2. If game started or finished, neutralize any other broadcast copies
     if p2 and game.get("broadcast_msgs"):
@@ -576,20 +795,10 @@ async def sync_rr_screens(bot: Any, game: Dict[str, Any], last_action_text: Opti
         )
         remaining_bcast = []
         for chat_id, msg_id in list(game.get("broadcast_msgs", [])):
-            # Skip messages belonging to the active players
             if any((chat_id, msg_id) == player_msgs.get(p) for p in (p1, p2) if p in player_msgs):
                 remaining_bcast.append((chat_id, msg_id))
                 continue
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=other_text,
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+            await safe_edit_rr_message(bot, chat_id, msg_id, other_text, reply_markup=None)
         game["broadcast_msgs"] = remaining_bcast
 
 
@@ -1017,9 +1226,9 @@ async def rr_watchdog_step(bot=None):
                 if now > game["turn_deadline_ts"]:
                     expired_games.append(gid)
                 else:
-                    # Live countdown auto-update every 10 seconds
+                    # Live countdown auto-update every 15 seconds (prevents Telegram flood rate limit)
                     last_tick = game.get("last_tick_ts", game["turn_deadline_ts"] - RR_TURN_TIMEOUT_SEC)
-                    if now - last_tick >= 10.0:
+                    if now - last_tick >= 15.0:
                         game["last_tick_ts"] = now
                         live_tick_games.append(gid)
             elif game["state"] == "pending" and now > (game["created_ts"] + RR_CHALLENGE_TIMEOUT_SEC):
@@ -1075,16 +1284,7 @@ async def rr_watchdog_step(bot=None):
             all_msgs = [(game["chat_id"], game["msg_id"])]
         for chat_id, msg_id in all_msgs:
             if bot:
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=expired_text,
-                        reply_markup=None,
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
+                await safe_edit_rr_message(bot, chat_id, msg_id, expired_text, reply_markup=None)
 
 
 async def start_rr_watchdog_loop(bot):
@@ -1202,7 +1402,17 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
         default_bet = 100 if balance >= 100 else (50 if balance >= 50 else MIN_RR_BET)
         lobby_text = format_rr_lobby_message(balance=int(balance), bet=default_bet, target_id=target_id)
         lobby_kb = get_rr_lobby_keyboard(bet=default_bet, balance=int(balance), target_id=target_id)
-        await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
+        from banner_manager import send_banner_message
+        sent = await send_banner_message(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            caption=lobby_text,
+            reply_markup=lobby_kb,
+            category="russian_roulette",
+            parse_mode="HTML"
+        )
+        if not sent:
+            await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
         return
 
     # ACCEPT SHORTCUT
@@ -1224,14 +1434,14 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
             await message.answer(err_text, parse_mode="HTML")
             return
 
-        game_text = format_rr_game_message(game)
-        kb = get_rr_game_keyboard(found_gid, is_my_turn=(game["turn"] == user_id))
-        sent = await message.answer(game_text, reply_markup=kb, parse_mode="HTML")
-        async with rr_lock:
-            game["chat_id"] = sent.chat.id
-            game["msg_id"] = sent.message_id
-            game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
-        await sync_rr_screens(message.bot, game)
+        # Transition screens: neutralize old cards & send fresh interactive game banner down to chat
+        opp_msg_id = message.reply_to_message.message_id if message.reply_to_message else None
+        await start_active_rr_game_screens(
+            bot=message.bot,
+            game=game,
+            opponent_chat_id=message.chat.id,
+            opponent_msg_id=opp_msg_id
+        )
         return
 
     # DECLINE / CANCEL SHORTCUT
@@ -1263,7 +1473,17 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
         default_bet = 100 if balance >= 100 else (50 if balance >= 50 else MIN_RR_BET)
         lobby_text = format_rr_lobby_message(balance=int(balance), bet=default_bet, target_id=target_id)
         lobby_kb = get_rr_lobby_keyboard(bet=default_bet, balance=int(balance), target_id=target_id)
-        await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
+        from banner_manager import send_banner_message
+        sent = await send_banner_message(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            caption=lobby_text,
+            reply_markup=lobby_kb,
+            category="russian_roulette",
+            parse_mode="HTML"
+        )
+        if not sent:
+            await message.answer(lobby_text, reply_markup=lobby_kb, parse_mode="HTML")
         return
 
     # CREATE CHALLENGE
@@ -1290,36 +1510,48 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
     kb = get_rr_challenge_keyboard(game_id, bet)
 
     # Отправляем карточку создателю
-    sent = await message.answer(card_text, reply_markup=kb, parse_mode="HTML")
+    from banner_manager import send_banner_message
+    sent = await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=card_text,
+        reply_markup=kb,
+        category="russian_roulette",
+        parse_mode="HTML"
+    )
+    if not sent:
+        sent = await message.answer(card_text, reply_markup=kb, parse_mode="HTML")
     async with rr_lock:
         game["chat_id"] = sent.chat.id
         game["msg_id"] = sent.message_id
         game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
         game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
 
-    # Рассылаем карточку всем остальным активным юзерам борда
-    try:
-        from shared_state import board_data as _board_data
-        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
-        for uid in active_users:
-            if uid == user_id:
-                continue
-            # Если дуэль целевая — шлём только цели
-            if target_id is not None and uid != target_id:
-                continue
-            try:
-                bcast_sent = await message.bot.send_message(
-                    chat_id=uid,
-                    text=card_text,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
+    # Рассылаем карточку активным юзерам борда (throttled background task)
+    async def _do_broadcast():
+        try:
+            from shared_state import board_data as _board_data
+            from banner_manager import broadcast_banner_to_users
+            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+            if target_id is not None:
+                active_users = [uid for uid in active_users if uid == target_id]
+            async def _on_sent(uid, mid):
                 async with rr_lock:
-                    game.setdefault("broadcast_msgs", []).append((uid, bcast_sent.message_id))
-            except Exception:
-                pass
-    except Exception:
-        pass
+                    game.setdefault("broadcast_msgs", []).append((uid, mid))
+            await broadcast_banner_to_users(
+                bot=message.bot,
+                user_ids=active_users,
+                exclude_uid=user_id,
+                caption=card_text,
+                reply_markup=kb,
+                category="russian_roulette",
+                parse_mode="HTML",
+                on_sent=_on_sent,
+            )
+        except Exception:
+            pass
+    import asyncio
+    asyncio.create_task(_do_broadcast())
 
 
 # -----------------------------------------------------------------------------
@@ -1354,9 +1586,12 @@ async def cb_rr_lobby(callback: types.CallbackQuery, board_id: str | None = None
     text = format_rr_lobby_message(balance=int(balance), bet=bet, target_id=target_id)
     kb = get_rr_lobby_keyboard(bet=bet, balance=int(balance), target_id=target_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        pass
+        try:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
     await callback.answer()
 
 
@@ -1382,43 +1617,57 @@ async def cb_rr_create(callback: types.CallbackQuery, board_id: str | None = Non
     card_text = format_rr_challenge_message(game)
     kb = get_rr_challenge_keyboard(game_id, bet)
 
+    sent = None
     try:
-        sent = await callback.message.edit_text(card_text, reply_markup=kb, parse_mode="HTML")
-        async with rr_lock:
-            game["chat_id"] = sent.chat.id
-            game["msg_id"] = sent.message_id
-            game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
-            game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
+        sent = await callback.message.edit_caption(caption=card_text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(card_text, reply_markup=kb, parse_mode="HTML")
+        try:
+            sent = await callback.message.edit_text(text=card_text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            from banner_manager import send_banner_message
+            sent = await send_banner_message(
+                bot=callback.bot,
+                chat_id=callback.message.chat.id,
+                caption=card_text,
+                reply_markup=kb,
+                category="russian_roulette",
+                parse_mode="HTML"
+            )
+            if not sent:
+                sent = await callback.message.answer(card_text, reply_markup=kb, parse_mode="HTML")
+
+    if sent:
         async with rr_lock:
             game["chat_id"] = sent.chat.id
             game["msg_id"] = sent.message_id
             game.setdefault("player_msgs", {})[user_id] = (sent.chat.id, sent.message_id)
             game.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
 
-    # Рассылаем карточку всем остальным активным юзерам борда
-    try:
-        from shared_state import board_data as _board_data
-        active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
-        for uid in active_users:
-            if uid == user_id:
-                continue
-            if target_id is not None and uid != target_id:
-                continue
-            try:
-                bcast_sent = await callback.bot.send_message(
-                    chat_id=uid,
-                    text=card_text,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
+    # Рассылаем карточку активным юзерам борда (throttled background task)
+    async def _do_broadcast():
+        try:
+            from shared_state import board_data as _board_data
+            from banner_manager import broadcast_banner_to_users
+            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
+            if target_id is not None:
+                active_users = [uid for uid in active_users if uid == target_id]
+            async def _on_sent(uid, mid):
                 async with rr_lock:
-                    game.setdefault("broadcast_msgs", []).append((uid, bcast_sent.message_id))
-            except Exception:
-                pass
-    except Exception:
-        pass
+                    game.setdefault("broadcast_msgs", []).append((uid, mid))
+            await broadcast_banner_to_users(
+                bot=callback.bot,
+                user_ids=active_users,
+                exclude_uid=user_id,
+                caption=card_text,
+                reply_markup=kb,
+                category="russian_roulette",
+                parse_mode="HTML",
+                on_sent=_on_sent,
+            )
+        except Exception:
+            pass
+    import asyncio
+    asyncio.create_task(_do_broadcast())
 
 @rr_router.callback_query(F.data.startswith("rr_accept:"))
 async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = None):
@@ -1437,13 +1686,16 @@ async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = Non
         await callback.answer(msg, show_alert=True)
         return
 
-    await callback.answer("⚔️ Дуэль принята! Барабан заряжен.")
-    async with rr_lock:
-        game["chat_id"] = callback.message.chat.id
-        game["msg_id"] = callback.message.message_id
-        game.setdefault("player_msgs", {})[user_id] = (callback.message.chat.id, callback.message.message_id)
-
-    await sync_rr_screens(callback.bot, game)
+    # Transition screens: neutralize old cards & send fresh interactive game banner down to chat
+    opp_chat_id = callback.message.chat.id if callback.message else None
+    opp_msg_id = callback.message.message_id if callback.message else None
+    await start_active_rr_game_screens(
+        bot=callback.bot,
+        game=game,
+        opponent_chat_id=opp_chat_id,
+        opponent_msg_id=opp_msg_id
+    )
+    await callback.answer("⚔️ Дуэль началась! Свежий револьвер отправлен вниз чата ⬇️")
 
 
 @rr_router.callback_query(F.data.startswith("rr_decline:"))
@@ -1457,16 +1709,23 @@ async def cb_rr_decline(callback: types.CallbackQuery):
     game_id = parts[1]
     user_id = callback.from_user.id
 
+    game = active_rr_games.get(game_id)
+    bcast_msgs = list(game.get("broadcast_msgs", [])) if game else []
+
     ok, res_text = await decline_or_cancel_rr_challenge(game_id, user_id, bot=callback.bot)
     if not ok:
         await callback.answer(res_text, show_alert=True)
         return
 
-    await callback.answer("Вызов отменен")
-    try:
-        await callback.message.edit_text(f"⚔️ <b>{res_text}</b>", parse_mode="HTML", reply_markup=None)
-    except TelegramBadRequest:
-        pass
+    cancel_text = f"⚔️ <b>{res_text}</b>"
+    await safe_edit_callback_message(callback, cancel_text, reply_markup=None)
+
+    for chat_id, msg_id in bcast_msgs:
+        if callback.message and chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
+            continue
+        await safe_edit_rr_message(callback.bot, chat_id, msg_id, cancel_text, reply_markup=None)
+
+    await callback.answer(res_text)
 
 
 @rr_router.callback_query(F.data.startswith("rr_wait:"))
@@ -1520,5 +1779,46 @@ async def cb_rr_surrender(callback: types.CallbackQuery):
     await sync_rr_screens(callback.bot, game)
 
 
+@rr_router.callback_query(F.data.startswith("rr_refresh:"))
+async def cb_rr_refresh(callback: types.CallbackQuery):
+    """Refreshes remaining turn time and duel status."""
+    parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer("Ошибка", show_alert=False)
+        return
+    game_id = parts[1]
+    game = active_rr_games.get(game_id)
+    if not game:
+        await callback.answer("Дуэль завершена", show_alert=False)
+        return
+
+    p1 = game.get("challenger_id")
+    p2 = game.get("acceptor_id")
+    p_msgs = game.get("player_msgs", {})
+    is_shared = False
+    if p1 in p_msgs and p2 in p_msgs:
+        is_shared = (p_msgs[p1][0] == p_msgs[p2][0])
+
+    turn = game.get("turn")
+    turn_anon = get_anon_id(turn) if turn else None
+    is_my_turn = (callback.from_user.id == turn)
+
+    await safe_edit_callback_message(
+        callback,
+        text=format_rr_game_message(game),
+        reply_markup=get_rr_game_keyboard(
+            game_id,
+            is_finished=game.get("finished", False),
+            is_my_turn=is_my_turn,
+            is_shared_chat=is_shared,
+            turn_anon=turn_anon
+        )
+    )
+    rem = max(0, int(game.get("turn_deadline_ts", 0) - time.time()))
+    turn_str = "Твой ход!" if is_my_turn else f"Ход: [ID:{turn_anon}]"
+    await callback.answer(f"⏳ Осталось: {rem}с ({turn_str})", show_alert=False)
+
+
 cmd_duel_rr = cmd_russian_roulette
+
 
