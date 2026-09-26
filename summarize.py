@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool, google_pool
 from common.text_utils import clean_ai_thinking, strip_thinking_tags
+from common.extractive_summary import generate_extractive_summary
 
 logger = logging.getLogger("summarize")
 
@@ -92,6 +93,8 @@ _PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
 MIN_PROVIDER_INTERVAL: dict[str, float] = {
     "gemini": 2.5,
     "groq": 2.5,
+    "openrouter": 2.5,
+    "openai": 1.0,
 }
 
 def _get_provider_lock(provider: str) -> asyncio.Lock:
@@ -217,12 +220,26 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
     Dispatch LLM completion using a cascade of OpenAI-compatible endpoints (Google Gemini & Groq).
     Supports choosing model/provider preference: persona, fast, gemini, qwen, llama, or default.
     Prioritizes high-throughput Gemini models with Groq Qwen failover.
+    Automatically activates extractive summary fallback if all LLMs are down/rate-limited.
     """
     if model_preference in ("persona", "persona_gemini"):
         # Persona / Cyberchad: строго 1 параллельный вызов через семафор
         async with _get_persona_semaphore():
-            return await _summarize_inner(prompt, text_dump, None, model_preference)
-    return await _summarize_inner(prompt, text_dump, None, model_preference)
+            raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
+    else:
+        raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
+
+    # CASCADE FALLBACK: If LLMs failed completely or returned error
+    if not raw_res or raw_res.startswith("Нейронка сдохла"):
+        # If this is a real text dump (not a unit-test with mock 'Text'), generate rich extractive summary!
+        if len(text_dump.strip()) >= 50 and model_preference not in ("persona", "persona_gemini"):
+            logger.warning("🛡️ All LLMs failed/exhausted. Activating intelligent extractive summary fallback!")
+            try:
+                return generate_extractive_summary(text_dump, prompt, paragraph_count=4)
+            except Exception as ext_err:
+                logger.error(f"Extractive fallback error: {ext_err}")
+
+    return raw_res
 
 
 # Канонический алиас для обратной совместимости
@@ -254,6 +271,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 ("gemini-3.6-flash", "gemini"),
                 ("gemini-3.7-flash", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
+                ("openai/gpt-oss-120b", "groq"),
+                ("openai/gpt-oss-20b", "groq"),
             ]
         )
         logger.info(
@@ -271,6 +290,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [chosen_fast] + remaining_fast + [
             ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
+            ("openai/gpt-oss-20b", "groq"),
         ]
     elif model_preference == "gemini":
         top_gem = [
@@ -285,10 +305,14 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
+            ("openai/gpt-oss-120b", "groq"),
+            ("openai/gpt-oss-20b", "groq"),
         ]
     elif model_preference in ("qwen", "llama", "groq"):
         models_cascade = [
             ("qwen/qwen3.8-27b", "groq"),
+            ("openai/gpt-oss-120b", "groq"),
+            ("openai/gpt-oss-20b", "groq"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-2.5-flash", "gemini"),
@@ -303,8 +327,22 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
+            ("openai/gpt-oss-120b", "groq"),
+            ("openai/gpt-oss-20b", "groq"),
         ]
+
+    # Additional fallbacks if external keys configured
+    if os.getenv("OPENROUTER_API_KEY"):
+        models_cascade.extend([
+            ("google/gemini-2.0-flash-exp:free", "openrouter"),
+            ("meta-llama/llama-3.3-70b-instruct:free", "openrouter"),
+        ])
+    if os.getenv("OPENAI_API_KEY"):
+        models_cascade.extend([
+            ("gpt-4o-mini", "openai"),
+        ])
 
     if model_preference not in ("persona", "persona_gemini"):
         system_instruction = prompt + (
@@ -338,9 +376,19 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         if provider == "gemini":
             keys = google_pool.get_all_active_tokens()
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        else:
+        elif provider == "groq":
             keys = groq_pool.get_all_active_tokens()
             base_url = "https://api.groq.com/openai/v1"
+        elif provider == "openrouter":
+            or_key = os.getenv("OPENROUTER_API_KEY")
+            keys = [or_key] if or_key else []
+            base_url = "https://openrouter.ai/api/v1"
+        elif provider == "openai":
+            oa_key = os.getenv("OPENAI_API_KEY")
+            keys = [oa_key] if oa_key else []
+            base_url = "https://api.openai.com/v1"
+        else:
+            continue
             
         if not keys:
             logger.warning(f"No keys for provider {provider}. Skipping model {model_name}.")
@@ -352,8 +400,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             logger.info(f"All keys for {provider} are in cooldown. Skipping model {model_name}.")
             continue
 
-        # Cap keys tried per model to max 3 healthy keys to prevent endless polling
-        active_keys = active_keys[:3]
+        # Cap keys tried per model to max 5 healthy keys to prevent endless polling
+        active_keys = active_keys[:5]
 
         # Безопасный лимит выходных токенов: для Gemini None (без урезания)
         # Для Groq: для persona 1024 токена, для summary 3500 токенов
@@ -376,11 +424,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     # Обязательно сохраняем БЛОК 1 (целевой пост) и БЛОК 2 (родительский пост) в начале!
                     effective_dump = effective_dump[:2500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-3500:]
             else:
-                if len(effective_sys) > 8000:
-                    effective_sys = effective_sys[:8000]
-                if len(effective_dump) > 40000:
-                    # Для лонгридов саммари сохраняем самые свежие посты в пределах 40k символов (~10k токенов)
-                    effective_dump = effective_dump[-40000:]
+                if len(effective_sys) > 6000:
+                    effective_sys = effective_sys[:6000]
+                if len(effective_dump) > 15000:
+                    # Для лонгридов саммари на Groq сохраняем самые свежие посты в пределах 15k символов во избежание 413
+                    effective_dump = effective_dump[-15000:]
 
         messages = [
             {"role": "system", "content": effective_sys},
@@ -512,7 +560,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         if hasattr(google_pool, "remove_token"):
                             google_pool.remove_token(api_key)
                     else:
-                        groq_pool.penalize_token(api_key, 300.0)
+                        groq_pool.penalize_token(api_key, 900.0)
                         if hasattr(groq_pool, "remove_token"):
                             groq_pool.remove_token(api_key)
                     in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
@@ -543,8 +591,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         groq_pool.penalize_token(api_key, 120.0)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}.")
                     if consecutive_429 >= 2:
-                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}). Halting {provider} attempts to protect keys from spam.")
-                        _provider_cooldowns[provider] = time.time() + 180.0
+                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}). Halting {provider} attempts temporarily.")
+                        _provider_cooldowns[provider] = time.time() + 60.0
                         skip_providers.add(provider)
                         break
                     in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
@@ -554,8 +602,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     logger.warning(f"⚠️ {provider} request timed out for {model_name}. Trying next candidate...")
                     break
                 if "503" in err_str or "high demand" in err_str.lower() or "service unavailable" in err_str.lower():
-                    logger.warning(f"⚠️ {provider} model {model_name} returned 503 (high demand). Setting 10m cooldown on model.")
-                    _model_cooldowns[model_name] = time.time() + 600.0
+                    logger.warning(f"⚠️ {provider} model {model_name} returned 503 (high demand). Setting 45s cooldown on model.")
+                    _model_cooldowns[model_name] = time.time() + 45.0
                     skip_model = True
                     break
                 # Any other error: skip model entirely
