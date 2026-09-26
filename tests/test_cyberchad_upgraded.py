@@ -19,6 +19,13 @@ from common.tts_engine import CYBERCHAD_PRESETS
 from ai_manager import (
     CYBERCHAD_NAME_REGEX,
     CYBERCHAD_SYSTEM_JSON_PROMPT,
+    CHAD_MOOD_FLAVORS,
+    CHAD_AMULET_ADORATION_MOODS,
+    CHAD_AMULET_DEFENSE_MOODS,
+    select_cyberchad_mood,
+    select_cyberchad_amulet_mood,
+    _RECENT_CHAD_MOODS,
+    _RECENT_AMULET_MOODS,
     parse_cyberchad_response,
     build_cyberchad_context,
     register_post_and_maybe_trigger_cyberchad_intervention,
@@ -34,11 +41,15 @@ def clean_test_state():
     _BOARD_FIGHT_TRACKER.clear()
     _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION.clear()
     _LAST_DIRECT_ROAST_USER_TS.clear()
+    _RECENT_CHAD_MOODS.clear()
+    _RECENT_AMULET_MOODS.clear()
     shared_state.messages_storage.clear()
     yield
     _BOARD_FIGHT_TRACKER.clear()
     _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION.clear()
     _LAST_DIRECT_ROAST_USER_TS.clear()
+    _RECENT_CHAD_MOODS.clear()
+    _RECENT_AMULET_MOODS.clear()
     shared_state.messages_storage.clear()
 
 
@@ -113,8 +124,8 @@ class TestCyberchadSystemPrompt:
     def test_prompt_bans_zoomer_slang(self):
         prompt_lower = CYBERCHAD_SYSTEM_JSON_PROMPT.lower()
         # Prompt must explicitly ban tiktok/zoomer words
-        assert "скуф" in prompt_lower
-        assert "альтушка" in prompt_lower
+        assert "сыч" in prompt_lower
+        assert "шкура" in prompt_lower
         assert "дединсайд" in prompt_lower
         assert "вайб" in prompt_lower
         assert "сигма" in prompt_lower
@@ -438,3 +449,111 @@ class TestAnchorBotVoiceSynthesis:
             )
             assert res is False
             assert mock_process.call_count == 0
+
+
+class TestCyberchadMoodFlavors:
+    """Tests for Cyberchad dynamic mood flavor registry, anti-repeat rotation, and context injection."""
+
+    def test_mood_flavors_registry_validity(self):
+        assert len(CHAD_MOOD_FLAVORS) >= 5
+        expected_moods = {
+            "cold_cynic", "manic_rage", "bored_alpha", "schizo_paranoid",
+            "philosophical_nihilist", "condescending_patron", "toxic_investigator"
+        }
+        assert expected_moods.issubset(set(CHAD_MOOD_FLAVORS.keys()))
+
+        for mood_id, data in CHAD_MOOD_FLAVORS.items():
+            assert data["id"] == mood_id
+            assert len(data["title"]) > 2
+            assert len(data["description"]) > 10
+            assert len(data["prompt_instruction"]) > 20
+            assert len(data["thought_prompt"]) > 10
+
+        # Verify amulet moods registries
+        assert len(CHAD_AMULET_ADORATION_MOODS) >= 4
+        assert len(CHAD_AMULET_DEFENSE_MOODS) >= 4
+        for data in CHAD_AMULET_ADORATION_MOODS.values():
+            assert len(data["prompt_instruction"]) > 20
+        for data in CHAD_AMULET_DEFENSE_MOODS.values():
+            assert len(data["prompt_instruction"]) > 20
+
+    def test_select_cyberchad_amulet_mood(self):
+        m_ad1 = select_cyberchad_amulet_mood(board_id="b", mode="adoration")
+        m_ad2 = select_cyberchad_amulet_mood(board_id="b", mode="adoration")
+        assert m_ad1["id"] != m_ad2["id"]
+
+        m_def1 = select_cyberchad_amulet_mood(board_id="b", mode="defense")
+        m_def2 = select_cyberchad_amulet_mood(board_id="b", mode="defense")
+        assert m_def1["id"] != m_def2["id"]
+
+    def test_select_cyberchad_mood_anti_repeat(self):
+        # 1st call picks any mood
+        m1 = select_cyberchad_mood(board_id="test_board")
+        # 2nd call must NOT be m1
+        m2 = select_cyberchad_mood(board_id="test_board")
+        assert m2["id"] != m1["id"]
+        # 3rd call must NOT be m1 or m2
+        m3 = select_cyberchad_mood(board_id="test_board")
+        assert m3["id"] not in (m1["id"], m2["id"])
+
+    def test_select_cyberchad_mood_override(self):
+        m = select_cyberchad_mood(board_id="b", mood_override="bored_alpha")
+        assert m["id"] == "bored_alpha"
+        assert m["title"] == "Усталое пресыщение"
+
+    def test_select_cyberchad_mood_context_bias(self):
+        # Test whining text triggers cold_cynic or bored_alpha
+        whining_text = "почему меня все обижают, за что разбаньте пожалуйста плачу"
+        results = [select_cyberchad_mood(board_id=f"bias_test_{i}", target_text=whining_text)["id"] for i in range(20)]
+        assert any(r in ("cold_cynic", "bored_alpha") for r in results)
+
+        # Test conspiracy text triggers schizo_paranoid
+        conspiracy_text = "масоны и санитары ставят опыты 5g чипы слежка госдеп"
+        results_schizo = [select_cyberchad_mood(board_id=f"bias_schizo_{i}", target_text=conspiracy_text)["id"] for i in range(20)]
+        assert "schizo_paranoid" in results_schizo
+
+    @pytest.mark.asyncio
+    async def test_build_cyberchad_context_with_mood_injection(self):
+        shared_state.messages_storage[200] = {
+            "post_num": 200,
+            "board_id": "b",
+            "author_id": 555,
+            "content": {"type": "text", "text": "какой смысл в этом чате"}
+        }
+
+        context = await build_cyberchad_context(
+            board_id="b",
+            target_post_num=200,
+            author_id=555,
+            limit_board=5,
+            mood_flavor="philosophical_nihilist"
+        )
+
+        # Verify Block 0 with mood is injected
+        assert "=== [БЛОК 0: ТВОЁ ТЕКУЩЕЕ НАСТРОЕНИЕ (ЭМОЦИОНАЛЬНЫЙ ФОКУС): «ТОКСИЧНЫЙ НИГИЛИСТ»] ===" in context
+        assert "ТОКСИЧНЫЙ ЭКЗИСТЕНЦИАЛЬНЫЙ НИГИЛИЗМ" in context
+        # Verify subsequent blocks 1-5 remain intact
+        assert "=== [БЛОК 1: ЦЕЛЕВОЕ СООБЩЕНИЕ ДЛЯ ОТВЕТА (ЦЕЛЬ)] ===" in context
+        assert "какой смысл в этом чате" in context
+
+    @pytest.mark.asyncio
+    async def test_build_cyberchad_context_include_mood_false(self):
+        shared_state.messages_storage[201] = {
+            "post_num": 201,
+            "board_id": "b",
+            "author_id": 555,
+            "content": {"type": "text", "text": "просто тестовый пост"}
+        }
+
+        context = await build_cyberchad_context(
+            board_id="b",
+            target_post_num=201,
+            author_id=555,
+            limit_board=5,
+            include_mood=False
+        )
+
+        # Verify Block 0 is omitted when include_mood=False
+        assert "=== [БЛОК 0:" not in context
+        assert "=== [БЛОК 1: ЦЕЛЕВОЕ СООБЩЕНИЕ ДЛЯ ОТВЕТА (ЦЕЛЬ)] ===" in context
+
