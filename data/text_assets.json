@@ -9469,6 +9469,27 @@
     "これを見ろ。次にお前の人生を見ろ。違いがわかるか？",
     "この絵はルーブルに飾れるほど素晴らしい。男トイレに。"
   ],
+  "FURRY_SUCCESS_PHRASES": [
+    "🦊 Пушистость доставлена!",
+    "🐾 Антро-красота, как заказывали~",
+    "🦊 Фурри-арт прибыл!",
+    "🐾 Пушистые уши и хвосты в наличии",
+    "🦊 Дичь из антро-измерения!",
+    "🐾 Furry-контент, свежак"
+  ],
+  "FURRY_SUCCESS_PHRASES_EN": [
+    "🦊 Furry art delivered!",
+    "🐾 Anthro beauty, as requested~",
+    "🦊 Fluffy ears and tails incoming",
+    "🐾 Fresh from the anthro dimension!",
+    "🦊 Furry pic served hot"
+  ],
+  "FURRY_SUCCESS_PHRASES_JP": [
+    "🦊 ケモノアートが届きました！",
+    "🐾 ふわふわの耳としっぽ~",
+    "🦊 アンソロ界から直送!",
+    "🐾 ケモノコンテンツ、新鮮です"
+  ],
   "REACTION_NOTIFY_PHRASES_JP": {
     "positive": [
       "👍 アノンがお前のレス #{post_num} を支持した",

@@ -534,6 +534,17 @@ async def _create_tables(db):
         CREATE INDEX IF NOT EXISTS idx_moneydrops_status_created ON MoneyDrops (status, created_at);
         """)
         await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MoneyDropMessages (
+            drop_id TEXT NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            PRIMARY KEY (drop_id, chat_id, message_id)
+        );
+        """)
+        await cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_moneydropmessages_drop_id ON MoneyDropMessages (drop_id);
+        """)
+        await cursor.execute("""
         CREATE TABLE IF NOT EXISTS ImportQueue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL,
@@ -659,6 +670,17 @@ async def _create_tables(db):
         """)
         await cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_daily_limits_day ON UserDailyLimits(day_date);
+        """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS UserImmunity (
+            user_id INTEGER NOT NULL,
+            immunity_type TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            PRIMARY KEY (user_id, immunity_type)
+        );
+        """)
+        await cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_immunity_exp ON UserImmunity(expires_at);
         """)
 
 
@@ -955,6 +977,19 @@ async def _apply_migrations(db):
             print("✅ Migrated: Ensured 'UserDailyLimits' table exists.")
         except aiosqlite.OperationalError: pass
 
+        try:
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS UserImmunity (
+                user_id INTEGER NOT NULL,
+                immunity_type TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                PRIMARY KEY (user_id, immunity_type)
+            );
+            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_user_immunity_exp ON UserImmunity(expires_at);")
+            print("✅ Migrated: Ensured 'UserImmunity' table exists.")
+        except aiosqlite.OperationalError: pass
+
 async def _create_indices(db):
     async with db.cursor() as cursor:
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_timestamp ON Posts(board_id, timestamp);")
@@ -1200,6 +1235,7 @@ async def initialize_database():
             
             await db.execute("COMMIT")
             await sync_daily_limits_from_db(db)
+            await sync_user_immunity_from_db(db)
         print("✅ База данных успешно инициализирована.")
     except Exception as e:
         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать базу данных: {e}")
@@ -1217,6 +1253,7 @@ async def init_db(db=None):
         await _create_triggers(db)
         await _insert_initial_data(db)
         await sync_daily_limits_from_db(db)
+        await sync_user_immunity_from_db(db)
     else:
         await initialize_database()
 
@@ -1304,21 +1341,78 @@ async def is_database_migrated() -> bool:
             return result[0] > 0
 async def get_post_info_by_copy(recipient_id: int, message_id: int) -> tuple[int, int] | None:
     """
-    Находит (post_num, author_id) оригинального поста по ID копии сообщения.
+    Находит (post_num, author_id) оригинального поста по ID копии сообщения (PostCopies или ChannelCopies).
     """
     from common.db_pool import get_pool
     try:
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(5.0):
             db = await get_pool()
-            query = """
+            # 1. Поиск по PostCopies (для ЛС пользователей)
+            query_pc = """
                 SELECT p.post_num, p.author_id
                 FROM Posts p
                 JOIN PostCopies pc ON p.post_num = pc.post_num
                 WHERE pc.recipient_id = ? AND pc.message_id = ?
+                LIMIT 1
             """
-            async with db.execute(query, (recipient_id, message_id)) as cursor:
+            async with db.execute(query_pc, (recipient_id, message_id)) as cursor:
                 result = await cursor.fetchone()
-                return (result[0], result[1]) if result else None
+                if result:
+                    return (result[0], result[1])
+
+            # 2. Поиск по ChannelCopies (строго по точному channel_id, без опасного wildcard OR cc.message_id)
+            query_cc = """
+                SELECT p.post_num, p.author_id
+                FROM Posts p
+                JOIN ChannelCopies cc ON p.post_num = cc.post_num
+                WHERE cc.channel_id = ? AND cc.message_id = ?
+                LIMIT 1
+            """
+            async with db.execute(query_cc, (recipient_id, message_id)) as cursor:
+                result = await cursor.fetchone()
+                if result:
+                    return (result[0], result[1])
+
+            # 3. Фолбэк на известные каналы хранения/архива (только если recipient_id сам является известным каналом)
+            from common.config import STORAGE_CHANNELS
+            known_storage_channels = {int(cid) for cid in STORAGE_CHANNELS.values() if cid}
+            try:
+                import shared_state
+                archive_cid = getattr(shared_state, 'ARCHIVE_CHANNEL_ID', None)
+                if archive_cid:
+                    known_storage_channels.add(int(archive_cid))
+            except Exception:
+                pass
+
+            if recipient_id in known_storage_channels:
+                # Пробуем найти по Posts.channel_message_id
+                query_cmsg = """
+                    SELECT post_num, author_id
+                    FROM Posts
+                    WHERE channel_message_id = ?
+                    LIMIT 1
+                """
+                async with db.execute(query_cmsg, (message_id,)) as cursor:
+                    result = await cursor.fetchone()
+                    if result:
+                        return (result[0], result[1])
+
+                # Пробуем среди других каналов кластера хранения
+                if len(known_storage_channels) > 1:
+                    placeholders = ",".join("?" for _ in known_storage_channels)
+                    query_cluster = f"""
+                        SELECT p.post_num, p.author_id
+                        FROM Posts p
+                        JOIN ChannelCopies cc ON p.post_num = cc.post_num
+                        WHERE cc.channel_id IN ({placeholders}) AND cc.message_id = ?
+                        LIMIT 1
+                    """
+                    async with db.execute(query_cluster, (*known_storage_channels, message_id)) as cursor:
+                        result = await cursor.fetchone()
+                        if result:
+                            return (result[0], result[1])
+
+            return None
     except Exception:
         return None
 async def load_state_from_db(thread_boards: set) -> dict:
@@ -2857,42 +2951,40 @@ async def get_post_by_num(post_num: int) -> Optional[Dict[str, Any]]:
     """
     Получает пост по номеру.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     try:
-        async with asyncio.timeout(2.0):
-            async with db_lock:
-                db = await get_pool()
-                async with db.execute("SELECT * FROM Posts WHERE post_num = ? LIMIT 1", (post_num,)) as cursor:
-                    row = await cursor.fetchone()
-                    if row is None:
-                        return None
-                    
-                    cols = [d[0] for d in cursor.description]
-                    row_data = dict(zip(cols, row))
+        async with asyncio.timeout(5.0):
+            db = await get_pool()
+            async with db.execute("SELECT * FROM Posts WHERE post_num = ? LIMIT 1", (post_num,)) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
                 
-                post_data = _process_site_db_row(row_data)
-                if post_data and 'post_num' in post_data:
-                    post_data['id'] = post_data['post_num']
-                return post_data
+                cols = [d[0] for d in cursor.description]
+                row_data = dict(zip(cols, row))
+            
+            post_data = _process_site_db_row(row_data)
+            if post_data and 'post_num' in post_data:
+                post_data['id'] = post_data['post_num']
+            return post_data
     except Exception:
         return None
 
 async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     try:
-        async with asyncio.timeout(2.0):
-            async with db_lock:
-                db = await get_pool()
-                query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
-                async with db.execute(query, (post_num,)) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        thread_id, reply_to = row
-                        if thread_id:
-                            return thread_id
-                        if reply_to is None:
-                            return post_num
-                    return None
+        async with asyncio.timeout(5.0):
+            db = await get_pool()
+            query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
+            async with db.execute(query, (post_num,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    thread_id, reply_to = row
+                    if thread_id:
+                        return thread_id
+                    if reply_to is None:
+                        return post_num
+                return None
     except Exception:
         return None
 async def get_post_count_in_thread(thread_op_num: int) -> int:
@@ -3120,40 +3212,67 @@ async def delete_post_by_num(post_num: int) -> bool:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # Проверяем, тред ли это
-                async with db.execute("SELECT 1 FROM Threads WHERE thread_id = ? LIMIT 1", (post_id_str,)) as cursor:
+                # Проверяем, тред ли это (по thread_id или thread_num)
+                async with db.execute(
+                    "SELECT 1 FROM Threads WHERE thread_id = ? OR thread_num = ? LIMIT 1",
+                    (post_id_str, post_id_int)
+                ) as cursor:
                     is_thread = await cursor.fetchone() is not None
                 
                 if is_thread:
                     print(f"🗑️ [DB] Удаление ТРЕДА #{post_num}...")
                     # Собираем все номера постов треда для очистки связанных таблиц
-                    async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ?", (post_id_str,)) as cursor:
+                    async with db.execute(
+                        "SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?",
+                        (post_id_str, post_id_int)
+                    ) as cursor:
                         thread_post_nums = [row[0] for row in await cursor.fetchall()]
                     if post_id_int not in thread_post_nums:
                         thread_post_nums.append(post_id_int)
                     
                     if thread_post_nums:
-                        placeholders = ",".join("?" for _ in thread_post_nums)
-                        await db.execute(f"DELETE FROM PostFiles WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM BroadcastQueue WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM NotificationQueue WHERE source_post_num IN ({placeholders}) OR reply_post_num IN ({placeholders})", thread_post_nums + thread_post_nums)
-                        await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM DeliveryQueue WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM ModQueue WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM PollVotes WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM Reports WHERE post_num IN ({placeholders})", thread_post_nums)
-                        await db.execute(f"DELETE FROM Backlinks WHERE target_post_num IN ({placeholders}) OR source_post_num IN ({placeholders})", thread_post_nums + thread_post_nums)
-                        await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders}) OR thread_id = ?", thread_post_nums + thread_post_nums + [post_id_str])
-                        await db.execute(f"UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num IN ({placeholders})", thread_post_nums)
+                        # Используем iter_sql_chunks во избежание ошибки too many SQL variables (лимит 999)
+                        for chunk in iter_sql_chunks(thread_post_nums, chunk_size=400):
+                            placeholders = ",".join("?" for _ in chunk)
+                            await db.execute(f"DELETE FROM PostFiles WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(f"DELETE FROM BroadcastQueue WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(
+                                f"DELETE FROM NotificationQueue WHERE source_post_num IN ({placeholders}) OR reply_post_num IN ({placeholders})",
+                                chunk + chunk
+                            )
+                            await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(f"DELETE FROM DeliveryQueue WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(f"DELETE FROM ModQueue WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(f"DELETE FROM PollVotes WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(f"DELETE FROM Reports WHERE post_num IN ({placeholders})", chunk)
+                            await db.execute(
+                                f"DELETE FROM Backlinks WHERE target_post_num IN ({placeholders}) OR source_post_num IN ({placeholders})",
+                                chunk + chunk
+                            )
+                            await db.execute(
+                                f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})",
+                                chunk + chunk
+                            )
+                            await db.execute(
+                                f"UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num IN ({placeholders})",
+                                chunk
+                            )
+                            await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", chunk)
                     
-                    await db.execute("DELETE FROM Threads WHERE thread_id = ?", (post_id_str,))
-                    await db.execute("DELETE FROM Posts WHERE thread_id = ?", (post_id_str,))
+                    await db.execute("DELETE FROM UserReplies WHERE thread_id = ?", (post_id_str,))
+                    await db.execute(
+                        "DELETE FROM Posts WHERE thread_id = ? OR thread_id = ? OR post_num = ?",
+                        (post_id_str, post_id_int, post_id_int)
+                    )
+                    await db.execute(
+                        "DELETE FROM Threads WHERE thread_id = ? OR thread_num = ?",
+                        (post_id_str, post_id_int)
+                    )
                     
                     # Мгновенная очистка кэша тредов
                     for cache_list in _THREAD_CACHE.values():
-                        if post_id_str in cache_list:
-                            cache_list.remove(post_id_str)
+                        cache_list[:] = [t for t in cache_list if t != post_id_str and t != str(post_id_int)]
                 else:
                     print(f"🗑️ [DB] Удаление ПОСТА #{post_num}...")
                     await db.execute("DELETE FROM PostFiles WHERE post_num = ?", (post_id_int,))
@@ -3170,11 +3289,12 @@ async def delete_post_by_num(post_num: int) -> bool:
                     await db.execute("UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num = ?", (post_id_int,))
                     await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
                 
-                # Мгновенная очистка медиа-кэша (удаляем все вхождения этого поста)
+                # Мгновенная очистка медиа-кэша (удаляем все вхождения постов треда или одиночного поста)
+                del_post_nums_set = set(thread_post_nums) if is_thread else {post_id_int}
                 for cache_list in _VIDEO_CACHE.values():
-                    cache_list[:] = [item for item in cache_list if item[0] != post_id_int]
+                    cache_list[:] = [item for item in cache_list if item[0] not in del_post_nums_set]
                 for cache_list in _IMAGE_CACHE.values():
-                    cache_list[:] = [item for item in cache_list if item[0] != post_id_int]
+                    cache_list[:] = [item for item in cache_list if item[0] not in del_post_nums_set]
                 
                 await db.execute("COMMIT")
                 return True
@@ -3186,12 +3306,12 @@ async def delete_post_by_num(post_num: int) -> bool:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
-                print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при удалении #{post_num}: {e}")
+                logger.error(f"[DB] Критическая ошибка при удалении #{post_num}: {e}")
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при удалении #{post_num}: {e}")
+                logger.error(f"[DB] Критическая ошибка при удалении #{post_num}: {e}")
                 break
             
     return False
@@ -3309,7 +3429,11 @@ async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | N
             """
             async with db.execute(query, (recipient_id, message_id)) as cursor:
                 result = await cursor.fetchone()
-                return result[0] if result else None
+                if result:
+                    return result[0]
+            # Безопасный фолбэк на get_post_info_by_copy (для каналов и хранилища)
+            info = await get_post_info_by_copy(recipient_id, message_id)
+            return info[1] if info else None
     except Exception:
         return None
 
@@ -3324,27 +3448,26 @@ async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | 
     Возвращает список всех копий для указанного поста,
     либо словарь со списками копий для нескольких постов.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     try:
-        async with asyncio.timeout(3.0):
-            async with db_lock:
-                db = await get_pool()
-                if isinstance(post_num, list):
-                    if not post_num:
-                        return {}
-                    placeholders = ','.join('?' for _ in post_num)
-                    query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+        async with asyncio.timeout(5.0):
+            db = await get_pool()
+            if isinstance(post_num, list):
+                if not post_num:
+                    return {}
+                placeholders = ','.join('?' for _ in post_num)
+                query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
 
-                    result = {num: [] for num in post_num}
-                    async with db.execute(query, post_num) as cursor:
-                        rows = await cursor.fetchall()
-                        for p_num, recipient_id, message_id in rows:
-                            result[p_num].append((recipient_id, message_id))
-                    return result
+                result = {num: [] for num in post_num}
+                async with db.execute(query, post_num) as cursor:
+                    rows = await cursor.fetchall()
+                    for p_num, recipient_id, message_id in rows:
+                        result[p_num].append((recipient_id, message_id))
+                return result
 
-                query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
-                async with db.execute(query, (post_num,)) as cursor:
-                    return await cursor.fetchall()
+            query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
+            async with db.execute(query, (post_num,)) as cursor:
+                return await cursor.fetchall()
     except Exception:
         if isinstance(post_num, list):
             return {num: [] for num in post_num}
@@ -10030,4 +10153,52 @@ async def cleanup_old_user_daily_limits(db, keep_days: int = 7) -> int:
         return await _do_clean()
     async with db_lock:
         return await _do_clean()
+
+
+async def record_user_immunity(db, user_id: int, immunity_type: str, expires_at: float):
+    """
+    Персистентно записывает иммунитет пользователя в SQLite (UserImmunity).
+    """
+    from common.db_pool import get_pool, db_lock
+    if db is None:
+        db = await get_pool()
+
+    async def _do_record():
+        await db.execute(
+            "REPLACE INTO UserImmunity (user_id, immunity_type, expires_at) VALUES (?, ?, ?)",
+            (user_id, immunity_type, float(expires_at))
+        )
+        await db.commit()
+
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        await _do_record()
+    else:
+        async with db_lock:
+            await _do_record()
+
+
+async def sync_user_immunity_from_db(db) -> int:
+    """
+    Гидратирует активные иммунитеты из UserImmunity в shared_state._VICTIM_PARTYVAN_IMMUNITY.
+    """
+    import shared_state
+    now = time.time()
+    try:
+        async with db.execute(
+            "SELECT user_id, expires_at FROM UserImmunity WHERE immunity_type = 'partyvan' AND expires_at > ?",
+            (now,)
+        ) as c:
+            rows = await c.fetchall()
+            count = 0
+            for uid, exp in rows:
+                shared_state._VICTIM_PARTYVAN_IMMUNITY[uid] = max(
+                    shared_state._VICTIM_PARTYVAN_IMMUNITY.get(uid, 0.0),
+                    float(exp)
+                )
+                count += 1
+            return count
+    except Exception as e:
+        logger.debug(f"ℹ️ Error syncing user immunity from db: {e}")
+        return 0
+
 

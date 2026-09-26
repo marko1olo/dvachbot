@@ -33,6 +33,24 @@ try:
 except ImportError:
     logger.warning("⚠️ TGCRYPTO NOT INSTALLED! Download speed will be very slow. Run: pip install tgcrypto")
 
+import sqlite3
+
+_orig_handle_updates = getattr(Client, "handle_updates", None)
+if _orig_handle_updates:
+    async def _safe_handle_updates(self, updates):
+        try:
+            return await _orig_handle_updates(self, updates)
+        except sqlite3.ProgrammingError as e:
+            if "closed database" in str(e).lower():
+                return
+            raise
+        except Exception:
+            if not getattr(self, "is_connected", False):
+                return
+            raise
+
+    Client.handle_updates = _safe_handle_updates
+
 # Глобальный кэш запущенных клиентов: {bot_token: Client}
 _ACTIVE_CLIENTS = {}
 _LAST_USED = {}  # {bot_token: timestamp}

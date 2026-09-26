@@ -3,7 +3,10 @@ import asyncio
 import atexit
 import sqlite3
 import os
+import logging
 from common.config import DB_NAME
+
+logger = logging.getLogger("db_pool")
 
 
 def _patch_aiosqlite_safe_worker():
@@ -230,6 +233,8 @@ async def get_pool():
                 print(f"[DB] Connected successfully (attempt {attempt+1}, isolation_level=None)")
                 return _db_connection
             except Exception as e:
+                if "Production DB / Bot access forbidden" in str(e):
+                    raise e
                 print(f"[DB] Retry {attempt+1}/{retries} failed: {e}")
                 if attempt < retries - 1:
                     await asyncio.sleep(2)  # Backoff перед retry
@@ -373,7 +378,13 @@ class db_transaction:
             except Exception as e:
                 err_str = str(e).lower()
                 if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
+                    if self._lock_acquired:
+                        db_lock.release()
+                        self._lock_acquired = False
                     await asyncio.sleep(self.base_delay * (2 ** attempt))
+                    if not is_owned:
+                        await db_lock.acquire()
+                        self._lock_acquired = True
                 else:
                     raise
         return self.db
@@ -401,8 +412,17 @@ class db_transaction:
                 else:
                     try:
                         await self.db.execute("COMMIT")
-                    except Exception:
-                        pass
+                    except Exception as commit_err:
+                        err_msg = str(commit_err).lower()
+                        if "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
+                            logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
+                        else:
+                            logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
+                            try:
+                                await self.db.execute("ROLLBACK")
+                            except Exception:
+                                pass
+                            raise
         finally:
             if self._lock_acquired:
                 db_lock.release()

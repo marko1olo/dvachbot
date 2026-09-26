@@ -1,3 +1,4 @@
+import urllib.parse
 from urllib.parse import urlparse
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
 from common.database import update_thread_last_updated, create_board, approve_board, delete_board
@@ -99,6 +100,7 @@ try:
         get_monogatari_image,
         get_nsfw_anime_image,
         get_loli_image,
+        get_furry_image,
     )
 except ImportError:
     print(
@@ -201,16 +203,60 @@ def sanitize_header_filename(filename: str | None) -> str:
     return filename or "file"
 
 
+def format_content_disposition(disposition_type: str, filename: str | None) -> str:
+    """
+    Format Content-Disposition header in compliance with RFC 6266 and RFC 5987.
+    Ensures ASCII-only in filename="..." to prevent Starlette latin-1 UnicodeEncodeError,
+    while preserving Unicode/Cyrillic via filename*=UTF-8''<encoded>.
+    """
+    clean_name = sanitize_header_filename(filename)
+    ascii_name = clean_name.encode("ascii", "replace").decode("ascii").replace("?", "_").strip()
+    if not ascii_name:
+        ascii_name = "file"
+    encoded_utf8 = urllib.parse.quote(clean_name, encoding="utf-8")
+    if clean_name == ascii_name:
+        return f'{disposition_type}; filename="{ascii_name}"'
+    return f'{disposition_type}; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_utf8}'
+
+
+def _is_trusted_proxy(ip: str | None) -> bool:
+    if not ip:
+        return False
+    if ip in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return True
+    try:
+        import ipaddress
+        addr = ipaddress.ip_address(ip)
+        return addr.is_loopback or addr.is_private
+    except ValueError:
+        return False
+
+
 def get_real_ip(request: Request) -> str:
     client_host = getattr(request.client, "host", None) if getattr(request, "client", None) else None
-    # Only trust forwarded headers if connecting from trusted local reverse proxy (nginx/caddy on localhost)
-    if client_host in ("127.0.0.1", "::1", "localhost"):
+    if _is_trusted_proxy(client_host):
         real_ip = request.headers.get("x-real-ip")
         if real_ip:
-            return real_ip.strip()
+            candidate = real_ip.strip()
+            try:
+                import ipaddress
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                pass
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            for candidate in reversed(parts):
+                try:
+                    import ipaddress
+                    addr = ipaddress.ip_address(candidate)
+                    if not (addr.is_loopback or addr.is_private):
+                        return candidate
+                except ValueError:
+                    continue
+            if parts:
+                return parts[0]
     if client_host:
         return client_host
     return "127.0.0.1"
@@ -675,7 +721,8 @@ try:
 except ImportError:
     psutil = None
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    if "pytest" not in sys.modules and not os.environ.get("PYTEST_CURRENT_TEST"):
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     sys.stdout.reconfigure(encoding="utf-8")
 SITE_ACCESS_MODE = "PUBLIC"
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -738,7 +785,7 @@ _SITE_NICK_PREFIXES = [
 ]
 _SITE_NICK_SUFFIXES = [
     "Битард",
-    "Скуф",
+    "Сыч",
     "Шиз",
     "Анон",
     "Ньюфаг",
@@ -749,10 +796,10 @@ _SITE_NICK_SUFFIXES = [
     "Двачер",
     "Чухан",
     "Куколд",
-    "Нормис",
+    "Рак",
     "Гигачад",
     "Подпивас",
-    "Зумер",
+    "Ньюфаг",
     "Бумер",
     "Сояк",
     "Инцел",
@@ -764,12 +811,12 @@ _SITE_NICK_SUFFIXES = [
     "Ноулайфер",
     "Тролль",
     "Моралфаг",
-    "Альтушка",
+    "Шкура",
     "Масик",
     "Школьник",
     "Дед",
     "Хиккан",
-    "Скуфидон",
+    "Сычидон",
     "Терпила",
     "Вахтер",
     "Тентакль",
@@ -973,10 +1020,20 @@ ANIME_COMMAND_MAP = {
     "LOLI": get_loli_image,
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
+    "furry": get_furry_image,
+    "Furry": get_furry_image,
+    "FURRY": get_furry_image,
+    "фурри": get_furry_image,
+    "Фурри": get_furry_image,
+    "ФУРРИ": get_furry_image,
+    "furri": get_furry_image,
+    "Furri": get_furry_image,
 }
 
+_ANIME_KEYS_SORTED = sorted(ANIME_COMMAND_MAP.keys(), key=len, reverse=True)
+_ANIME_CMDS_PATTERN = "|".join(re.escape(k) for k in _ANIME_KEYS_SORTED)
 RE_ANIME_STACK = re.compile(
-    rf"/({'|'.join(ANIME_COMMAND_MAP.keys())})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE
+    rf"/({_ANIME_CMDS_PATTERN})(?:@\w+)?(?=\s|\d|$)(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE
 )
 
 
@@ -2338,7 +2395,7 @@ async def ddos_guard_middleware(request: Request, call_next):
                 media_type="application/x-gzip",
                 headers={
                     "Content-Encoding": "gzip",
-                    "Content-Disposition": f'attachment; filename="{sanitize_header_filename(filename)}"',
+                    "Content-Disposition": format_content_disposition("attachment", filename),
                 },
             )
 
@@ -2832,15 +2889,19 @@ async def language_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
         return response
-    except Exception as e:
+    except (Exception, getattr(__builtins__, "BaseExceptionGroup", Exception)) as e:
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
         err_msg = str(e)
         err_type = type(e).__name__
         if (
-            "No response returned" in err_msg
+            isinstance(e, asyncio.CancelledError)
+            or "No response returned" in err_msg
             or "connection closed" in err_msg.lower()
             or "clientdisconnect" in err_msg.lower()
             or "taskgroup" in err_msg.lower()
             or "exceptiongroup" in err_type.lower()
+            or "cancelled" in err_msg.lower()
         ):
             return Response("OK", status_code=200)
         logger.warning(f"⚠️ Handled request exception: {err_type}: {err_msg[:100]}", exc_info=e)
@@ -3202,9 +3263,9 @@ def log_system_event(message: str):
 
 
 def _apply_xss_protection(text: str) -> str:
-    for pattern, replacement in XSS_REPLACEMENTS:
-        text = pattern.sub(replacement, text)
-    return text.replace("style", "sty1e").replace("STYLE", "STY1E")
+    # Note: html.escape(text, quote=True) is called immediately afterwards in format_post_text,
+    # safely neutralizing all HTML tags without destructively mangling words like 'description' or 'lifestyle'.
+    return text
 
 
 def _format_lines_and_greentext(text: str) -> str:
@@ -5195,7 +5256,7 @@ async def honey_pot_troll(request: Request):
             media_type="application/x-gzip",
             headers={
                 "Content-Encoding": "gzip",
-                "Content-Disposition": f'attachment; filename="{sanitize_header_filename(filename)}"',
+                "Content-Disposition": format_content_disposition("attachment", filename),
             },
         )
 
@@ -5261,12 +5322,13 @@ async def fake_admin_dashboard(request: Request):
     Скример или фейковый лог ФСБ.
     """
     client_ip = get_real_ip(request)
+    clean_ip_js = json.dumps(str(client_ip))
     return HTMLResponse(f"""
     <html>
     <body style="background:#000; color:red; font-family:monospace; font-size:16px;">
         <pre id="log"></pre>
         <script>
-            const ip = "{client_ip}";
+            const ip = {clean_ip_js};
             const logs = [
                 "ACCESS GRANTED.",
                 "INITIATING TRACE ON IP: " + ip,
@@ -5591,7 +5653,7 @@ async def api_captcha_generate(request: Request):
             "Двач лучше",
             "Я сосал",
             "Я обосрался",
-            "Да не скуф я",
+            "Да не сыч я",
             "Я пердикс",
             "Тгач круто",
             "Моя мама шлюха",
@@ -5733,6 +5795,14 @@ ADMIN_BROADCAST_QUEUE = asyncio.Queue()
 
 @app.websocket("/ws/admin/feed")
 async def admin_feed_websocket(websocket: WebSocket):
+    origin = websocket.headers.get("origin")
+    if origin:
+        origin_host = urlparse(origin).netloc.split(":")[0].lower()
+        req_host = (websocket.headers.get("host") or "").split(":")[0].lower()
+        if origin_host and req_host and origin_host != req_host and origin_host not in ("127.0.0.1", "localhost"):
+            await websocket.close(code=1008)
+            return
+
     user = websocket.session.get("user")
     if not user or not user.get("is_admin"):
         await websocket.close(code=1008)
@@ -6552,16 +6622,16 @@ async def export_thread_html(board_id: str, post_num: int):
     def format_ts(ts):
         return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
-    html = []
-    html.append("<!DOCTYPE html>")
-    html.append("<html lang='ru'>")
-    html.append("<head>")
-    html.append("<meta charset='UTF-8'>")
-    html.append(
+    html_lines = []
+    html_lines.append("<!DOCTYPE html>")
+    html_lines.append("<html lang='ru'>")
+    html_lines.append("<head>")
+    html_lines.append("<meta charset='UTF-8'>")
+    html_lines.append(
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
     )
-    html.append(f"<title>Архив треда #{real_thread_id} - /{board_id}/</title>")
-    html.append("""
+    html_lines.append(f"<title>Архив треда #{real_thread_id} - /{board_id}/</title>")
+    html_lines.append("""
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -6632,76 +6702,69 @@ async def export_thread_html(board_id: str, post_num: int):
         }
     </style>
     """)
-    html.append("</head>")
-    html.append("<body>")
-    html.append("<div class='container'>")
-    html.append("<header>")
-    html.append(f"<h1>Тред #{real_thread_id} (Раздел /{board_id}/)</h1>")
-    html.append(
+    html_lines.append("</head>")
+    html_lines.append("<body>")
+    html_lines.append("<div class='container'>")
+    html_lines.append("<header>")
+    html_lines.append(f"<h1>Тред #{real_thread_id} (Раздел /{board_id}/)</h1>")
+    html_lines.append(
         f"<p style='color:#8b949e;'>Сохранено из архива ТГАЧ. Всего постов: {len(replies) + 1}</p>"
     )
-    html.append("</header>")
+    html_lines.append("</header>")
 
     # OP post
-    html.append("<div class='post op-post'>")
+    html_lines.append("<div class='post op-post'>")
     op_headers = f"<div class='post-header'>Анон #<strong>{op_post.get('id')}</strong> ({format_ts(op_post.get('timestamp', 0))})</div>"
-    html.append(op_headers)
-    html.append("<div class='post-content'>")
+    html_lines.append(op_headers)
+    html_lines.append("<div class='post-content'>")
 
     if op_post.get("content", {}).get("files"):
-        html.append("<div class='post-files-container'>")
+        html_lines.append("<div class='post-files-container'>")
         for f in op_post["content"]["files"]:
-            html.append(
-                f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>"
-            )
-            html.append(
-                f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>"
-            )
-            html.append("</a>")
-        html.append("</div>")
+            orig_f = html.escape(f.get('original_url') or '', quote=True)
+            thumb_f = html.escape(f.get('thumbnail_url') or f.get('original_url') or '', quote=True)
+            html_lines.append(f"<a href='{orig_f}' class='file-thumb' target='_blank'>")
+            html_lines.append(f"<img src='{thumb_f}' alt='file'>")
+            html_lines.append("</a>")
+        html_lines.append("</div>")
 
-    html.append(
-        f"<div class='post-text'>{op_post.get('content', {}).get('text') or ''}</div>"
-    )
-    html.append("</div></div>")
+    op_text = format_post_text(str(op_post.get('content', {}).get('text') or ''))
+    html_lines.append(f"<div class='post-text'>{op_text}</div>")
+    html_lines.append("</div></div>")
 
     # Replies
     for post in replies:
-        html.append("<div class='post'>")
+        html_lines.append("<div class='post'>")
         rep_headers = f"<div class='post-header'>Анон #<strong>{post.get('id')}</strong> ({format_ts(post.get('timestamp', 0))})</div>"
-        html.append(rep_headers)
-        html.append("<div class='post-content'>")
+        html_lines.append(rep_headers)
+        html_lines.append("<div class='post-content'>")
 
         if post.get("reply_to_post_num"):
-            html.append(
-                f"<p class='reply-indicator'>&gt;&gt;{post.get('reply_to_post_num')}</p>"
-            )
+            r_num = int(post.get("reply_to_post_num"))
+            html_lines.append(f"<p class='reply-indicator'>&gt;&gt;{r_num}</p>")
 
         if post.get("content", {}).get("files"):
-            html.append("<div class='post-files-container'>")
+            html_lines.append("<div class='post-files-container'>")
             for f in post["content"]["files"]:
-                html.append(
-                    f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>"
-                )
-                html.append(
-                    f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>"
-                )
-                html.append("</a>")
-            html.append("</div>")
+                orig_f = html.escape(f.get('original_url') or '', quote=True)
+                thumb_f = html.escape(f.get('thumbnail_url') or f.get('original_url') or '', quote=True)
+                html_lines.append(f"<a href='{orig_f}' class='file-thumb' target='_blank'>")
+                html_lines.append(f"<img src='{thumb_f}' alt='file'>")
+                html_lines.append("</a>")
+            html_lines.append("</div>")
 
-        html.append(
-            f"<div class='post-text'>{post.get('content', {}).get('text') or ''}</div>"
-        )
-        html.append("</div></div>")
+        rep_text = format_post_text(str(post.get('content', {}).get('text') or ''))
+        html_lines.append(f"<div class='post-text'>{rep_text}</div>")
+        html_lines.append("</div></div>")
 
-    html.append("</div>")
-    html.append("</body>")
-    html.append("</html>")
+    html_lines.append("</div>")
+    html_lines.append("</body>")
+    html_lines.append("</html>")
 
     headers = {
-        "Content-Disposition": f'attachment; filename="{sanitize_header_filename(f"thread-{board_id}-{real_thread_id}.html")}"'
+        "Content-Disposition": format_content_disposition("attachment", f"thread-{board_id}-{real_thread_id}.html")
     }
-    return Response(content="\n".join(html), media_type="text/html", headers=headers)
+    return Response(content="\n".join(html_lines), media_type="text/html", headers=headers)
 
 
 @app.get("/{board_id}/res/{post_num}/gallery")
@@ -8194,13 +8257,7 @@ async def api_create_post(
     # Удаляем триггеры команд из текста только в том случае, если у нас есть файлы (загруженные или сгенерированные)
     # Также учитываем picrandom, так как он добавит файл позже
     if (all_files_to_upload or picrandom) and anime_tasks:
-        command_keys_raw = "|".join(re.escape(k) for k in ANIME_COMMAND_MAP.keys())
-        sanitized_text = re.sub(
-            rf"/({command_keys_raw})(?:(\d+)|(?:\s+(\d+)))?",
-            "",
-            sanitized_text,
-            flags=re.IGNORECASE,
-        ).strip()
+        sanitized_text = RE_ANIME_STACK.sub("", sanitized_text).strip()
 
     final_text = sanitized_text or ""
     content = {"text": final_text, "files": files_data}
@@ -9268,8 +9325,8 @@ async def api_get_thread(
         return []
     thread_id = int(real_thread_id)
 
-    # Кэширование на основе версии доски (обновляется при любом посте)
-    current_version = BOARD_VERSIONS[board_id]
+    # Кэширование на основе версии треда (обновляется только при активности в конкретном треде)
+    current_version = THREAD_VERSIONS.get(str(thread_id), THREAD_VERSIONS.get(thread_id, 0))
     stream = getattr(request.state, "stream", "ru")
     # Кэш общий для всех (без shadow-постов)
     cache_key = f"api_thread_full_v2:{board_id}:{thread_id}:{stream}:{current_version}"
@@ -10488,9 +10545,9 @@ async def _proxy_protected_telegram_file(
         is_safe_mime = media_type in SAFE_INLINE_MEDIA_TYPES
 
         if is_safe_ext and is_safe_mime:
-            headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
+            headers["Content-Disposition"] = format_content_disposition("inline", safe_filename)
         else:
-            headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
+            headers["Content-Disposition"] = format_content_disposition("attachment", safe_filename)
     except Exception:
         await close_upstream()
         raise
@@ -10584,9 +10641,9 @@ async def _proxy_external_url(
         is_safe_mime = media_type in SAFE_INLINE_MEDIA_TYPES
 
         if is_safe_ext and is_safe_mime:
-            headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
+            headers["Content-Disposition"] = format_content_disposition("inline", safe_filename)
         else:
-            headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
+            headers["Content-Disposition"] = format_content_disposition("attachment", safe_filename)
     except Exception:
         await close_upstream()
         raise
@@ -10666,13 +10723,18 @@ async def get_telegram_file(
     # Очистка file_id от лишних слешей и сегментов пути
     file_id = file_id.lstrip("/")
 
-    # Если file_id уже является полной ссылкой (или URL в пути), перенаправляем
+    # Если file_id уже является полной ссылкой (или URL в пути), перенаправляем только на разрешенные домены
     if file_id.startswith(("http:/", "https:/", "http://", "https://")):
         full_url = file_id
         if full_url.startswith("http:/") and not full_url.startswith("http://"):
             full_url = "http://" + full_url[6:].lstrip("/")
         elif full_url.startswith("https:/") and not full_url.startswith("https://"):
             full_url = "https://" + full_url[7:].lstrip("/")
+        parsed = urlparse(full_url)
+        allowed_domains = {"files.catbox.moe", "i.catbox.moe", "catbox.moe", "i.ibb.co", "pixhost.to", "img.pixhost.to", "huggingface.co", "telegra.ph", "api.telegram.org"}
+        domain = (parsed.hostname or "").lower()
+        if not any(domain == d or domain.endswith("." + d) for d in allowed_domains):
+            raise HTTPException(status_code=403, detail="Redirect to untrusted external domain prohibited")
         return RedirectResponse(
             url=full_url,
             status_code=301,

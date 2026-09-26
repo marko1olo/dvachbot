@@ -201,13 +201,13 @@ JAPANESE_WORD_REPLACEMENTS = {
     "хейтер": 'アンチ', "хейтить": "アンチする", "стрим": '配信', "стример": "配信者", "донат": ['投銭', '寄付'],
     "скилл": "スキル", "скилловый": "上手い", "нуб": ["初心者", "雑魚", "ヘタクソ"], "про": "プロ", "топ": ['トップ', '最高'], "имба": 'ぶっ壊れ', "топчик": "トップ",
     "игра": "ゲーム", "игрок": "プレイヤー", "тима": "チーム", "сквад": "チーム", "рейд": 'レイド',
-    "аниме": "アニメ", "аниму": "アニメ", "ониме": "アニメ", "онеме": "アニメ", "манга": "漫画", "тян": "ちゃん", "тянка": "ちゃん", "тня": "ちゃん", "кун": "くん", "вайфу": "嫁", "скуф": ['スクーフ', 'スクーフタチ', 'キモオタ', 'おっさん', 'ネトウヨ', '加齢臭おじさん', 'おじさん'], "скуфы": "スクーフタチ",
+    "аниме": "アニメ", "аниму": "アニメ", "ониме": "アニメ", "онеме": "アニメ", "манга": "漫画", "тян": "ちゃん", "тянка": "ちゃん", "тня": "ちゃん", "кун": "くん", "вайфу": "嫁", "сыч": ['スクーフ', 'スクーフタチ', 'キモオタ', 'おっさん', 'ネトウヨ', '加齢臭おじさん', 'おじさん'], "сычи": "スクーフタチ",
     "дегенерат": ['デジェネラット', '池沼', '変質者'], "шиз": "統合失調症", "русня": ['ロシア人', 'オークども', 'ロシアの豚', '北方蛮族'], "чушпан": "チュシパン",
     "сигма": "シグマ",
-    "нормис": ['一般人', 'リア充', 'パンピー', '陽キャ'],
-    "нормисы": ['一般人たち', 'リア充ども', 'パンピーども'],
-    "зумер": 'Z世代',
-    "зумеры": "Z世代",
+    "рак": ['一般人', 'リア充', 'パンピー', '陽キャ'],
+    "раки": ['一般人たち', 'リア充ども', 'パンピーども'],
+    "ньюфаг": 'Z世代',
+    "ньюфаги": "Z世代",
     "бумер": ['ブーマー', 'ブーマー世代'],
     "бумеры": "ブーマー",
     "милф": "MILFは",
@@ -368,8 +368,8 @@ JAPANESE_WORD_REPLACEMENTS = {
     "отвалите": "どけ",
     "пошли нахуй": ['くたばれ', '失せろ', '消えろ'],
 # --- Современный интернет-сленг, архетипы и субкультуры ---
-    "альтушка":['サブカル女子', 'メンヘラ女子', '地雷系女子', '痛い女', 'アルト女子'],
-    "альтушки": ['サブカル女子たち', 'メンヘラ女子たち', '地雷系', 'アルト女子'],
+    "шкура":['サブカル女子', 'メンヘラ女子', '地雷系女子', '痛い女', 'アルト女子'],
+    "шкуры": ['サブカル女子たち', 'メンヘラ女子たち', '地雷系', 'アルト女子'],
     "тюбик":['ヒョロガリ', 'もやし男', '弱者男性', 'ひ弱な奴', 'ひ弱な男'],
     "масик":['スパダリ', 'イケメン', '王子様', 'リア充男', '彼ぴ', 'ダーリン'],
     "штрих": ['ヤンキー', 'DQN', '不良', '奴'],
@@ -1643,6 +1643,21 @@ GELBOORU_NEGATIVE_TAGS = [
     "-sex", "-penetration", "-intercourse", "-paizuri", "-fellatio", "-cunnilingus", "-fingering", "-vaginal"
 ]
 
+# Gelbooru NSFW variant — no sex-act negative tags (they're positives in NSFW queries)
+GELBOORU_NSFW_NEGATIVE_TAGS = [
+    "-shota", "-cub", "-guro", "-gore", "-vore", "-scat", "-feces", "-pampers", "-toddler", "-diaper", "-baby",
+    "-sagging_breasts", "-gigantic_breasts", "-femdom", "-inflation", "-huge_breasts", "-pee", "-peeing",
+    "-pregnant", "-cream_the_rabbit", "-sonic_(series)",
+    "-large_penis", "-huge_penis", "-monster_cock", "-amputation", "-amputee", "-injury",
+    "-2boys", "-1boy", "-gay", "-yaoi", "-furry", "-bara", "-bdsm", "-impaled",
+    "-lowres", "-sketch", "-monochrome", "-bad_anatomy", "-screencap", "-retro_artstyle",
+]
+
+# Quality gate for yande.re / konachan NSFW queries
+HENT_QUALITY_NEGATIVE_TAGS = [
+    "-lowres", "-sketch", "-monochrome", "-bad_anatomy", "-screencap", "-retro_artstyle", "-vintage",
+]
+
 # AIBooru использует схожую систему тегов, поэтому мы можем использовать проверенный список
 AIBOORU_NEGATIVE_TAGS = [
     "-shota", "-cub", "-guro", "-gore", "-vore", "-scat", "-feces", "-diaper", "-baby", "-sagging breasts", "-gigantic_breasts",
@@ -1659,6 +1674,7 @@ ANIME_HARD_BLOCKED_PREFIXES = ("shota", "shotacon")
 LOLI_IMAGE_NEGATIVE_TAGS = [
     "-shota", "-shotacon", "-1boy", "-2boys", "-boy", "-male",
     "-penis", "-futanari", "-rating:e", "-explicit",
+    "-lowres", "-sketch", "-comic", "-monochrome", "-bad_anatomy", "-screencap",
 ]
 
 def _merge_negative_tags(*groups):
@@ -1685,6 +1701,101 @@ ANIME_SAFETY_NEGATIVE_TAGS = _merge_negative_tags(
         "-rape", "-snuff", "-torture", "-blood",
     ]
 )
+
+# --- AGE CUTOFF & DEDUPLICATION (2012 MINIMUM) ---
+from collections import deque
+
+BOORU_MIN_YEAR = 2012
+BOORU_MIN_TIMESTAMP = 1325376000  # 2012-01-01 00:00:00 UTC
+SAFEBOORU_MIN_ID = 750000        # Safebooru post ID for early 2012
+
+_MAX_RECENT_SERVED = 2000
+_RECENT_SERVED_URLS: deque[str] = deque(maxlen=_MAX_RECENT_SERVED)
+_RECENT_SERVED_URLS_SET: set[str] = set()
+_RECENT_SERVED_HASHES: deque[str] = deque(maxlen=_MAX_RECENT_SERVED)
+_RECENT_SERVED_HASHES_SET: set[str] = set()
+
+def is_image_recent(url: str = "", content_hash: str = "") -> bool:
+    """Check if image URL or MD5/SHA256 content hash was served recently."""
+    if url and url in _RECENT_SERVED_URLS_SET:
+        return True
+    if content_hash and content_hash in _RECENT_SERVED_HASHES_SET:
+        return True
+    return False
+
+def record_served_image(url: str = "", content_hash: str = ""):
+    """Track served image in circular LRU sets to avoid repetitive duplicates."""
+    if url:
+        if len(_RECENT_SERVED_URLS) >= _MAX_RECENT_SERVED:
+            oldest = _RECENT_SERVED_URLS.popleft()
+            _RECENT_SERVED_URLS_SET.discard(oldest)
+        _RECENT_SERVED_URLS.append(url)
+        _RECENT_SERVED_URLS_SET.add(url)
+    if content_hash:
+        if len(_RECENT_SERVED_HASHES) >= _MAX_RECENT_SERVED:
+            oldest_h = _RECENT_SERVED_HASHES.popleft()
+            _RECENT_SERVED_HASHES_SET.discard(oldest_h)
+        _RECENT_SERVED_HASHES.append(content_hash)
+        _RECENT_SERVED_HASHES_SET.add(content_hash)
+
+def _post_is_too_old(post: dict, api_type: str = "") -> bool:
+    """Reject posts uploaded prior to 2012-01-01 (timestamp 1325376000)."""
+    if not isinstance(post, dict):
+        return False
+
+    if api_type == 'safebooru':
+        pid = post.get('id')
+        if pid is not None:
+            try:
+                if int(pid) < SAFEBOORU_MIN_ID:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        ch = post.get('change')
+        if ch is not None:
+            try:
+                if int(ch) < BOORU_MIN_TIMESTAMP:
+                    return True
+            except (ValueError, TypeError):
+                pass
+
+    created_at = post.get('created_at')
+    if created_at is not None:
+        if isinstance(created_at, (int, float)):
+            if created_at < BOORU_MIN_TIMESTAMP:
+                return True
+        elif isinstance(created_at, str):
+            if created_at.isdigit():
+                if int(created_at) < BOORU_MIN_TIMESTAMP:
+                    return True
+            else:
+                m = re.search(r'\b(200\d|201[01])\b', created_at)
+                if m:
+                    return True
+
+    ch = post.get('change')
+    if ch is not None and isinstance(ch, (int, float)) and ch < BOORU_MIN_TIMESTAMP:
+        return True
+
+    return False
+
+def _extract_booru_post_url(post: dict, api_type: str = "") -> Optional[str]:
+    """Helper to cleanly extract image URL from any booru post object."""
+    if not isinstance(post, dict):
+        return None
+    if api_type == 'safebooru':
+        d = post.get('directory')
+        img = post.get('image')
+        if d and img:
+            return f"https://safebooru.org/images/{d}/{img}"
+    url = post.get('file_url') or post.get('large_file_url') or post.get('sample_url') or post.get('jpeg_url')
+    if url:
+        if url.startswith("//"):
+            url = "https:" + url
+        if api_type == 'danbooru' and not url.startswith("http"):
+            url = f"https://danbooru.donmai.us{url}"
+        return url
+    return None
 
 
 def _normalize_tag_token(value: str) -> str:
@@ -1801,7 +1912,7 @@ BOORU_API_CONFIGS = {
         'params': {'page': 'dapi', 's': 'post', 'q': 'index', 'json': 1, 'limit': 10},
         'user_param': None,
         'key_param': None,
-        'negative_tags': [],
+        'negative_tags': ["-lowres", "-sketch", "-comic", "-monochrome", "-bad_anatomy", "-screencap"],
         'user': None,
         'key': None,
     }
@@ -2251,8 +2362,60 @@ async def get_random_anime_image() -> Optional[str]:
         ])
     return await _fetch_image_from_apis(apis, "Все SFW/NSFW API не смогли предоставить изображение.")
 
+async def _fetch_from_gelbooru_nsfw(session, headers, base_tags: str, rating_tag: str, proxy=None, **kwargs) -> Optional[str]:
+    """Gelbooru fetcher for NSFW queries using GELBOORU_NSFW_NEGATIVE_TAGS.
+    Separate from _fetch_from_booru_api to avoid contradictory sex-act negative tag injection.
+    """
+    config = BOORU_API_CONFIGS['gelbooru']
+    neg = " ".join(_merge_negative_tags(GELBOORU_NSFW_NEGATIVE_TAGS))
+    tags_query = f"{base_tags} {rating_tag} score:>10 {neg} sort:random".strip()
+    params = {
+        'page': 'dapi', 's': 'post', 'q': 'index', 'json': 1, 'limit': 20,
+        'tags': tags_query,
+        'api_key': config.get('key'),
+        'user_id': config.get('user'),
+    }
+    params = {k: v for k, v in params.items() if v is not None}
+    try:
+        async with session.get(config['url'], params=params, headers=headers, proxy=proxy) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            posts = data.get('post', []) if isinstance(data, dict) else []
+            if not posts:
+                return None
+            valid_posts = [
+                p for p in posts
+                if not _post_has_blocked_tags(p)
+                and not _post_is_too_old(p, 'gelbooru')
+                and not is_image_recent(
+                    url=_extract_booru_post_url(p, 'gelbooru') or "",
+                    content_hash=p.get('hash') or p.get('md5') or ""
+                )
+            ]
+            if not valid_posts:
+                valid_posts = [p for p in posts if not _post_has_blocked_tags(p) and not _post_is_too_old(p, 'gelbooru')]
+            if not valid_posts:
+                return None
+            chosen = random.choice(valid_posts)
+            url = _extract_booru_post_url(chosen, 'gelbooru')
+            if url:
+                record_served_image(url=url, content_hash=chosen.get('hash') or chosen.get('md5') or "")
+                return url
+    except Exception:
+        return None
+    return None
+
+
 async def get_nsfw_anime_image() -> Optional[str]:
-    # Список проверенных NSFW / Hentai тегов и их максимальных страниц для Yande.re
+    """NSFW hentai image fetcher with date >=2012 and quality gates.
+
+    Key fixes vs old version:
+    - Gelbooru: uses GELBOORU_NSFW_NEGATIVE_TAGS (no contradictory sex-act negatives)
+    - Danbooru: max 2 tags only (basic account has strict 2-tag limit; avoids HTTP 422)
+    - 4chan /h/ and /e/ removed (no date/quality filter, constant retro junk)
+    - Yande.re / Konachan: HENT_QUALITY_NEGATIVE_TAGS injected (-lowres -sketch etc.)
+    """
     yandere_nsfw_options = [
         {"tag": "sex", "max_page": 50},
         {"tag": "paizuri", "max_page": 30},
@@ -2274,73 +2437,86 @@ async def get_nsfw_anime_image() -> Optional[str]:
         {"tag": "oppai", "max_page": 50},
     ]
     selected_option = random.choice(yandere_nsfw_options)
+    selected_option_q = random.choice(yandere_nsfw_options)
+
+    gelbooru_nsfw_base_options = [
+        "1girl solo pussy breasts",
+        "1girl solo ass nude",
+        "1girl solo nipples",
+        "1girl solo ahegao",
+        "1girl solo blowjob",
+        "1girl solo sex",
+        "1girl solo cum nude",
+        "1girl solo lingerie",
+    ]
 
     apis = [
-        # Aibooru
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:explicit"})}},
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:questionable"})}},
-        
-        # Yande.re (Explicit)
+        # Aibooru (fast, few restrictions)
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(api_type="aibooru", base_tags="1girl", rating_tag="rating:explicit")}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(api_type="aibooru", base_tags="1girl", rating_tag="rating:questionable")}},
+
+        # Yande.re (Explicit) with quality negative tags
         {
-            "source": "yande.re", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "yande.re",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": selected_option["tag"], 
-                "rating_tag": "rating:e", 
+                "base_tags": selected_option["tag"],
+                "rating_tag": "rating:e",
                 "max_page": selected_option["max_page"],
-                "site_url": "https://yande.re/post.json"
+                "site_url": "https://yande.re/post.json",
+                "negative_tags": HENT_QUALITY_NEGATIVE_TAGS,
             }
         },
         # Yande.re (Questionable)
         {
-            "source": "yande.re", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "yande.re",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": selected_option["tag"], 
-                "rating_tag": "rating:q", 
-                "max_page": selected_option["max_page"],
-                "site_url": "https://yande.re/post.json"
+                "base_tags": selected_option_q["tag"],
+                "rating_tag": "rating:q",
+                "max_page": selected_option_q["max_page"],
+                "site_url": "https://yande.re/post.json",
+                "negative_tags": HENT_QUALITY_NEGATIVE_TAGS,
             }
         },
-        
-        # Konachan (Explicit - Hentai)
+
+        # Konachan (Explicit) with quality negative tags
         {
-            "source": "konachan", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "konachan",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": "nipples", 
-                "rating_tag": "rating:e", 
-                "max_page": 50, 
-                "site_url": "https://konachan.com/post.json"
+                "base_tags": "nipples",
+                "rating_tag": "rating:e",
+                "max_page": 50,
+                "site_url": "https://konachan.com/post.json",
+                "negative_tags": HENT_QUALITY_NEGATIVE_TAGS,
             }
         },
         {
-            "source": "konachan", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "konachan",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": "sex", 
-                "rating_tag": "rating:e", 
-                "max_page": 50, 
-                "site_url": "https://konachan.com/post.json"
+                "base_tags": "sex",
+                "rating_tag": "rating:e",
+                "max_page": 50,
+                "site_url": "https://konachan.com/post.json",
+                "negative_tags": HENT_QUALITY_NEGATIVE_TAGS,
             }
         },
-        
-        # NekoBot (Fast High-Res Hentai & Lewd API)
+
+        # NekoBot (fast API)
         {"source": "nekobot", "fetch_func": fetch_nekobot_nsfw, "params": {"ntype": random.choice(["hentai", "paizuri", "hneko", "hthigh", "lewd", "boobs", "ass", "4k"])}},
-        # 4chan Live Imageboards (/h/ Hentai & /e/ Ecchi)
-        {"source": "4chan_h", "fetch_func": fetch_4chan_live_image, "params": {"board": "h"}},
-        {"source": "4chan_e", "fetch_func": fetch_4chan_live_image, "params": {"board": "e"}},
-        
-        # Gelbooru
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:explicit"})}},
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:questionable"})}},
-        
-        # Danbooru
-        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:explicit"})}},
-        
+
+        # Gelbooru with NSFW-safe negative tags (no sex-act contradictions)
+        {"source": "gelbooru_nsfw", "fetch_func": _fetch_from_gelbooru_nsfw, "params": {"base_tags": random.choice(gelbooru_nsfw_base_options), "rating_tag": "rating:explicit"}},
+        {"source": "gelbooru_nsfw", "fetch_func": _fetch_from_gelbooru_nsfw, "params": {"base_tags": "1girl solo ass", "rating_tag": "rating:questionable"}},
+
+        # Danbooru — max 2 tags (basic account limit), no negative tags
+        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(api_type="danbooru", base_tags="1girl", rating_tag="rating:e", apply_negative_tags=False)}},
+
         # Waifu.pics
         {"source": "waifu.pics", "fetch_func": fetch_waifu_pics, "params": {"category": random.choice(WAIFUPICS_NSFW_CATEGORIES), "is_nsfw": True}},
-        
+
         # Nekos.best
         {"source": "nekos.best", "fetch_func": fetch_nekos_best, "params": {"category": random.choice(['pussy', 'feet', 'yuri', 'cum', 'blowjob', 'lewd'])}}
     ]
@@ -2420,6 +2596,83 @@ async def get_loli_image() -> Optional[str]:
     ]
     return await _fetch_image_from_apis(apis, "Loli anime APIs failed to provide an image.")
 
+async def _fetch_from_e926(session, headers, tags: str, proxy=None, **kwargs) -> Optional[str]:
+    """Fetch from e926.net (SFW e621 mirror). Requires descriptive User-Agent."""
+    e926_headers = dict(headers)
+    e926_headers["User-Agent"] = "DvachBot/1.0 (dvachbot tg imageboard bot)"
+    params = {'tags': tags, 'limit': 50}
+    try:
+        async with session.get(
+            "https://e926.net/posts.json",
+            params=params,
+            headers=e926_headers,
+            proxy=proxy,
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            posts = data.get('posts', [])
+            if not posts:
+                return None
+            valid_posts = []
+            for p in posts:
+                file_info = p.get('file', {})
+                ext = file_info.get('ext', '')
+                if ext not in ('jpg', 'jpeg', 'png', 'gif'):
+                    continue
+                url = file_info.get('url')
+                if not url:
+                    continue
+                if is_image_recent(url=url, content_hash=file_info.get('md5') or ""):
+                    continue
+                valid_posts.append((url, file_info.get('md5') or ""))
+            if not valid_posts:
+                return None
+            chosen_url, chosen_md5 = random.choice(valid_posts)
+            record_served_image(url=chosen_url, content_hash=chosen_md5)
+            return chosen_url
+    except Exception:
+        return None
+    return None
+
+
+async def get_furry_image() -> Optional[str]:
+    """Hetero/solo-female furry/anthro art. Clean aesthetic: no extreme fetishes,
+    no hyper proportions, no gore/scat/vore/feral/cub. Sources: e926 + gelbooru.
+    """
+    e926_tags_options = [
+        "anthro female solo score:>20 order:random -hyper -huge_breasts -macro -micro -vore -gore -scat -watersports -diaper -cub -feral -fart -bdsm -huge_penis -inflation",
+        "anthro female score:>15 male order:random -hyper -huge_breasts -macro -vore -gore -scat -watersports -diaper -cub -feral -fart -bdsm -hyper_penis",
+        "anthro female_anthro score:>20 order:random -hyper -huge_breasts -macro -vore -gore -scat -cub -feral -bdsm",
+        "anthro female solo score:>25 order:random -hyper -huge_breasts -vore -gore -scat -cub -feral -bdsm",
+    ]
+    gelbooru_furry_options = [
+        "anthro solo female score:>15",
+        "furry female solo score:>10",
+    ]
+
+    apis = [
+        # e926 — primary source (SFW e621 mirror, best anthro/furry quality)
+        {"source": "e926", "fetch_func": _fetch_from_e926, "params": {"tags": random.choice(e926_tags_options)}},
+        {"source": "e926", "fetch_func": _fetch_from_e926, "params": {"tags": random.choice(e926_tags_options)}},
+        # Gelbooru furry — secondary source
+        {"source": "gelbooru_furry", "fetch_func": _fetch_from_gelbooru_nsfw, "params": {"base_tags": random.choice(gelbooru_furry_options), "rating_tag": "rating:questionable"}},
+        # Yande.re furry
+        {
+            "source": "yande.re_furry",
+            "fetch_func": _fetch_from_yandere_paginated,
+            "params": {
+                "base_tags": "furry female score:>15",
+                "rating_tag": "rating:q",
+                "max_page": 30,
+                "site_url": "https://yande.re/post.json",
+                "negative_tags": ["-hyper", "-huge_breasts", "-gore", "-vore", "-scat"],
+            }
+        },
+    ]
+    return await _fetch_image_from_apis(apis, "Furry APIs не смогли предоставить изображение.")
+
 async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) -> Optional[str]:
     base_tags = kwargs.get('base_tags')
     rating_tag = kwargs.get('rating_tag')
@@ -2449,7 +2702,7 @@ async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) 
                 BOORU_API_CONFIGS.get(config_key, {}).get("negative_tags", []),
                 negative_tags,
             ))
-            tags = f'{base_tags} {rating_tag} {neg}'.strip()
+            tags = f'{base_tags} {rating_tag} date:>=2012-01-01 {neg}'.strip()
             params = {'tags': tags, 'limit': 100, 'page': page}
 
             query_hash = hashlib.sha256(tags.encode("utf-8", "ignore")).hexdigest()[:10]
@@ -2460,17 +2713,32 @@ async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) 
             if not posts or not isinstance(posts, list):
                 continue
 
-            # Фильтруем пустые URL (предпочитаем легкий sample_url/jpeg_url перед тяжелым file_url)
+            # Фильтруем пустые URL, заблокированные теги, старые публикации (<2012) и недавние дубликаты
             valid_posts = [
                 p for p in posts 
                 if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')) 
                 and not _post_has_blocked_tags(p)
+                and not _post_is_too_old(p, 'yande.re')
+                and not is_image_recent(
+                    url=p.get('sample_url') or p.get('jpeg_url') or p.get('file_url') or "",
+                    content_hash=p.get('md5') or p.get('hash') or ""
+                )
             ]
+            if not valid_posts:
+                # Если все уже отдавались недавно, берём не заблокированные и не старые
+                valid_posts = [
+                    p for p in posts 
+                    if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')) 
+                    and not _post_has_blocked_tags(p)
+                    and not _post_is_too_old(p, 'yande.re')
+                ]
             if not valid_posts: continue
 
             chosen_post = random.choice(valid_posts)
             img = chosen_post.get('sample_url') or chosen_post.get('jpeg_url') or chosen_post.get('file_url')
             if img and img.startswith("//"): img = "https:" + img
+            if img:
+                record_served_image(url=img, content_hash=chosen_post.get('md5') or chosen_post.get('hash') or "")
             return img
 
         except Exception:
@@ -2513,13 +2781,14 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         if api_type == 'gelbooru':
             main_params.update({'tags': f'{final_tags} sort:random'.strip(), 'api_key': config.get('key'), 'user_id': config.get('user')})
         elif api_type == 'danbooru':
-            main_params.update({'tags': final_tags, 'random': 'true', 'login': config.get('user'), 'api_key': config.get('key')})
+            main_params.update({'tags': f'{final_tags} date:>=2012-01-01'.strip(), 'random': 'true', 'login': config.get('user'), 'api_key': config.get('key')})
         elif api_type == 'aibooru':
             main_params.update({'tags': final_tags, 'random': 'true'})
         elif api_type == 'safebooru':
-            # Safebooru: 0-indexed 'pid' for pagination, limit up to 100
-            rand_pid = random.randint(0, 75)
-            main_params.update({'tags': f'{base_tags}'.strip(), 'limit': 50, 'pid': rand_pid})
+            # Safebooru: modern range >= 2012 (id:>750000), quality gate, moderate page random
+            rand_pid = random.randint(0, 30)
+            safebooru_tags = f"{base_tags} id:>{SAFEBOORU_MIN_ID} score:>5 {neg}".strip()
+            main_params.update({'tags': safebooru_tags, 'limit': 50, 'pid': rand_pid})
 
         # Чистим параметры
         main_params = {k: v for k, v in main_params.items() if v is not None}
@@ -2550,22 +2819,29 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
 
         if not posts: return None
         
-        valid_posts = [post for post in posts if not _post_has_blocked_tags(post)]
+        # Фильтруем заблокированные теги, старые публикации (<2012) и недавние дубликаты
+        valid_posts = [
+            post for post in posts 
+            if not _post_has_blocked_tags(post)
+            and not _post_is_too_old(post, api_type)
+            and not is_image_recent(
+                url=_extract_booru_post_url(post, api_type) or "",
+                content_hash=post.get('hash') or post.get('md5') or ""
+            )
+        ]
+        if not valid_posts:
+            # Если все на странице уже отдавались недавно, берём не заблокированные и не старые
+            valid_posts = [
+                post for post in posts 
+                if not _post_has_blocked_tags(post)
+                and not _post_is_too_old(post, api_type)
+            ]
         if not valid_posts: return None
 
         post = random.choice(valid_posts)
-        if api_type == 'safebooru':
-            d = post.get('directory')
-            img = post.get('image')
-            if d and img:
-                return f"https://safebooru.org/images/{d}/{img}"
-        
-        url = post.get('file_url') or post.get('large_file_url')
-        
+        url = _extract_booru_post_url(post, api_type)
         if url:
-            if url.startswith("//"): url = "https:" + url
-            if api_type == 'danbooru' and not url.startswith("http"):
-                url = f"https://danbooru.donmai.us{url}"
+            record_served_image(url=url, content_hash=post.get('hash') or post.get('md5') or "")
             return url
 
     except Exception:

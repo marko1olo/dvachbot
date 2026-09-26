@@ -132,7 +132,8 @@ from enum import Enum
 from logging.handlers import RotatingFileHandler
 from typing import Tuple
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    if "pytest" not in sys.modules and not os.environ.get("PYTEST_CURRENT_TEST"):
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from common.chart_lock import ChartLockTimeout, matplotlib_guard
 from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
@@ -176,6 +177,7 @@ from text_assets import (
     FAP_SUCCESS_PHRASES, FAP_SUCCESS_PHRASES_EN, FAP_SUCCESS_PHRASES_JP,
     GATARI_SUCCESS_PHRASES, GATARI_SUCCESS_PHRASES_EN, GATARI_SUCCESS_PHRASES_JP,
     LOLI_SUCCESS_PHRASES, LOLI_SUCCESS_PHRASES_EN, LOLI_SUCCESS_PHRASES_JP,
+    FURRY_SUCCESS_PHRASES, FURRY_SUCCESS_PHRASES_EN, FURRY_SUCCESS_PHRASES_JP,
     DEANON_COOLDOWN_PHRASES,
     MOTIVATIONAL_MESSAGES, MOTIVATIONAL_MESSAGES_EN, MOTIVATIONAL_MESSAGES_JP,
     INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP,
@@ -275,7 +277,7 @@ from help_text import (
 )
 from japanese_translator import (
     anime_transform, get_random_anime_image, get_monogatari_image, 
-    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url,
+    get_nsfw_anime_image, get_loli_image, get_furry_image, get_dynamic_proxy_url,
     get_event_anime_images, classify_media_url
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
@@ -347,13 +349,22 @@ ANIME_COMMAND_MAP = {
     "лоликон": get_loli_image,
     "дщдш": get_loli_image,
     "дщдшсщт": get_loli_image,
+    "furry": get_furry_image,
+    "Furry": get_furry_image,
+    "FURRY": get_furry_image,
+    "фурри": get_furry_image,
+    "Фурри": get_furry_image,
+    "ФУРРИ": get_furry_image,
+    "furri": get_furry_image,
+    "Furri": get_furry_image,
 }
 from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg, generate_poll_text_display
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
-RE_NEWLINES = re.compile(r'\n{2,}')
-RE_ANIME_CMD = re.compile(rf"^/({'|'.join(ANIME_COMMAND_MAP.keys())})", re.IGNORECASE)
-RE_ANIME_STACK = re.compile(rf"/({'|'.join(ANIME_COMMAND_MAP.keys())})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
+_ANIME_KEYS_SORTED = sorted(ANIME_COMMAND_MAP.keys(), key=len, reverse=True)
+_ANIME_CMDS_PATTERN = "|".join(re.escape(k) for k in _ANIME_KEYS_SORTED)
+RE_ANIME_CMD = re.compile(rf"^/({_ANIME_CMDS_PATTERN})(?:@\w+)?(?=\s|\d|$)", re.IGNORECASE)
+RE_ANIME_STACK = re.compile(rf"/({_ANIME_CMDS_PATTERN})(?:@\w+)?(?=\s|\d|$)(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
 RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_MULTI_REPLY = re.compile(r'>>(\d+)')
@@ -553,7 +564,7 @@ ROAST_COOLDOWN = 300
 import random
 
 NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
-NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
+NICK_SUFFIXES = ["Битард", "Сыч", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Рак", "Гигачад", "Подпивас", "Ньюфаг", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Шкура", "Масик", "Школьник", "Дед", "Хиккан", "Сычидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
 
 def generate_anon_name(user_id: int, stream: str = 'ru') -> str:
     return _canonical_gen_anon_name(user_id, stream=stream)
@@ -1868,6 +1879,11 @@ async def load_state():
     spam_words_map = await load_all_spam_words()
     for board_id, words_set in spam_words_map.items():
         board_data[board_id]['spam_filter_words'] = words_set
+        try:
+            from common.spam_filter import set_spam_filter_words
+            set_spam_filter_words(board_id, words_set)
+        except Exception as _sfw_err:
+            print(f"⚠️ Failed to init spam_filter_words for {board_id}: {_sfw_err}")
     reaction_bans_map = await load_all_reaction_bans()
     for board_id, banned_set in reaction_bans_map.items():
         board_data[board_id]['reaction_banned_users'] = banned_set
@@ -2622,13 +2638,22 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
 
 
         # Уведомление пользователю отключено по просьбе админа
-async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
+async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str | None = None) -> tuple[list[int], list, list]:
     for attempt in range(10):
         try:
             db = await get_pool()
             async with db_transaction(db):
-                query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
-                async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
+                conditions = ["author_id = ?"]
+                params: list[Any] = [user_id]
+                if board_id and str(board_id).lower() not in ('all', 'global', 'all_boards'):
+                    conditions.append("board_id = ?")
+                    params.append(str(board_id))
+                if time_threshold_ts > 0:
+                    conditions.append("timestamp >= ?")
+                    params.append(time_threshold_ts)
+
+                query_posts = f"SELECT post_num FROM Posts WHERE {' AND '.join(conditions)}"
+                async with db.execute(query_posts, tuple(params)) as cursor:
                     rows = await cursor.fetchall()
                 user_posts = [row[0] for row in rows]
 
@@ -2712,22 +2737,22 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
         await asyncio.sleep(0.2 * (attempt + 1))
     return [], [], []
 
-async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
+async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str | None = None):
     async with storage_lock:
         for post_num in posts_to_delete_nums:
             post_data = messages_storage.pop(post_num, None)
-            if post_data:
-                if board_id in THREAD_BOARDS:
-                    thread_id = post_data.get('thread_id')
-                    if thread_id:
-                        b_data = board_data.get(board_id, {})
-                        threads_data = get_threads_data(board_id)
-                        if thread_id in threads_data:
-                            try:
-                                if 'posts' in threads_data[thread_id]:
-                                    threads_data[thread_id]['posts'].remove(post_num)
-                            except (ValueError, KeyError):
-                                pass
+            b_id = (post_data.get('board_id') if post_data else None) or board_id
+            if b_id and b_id in THREAD_BOARDS:
+                thread_id = post_data.get('thread_id') if post_data else None
+                if thread_id:
+                    b_data = board_data.get(b_id, {})
+                    threads_data = get_threads_data(b_id)
+                    if thread_id in threads_data:
+                        try:
+                            if 'posts' in threads_data[thread_id]:
+                                threads_data[thread_id]['posts'].remove(post_num)
+                        except (ValueError, KeyError):
+                            pass
             message_copies_in_mem = post_to_messages.pop(post_num, {})
             for uid, mid_or_list in message_copies_in_mem.items():
                 if isinstance(mid_or_list, list):
@@ -2795,12 +2820,25 @@ async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_insta
     return total_deleted_count
 
 async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
-    deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
+    deleter = (
+        GLOBAL_BOTS.get(b_id)
+        or getattr(shared_state, 'GLOBAL_BOTS', {}).get(b_id)
+        or bot_instance
+    )
+    if not deleter:
+        return False
     try:
         await deleter.delete_message(uid, mid)
         return True
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after + 0.1)
+        try:
+            await deleter.delete_message(uid, mid)
+            return True
+        except Exception:
+            return False
     except (TelegramBadRequest, TelegramForbiddenError):
-        if deleter != bot_instance:
+        if deleter != bot_instance and bot_instance:
             try:
                 await bot_instance.delete_message(uid, mid)
                 return True
@@ -2906,7 +2944,10 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
     Правильно удаляет целые треды из БД/архивов, если удаляется ОП-пост.
     """
     try:
-        time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
+        if time_period_minutes >= 500000 or time_period_minutes <= 0:
+            time_threshold_ts = 0.0
+        else:
+            time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
 
         posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete = await _delete_user_posts_from_db(
             user_id, time_threshold_ts, board_id
@@ -2914,6 +2955,10 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
 
         if not posts_to_delete_nums:
             return 0
+
+        async with storage_lock:
+            for p_num in posts_to_delete_nums:
+                posts_pending_deletion.add(p_num)
 
         await _clean_posts_from_ram(posts_to_delete_nums, board_id)
         _clean_posts_from_caches(posts_to_delete_nums)
@@ -3998,9 +4043,14 @@ BASE_SHOP_PRICES = {
     'whale_safe': 50000,
 }
 
-def get_current_item_price(item_key: str) -> int:
-    from shared_state import market_state
+def get_current_item_price(item_key: str, user_id: int | None = None) -> int:
+    from shared_state import market_state, get_user_daily_shop_buys
     base = BASE_SHOP_PRICES.get(item_key, 100)
+    if item_key == 'mute' and user_id is not None:
+        buys = get_user_daily_shop_buys(user_id, 'mute')
+        # Escalating price per day: 1st buy = 500 ₪, 2nd buy = 1,500 ₪, 3rd buy = 3,500 ₪
+        mult_buys = 1 if buys == 0 else (3 if buys == 1 else 7)
+        base = int(base * mult_buys)
     mult = market_state.get('multipliers', {}).get(item_key, 1.0)
     return max(10, int(base * mult))
 
@@ -4057,7 +4107,7 @@ def _build_weapons_shop_content(user_id: int, balance: float):
     p_flag_ru = get_current_item_price('flag_ru')
     p_knife = get_current_item_price('knife')
     p_spray = get_current_item_price('pepperspray')
-    p_mute = get_current_item_price('mute')
+    p_mute = get_current_item_price('mute', user_id=user_id)
     p_lax = get_current_item_price('laxative')
     p_schizo = get_current_item_price('schizopill')
     p_jan = get_current_item_price('janitor')
@@ -5419,7 +5469,7 @@ async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
         "👗 <b>СПРАВОЧНИК: БУТИК И ГАРДЕРОБ</b>\n\n"
         "<i>Все вещи дают активные пассивные бонусы:</i>\n\n"
         "• 🦺 <b>Жилетка Вассермана:</b> +25% к зарплате во всех сменах <code>/work</code>.\n"
-        "• 👑 <b>Корона VIP-Скуфа:</b> +20% к чаевым на работе и VIP-статус.\n"
+        "• 👑 <b>Корона VIP-Сыча:</b> +20% к чаевым на работе и VIP-статус.\n"
         "• 🪖 <b>Шлем ОМОНа:</b> 0 потерь от штрафов на работе, -50% времени мута от выстрела.\n"
         "• 🩲 <b>Обоссанные треники:</b> x2 шанс дропа предметов на работе, 25% шанс отпугнуть грабителя.\n"
         "• 📦 <b>Пакет Пятерочки:</b> 8% шанс выбить бесплатный кейс во время смены на работе.\n"
@@ -5453,7 +5503,7 @@ async def cb_wiki_cat_sets(callback: types.CallbackQuery, board_id: str | None):
         "3. 👘 <b>Сет «Труъ-Хикка Анимешник»:</b>\n"
         "• <i>Комплект:</i> Неко-Ушки + Худи с Аской\n"
         "• <i>Бонус:</i> <b>+50 к Рассудку</b> персонажа и <b>x2 шанс дропа лутбоксов</b> на работе!\n\n"
-        "4. 🩲 <b>Сет «Подъездный Скуф»:</b>\n"
+        "4. 🩲 <b>Сет «Подъездный Сыч»:</b>\n"
         "• <i>Комплект:</i> Корона VIP + Обоссанные треники\n"
         "• <i>Бонус:</i> <b>40% шанс отпугнуть грабителя</b> в <code>/rob</code> и +35% к чаевым в пивнухе!\n\n"
         "5. 🥼 <b>Сет «Палата №6 / Шизофреник»:</b>\n"
@@ -5930,7 +5980,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
         return
 
-    price = get_current_item_price(item)
+    price = get_current_item_price(item, user_id=user_id)
     now = int(time.time())
     msg = ""
     err_msg = ""
@@ -6206,10 +6256,10 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         # --- 4. PREFIX ---
         elif item == "prefix" or item == "hat_crown":
             prefixes = [
-                "[Скуф]", "[Опущенный]", "[Калоед]", "[Гой]",
+                "[Сыч]", "[Опущенный]", "[Калоед]", "[Гой]",
                 "[Инцел]", "[Анимешник]", "[Чмо]",
                 "[Вайпер Параши]", "[Дырявый]", "[Каловая Масса]",
-                "[Порваха]", "[Обоссанный Скуф]",
+                "[Порваха]", "[Обоссанный Сыч]",
                 # Редкие (15%):
                 "[Вумен ☕️]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
             ]
@@ -7084,9 +7134,9 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     # 2. Fear check (Gop-Skuf set: 40%, Tracksuit: 25%)
     fear_chance = t_stats.get("rob_fear_chance", 0.0)
     if fear_chance > 0 and random.random() < fear_chance:
-        if t_stats.get("active_set_name") and "Скуф" in t_stats["active_set_name"]:
+        if t_stats.get("active_set_name") and "Сыч" in t_stats["active_set_name"]:
             fear_text = (
-                "👑 <b>АВТОРИТЕТНЫЙ СКУФ НАПУГАЛ ГРАБИТЕЛЯ!</b>\n"
+                "👑 <b>АВТОРИТЕТНЫЙ СЫЧ НАПУГАЛ ГРАБИТЕЛЯ!</b>\n"
                 "Жертва в Короне и Трениках взглянула на тебя с таким презрением, что ты в ужасе выронил заточку и сбежал!\n"
                 "Заточка сломалась от страха."
             )
@@ -9246,19 +9296,19 @@ async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None,
         return
     amt = m.group(1)
     rest = m.group(2)
-    message.text = f"/pay {amt}" + (f" {rest}" if rest else "")
-    return await cmd_pay(message, board_id=board_id, stream=stream)
+    override_text = f"/pay {amt}" + (f" {rest}" if rest else "")
+    return await cmd_pay(message, board_id=board_id, stream=stream, raw_command_text=override_text)
 
 
 @dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат", "задонатить", "перевести", "поделиться", "пей", ignore_case=True, ignore_mention=True))
-async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru'):
+async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru', raw_command_text: str | None = None):
     if not board_id: return
     sender_id = message.from_user.id
     db = await get_pool()
     sender_bal = await get_user_global_balance(db, sender_id)
     sender_anon = get_anon_id(sender_id)
 
-    raw_text = (message.text or message.caption or "").strip()
+    raw_text = (raw_command_text or message.text or message.caption or "").strip()
     parts = raw_text.split()
     args = parts[1:]
 
@@ -9850,23 +9900,28 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         except Exception:
             pass
     else:
-        # Если вызов открытый — транслируем его всем активным анонам на доске в их ленту
-        active_board_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
-        for uid in active_board_users:
-            if uid == user_id:
-                continue
+        # Открытый вызов — рассылаем активным юзерам борда (throttled background task)
+        async def _do_duel_broadcast():
             try:
-                bcast = await message.bot.send_message(
-                    chat_id=uid,
-                    text=duel_card_text,
+                from banner_manager import broadcast_banner_to_users
+                active_board_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
+                async def _on_sent(uid, mid):
+                    async with classic_duel_lock:
+                        if user_id in _active_duels:
+                            _active_duels[user_id]["broadcast_msgs"].append((uid, mid))
+                await broadcast_banner_to_users(
+                    bot=message.bot,
+                    user_ids=active_board_users,
+                    exclude_uid=user_id,
+                    caption=duel_card_text,
                     reply_markup=kb_duel_challenge,
-                    parse_mode="HTML"
+                    category="duel",
+                    parse_mode="HTML",
+                    on_sent=_on_sent,
                 )
-                async with classic_duel_lock:
-                    if user_id in _active_duels:
-                        _active_duels[user_id]["broadcast_msgs"].append((uid, bcast.message_id))
             except Exception:
                 pass
+        asyncio.create_task(_do_duel_broadcast())
 
     try: await message.delete()
     except Exception: pass
@@ -11450,7 +11505,7 @@ async def cmd_drop(message: types.Message, board_id: str | None, stream: str = '
         )
         photo_payload = None
         if donor_msg:
-            drop_engine.register_drop_message(drop_rec.drop_id, message.chat.id, donor_msg.message_id)
+            await drop_engine.record_drop_message_db(db, drop_rec.drop_id, message.chat.id, donor_msg.message_id)
             if getattr(donor_msg, 'photo', None):
                 photo_payload = donor_msg.photo[-1].file_id
 
@@ -11478,6 +11533,9 @@ async def cmd_drop(message: types.Message, board_id: str | None, stream: str = '
 async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_id: int, photo_payload, caption: str, kb):
     """Рассылает сообщение о дропе шекелей всем активным анонам на доске с аниме-баннером."""
     active_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
+    import random
+    random.shuffle(active_users)
+    db = await get_pool()
     for target_uid in active_users:
         if target_uid != exclude_chat_id:
             rec = drop_engine.active_drops.get(drop_id)
@@ -11501,7 +11559,7 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
                         parse_mode="HTML"
                     )
                 if sent:
-                    drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                    await drop_engine.record_drop_message_db(db, drop_id, target_uid, sent.message_id)
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 0.5)
                 rec = drop_engine.active_drops.get(drop_id)
@@ -11523,10 +11581,13 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
                                 parse_mode="HTML"
                             )
                         if sent:
-                            drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                            await drop_engine.record_drop_message_db(db, drop_id, target_uid, sent.message_id)
                     except Exception:
                         pass
-            except Exception:
+            except Exception as e:
+                err_s = str(e).lower()
+                if any(x in err_s for x in ["forbidden", "blocked", "chat not found", "user is deactivated", "bot was kicked"]):
+                    continue
                 try:
                     sent = await bot.send_message(
                         chat_id=target_uid,
@@ -11535,9 +11596,9 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
                         parse_mode="HTML"
                     )
                     if sent:
-                        drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
-                except TelegramRetryAfter as e:
-                    await asyncio.sleep(e.retry_after + 0.5)
+                        await drop_engine.record_drop_message_db(db, drop_id, target_uid, sent.message_id)
+                except TelegramRetryAfter as e2:
+                    await asyncio.sleep(e2.retry_after + 0.5)
                     try:
                         sent = await bot.send_message(
                             chat_id=target_uid,
@@ -11546,16 +11607,33 @@ async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_i
                             parse_mode="HTML"
                         )
                         if sent:
-                            drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                            await drop_engine.record_drop_message_db(db, drop_id, target_uid, sent.message_id)
                     except Exception:
                         pass
                 except Exception:
                     pass
-            await asyncio.sleep(0.04)
+            await asyncio.sleep(0.06)
 
 async def _update_all_drop_messages(bot, drop_id: str, new_text: str, exclude_chat_id: Optional[int] = None, exclude_pair: Optional[Tuple[int, int]] = None):
     """Обновляет все копии сообщения о дропе у всех анонов, убирая кнопку и показывая победителя."""
     msg_copies = drop_engine.get_drop_messages(drop_id)
+    if not msg_copies:
+        try:
+            db = await get_pool()
+            async with db.execute("SELECT chat_id, message_id FROM MoneyDropMessages WHERE drop_id = ?", (drop_id,)) as c:
+                rows = await c.fetchall()
+            for c_id, m_id in rows:
+                drop_engine.register_drop_message(drop_id, int(c_id), int(m_id))
+            msg_copies = drop_engine.get_drop_messages(drop_id)
+        except Exception:
+            pass
+
+    if not bot:
+        from shared_state import GLOBAL_BOTS as _gb
+        bot = next(iter(_gb.values())) if _gb else None
+    if not bot:
+        return
+
     for chat_id, message_id in msg_copies:
         if exclude_pair and (chat_id, message_id) == exclude_pair:
             continue
@@ -11582,7 +11660,10 @@ async def _update_all_drop_messages(bot, drop_id: str, new_text: str, exclude_ch
                     )
                 except Exception:
                     pass
-            except Exception:
+            except Exception as e:
+                err_s = str(e).lower()
+                if any(x in err_s for x in ["not modified", "chat not found", "blocked", "deactivated", "forbidden", "message to edit not found"]):
+                    continue
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,
@@ -11591,8 +11672,8 @@ async def _update_all_drop_messages(bot, drop_id: str, new_text: str, exclude_ch
                         parse_mode="HTML",
                         reply_markup=None
                     )
-                except TelegramRetryAfter as e:
-                    await asyncio.sleep(e.retry_after + 0.5)
+                except TelegramRetryAfter as e2:
+                    await asyncio.sleep(e2.retry_after + 0.5)
                     try:
                         await bot.edit_message_text(
                             chat_id=chat_id,
@@ -11607,7 +11688,7 @@ async def _update_all_drop_messages(bot, drop_id: str, new_text: str, exclude_ch
                     pass
         except Exception:
             pass
-        await asyncio.sleep(0.04)
+        await asyncio.sleep(0.05)
 
 @dp.callback_query(F.data.startswith("drop:"))
 async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
@@ -11640,6 +11721,82 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
         )
         if not ok:
             await callback.answer(msg, show_alert=True)
+            # If the drop was claimed, expired, or cancelled, immediately update the clicked message to remove the stale button!
+            if drop_rec and drop_rec.status == "claimed":
+                final_text = (
+                    f"💸 <b>ДРОП ШЕКЕЛЕЙ ПЕРЕХВАЧЕН!</b>\n\n"
+                    f"👤 Создатель: <b>{drop_rec.donor_name}</b> (Сумма: <b>{int(drop_rec.amount)} ₪</b>)\n"
+                    f"🏆 Победитель: <b>{drop_rec.claimed_name or 'Анон'}</b> оказался самым быстрым и забрал весь куш!\n\n"
+                    f"⚡ <i>Дроп закрыт.</i>"
+                )
+                if callback.message:
+                    try:
+                        await callback.message.edit_caption(caption=final_text, parse_mode="HTML", reply_markup=None)
+                    except Exception:
+                        try:
+                            await callback.message.edit_text(text=final_text, parse_mode="HTML", reply_markup=None)
+                        except Exception:
+                            pass
+            elif drop_rec and drop_rec.status == "expired":
+                final_text = (
+                    f"⏳ <b>ДРОП ШЕКЕЛЕЙ ИСТЕК</b>\n\n"
+                    f"👤 Создатель: <b>{drop_rec.donor_name}</b> (Сумма: <b>{int(drop_rec.amount)} ₪</b>)\n"
+                    f"Никто не успел забрать чек за 10 минут. Шекели возвращены на баланс донора."
+                )
+                if callback.message:
+                    try:
+                        await callback.message.edit_caption(caption=final_text, parse_mode="HTML", reply_markup=None)
+                    except Exception:
+                        try:
+                            await callback.message.edit_text(text=final_text, parse_mode="HTML", reply_markup=None)
+                        except Exception:
+                            pass
+            elif drop_rec and drop_rec.status == "cancelled":
+                final_text = (
+                    f"🚫 <b>ДРОП ШЕКЕЛЕЙ ОТМЕНЕН</b>\n\n"
+                    f"👤 Создатель: <b>{drop_rec.donor_name}</b> отменил этот дроп на <b>{int(drop_rec.amount)} ₪</b>.\n"
+                    f"Шекели возвращены на баланс создателя."
+                )
+                if callback.message:
+                    try:
+                        await callback.message.edit_caption(caption=final_text, parse_mode="HTML", reply_markup=None)
+                    except Exception:
+                        try:
+                            await callback.message.edit_text(text=final_text, parse_mode="HTML", reply_markup=None)
+                        except Exception:
+                            pass
+            elif not drop_rec:
+                try:
+                    async with db.execute("SELECT donor_id, amount, status, claimed_by FROM MoneyDrops WHERE drop_id = ?", (drop_id,)) as c:
+                        row = await c.fetchone()
+                    if row:
+                        st = row[2]
+                        amt = int(row[1])
+                        if st == "claimed":
+                            final_text = (
+                                f"💸 <b>ДРОП ШЕКЕЛЕЙ ПЕРЕХВАЧЕН!</b>\n\n"
+                                f"Сумма: <b>{amt} ₪</b>\n"
+                                f"Дроп уже забран другим аноном!\n\n"
+                                f"⚡ <i>Дроп закрыт.</i>"
+                            )
+                        else:
+                            final_text = (
+                                f"⏳ <b>ДРОП ШЕКЕЛЕЙ НЕАКТИВЕН</b>\n\n"
+                                f"Сумма: <b>{amt} ₪</b>\n"
+                                f"Время действия дропа истекло или он был закрыт."
+                            )
+                    else:
+                        final_text = "⚡ <i>Дроп не найден или уже закрыт.</i>"
+                    if callback.message:
+                        try:
+                            await callback.message.edit_caption(caption=final_text, parse_mode="HTML", reply_markup=None)
+                        except Exception:
+                            try:
+                                await callback.message.edit_text(text=final_text, parse_mode="HTML", reply_markup=None)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
             return
 
         await callback.answer(f"🎉 Ты успел забрать {int(drop_rec.amount)} ₪!", show_alert=True)
@@ -11650,13 +11807,14 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             f"⚡ <i>Дроп закрыт.</i>"
         )
         # 1. Мгновенно обновляем у победителя
-        try:
-            if callback.message.caption:
+        if callback.message:
+            try:
                 await callback.message.edit_caption(caption=new_text, parse_mode="HTML", reply_markup=None)
-            else:
-                await callback.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=None)
-        except Exception:
-            pass
+            except Exception:
+                try:
+                    await callback.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=None)
+                except Exception:
+                    pass
 
         # 2. Оповещаем автора в личку (только если автор не победитель)
         if drop_rec.donor_id and drop_rec.donor_id != user_id:
@@ -11723,7 +11881,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
         )
         photo_payload = None
         if donor_msg:
-            drop_engine.register_drop_message(drop_rec.drop_id, callback.message.chat.id, donor_msg.message_id)
+            await drop_engine.record_drop_message_db(db, drop_rec.drop_id, callback.message.chat.id, donor_msg.message_id)
             if getattr(donor_msg, 'photo', None):
                 photo_payload = donor_msg.photo[-1].file_id
 
@@ -12642,10 +12800,26 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 f"💰 Выбранная ставка: <code>{default_bet:,} ₪</code>\n\n"
                 f"Выбери размер ставки и создай вызов на доску:"
             )
+            edited = False
             try:
-                await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+                await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+                edited = True
             except Exception:
-                await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
+                try:
+                    await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+                    edited = True
+                except Exception:
+                    pass
+            if not edited:
+                from banner_manager import send_banner_message
+                await send_banner_message(
+                    bot=callback.bot,
+                    chat_id=callback.message.chat.id,
+                    caption=caption,
+                    reply_markup=kb,
+                    category="ttt",
+                    parse_mode="HTML"
+                )
         elif game == "dice":
             # Open dice lobby instead of hardcoding 100₪
             async with db_lock:
@@ -12668,10 +12842,26 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             from russian_roulette_pvp import get_rr_lobby_keyboard, format_rr_lobby_message
             kb = get_rr_lobby_keyboard(100, balance=int(bal))
             caption = format_rr_lobby_message(balance=int(bal), bet=100)
+            edited = False
             try:
-                await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+                await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+                edited = True
             except Exception:
-                await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
+                try:
+                    await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+                    edited = True
+                except Exception:
+                    pass
+            if not edited:
+                from banner_manager import send_banner_message
+                await send_banner_message(
+                    bot=callback.bot,
+                    chat_id=callback.message.chat.id,
+                    caption=caption,
+                    reply_markup=kb,
+                    category="russian_roulette",
+                    parse_mode="HTML"
+                )
         elif game == "duel":
             # Open classic duel lobby instead of a hardcoded challenge
             async with db_lock:
@@ -13042,7 +13232,7 @@ async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str
 
 _PASSPORT_DATA = {
     'ru': {
-        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
+        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Ньюфаг с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
         'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
         'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
     },
@@ -13093,7 +13283,7 @@ def _get_passport_rank_and_role(lang: str, post_count: int) -> tuple[str, str]:
         elif post_count < 200: return "🐸 Битард обыкновенный", "Анон"
         elif post_count < 400: return "☣️ Проткнутый пидоран", "Транссексуал"
         elif post_count < 600: return "🧙‍♂️ Волшебник (30 лет без секса)", "Девственник"
-        elif post_count < 800: return "🦍 Скуф", "Проткнутый"
+        elif post_count < 800: return "🦍 Сыч", "Проткнутый"
         elif post_count < 1000: return "🔥 Живое воплощение Йобы", "Легенда"
         elif post_count < 1500: return "🔥 Сумасшедший", "Сбежавший из дурки"
         elif post_count < 1800: return "🔥 Легенда двача", "Старожил"
@@ -13446,10 +13636,10 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     # 1. Огромный пул инкриминируемых статей (40+ статей с черным юмором)
     cases_pool = [
         "Ст. 228.1 — Хранение и сбыт отборного концентрированного кринжа в особо крупном размере",
-        "Ст. 1488.2 — Публичное оскорбление чувств скуфов, нормисов и подпивасов",
+        "Ст. 1488.2 — Публичное оскорбление чувств сычей, раков и подпивасов",
         "Ст. 105.7 — Доведение модератора до нервного срыва трехэтажными пастами",
         "Ст. 210.3 — Руководство ОПГ по взлому капчи и нелегальной накрутке реакций",
-        "Ст. 282.8 — Возбуждение ненависти к зумерам, тиктокерам и дневному онлайну",
+        "Ст. 282.8 — Возбуждение ненависти к ньюфагам, говноедам и дневному онлайну",
         "Ст. 159.4 — Финансовая пирамида на обещаниях вернуть долг в 50 шекелей",
         "Ст. 330.1 — Несанкционированный шмон карманов сычей через команду /rob",
         "Ст. 119.5 — Публичные угрозы заминировать санузел оппонента через /shit",
@@ -13469,13 +13659,13 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         "Ст. 306.1 — Ложный донос майору о наличии здравого смысла в треде /b/",
         "Ст. 245.9 — Жестокое обращение с анимешниками путем травли в ночных перекатах",
         "Ст. 177.3 — Злостное уклонение от уплаты налога на роскошь в Фонд Яхты Абу",
-        "Ст. 214.2 — Осквернение памяти лампового двача современным зумерским сленгом",
+        "Ст. 214.2 — Осквернение памяти лампового двача современным ньюфагским сленгом",
         "Ст. 280.1 — Призывы к насильственному свержению главного санитара",
         "Ст. 307.4 — Заведомо ложные показания о наличии личной жизни и тян",
         "Ст. 158.7 — Кража чужой пасты и выдача её за авторский контент",
         "Ст. 359.1 — Наемничество в чужих срачах за долю в награбленных шекелях",
         "Ст. 207.2 — Распространение фейков о скором закрытии борды и раздаче админок",
-        "Ст. 116.1 — Нанесение моральных побоев скуфу пастой про успешный успех в IT",
+        "Ст. 116.1 — Нанесение моральных побоев сычу пастой про успешный успех в IT",
         "Ст. 167.3 — Умышленное уничтожение ламповой атмосферы треда вбросом политоты",
         "Ст. 111.4 — Причинение тяжкого вреда рассудку ночным чтением шизофазии",
         "Ст. 243.2 — Уничтожение культурного слоя борды массовым постингом баянов",
@@ -13488,7 +13678,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         "Ст. 222.8 — Незаконное ношение и применение заточки в переполненном треде",
         "Ст. 69.69 — Публичное смакование подливы после просроченной шаурмы",
         "Ст. 333.1 — Закидывание ОМОНа шапочками из фольги при исполнении",
-        "Ст. 115.3 — Нанесение легких телесных повреждений самолюбию альтушки",
+        "Ст. 115.3 — Нанесение легких телесных повреждений самолюбию шкуры",
         "Ст. 297.2 — Неуважение к суду старейшин Сосача и демонстрация дырявых носков",
         "Ст. 131.9 — Покушение на целомудрие резиновой вайфу в нетрезвом виде",
         "Ст. 313.4 — Побег из дурки через форточку на простынях с принтом Евангелиона",
@@ -13513,7 +13703,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         "Флешка с архивом удаленных тредов 2012 года, пара сухарей и самодельный нож из ложки.",
         "Засохшая вокзальная шаурма, три использованных экспресс-теста на IQ с результатом 45 и пачка соды.",
         "Трусы с пятнами неизвестного происхождения, томик Ницше без страниц и чек на покупку перцовки «Шпага».",
-        "Тайный дневник скуфа, где каждый день записан как «Опять не дали, опять обмазали говном».",
+        "Тайный дневник сыча, где каждый день записан как «Опять не дали, опять обмазали говном».",
         "Коллекция пивных крышек «Балтика 9», ржавая вилка для чистки параши и иконка с ликом Папича."
     ]
 
@@ -13521,7 +13711,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     psych_eval_pool = [
         "Вменяем исключительно под пивом. В трезвом виде впадает в кататонический ступор.",
         "Хронический синдром вахтера в терминальной стадии. Требуется принудительная изоляция в /b/.",
-        "Патологическая тяга к деанону нормисов. Мозг замещен шитпостами на 84%.",
+        "Патологическая тяга к деанону раков. Мозг замещен шитпостами на 84%.",
         "Полная фиксация на теории заговора модераторов. Считает себя реинкарнацией Наполеона в /po/.",
         "Острая шизофазия с приступами графомании. При попытке отобрать клавиатуру кусается.",
         "Абсолютная невосприимчивость к логике и фактам. Рекомендуется ударная доза галоперидола.",
@@ -13543,7 +13733,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         "'Объект 3 часа бампал пустой тред своими же фейками, создавая иллюзию бурной дискуссии.'",
         "'Зафиксирована попытка подкупа участкового виртуальными шекелями и обещанием админки.'",
         "'Объект пытался заказать пиццу за шекели Двача, после отказа угрожал натравить /b/.'",
-        "'Слышны невнятные выкрики: «База! Это база! Вы все нормисы!», сопровождаемые грохотом стула.'",
+        "'Слышны невнятные выкрики: «База! Это база! Вы все раки!», сопровождаемые грохотом стула.'",
         "'Объект пытался взломать пентагон через блокнот, но случайно удалил папку System32.'",
         "'Объект просил у Алисы разрешения потрогать траву, после чего заплакал и заказал чебурек.'",
         "'Перехвачен монолог: «Я не обосрался, это тактический маневр подливой! Слышите, суки?!».'"
@@ -13609,7 +13799,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         context_notes.extend([
             "Ветеран нулевой. Помнит перекаты 2014 года, на молодежь смотрит как на говно.",
             "Архивный мамонт. Написал больше постов, чем прочитал книг за всю свою жизнь.",
-            "Хранитель традиций. При появлении зумеров начинает нудно рассказывать, как раньше было лучше."
+            "Хранитель традиций. При появлении ньюфагов начинает нудно рассказывать, как раньше было лучше."
         ])
 
     # Экипировка (если есть)
@@ -13639,7 +13829,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         "Склонен к внезапным приступам графомании. Пишет пасты на 10 экранов без знаков препинания.",
         "Ведет скрытое наблюдение за чужими балансами. На допросах утверждает, что шекели — фикция.",
         "Агент глубокого залегания. Способен 6 часов сидеть в ридонли, чтобы вбросить один баян.",
-        "Мечтает свергнуть модераторов, забанить нормисов и объявить себя новым Абу.",
+        "Мечтает свергнуть модераторов, забанить раков и объявить себя новым Абу.",
         "Дрочит на кружочки в Telegram. Искренне верит, что общается с реальными тяночками.",
         "Опасный социопат. Не мылся с прошлого вторника, использует запах треников как биооружие.",
         "Сливает зарплату мамы в слоты 777. В перерывах учит анонов финансовой грамотности.",
@@ -15916,6 +16106,7 @@ class StackedAnimeHandler:
             **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "ecchi", "ero", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW", "ECCHI", "ERO"]},
             **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI", "MONOGATARI"]},
             **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS", "лоли", "лоликон", "дщдш", "дщдшсщт", "Лоли", "Лоликон", "ЛОЛИ", "ЛОЛИКОН"]},
+            **{k: 'furry' for k in ["furry", "фурри", "furri", "Furry", "Фурри", "FURRY", "ФУРРИ", "Furri"]},
         }
 
         for command, num_no_space, num_with_space in self.matches:
@@ -15969,6 +16160,10 @@ class StackedAnimeHandler:
                 if self.lang == 'en': phrase_list = LOLI_SUCCESS_PHRASES_EN
                 elif self.lang == 'jp': phrase_list = LOLI_SUCCESS_PHRASES_JP
                 else: phrase_list = LOLI_SUCCESS_PHRASES
+            elif chosen_category == 'furry':
+                if self.lang == 'en': phrase_list = FURRY_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = FURRY_SUCCESS_PHRASES_JP
+                else: phrase_list = FURRY_SUCCESS_PHRASES
 
             if phrase_list:
                 random_phrase = random.choice(phrase_list)
@@ -15977,7 +16172,7 @@ class StackedAnimeHandler:
         return final_caption
 
 
-@dp.message(F.text.regexp(rf"^/({'|'.join(ANIME_COMMAND_MAP.keys())})"))
+@dp.message(F.text.regexp(rf"(?i)^/({_ANIME_CMDS_PATTERN})(?:@\w+)?(?=\s|\d|$)"))
 async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
     Универсальный обработчик для всех аниме-команд.
@@ -16137,12 +16332,12 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[roast] Error: {e}")
-        await processing_msg.edit_text("❌ Ошибка генерации" if lang == 'ru' else "❌ Error")
-        return
+        from troll_phrases import get_random_troll_phrase
+        summary = get_random_troll_phrase(context_type="normal")
         
-    if not summary:
-        await processing_msg.edit_text("❌ Ошибка генерации" if lang == 'ru' else "❌ Error")
-        return
+    if not summary or summary.startswith('Нейронка сдохла'):
+        from troll_phrases import get_random_troll_phrase
+        summary = get_random_troll_phrase(context_type="normal")
         
     roast_text = f"🔥 <b>ПРОЖАРКА ЧАТА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>CHAT ROAST</b> 🔥\n\n{summary}"
     if lang == 'jp': roast_text = f"🔥 <b>煽り</b> 🔥\n\n{summary}"
@@ -16622,14 +16817,17 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[summarize] Error during HF summarize: {e}")
-        if lang == 'en':
-            err_msg = "Error generating summary."
-        elif lang == 'jp':
-            err_msg = "サマリーの生成中にエラーが発生しました。"
-        else:
-            err_msg = "Ошибка при генерации саммари."
-        await message.answer(err_msg)
-        return
+        summary = None
+
+    if not summary or summary.startswith('Нейронка сдохла'):
+        print("[summarize] Summary failed or empty, activating extractive fallback...")
+        try:
+            from common.extractive_summary import generate_extractive_summary
+            summary = generate_extractive_summary(chunk, prompt, lang=lang, paragraph_count=paragraph_count, board_id=board_id, context_name=context_name)
+            summary = clean_html_for_tg(summary)
+        except Exception as fb_err:
+            print(f"[summarize] Extractive fallback error: {fb_err}")
+            summary = None
 
     if not summary:
         print("[summarize] Summary empty or failed")
@@ -16709,7 +16907,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             print("[summarize] Telegraph creation failed, falling back to direct message")
             summary = _tg_safe_truncate(summary, max_utf16=3500)
     
-    if cache_key and summary:
+    if cache_key and summary and not summary.startswith('Нейронка сдохла'):
         _SUMMARY_CACHE[cache_key] = (time.time(), summary)
     else:
         if is_blat:
@@ -20220,25 +20418,38 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
     for name, locks in (("generate_locks", generate_locks), ("user_spam_locks", user_spam_locks)):
         _note(name, _prune_idle_locks(locks))
 
+    def _to_sec(val) -> float:
+        if isinstance(val, (int, float)):
+            return float(val)
+        if hasattr(val, 'timestamp'):
+            try:
+                return float(val.timestamp())
+            except Exception:
+                pass
+        try:
+            return float(val or 0.0)
+        except Exception:
+            return 0.0
+
     # Combat & duel cooldowns
-    combat_expired = [uid for uid, ts in list(shared_state._GLOBAL_COMBAT_COOLDOWNS.items()) if ts <= now]
+    combat_expired = [uid for uid, ts in list(shared_state._GLOBAL_COMBAT_COOLDOWNS.items()) if _to_sec(ts) <= now]
     for uid in combat_expired:
         shared_state._GLOBAL_COMBAT_COOLDOWNS.pop(uid, None)
     _note("_GLOBAL_COMBAT_COOLDOWNS", len(combat_expired))
 
-    victim_rob_expired = [uid for uid, ts in list(shared_state._VICTIM_ROB_COOLDOWNS.items()) if ts <= now]
+    victim_rob_expired = [uid for uid, ts in list(shared_state._VICTIM_ROB_COOLDOWNS.items()) if _to_sec(ts) <= now]
     for uid in victim_rob_expired:
         shared_state._VICTIM_ROB_COOLDOWNS.pop(uid, None)
     _note("_VICTIM_ROB_COOLDOWNS", len(victim_rob_expired))
 
-    duel_expired = [uid for uid, ts in list(shared_state._duel_cooldowns.items()) if now - ts > 3600]
+    duel_expired = [uid for uid, ts in list(shared_state._duel_cooldowns.items()) if now - _to_sec(ts) > 3600]
     for uid in duel_expired:
         shared_state._duel_cooldowns.pop(uid, None)
     _note("_duel_cooldowns", len(duel_expired))
 
     history_expired = []
     for uid, history in list(shared_state._ATTACKER_TARGET_HISTORY.items()):
-        valid = [(ts, tid) for ts, tid in history if now - ts <= shared_state._ATTACK_WINDOW_SEC]
+        valid = [(ts, tid) for ts, tid in history if now - _to_sec(ts) <= shared_state._ATTACK_WINDOW_SEC]
         if valid:
             shared_state._ATTACKER_TARGET_HISTORY[uid] = valid
         else:
@@ -20250,7 +20461,7 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
     for item_type, attackers in list(shared_state._ACTIVE_AUTHOR_ATTACKS.items()):
         empty_attackers = []
         for attacker_id, victims in list(attackers.items()):
-            active_victims = {tgt: exp for tgt, exp in victims.items() if exp > now}
+            active_victims = {tgt: exp for tgt, exp in victims.items() if _to_sec(exp) > now}
             if active_victims:
                 attackers[attacker_id] = active_victims
             else:
@@ -20258,14 +20469,14 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
         for aid in empty_attackers:
             attackers.pop(aid, None)
 
-    target_attack_expired = [uid for uid, ts in list(shared_state._TARGET_LAST_ATTACKED_TS.items()) if ts <= now]
+    target_attack_expired = [uid for uid, ts in list(shared_state._TARGET_LAST_ATTACKED_TS.items()) if _to_sec(ts) <= now]
     for uid in target_attack_expired:
         shared_state._TARGET_LAST_ATTACKED_TS.pop(uid, None)
     _note("_TARGET_LAST_ATTACKED_TS", len(target_attack_expired))
 
     series_expired = []
     for uid, history in list(shared_state._ATTACKER_SERIES_HISTORY.items()):
-        valid = [ts for ts in history if now - ts < 600]
+        valid = [ts for ts in history if now - _to_sec(ts) < 600]
         if valid:
             shared_state._ATTACKER_SERIES_HISTORY[uid] = valid
         else:
@@ -20274,14 +20485,14 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
         shared_state._ATTACKER_SERIES_HISTORY.pop(uid, None)
     _note("_ATTACKER_SERIES_HISTORY", len(series_expired))
 
-    persona_dialogue_expired = [uid for uid, ts in list(shared_state._last_persona_dialogue_user_ts.items()) if now - ts > 86400]
+    persona_dialogue_expired = [uid for uid, ts in list(shared_state._last_persona_dialogue_user_ts.items()) if now - _to_sec(ts) > 86400]
     for uid in persona_dialogue_expired:
         shared_state._last_persona_dialogue_user_ts.pop(uid, None)
     _note("_last_persona_dialogue_user_ts", len(persona_dialogue_expired))
 
     work_expired_users = []
     for uid, jobs in list(shared_state._GLOBAL_WORK_COOLDOWNS.items()):
-        active_jobs = {jid: ts for jid, ts in jobs.items() if ts > now}
+        active_jobs = {jid: ts for jid, ts in jobs.items() if _to_sec(ts) > now}
         if active_jobs:
             shared_state._GLOBAL_WORK_COOLDOWNS[uid] = active_jobs
         else:
@@ -20296,21 +20507,21 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
     for b_id, b_dict in board_data.items():
         st = b_dict.get('spam_tracker')
         if isinstance(st, dict):
-            empty_st = [u for u, ts_list in list(st.items()) if not ts_list or (isinstance(ts_list, list) and max(ts_list or [0]) < now - 3600)]
+            empty_st = [u for u, ts_list in list(st.items()) if not ts_list or (isinstance(ts_list, list) and max([_to_sec(x) for x in ts_list] or [0]) < now - 3600)]
             for u in empty_st:
                 st.pop(u, None)
             board_cleanups += len(empty_st)
 
         lrt = b_dict.get('last_roll_time')
         if isinstance(lrt, dict):
-            expired_roll = [u for u, ts in list(lrt.items()) if now - ts > 86400]
+            expired_roll = [u for u, ts in list(lrt.items()) if now - _to_sec(ts) > 86400]
             for u in expired_roll:
                 lrt.pop(u, None)
             board_cleanups += len(expired_roll)
 
         lic = b_dict.get('last_info_command_time')
         if isinstance(lic, dict):
-            expired_info = [u for u, ts in list(lic.items()) if now - ts > 3600]
+            expired_info = [u for u, ts in list(lic.items()) if now - _to_sec(ts) > 3600]
             for u in expired_info:
                 lic.pop(u, None)
             board_cleanups += len(expired_info)
@@ -20526,7 +20737,7 @@ async def auto_memory_cleaner():
             # 4.1. Очистка и подрезка RAM-кэша постов (messages_storage, post_to_messages, message_to_post)
             try:
                 async with storage_lock:
-                    limit = max(500, int(MAX_MESSAGES_IN_MEMORY or 1100))
+                    limit = max(1000, int(MAX_MESSAGES_IN_MEMORY or 2500))
                     if len(messages_storage) > limit:
                         excess = len(messages_storage) - limit
                         sorted_pnums = sorted(messages_storage.keys())
@@ -20536,18 +20747,15 @@ async def auto_memory_cleaner():
                             post_to_messages.pop(pnum, None)
                         removed["evicted_posts_from_ram"] = len(drop_pnums)
 
-                    valid_post_nums = set(post_to_messages.keys()) | set(messages_storage.keys())
-                    stale_msg_keys = [k for k, pnum in message_to_post.items() if pnum not in valid_post_nums]
-                    for k in stale_msg_keys:
-                        message_to_post.pop(k, None)
-                    MAX_CAP = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "20000"))
+                    # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (50000).
+                    # Мы не сбрасываем его при вытеснении постов из messages_storage, чтобы ответы на старые посты резолвились.
+                    MAX_CAP = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
                     if len(message_to_post) > MAX_CAP:
                         excess = len(message_to_post) - MAX_CAP
                         drop_keys = [k for k, _ in zip(message_to_post, range(excess))]
                         for k in drop_keys:
                             message_to_post.pop(k, None)
-                    if stale_msg_keys:
-                        removed["stale_message_to_post"] = len(stale_msg_keys)
+                        removed["stale_message_to_post"] = excess
             except Exception:
                 pass
 
@@ -22646,8 +22854,15 @@ async def _collect_stacked_anime_downloads(
     successful_by_slot: dict[int, tuple[bytes, str, str]] = {}
     retry_slots = list(range(len(fetcher_tasks)))
     loop = asyncio.get_running_loop()
+    batch_seen_urls: set[str] = set()
+    batch_seen_hashes: set[str] = set()
+    from japanese_translator import is_image_recent, record_served_image
+    import hashlib
 
-    for round_index in range(ANIME_REFILL_ROUNDS + 1):
+    # Гарантированный добор полного пула картинок без брака и дубликатов
+    max_refill_rounds = max(6, ANIME_REFILL_ROUNDS * 3)
+
+    for round_index in range(max_refill_rounds + 1):
         if not retry_slots:
             break
         round_source = source if round_index == 0 else f"{source}:refill{round_index}"
@@ -22662,6 +22877,10 @@ async def _collect_stacked_anime_downloads(
                 continue
             slot = retry_slots[local_index]
             if isinstance(result, str) and result.startswith("http"):
+                # Отсекаем дубликаты URL в текущем батче
+                if result in batch_seen_urls:
+                    next_slots.append(slot)
+                    continue
                 urls.append(result)
                 url_slots.append(slot)
             else:
@@ -22675,6 +22894,13 @@ async def _collect_stacked_anime_downloads(
                 slot = url_slots[local_index]
                 if isinstance(res, tuple) and res[0]:
                     image_bytes = res[0]
+                    # Вычисляем хеш для точного отсечения дубликатов
+                    img_hash = hashlib.sha256(image_bytes).hexdigest()
+                    if orig_url in batch_seen_urls or img_hash in batch_seen_hashes or is_image_recent(url=orig_url, content_hash=img_hash):
+                        print(f"[{board_id}] 🔁 Дубликат пикчи ({orig_url[-25:]}, sha={img_hash[:8]}), ищу замену для слота #{slot}...")
+                        next_slots.append(slot)
+                        continue
+
                     try:
                         ext = orig_url.split('.')[-1].split('?')[0].lower()
                         if len(ext) > 4:
@@ -22684,13 +22910,16 @@ async def _collect_stacked_anime_downloads(
                     processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, image_bytes)
                     real_type = detect_media_type(processed_bytes, orig_url)
                     successful_by_slot[slot] = (processed_bytes, real_type, ext)
+                    batch_seen_urls.add(orig_url)
+                    batch_seen_hashes.add(img_hash)
+                    record_served_image(url=orig_url, content_hash=img_hash)
                 else:
                     if isinstance(res, Exception):
                         print(f"⚠️ Ошибка при скачивании изображения: {res}")
                     next_slots.append(slot)
 
         retry_slots = [slot for slot in dict.fromkeys(next_slots) if slot not in successful_by_slot]
-        if retry_slots and round_index < ANIME_REFILL_ROUNDS:
+        if retry_slots and round_index < max_refill_rounds:
             runtime_logger.warning(
                 "anime_media_refill %s",
                 json.dumps(
@@ -22787,7 +23016,7 @@ LOLI_REWARD_COOLDOWN_SEC: float = 3600.0
 LOLI_BUST_STATE: dict[str, dict] = {}
 
 LOLI_EXPLANATION_TEXTS = [
-    "Гражданин майор! Папку с лолями мне подбросили агенты ЦРУ через открытый порт 8080. Сам я правоверный скуф и смотрю только передачи Соловьёва.",
+    "Гражданин майор! Папку с лолями мне подбросили агенты ЦРУ через открытый порт 8080. Сам я правоверный сыч и смотрю только передачи Соловьёва.",
     "Проводил комплексный культурологический анализ традиционного японского изобразительного искусства эпохи Хэйан для диссертации в ВШЭ. Картинки не разглядывал, изучал исключительно композицию.",
     "Мой рыжий персидский кот прыгнул на клавиатуру, нажал слэш и задом набрал команду /loli10. Прошу привлечь кота к уголовной ответственности по ст. 242 УК РФ.",
     "Я слепой инвалид третьей группы, использую голосовой ввод. Сказал Алисе включить Ольгу Бузову, а робот распознал это как запрос на аниме-пак. Моей вины нет.",
@@ -24775,14 +25004,25 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
+    post_num = None
     async with storage_lock:
         post_num = message_to_post.get(lookup_key)
         if post_num and post_num in messages_storage:
-            return messages_storage[post_num].get("author_id")
+            author_id = messages_storage[post_num].get("author_id")
+            if author_id is not None:
+                return author_id
     if not post_num:
         info = await get_post_info_by_copy(target_chat_id, reply_mid)
         if info:
             post_num = info[0]
+            if info[1] is not None:
+                return info[1]
+    if not post_num:
+        from common.text_utils import extract_post_num_from_message_text
+        reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+        extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
+        if extracted_pnum:
+            post_num = extracted_pnum
     if post_num:
         db_post = await get_post_by_num(post_num)
         if db_post and 'author_id' in db_post:
@@ -24790,6 +25030,26 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
     if db_author_id is not None:
         return db_author_id
+    return None
+
+async def get_post_num_by_reply(msg: types.Message) -> int | None:
+    if not msg.reply_to_message:
+        return None
+    target_chat_id = msg.reply_to_message.chat.id
+    reply_mid = msg.reply_to_message.message_id
+    lookup_key = (target_chat_id, reply_mid)
+    async with storage_lock:
+        pnum = message_to_post.get(lookup_key)
+        if pnum:
+            return pnum
+    info = await get_post_info_by_copy(target_chat_id, reply_mid)
+    if info:
+        return info[0]
+    from common.text_utils import extract_post_num_from_message_text
+    reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+    extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
+    if extracted_pnum:
+        return extracted_pnum
     return None
 @dp.message(Command("id"))
 async def cmd_get_id(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -24850,29 +25110,40 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
 async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
+    target_post_num = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
+        target_post_num = await get_post_num_by_reply(message)
     parts = (message.text or message.caption or "").split()
-    if len(parts) == 2:
-        try: target_id = int(parts[1])
-        except ValueError: pass
+    if len(parts) >= 2:
+        raw_target = parts[1].lstrip('#').strip()
+        if raw_target.isdigit():
+            val = int(raw_target)
+            db_p = await get_post_by_num(val)
+            if db_p and 'author_id' in db_p:
+                target_id = db_p['author_id']
+                target_post_num = val
+            else:
+                target_id = val
     if not target_id:
-        await message.answer("Нужно ответить на сообщение или указать ID: <code>/ban &lt;id&gt;</code>", parse_mode="HTML")
+        await message.answer("Нужно ответить на сообщение или указать ID/номер поста: <code>/ban &lt;id|post_num&gt;</code>", parse_mode="HTML")
         return
 
     anon_name = generate_anon_name(target_id)
+    post_info_str = f" (пост #{target_post_num})" if target_post_num else ""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🔥 Да, сжечь!", callback_data=f"admin_action:ban:{target_id}:{board_id}:0"),
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (ID: <code>{target_id}</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b>{post_info_str} (ID: <code>{target_id}</code>) и снести его посты?", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
 async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int):
-    deleted_posts = await delete_user_posts(bot, target_id, 5, board_id)
+    # При бане удаляем посты спамера за последние 24 часа (1440 минут)
+    deleted_posts = await delete_user_posts(bot, target_id, 1440, board_id)
     await log_global_event('bot', f"🔨 BAN: Мод {admin_id} забанил {target_id} на /{board_id}/ (удалено {deleted_posts} пст)")
     async with storage_lock:
         b_data = board_data[board_id]
@@ -24907,29 +25178,11 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         return
     command_args = (message.text or message.caption or "").split()[1:]
     target_id = None
+    target_post_num = None
     duration_str = "1h"
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-        if not target_id:
-            # Fallback 1: Extract post_num from replied message text / caption
-            reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-            import re
-            match = re.search(r'(?:Post\s*№?|№|#|>>)\s*(\d+)', reply_text, re.IGNORECASE)
-            if match:
-                p_num = int(match.group(1))
-                db_p = await get_post_by_num(p_num)
-                if db_p and 'author_id' in db_p:
-                    target_id = db_p['author_id']
-        if not target_id:
-            # Fallback 2: Check ChannelCopies
-            try:
-                db = await get_pool()
-                async with db.execute("SELECT p.author_id FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?", (message.reply_to_message.chat.id, message.reply_to_message.message_id)) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        target_id = row[0]
-            except Exception:
-                pass
+        target_post_num = await get_post_num_by_reply(message)
         if command_args: duration_str = command_args[0]
     elif command_args:
         raw_target = command_args[0].lstrip('#').strip()
@@ -24938,6 +25191,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
             db_p = await get_post_by_num(val)
             if db_p and 'author_id' in db_p:
                 target_id = db_p['author_id']
+                target_post_num = val
             else:
                 target_id = val
             if len(command_args) > 1: duration_str = command_args[1]
@@ -24967,15 +25221,6 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         try: minutes = int(duration_str)
         except Exception: minutes = 60
 
-    # A PRIORI SHADOWMUTE: give shadowmute for at least 1 hour (3600 seconds) with reason='wipe'
-    smute_seconds = max(3600, minutes * 60)
-    try:
-        from common.database import update_shadow_mute
-        await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
-        await log_global_event('bot', f"👻 WIPE SHADOWMUTE: Автору {target_id} выдан шедоумут на {smute_seconds}с на /{board_id}/ (авто при /wipe)")
-    except Exception as e:
-        print(f"⚠️ Failed to apply a priori shadowmute on wipe: {e}")
-
     anon_name = generate_anon_name(target_id)
     time_label = f"{minutes} минут" if minutes < 60 else (f"{minutes//60}ч" if minutes < 1440 else (f"{minutes//1440}д" if minutes < 500000 else "за ВСЁ время"))
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -24984,7 +25229,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?\n<i>(Автору уже выдан теневой мут на 1ч)</i>", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вайп: <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}.\nНажмите подтверждение — шедоумут и удаление постов применятся только после этого.", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
@@ -26178,7 +26423,7 @@ async def database_cleanup_task():
             
             # Оптимизация оперативной памяти (RAM): очистка message_to_post по валидным постам и ограничение размера
             async with storage_lock:
-                limit = max(500, int(MAX_MESSAGES_IN_MEMORY or 1100))
+                limit = max(1000, int(MAX_MESSAGES_IN_MEMORY or 2500))
                 if len(messages_storage) > limit:
                     print(f"🚮 [Maintenance] Очистка RAM-кэша постов (было {len(messages_storage)}, лимит {limit})...")
                     sorted_nums = sorted(messages_storage.keys())
@@ -26187,19 +26432,17 @@ async def database_cleanup_task():
                         messages_storage.pop(pnum, None)
                         post_to_messages.pop(pnum, None)
 
-                valid_nums = set(messages_storage.keys()) | set(post_to_messages.keys())
-                stale_keys = [key for key, pnum in message_to_post.items() if pnum not in valid_nums]
-                for key in stale_keys:
-                    message_to_post.pop(key, None)
-
-                # Ограничение размера message_to_post (не более 20,000 записей)
-                MAX_MESSAGE_TO_POST = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "20000"))
+                # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (50000).
+                # Мы не сбрасываем его при вытеснении постов из messages_storage, чтобы ответы на старые посты резолвились.
+                MAX_MESSAGE_TO_POST = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
+                dropped_count = 0
                 if len(message_to_post) > MAX_MESSAGE_TO_POST:
                     excess = len(message_to_post) - MAX_MESSAGE_TO_POST
                     keys_to_drop = [k for k, _ in zip(message_to_post, range(excess))]
                     for k in keys_to_drop:
                         message_to_post.pop(k, None)
-                print(f"✅ [Maintenance] message_to_post очищен: удалено {len(stale_keys)} устаревших записей, текущий размер: {len(message_to_post)} (постов в RAM: {len(messages_storage)}).")
+                    dropped_count = excess
+                print(f"✅ [Maintenance] message_to_post проверен: превышение лимита {dropped_count}, текущий размер: {len(message_to_post)} (постов в RAM: {len(messages_storage)}).")
 
             await asyncio.sleep(21600) 
         except asyncio.CancelledError:
@@ -26382,7 +26625,16 @@ async def periodic_board_summary():
             logger.debug(f"📝 [PERIODIC SUMMARY] raw_len={raw_len} cleaned_len={len(summary) if summary else 0}")
             
             if not summary or summary.startswith('Нейронка сдохла'):
-                print(f"❌ [PERIODIC SUMMARY] Ошибка генерации саммари: {repr(summary[:80])}")
+                print(f"⚠️ [PERIODIC SUMMARY] LLM недоступна ({repr(summary[:50]) if summary else 'пусто'}), активирую extractive fallback...")
+                try:
+                    from common.extractive_summary import generate_extractive_summary
+                    summary = generate_extractive_summary(chunk, prompt, lang='ru', paragraph_count=auto_paragraph_count, board_id=board_id)
+                    summary = clean_html_for_tg(summary)
+                except Exception as fb_err:
+                    print(f"❌ [PERIODIC SUMMARY] Extractive fallback error: {fb_err}")
+
+            if not summary or summary.startswith('Нейронка сдохла'):
+                print(f"❌ [PERIODIC SUMMARY] Ошибка генерации саммари: {repr(summary[:80]) if summary else 'пусто'}")
                 continue
                 
             date_str = datetime.now().strftime('%d.%m %H:%M')
@@ -26579,7 +26831,7 @@ async def periodic_newspaper_broadcast():
                 f"В номере:\n"
                 f"• Литературный вестник дня (самые длинные посты)\n"
                 f"• Топ обсуждаемых тем и тредов\n"
-                f"• Сводка происшествий и общая статистика скуфства\n\n"
+                f"• Сводка происшествий и общая статистика сычства\n\n"
                 f"👉 <b>Читать свежий номер:</b> <a href='{url}'>{url}</a>\n\n"
                 f"🚀 <i>Будьте в курсе последних событий деградации!</i>"
             )
@@ -27007,9 +27259,19 @@ async def event_loop_health_tick_task():
 
 def _write_heartbeat_payload(payload: dict) -> None:
     tmp_path = f"{BOT_HEARTBEAT_PATH}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as heartbeat_file:
-        json.dump(payload, heartbeat_file, ensure_ascii=False, separators=(",", ":"))
-    os.replace(tmp_path, BOT_HEARTBEAT_PATH)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as heartbeat_file:
+            json.dump(payload, heartbeat_file, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return
+    for attempt in range(4):
+        try:
+            os.replace(tmp_path, BOT_HEARTBEAT_PATH)
+            break
+        except PermissionError:
+            time.sleep(0.03 * (attempt + 1))
+        except Exception:
+            break
 
 async def controlled_stop_watcher_task():
     global drain_shutdown_requested, drain_shutdown_requested_at
@@ -27138,7 +27400,13 @@ def _event_loop_stall_watchdog_loop():
                 with open(BOT_DEADLOCK_DUMP_PATH, "a", encoding="utf-8") as dump_file:
                     dump_file.write("\n=== EVENT LOOP STALL DUMP ===\n")
                     dump_file.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                    faulthandler.dump_traceback(file=dump_file, all_threads=True)
+                    if sys.platform == "win32":
+                        import traceback
+                        for thread_id, frame in sys._current_frames().items():
+                            dump_file.write(f"\n--- Thread {thread_id} ---\n")
+                            traceback.print_stack(frame, file=dump_file)
+                    else:
+                        faulthandler.dump_traceback(file=dump_file, all_threads=True)
                     dump_file.write("=== END EVENT LOOP STALL DUMP ===\n")
                     dump_file.flush()
                 try:
@@ -27160,7 +27428,7 @@ def _event_loop_stall_watchdog_loop():
         if lag_sec >= EVENT_LOOP_AUTO_RESTART_SEC:
             try:
                 msg_bytes = (
-                    f"\n\U0001f6a8\U0001f6a8\U0001f6a8 [WATCHDOG CRITICAL] EVENT LOOP HARD DEADLOCK DETECTED! "
+                    f"\n🚨🚨🚨 [WATCHDOG CRITICAL] EVENT LOOP HARD DEADLOCK DETECTED! "
                     f"Lag={lag_sec:.1f}s >= threshold {EVENT_LOOP_AUTO_RESTART_SEC}s. "
                     f"Triggering emergency exit(42) for immediate supervisor restart!\n"
                 ).encode("utf-8", errors="replace")
@@ -27170,7 +27438,13 @@ def _event_loop_stall_watchdog_loop():
             try:
                 with open(BOT_DEADLOCK_DUMP_PATH, "a", encoding="utf-8") as dump_file:
                     dump_file.write(f"\n=== EMERGENCY DEADLOCK AUTO-RESTART ts={now:.3f} lag={lag_sec:.3f}s ===\n")
-                    faulthandler.dump_traceback(file=dump_file, all_threads=True)
+                    if sys.platform == "win32":
+                        import traceback
+                        for thread_id, frame in sys._current_frames().items():
+                            dump_file.write(f"\n--- Thread {thread_id} ---\n")
+                            traceback.print_stack(frame, file=dump_file)
+                    else:
+                        faulthandler.dump_traceback(file=dump_file, all_threads=True)
                     dump_file.write("=== EMERGENCY RESTART TRIGGERED ===\n")
                     dump_file.flush()
             except Exception:
