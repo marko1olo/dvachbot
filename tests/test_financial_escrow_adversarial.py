@@ -160,22 +160,31 @@ class TestFinancialBalanceConservation:
         delta_abu = final_abu - init_abu
         total_balance_delta = delta_p1 + delta_p2 + delta_abu
 
-        assert total_balance_delta == 0.0, f"Balance leak detected! Delta: {total_balance_delta}"
-        assert final_global_total == init_global_total
+        total_pot = stake * 2
+        is_burn_rake = total_pot > 50000
+        if is_burn_rake:
+            expected_rake = max(5, int(total_pot * 0.10))
+            expected_abu_delta = 0.0
+        else:
+            expected_rake = max(5, int(total_pot * dde.DICE_RAKE_PERCENT))
+            expected_abu_delta = float(expected_rake)
+
+        expected_total_delta = -float(expected_rake) if is_burn_rake else 0.0
+        assert total_balance_delta == expected_total_delta, f"Balance leak detected! Delta: {total_balance_delta}"
+        assert final_global_total == init_global_total + expected_total_delta
 
         # 2. Detailed Rake & Payout Math
-        expected_rake = max(5, int((stake * 2) * dde.DICE_RAKE_PERCENT))
-        expected_win_payout = (stake * 2) - expected_rake
+        expected_win_payout = total_pot - expected_rake
 
         assert delta_p2 == -stake, f"Loser delta mismatch: expected -{stake}, got {delta_p2}"
         assert delta_p1 == stake - expected_rake, f"Winner delta mismatch: expected {stake - expected_rake}, got {delta_p1}"
-        assert delta_abu == expected_rake, f"Abu fund delta mismatch: expected {expected_rake}, got {delta_abu}"
+        assert delta_abu == expected_abu_delta, f"Abu fund delta mismatch: expected {expected_abu_delta}, got {delta_abu}"
 
         # 3. Transaction Log Consistency
         sum_tx = await get_total_user_transactions(db, [p1, p2], category="dice_duel")
         # Winner got +win_payout, Loser had escrow -stake, Winner had escrow -stake
         # Sum tx = -stake + -stake + win_payout = -2*stake + (2*stake - rake) = -rake
-        assert sum_tx + delta_abu == 0.0, f"Transaction log inconsistent with Abu rake: {sum_tx} vs {delta_abu}"
+        assert sum_tx + expected_rake == 0.0, f"Transaction log inconsistent with rake: {sum_tx} vs {expected_rake}"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stake", [50, 100, 1000, 33333, 500000])
@@ -317,17 +326,26 @@ class TestFinancialBalanceConservation:
         delta_p2 = final_p2 - init_p2
         delta_abu = final_abu - init_abu
 
-        assert delta_p1 + delta_p2 + delta_abu == 0.0, f"RR balance leak detected! Delta: {delta_p1 + delta_p2 + delta_abu}"
-        assert final_total == init_total
+        total_pot = stake * 2
+        is_burn_rake = total_pot > 50000
+        if is_burn_rake:
+            expected_rake = max(5, int(total_pot * 0.10))
+            expected_abu_delta = 0.0
+        else:
+            expected_rake = max(5, int(total_pot * rr.RR_RAKE_PERCENT))
+            expected_abu_delta = float(expected_rake)
 
-        expected_rake = max(5, int((stake * 2) * rr.RR_RAKE_PERCENT))
+        expected_total_delta = -float(expected_rake) if is_burn_rake else 0.0
+        assert delta_p1 + delta_p2 + delta_abu == expected_total_delta, f"RR balance leak detected! Delta: {delta_p1 + delta_p2 + delta_abu}"
+        assert final_total == init_total + expected_total_delta
+
         assert delta_p1 == -stake
         assert delta_p2 == stake - expected_rake
-        assert delta_abu == expected_rake
+        assert delta_abu == expected_abu_delta
 
         # Check transactions
         sum_tx = await get_total_user_transactions(db, [p1, p2], category="rr_pvp")
-        assert sum_tx + delta_abu == 0.0
+        assert sum_tx + expected_rake == 0.0
 
     @pytest.mark.asyncio
     async def test_russian_roulette_timeout_forfeit_conservation(self, isolated_test_db):
@@ -548,19 +566,19 @@ class TestFinancialBalanceConservation:
         game = ttt.TicTacToeGame(
             game_id="ttt_test_win",
             board_id="b",
+            chat_id=100,
             challenger_id=p1,
             opponent_id=p2,
             bet=stake,
-            pot=stake * 2
         )
-        game.state = "playing"
+        game.status = "active"
 
         # Escrow manually deducted on start in TTT engine
         await deduct_user_global_balance(db, p1, "b", stake)
         await deduct_user_global_balance(db, p2, "b", stake)
 
         game.winner_id = p1
-        game.state = "finished"
+        game.status = "finished"
 
         mock_bot = make_mock_bot()
         with patch("ttt_engine.publish_ttt_board_announcement", new_callable=AsyncMock):
@@ -588,14 +606,14 @@ class TestFinancialBalanceConservation:
         game_draw = ttt.TicTacToeGame(
             game_id="ttt_test_draw",
             board_id="b",
+            chat_id=100,
             challenger_id=p1,
             opponent_id=p2,
             bet=stake,
-            pot=stake * 2
         )
         await deduct_user_global_balance(db, p1, "b", stake)
         await deduct_user_global_balance(db, p2, "b", stake)
-        game_draw.state = "finished"
+        game_draw.status = "finished"
 
         with patch("ttt_engine.publish_ttt_board_announcement", new_callable=AsyncMock):
             await ttt.finish_ttt_game(game_draw, is_win=False, is_draw=True, bot=mock_bot)
@@ -670,6 +688,10 @@ class TestConcurrentWalletDrainAdversarial:
         """
         db = isolated_test_db
         user_id = 60002
+
+        for b in ["b", "vg", "a", "po", "fag"]:
+            await db.execute("INSERT OR IGNORE INTO Boards (board_id, name) VALUES (?, ?)", (b, b))
+        await db.commit()
 
         await add_user_global_balance(db, user_id, "b", 300.0)
         await add_user_global_balance(db, user_id, "vg", 200.0)
@@ -821,6 +843,15 @@ class TestNotificationDeliveryAndResilienceAdversarial:
         await add_user_global_balance(db, p1, "b", 20_000)
         await add_user_global_balance(db, p2, "b", 20_000)
 
+        async def clear_mutes():
+            await db.execute("DELETE FROM Mutes WHERE user_id IN (?, ?)", (p1, p2))
+            await db.commit()
+            import shared_state
+            async with shared_state.storage_lock:
+                if "b" in shared_state.board_data and 'mutes' in shared_state.board_data["b"]:
+                    shared_state.board_data["b"]['mutes'].pop(p1, None)
+                    shared_state.board_data["b"]['mutes'].pop(p2, None)
+
         mock_bot = make_mock_bot()
 
         # 1. Russian Roulette Fatal Shot DMs
@@ -833,6 +864,7 @@ class TestNotificationDeliveryAndResilienceAdversarial:
         assert p1 in sent_chats and p2 in sent_chats
 
         # 2. Russian Roulette Surrender DMs
+        await clear_mutes()
         ok, _, rr_gid2 = await rr.create_rr_challenge("b", p1, stake)
         ok, _, _ = await rr.accept_rr_challenge(rr_gid2, p2)
         mock_bot.send_message.reset_mock()
@@ -842,6 +874,7 @@ class TestNotificationDeliveryAndResilienceAdversarial:
         assert p1 in sent_chats and p2 in sent_chats
 
         # 3. Russian Roulette Timeout Forfeit DMs
+        await clear_mutes()
         ok, _, rr_gid3 = await rr.create_rr_challenge("b", p1, stake)
         ok, _, _ = await rr.accept_rr_challenge(rr_gid3, p2)
         mock_bot.send_message.reset_mock()
@@ -851,6 +884,7 @@ class TestNotificationDeliveryAndResilienceAdversarial:
         assert p1 in sent_chats and p2 in sent_chats
 
         # 4. Dice Duel Win/Loss DMs
+        await clear_mutes()
         ok, _, d_gid = await dde.create_dice_challenge("b", p1, stake)
         ok, _, _ = await dde.accept_dice_challenge(d_gid, p2)
         mock_bot.send_message.reset_mock()
@@ -860,6 +894,7 @@ class TestNotificationDeliveryAndResilienceAdversarial:
         assert p1 in sent_chats and p2 in sent_chats
 
         # 5. Dice Duel Draw Refund DMs
+        await clear_mutes()
         ok, _, d_gid2 = await dde.create_dice_challenge("b", p1, stake)
         ok, _, _ = await dde.accept_dice_challenge(d_gid2, p2)
         mock_bot.send_message.reset_mock()
@@ -875,8 +910,8 @@ class TestNotificationDeliveryAndResilienceAdversarial:
         admin_msg.text = f"/addmoney {p1} 5000"
         admin_msg.bot = mock_bot
         admin_msg.reply = AsyncMock()
-        with patch.object(main, "ADMIN_IDS", [99999]):
-            await main.cmd_add_money_admin(admin_msg)
+        with patch("main.is_admin", return_value=True):
+            await main.cmd_add_money_admin(admin_msg, "b")
         await asyncio.sleep(0.05)
         sent_chats = [c.kwargs.get("chat_id") for c in mock_bot.send_message.call_args_list]
         assert p1 in sent_chats

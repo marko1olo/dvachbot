@@ -19,6 +19,7 @@ async def test_slots_spin_animation_in_place():
     with patch("main.casino_engine.check_casino_cooldown", return_value=(True, 0)), \
          patch("main.get_pool", return_value=mock_db), \
          patch("main.get_user_global_balance", return_value=10000), \
+         patch("main.deduct_user_global_balance", return_value=(True, 9900)), \
          patch("main.casino_engine.roll_slots", return_value=(["🍒", "🍒", "🍒"], 9.0, "Три Вишенки")), \
          patch("main.calculate_win_tax", return_value=(0, 900)), \
          patch("main.add_user_global_balance", return_value=10900), \
@@ -67,6 +68,7 @@ async def test_coinflip_animation_in_place():
     with patch("main.casino_engine.check_casino_cooldown", return_value=(True, 0)), \
          patch("main.get_pool", return_value=mock_db), \
          patch("main.get_user_global_balance", return_value=5000), \
+         patch("main.deduct_user_global_balance", return_value=(True, 4900)), \
          patch("main.casino_engine.play_coinflip", return_value=("🦅 ОРЕЛ", True, 1.95, "Победа")), \
          patch("main.calculate_win_tax", return_value=(0, 95)), \
          patch("main.add_user_global_balance", return_value=5095), \

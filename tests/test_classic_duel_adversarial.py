@@ -330,7 +330,7 @@ async def test_watchdog_timeout_recovery_and_balance_safety(isolated_test_db):
         _active_duels[challenger_id] = {
             "board_id": board_id,
             "amount": stake,
-            "ts": time.time() - 150.0,  # 150s ago (> 120s)
+            "ts": time.time() - 700.0,  # 700s ago (> 600s _DUEL_TIMEOUT)
             "msg_id": 1111,
             "chat_id": 2222,
             "broadcast_msgs": [(2222, 1111)],
@@ -372,7 +372,7 @@ async def test_accept_expired_duel_rejected(isolated_test_db):
         _active_duels[challenger_id] = {
             "board_id": board_id,
             "amount": stake,
-            "ts": time.time() - 200.0,
+            "ts": time.time() - 700.0,  # 700s ago (> 600s _DUEL_TIMEOUT)
             "msg_id": 1212,
             "chat_id": 100,
             "broadcast_msgs": [],
