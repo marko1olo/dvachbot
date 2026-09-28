@@ -86,7 +86,7 @@ class TestBannerManager(unittest.TestCase):
         from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
         all_banners = set(_CATEGORIZED_BANNERS["all"])
         self.assertGreaterEqual(len(all_banners), 1441)
-        self.assertEqual(len(all_banners), 1657)
+        self.assertEqual(len(all_banners), 2356)
 
         all_reached = set()
         for subsection, cats in SUBSECTION_CATEGORIES.items():
@@ -494,6 +494,29 @@ class TestBannerCacheDebounce(unittest.TestCase):
         self.assertIsNotNone(msg)
         self.assertTrue(recorded_kwargs.get("supports_streaming"), "Expected supports_streaming=True")
         self.assertEqual(banner_manager._BANNER_CACHE.get(f"12345:{chosen_vid}"), "cached_vid_fid_999")
+
+    def test_truncate_html_caption(self):
+        from banner_manager import _truncate_html_caption
+        # 1. Short text remains unchanged
+        short_txt = "<b>Hello World</b>"
+        self.assertEqual(_truncate_html_caption(short_txt, limit=100), short_txt)
+
+        # 2. Long text with tags closes unclosed tags
+        long_txt = "<b>Bold start <i>italic inner " + ("a" * 1000) + "</i></b>"
+        truncated = _truncate_html_caption(long_txt, limit=100)
+        self.assertIn("<b>", truncated)
+        self.assertIn("</b>", truncated)
+        self.assertIn("<i>", truncated)
+        self.assertIn("</i>", truncated)
+        self.assertTrue(truncated.endswith("...\n<i>[Текст сокращен]</i>"))
+
+        # 3. Cut inside tag does not leave malformed open tag
+        malformed_cut_txt = "Some text <a href='https://example.com/very/long/url'>Link text</a>"
+        # Cut right after '<a href='
+        cut_point = malformed_cut_txt.find("<a href") + 5
+        truncated2 = _truncate_html_caption(malformed_cut_txt, limit=cut_point)
+        self.assertNotIn("<a", truncated2)
+        self.assertTrue(truncated2.endswith("...\n<i>[Текст сокращен]</i>"))
 
 
 if __name__ == "__main__":

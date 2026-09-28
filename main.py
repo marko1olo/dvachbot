@@ -517,6 +517,7 @@ BOT_HEARTBEAT_PATH = os.path.join(LOG_DIR, "bot_heartbeat.json")
 BOT_DEADLOCK_DUMP_PATH = os.path.join(LOG_DIR, "bot_deadlock_watchdog.log")
 BOT_FATAL_CRASH_DUMP_PATH = os.path.join(LOG_DIR, "bot_fatal_crash.log")
 BOT_CONTROLLED_STOP_PATH = "bot.stop"
+BOT_CONTROLLED_RESTART_PATH = "bot.restart"
 EVENT_LOOP_DUMP_STALE_SEC = float(os.environ.get("BOT_EVENT_LOOP_DUMP_STALE_SEC", "45"))
 EVENT_LOOP_DUMP_COOLDOWN_SEC = float(os.environ.get("BOT_EVENT_LOOP_DUMP_COOLDOWN_SEC", "120"))
 EVENT_LOOP_AUTO_RESTART_SEC = float(os.environ.get("BOT_EVENT_LOOP_AUTO_RESTART_SEC", "60"))
@@ -3744,8 +3745,11 @@ async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
             post_timestamp = post_data_db.get('timestamp', 0)
     if not post_content:
         b_data['active_pin'] = None
+        await update_board_settings(board_id, {'active_pin': None})
         return
-    if (time.time() - post_timestamp) > 172800:
+    if (time.time() - post_timestamp) > 86400:
+        b_data['active_pin'] = None
+        await update_board_settings(board_id, {'active_pin': None})
         return
     await asyncio.sleep(1.5)
     try:
@@ -4043,7 +4047,7 @@ BASE_SHOP_PRICES = {
     'whale_safe': 50000,
 }
 
-def get_current_item_price(item_key: str, user_id: int | None = None) -> int:
+def get_current_item_price(item_key: str, user_id: int | None = None, balance: float | None = None) -> int:
     from shared_state import market_state, get_user_daily_shop_buys
     base = BASE_SHOP_PRICES.get(item_key, 100)
     if item_key == 'mute' and user_id is not None:
@@ -4051,6 +4055,13 @@ def get_current_item_price(item_key: str, user_id: int | None = None) -> int:
         # Escalating price per day: 1st buy = 500 ₪, 2nd buy = 1,500 ₪, 3rd buy = 3,500 ₪
         mult_buys = 1 if buys == 0 else (3 if buys == 1 else 7)
         base = int(base * mult_buys)
+    elif item_key == 'janitor':
+        # Прогрессивный налог на Билет Дворника от капитала (5%) + суточная эскалация
+        buys = get_user_daily_shop_buys(user_id, 'janitor') if user_id is not None else 0
+        mult_buys = 1 if buys == 0 else (3 if buys == 1 else 10)
+        base = int(base * mult_buys)
+        if balance is not None and balance > 0:
+            base += int(balance * 0.05)
     mult = market_state.get('multipliers', {}).get(item_key, 1.0)
     return max(10, int(base * mult))
 
@@ -4110,7 +4121,7 @@ def _build_weapons_shop_content(user_id: int, balance: float):
     p_mute = get_current_item_price('mute', user_id=user_id)
     p_lax = get_current_item_price('laxative')
     p_schizo = get_current_item_price('schizopill')
-    p_jan = get_current_item_price('janitor')
+    p_jan = get_current_item_price('janitor', user_id=user_id, balance=balance)
     p_van = get_current_item_price('partyvan')
 
     text = (
@@ -4688,6 +4699,12 @@ async def cmd_reload_banners(message: types.Message, board_id: str | None = None
         f"Категорий: <b>{len(_CATEGORIZED_BANNERS)}</b>",
         parse_mode="HTML"
     )
+
+
+@dp.message(Command("broadcast_reactions", "reactions_broadcast", ignore_case=True, ignore_mention=True))
+async def cmd_broadcast_reactions(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    from reaction_broadcast_engine import handle_broadcast_reactions_command
+    await handle_broadcast_reactions_command(message, is_admin_check_func=lambda uid: is_admin(uid, board_id))
 
 
 @dp.callback_query(F.data.startswith("bn:"))
@@ -5980,13 +5997,13 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
         return
 
-    price = get_current_item_price(item, user_id=user_id)
     now = int(time.time())
     msg = ""
     err_msg = ""
 
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
+        price = get_current_item_price(item, user_id=user_id, balance=balance)
         if balance < price:
             excuse = secrets.choice(INSUFFICIENT_FUNDS_EXCUSES).format(price=price, balance=int(balance))
             await callback.answer(excuse, show_alert=True)
@@ -6061,12 +6078,16 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
 
         # --- 2. WEAPONS & COMBAT ---
         if item == "janitor":
-            max_cap = now + 7 * 86400
-            current_exp = active_items.get("janitor_until", 0)
-            base = current_exp if current_exp > now else now
-            active_items["janitor_until"] = min(base + 6 * 3600, max_cap)
-            active_items["janitor_deletes_left"] = 5
-            msg = "🚮 Ты получил Билет Дворника на 6 часов (5 удалений через /del)!"
+            buys = get_user_daily_shop_buys(user_id, "janitor")
+            if buys >= 2:
+                err_msg = "🚫 Ты уже купил 2 билета за сегодня! Профсоюз дворников запрещает монополию."
+            else:
+                max_cap = now + 7 * 86400
+                current_exp = active_items.get("janitor_until", 0)
+                base = current_exp if current_exp > now else now
+                active_items["janitor_until"] = min(base + 6 * 3600, max_cap)
+                active_items["janitor_deletes_left"] = min(6, active_items.get("janitor_deletes_left", 0) + 3)
+                msg = f"🚮 Ты получил Билет Дворника на 6 часов (+3 удаления через /del)! Доступно удалений: {active_items['janitor_deletes_left']}."
 
         elif item == "mute":
             if active_items.get("mute_gun"):
@@ -6120,13 +6141,21 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                 msg = "🇷🇺 Ты купил Флаг России! Сделай Reply на пост с командой /flag_ru (повесить флаг на 1-3 часа)."
 
         elif item == "pills":
-            active_items.pop("shit_until", None)
-            active_items.pop("vomit_until", None)
-            active_items.pop("flag_ua_until", None)
-            active_items.pop("flag_ru_until", None)
-            active_items.pop("peppersprayed_until", None)
-            if not is_user_under_unbribable_mute(active_items):
-                await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            DEBUFF_KEYS = ("shit_until", "vomit_until", "flag_ua_until", "flag_ru_until", "peppersprayed_until", "cursed_until", "schizo_pill_until", "schizo_until")
+            for k in DEBUFF_KEYS:
+                active_items.pop(k, None)
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (user_id,))
+            async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (user_id,)) as cur:
+                user_rows = await cur.fetchall()
+            for b_row_id, raw_items in user_rows:
+                try:
+                    row_items = json.loads(raw_items) if raw_items else {}
+                except Exception:
+                    row_items = {}
+                for k in DEBUFF_KEYS:
+                    row_items.pop(k, None)
+                await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(row_items), user_id, b_row_id))
             msg = "💊 Ты выпил Аминазин! Все дебаффы (говно, блевота, флаги, перец, понос, шиза) моментально смыты."
 
         elif item == "knife":
@@ -6260,10 +6289,11 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                 "[Инцел]", "[Анимешник]", "[Чмо]",
                 "[Вайпер Параши]", "[Дырявый]", "[Каловая Масса]",
                 "[Порваха]", "[Обоссанный Сыч]",
+                "[Ариец]",
                 # Редкие (15%):
                 "[Вумен ☕️]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
             ]
-            chosen = random.choice(prefixes[:12]) if random.random() < 0.85 else random.choice(prefixes[12:])
+            chosen = random.choice(prefixes[:13]) if random.random() < 0.85 else random.choice(prefixes[13:])
             expires = now + 86400
             active_items["equipped_head"] = "hat_crown"
             active_items["owned_hat_crown"] = True
@@ -7937,16 +7967,23 @@ async def cmd_cure(message: types.Message, board_id: str | None, stream: str = '
 
     await record_user_transaction(db, user_id, -price, 'shop', 'Покупка: Аминазин (/cure)')
 
-    active_items.pop("shit_until", None)
-    active_items.pop("vomit_until", None)
-    active_items.pop("flag_ua_until", None)
-    active_items.pop("flag_ru_until", None)
-    active_items.pop("peppersprayed_until", None)
+    DEBUFF_KEYS = ("shit_until", "vomit_until", "flag_ua_until", "flag_ru_until", "peppersprayed_until", "cursed_until", "schizo_pill_until", "schizo_until")
+    for k in DEBUFF_KEYS:
+        active_items.pop(k, None)
 
     async with db_lock:
-        if not is_user_under_unbribable_mute(active_items):
-            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (user_id,))
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+        await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (user_id,))
+        async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (user_id,)) as cur:
+            user_rows = await cur.fetchall()
+        for b_row_id, raw_items in user_rows:
+            try:
+                row_items = json.loads(raw_items) if raw_items else {}
+            except Exception:
+                row_items = {}
+            for k in DEBUFF_KEYS:
+                row_items.pop(k, None)
+            await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(row_items), user_id, b_row_id))
         await db.commit()
 
     await log_global_event('bot', f"💊 CURE: Юзер {user_id} принял Аминазин за {price} ₪ на /{board_id}/ (дебаффы сняты)")
@@ -9854,7 +9891,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
             InlineKeyboardButton(text="⚔️ Принять вызов!", callback_data=f"duel_accept:{duel_token}"),
             InlineKeyboardButton(text="❌ Отменить", callback_data=f"duel_cancel:{duel_token}"),
         ]
-    ]) if not target_id else kb_duel_own
+    ])
 
     # Отправляем карточку вызова
     try:
@@ -10658,15 +10695,22 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                 answer_text = f"❌ Недостаточно шекелей! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work."
             else:
                 await deduct_user_global_balance(db, user_id, board_id, cost)
-                user_items["shit_until"] = 0
-                user_items["vomit_until"] = 0
-                user_items["flag_ua_until"] = 0
-                user_items["flag_ru_until"] = 0
-                user_items["cursed_until"] = 0
-                user_items["schizo_pill_until"] = 0
+                DEBUFF_KEYS = ("shit_until", "vomit_until", "flag_ua_until", "flag_ru_until", "peppersprayed_until", "cursed_until", "schizo_pill_until", "schizo_until")
+                for k in DEBUFF_KEYS:
+                    user_items[k] = 0
                 async with db_transaction(db):
-                    await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
-                                     (json.dumps(user_items), user_id, board_id))
+                    await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (user_id,))
+                    async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (user_id,)) as cur:
+                        user_rows = await cur.fetchall()
+                    for b_row_id, raw_items in user_rows:
+                        try:
+                            row_items = json.loads(raw_items) if raw_items else {}
+                        except Exception:
+                            row_items = {}
+                        for k in DEBUFF_KEYS:
+                            row_items.pop(k, None)
+                        await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                                         (json.dumps(row_items), user_id, b_row_id))
                 answer_text = "💊 Аминазин принят! Все дебаффы (говно, блевота, флаги, понос, шиза) мгновенно смыты."
                 edit_html = (
                     f"✨ <b>ТЫ ПОЛНОСТЬЮ ОЧИЩЕН!</b>\n\n"
@@ -20771,7 +20815,7 @@ async def auto_memory_cleaner():
             # 4.1. Очистка и подрезка RAM-кэша постов (messages_storage, post_to_messages, message_to_post)
             try:
                 async with storage_lock:
-                    limit = max(1000, int(MAX_MESSAGES_IN_MEMORY or 2500))
+                    limit = max(1000, min(15000, int(MAX_MESSAGES_IN_MEMORY or 10000)))
                     if len(messages_storage) > limit:
                         excess = len(messages_storage) - limit
                         sorted_pnums = sorted(messages_storage.keys())
@@ -20781,9 +20825,9 @@ async def auto_memory_cleaner():
                             post_to_messages.pop(pnum, None)
                         removed["evicted_posts_from_ram"] = len(drop_pnums)
 
-                    # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (50000).
+                    # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (15000).
                     # Мы не сбрасываем его при вытеснении постов из messages_storage, чтобы ответы на старые посты резолвились.
-                    MAX_CAP = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
+                    MAX_CAP = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "15000"))
                     if len(message_to_post) > MAX_CAP:
                         excess = len(message_to_post) - MAX_CAP
                         drop_keys = [k for k, _ in zip(message_to_post, range(excess))]
@@ -22930,7 +22974,7 @@ async def _collect_stacked_anime_downloads(
                     image_bytes = res[0]
                     # Вычисляем хеш для точного отсечения дубликатов
                     img_hash = hashlib.sha256(image_bytes).hexdigest()
-                    if orig_url in batch_seen_urls or img_hash in batch_seen_hashes or is_image_recent(url=orig_url, content_hash=img_hash):
+                    if orig_url in batch_seen_urls or img_hash in batch_seen_hashes or is_image_recent(content_hash=img_hash):
                         print(f"[{board_id}] 🔁 Дубликат пикчи ({orig_url[-25:]}, sha={img_hash[:8]}), ищу замену для слота #{slot}...")
                         next_slots.append(slot)
                         continue
@@ -23873,6 +23917,26 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
                         post_ts_float = 0.0
 
         now = time.time()
+
+        # Кулдаун между удалениями дворника: 60 секунд
+        last_del_ts = active_items.get("last_janitor_del_ts", 0)
+        if now - last_del_ts < 60:
+            cd_left = int(60 - (now - last_del_ts))
+            await message.answer(f"⏳ <b>Метла перегрелась!</b> Подожди {cd_left} сек перед следующим удалением.\n<i>(Счётчик удалений сохранён)</i>", parse_mode="HTML")
+            try: await message.delete()
+            except Exception: pass
+            return
+
+        # Суточный лимит: максимум 3 удаления в сутки на юзера
+        del_history = active_items.get("janitor_del_history", [])
+        del_history = [t for t in del_history if now - t < 86400]
+        active_items["janitor_del_history"] = del_history
+        if len(del_history) >= 3:
+            await message.answer("🚫 <b>Суточный лимит дворника исчерпан!</b>\nТы уже совершил 3 удаления за последние 24 часа. Отдохни и дай анонам пообщаться.\n<i>(Счётчик удалений сохранён)</i>", parse_mode="HTML")
+            try: await message.delete()
+            except Exception: pass
+            return
+
         # Ограничение возраста: максимум 15 минут (900 сек)
         if post_ts_float > 0 and (now - post_ts_float > 900):
             await message.answer("⏱️ <b>Слишком старый пост!</b>\nДворники могут убирать только свежий мусор (не старше 15 минут). Старые посты трогать запрещено!\n<i>(Счётчик удалений сохранён)</i>", parse_mode="HTML")
@@ -23898,6 +23962,9 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         async with db_lock:
             janitor_deletes_left -= 1
             active_items["janitor_deletes_left"] = janitor_deletes_left
+            del_history.append(now)
+            active_items["janitor_del_history"] = del_history
+            active_items["last_janitor_del_ts"] = now
             await db.execute(
                 "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                 (json.dumps(active_items), user_id, board_id)
@@ -26457,7 +26524,7 @@ async def database_cleanup_task():
             
             # Оптимизация оперативной памяти (RAM): очистка message_to_post по валидным постам и ограничение размера
             async with storage_lock:
-                limit = max(1000, int(MAX_MESSAGES_IN_MEMORY or 2500))
+                limit = max(1000, min(15000, int(MAX_MESSAGES_IN_MEMORY or 10000)))
                 if len(messages_storage) > limit:
                     print(f"🚮 [Maintenance] Очистка RAM-кэша постов (было {len(messages_storage)}, лимит {limit})...")
                     sorted_nums = sorted(messages_storage.keys())
@@ -26466,9 +26533,9 @@ async def database_cleanup_task():
                         messages_storage.pop(pnum, None)
                         post_to_messages.pop(pnum, None)
 
-                # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (50000).
+                # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (15000).
                 # Мы не сбрасываем его при вытеснении постов из messages_storage, чтобы ответы на старые посты резолвились.
-                MAX_MESSAGE_TO_POST = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
+                MAX_MESSAGE_TO_POST = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "15000"))
                 dropped_count = 0
                 if len(message_to_post) > MAX_MESSAGE_TO_POST:
                     excess = len(message_to_post) - MAX_MESSAGE_TO_POST
@@ -27310,20 +27377,29 @@ def _write_heartbeat_payload(payload: dict) -> None:
 async def controlled_stop_watcher_task():
     global drain_shutdown_requested, drain_shutdown_requested_at
     while not is_shutting_down:
-        if os.path.exists(BOT_CONTROLLED_STOP_PATH):
+        is_restart = os.path.exists(BOT_CONTROLLED_RESTART_PATH)
+        is_stop = os.path.exists(BOT_CONTROLLED_STOP_PATH)
+        if is_stop or is_restart:
+            if is_restart:
+                try:
+                    os.remove(BOT_CONTROLLED_RESTART_PATH)
+                except OSError:
+                    pass
             if not drain_shutdown_requested:
                 drain_shutdown_requested = True
                 drain_shutdown_requested_at = time.time()
+                action_name = "Controlled restart" if is_restart else "Controlled stop"
                 print(
-                    "🛑 Controlled stop requested: polling will stop, "
+                    f"🛑 {action_name} requested: polling will stop, "
                     f"then RAM delivery queues will drain for up to {CONTROLLED_STOP_DRAIN_TIMEOUT_SEC:.0f}s."
                 )
                 runtime_logger.warning(
-                    "controlled_stop_requested %s",
+                    "controlled_drain_shutdown_requested %s",
                     json.dumps(
                         {
                             "ts": round(drain_shutdown_requested_at, 3),
                             "pid": os.getpid(),
+                            "action": "restart" if is_restart else "stop",
                             "queues_total": _delivery_queue_total(),
                             "queues_top": sorted(
                                 _delivery_queue_counts().items(),
@@ -27340,7 +27416,7 @@ async def controlled_stop_watcher_task():
                 await dp.stop_polling()
             except RuntimeError as exc:
                 if "Polling is not started" not in str(exc):
-                    print(f"⚠️ Controlled stop could not stop polling cleanly: {exc}")
+                    print(f"⚠️ Controlled drain could not stop polling cleanly: {exc}")
             except Exception as exc:
                 print(f"⚠️ Controlled stop watcher error: {type(exc).__name__}: {exc}")
             return
@@ -27789,6 +27865,9 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "ttt_watchdog": lambda: ttt_engine.start_ttt_watchdog_loop(bots.get('ru') or active_bots_list[0]),
         "classic_duel_watchdog": lambda: start_classic_duel_watchdog_loop(bots.get('ru') or active_bots_list[0]),
         "solo_casino_watchdog": lambda: start_solo_casino_watchdog_loop(bots.get('ru') or active_bots_list[0]),
+        "reaction_motivation_broadcast": lambda: __import__('reaction_broadcast_engine').reaction_motivation_broadcast_loop(
+            lambda: bots.get('ru') or bots.get('b') or (next(iter(bots.values())) if bots else None)
+        ),
     }
     if ENABLE_REPLY_NOTIFICATIONS:
         tasks_to_run["reply_notifier_task"] = lambda: reply_notifier_task()
