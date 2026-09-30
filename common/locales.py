@@ -1453,7 +1453,7 @@ TRANSLATIONS = {
         "spank_score_label": "SCORE",
         "audio_random_artists": [
             "Skiff Lord",
-            "Cringe Overlord",
+            "Shitpost Overlord",
             "Basement Dweller",
             "Your Drunk Dad",
             "GPT-5 Schizo",

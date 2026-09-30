@@ -2249,7 +2249,7 @@ def _generate_chart_36(c, images):
 
 
 def _generate_chart_37(c, images):
-    # ── 37. Матрица Хайпа — 7×24 со стрелками тренда ────────────────────────
+    # ── 37. Матрица Форса — 7×24 со стрелками тренда ────────────────────────
     try:
         import numpy as _np
         now = time.time()
@@ -2294,7 +2294,7 @@ def _generate_chart_37(c, images):
         ax.set_facecolor('#0d1117')
 
         from matplotlib.colors import LinearSegmentedColormap
-        CMAP = LinearSegmentedColormap.from_list('hype', ['#0d1117','#003d20','#39d353','#80ffaa'])
+        CMAP = LinearSegmentedColormap.from_list('force_trend', ['#0d1117','#003d20','#39d353','#80ffaa'])
 
         for d in range(7):
             for h in range(24):
@@ -2324,7 +2324,7 @@ def _generate_chart_37(c, images):
         ax.set_yticks(range(7))
         ax.set_yticklabels(days_ru_s, fontsize=9)
         ax.set_xlabel('Час суток')
-        ax.set_title('37. Матрица Хайпа — активность 7×24 со стрелками тренда (▲▼ vs прошлые 2 нед)',
+        ax.set_title('37. Матрица Форса — активность 7×24 со стрелками тренда (▲▼ vs прошлые 2 нед)',
                      fontsize=12, fontweight='bold', color='#80ffaa')
         plt.tight_layout()
         save_chart(images, '37_hype_matrix.png')

@@ -320,14 +320,14 @@ CLOTHING_CATALOG = {
         "id": "feet_sneakers",
         "slot": "feet",
         "tier": 3,
-        "name": "👟 Тяги бархатные (Подкрадули)",
+        "name": "👟 Стоптанные берцы (Тяги битарда)",
         "price": 400,
         "duration_days": 30,
         "duration_hours": 720,
         "defense": 15,
         "toxicity": 10,
         "sanity": 20,
-        "desc": "Подкрадули на 30 дней. 30% шанс успешно сбежать при облаве пативэна /partyvan."
+        "desc": "Стоптанные берцы на 30 дней. 30% шанс успешно съебать при облаве пативэна /partyvan."
     }
 }
 
