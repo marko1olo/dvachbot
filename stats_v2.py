@@ -604,12 +604,12 @@ def generate_bayan_memetics_poster() -> io.BytesIO:
                     SUM(CASE WHEN content LIKE '%шкура%' THEN 1 ELSE 0 END) as alt,
                     SUM(CASE WHEN content LIKE '%база%' THEN 1 ELSE 0 END) as baza,
                     SUM(CASE WHEN content LIKE '%сояк%' THEN 1 ELSE 0 END) as soyak,
-                    SUM(CASE WHEN content LIKE '%сигма%' THEN 1 ELSE 0 END) as sigma
+                    SUM(CASE WHEN content LIKE '%ариец%' THEN 1 ELSE 0 END) as aryan
                 FROM Posts
                 WHERE timestamp > (strftime('%s', 'now') - 30 * 86400)
             """)
             slang_row = c.fetchone()
-            slang_words = ["сыч", "гойда", "шкура", "база", "сояк", "сигма"]
+            slang_words = ["сыч", "гойда", "шкура", "база", "сояк", "ариец"]
             if slang_row:
                 slang_counts = [
                     (slang_row['skuf'] or 0),
@@ -617,7 +617,7 @@ def generate_bayan_memetics_poster() -> io.BytesIO:
                     (slang_row['alt'] or 0),
                     (slang_row['baza'] or 0),
                     (slang_row['soyak'] or 0),
-                    (slang_row['sigma'] or 0)
+                    (slang_row['aryan'] or 0)
                 ]
             else:
                 slang_counts = [0, 0, 0, 0, 0, 0]
@@ -880,8 +880,8 @@ def run_db_sentiment_moderation_forensics(
             ai_reply_texts.append(raw)
 
         # Token sentiment scoring on AI replies
-        PRAISE_TOKENS = ["база", "сигма", "хорош", "гигачад", "красава", "увожение", "мощно", "годно", "гений"]
-        HOSTILITY_TOKENS = ["хуй", "бля", "пизд", "еба", "сояк", "шиз", "заткнись", "говно", "высер", "душный", "кринж"]
+        PRAISE_TOKENS = ["база", "ариец", "хорош", "гигачад", "красава", "увожение", "мощно", "годно", "гений"]
+        HOSTILITY_TOKENS = ["хуй", "бля", "пизд", "еба", "сояк", "шиз", "заткнись", "говно", "высер", "душный", "параша"]
         FEAR_TOKENS = ["страшно", "жесть", "пощади", "ужас", "ппц", "rip", "молчу"]
 
         ai_sentiment_counts = {"praise": 0, "hostility": 0, "fear": 0, "neutral": 0}
@@ -904,7 +904,7 @@ def run_db_sentiment_moderation_forensics(
         c.execute("""
             SELECT 
                 COUNT(*) as total_posts,
-                SUM(CASE WHEN content LIKE '%база%' OR content LIKE '%сигма%' OR content LIKE '%годно%' OR content LIKE '%топ%' THEN 1 ELSE 0 END) as positive_posts,
+                SUM(CASE WHEN content LIKE '%база%' OR content LIKE '%ариец%' OR content LIKE '%годно%' OR content LIKE '%топ%' THEN 1 ELSE 0 END) as positive_posts,
                 SUM(CASE WHEN content LIKE '%хуй%' OR content LIKE '%бля%' OR content LIKE '%пизд%' OR content LIKE '%еба%' THEN 1 ELSE 0 END) as toxic_posts,
                 SUM(CASE WHEN content LIKE '%казино%' OR content LIKE '%рулетка%' OR content LIKE '%кости%' OR content LIKE '%дуэль%' OR content LIKE '%джекпот%' THEN 1 ELSE 0 END) as pvp_posts,
                 SUM(CASE WHEN content LIKE '%подкрут%' OR content LIKE '%скам%' OR content LIKE '%наеб%' OR content LIKE '%слив%' THEN 1 ELSE 0 END) as scam_complaint_posts

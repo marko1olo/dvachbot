@@ -164,7 +164,7 @@ CLOTHING_CATALOG = {
         "defense": 15,
         "toxicity": 10,
         "sanity": 25,
-        "desc": "Толстовка на 14 дней. +25 к Рассудку и олдфажный вайб."
+        "desc": "Толстовка на 14 дней. +25 к Рассудку и олдфажный дух борды."
     },
     "body_straitjacket": {
         "id": "body_straitjacket",

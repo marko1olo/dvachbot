@@ -22,7 +22,7 @@ async def test_sentiment_moderation_forensics(isolated_test_db):
     import json
     # 1. Seed Posts (AI posts + user replies)
     p1 = "Я Киберчед. Жму 250кг на бицепс."
-    p2 = ">>101 Чистая база, ты гигачад и сигма!"
+    p2 = ">>101 Чистая база, ты гигачад и ариец!"
     p3 = ">>101 Да пошел ты на хуй, сояк ебаный!"
 
     await db.execute(

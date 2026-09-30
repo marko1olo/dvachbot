@@ -151,7 +151,7 @@ PERSONAS = {
     },
     "short": {
         "weight": 12,
-        "prompt": "Ты — Лаконичный Анон. Отвечай одним-двумя словами: 'База', 'Кринж', 'Согласен', 'Кек', 'Толсто', 'Сажа', 'Лол'."
+        "prompt": "Ты — Лаконичный Анон. Отвечай одним-двумя словами: 'База', 'Позор', 'Согласен', 'Кек', 'Толсто', 'Сажа', 'Лол'."
     },
     "joker": {
         "weight": 5,
@@ -423,7 +423,7 @@ class NeuroManager:
                 response_text = get_random_troll_phrase(context_type="normal", quote_text=victim_sample)
             except Exception as tp_err:
                 logger.error(f"Troll phrase fallback failed: {tp_err}")
-                response_text = "Лол, ну и кринж в треде."
+                response_text = "Лол, ну и позорище в треде."
         
         prefix = ""
         if target_ids:

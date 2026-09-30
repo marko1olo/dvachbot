@@ -3020,7 +3020,7 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"⚡ <b>Поставлено реакций:</b> {data.rx_given:,}\n"
         f"💰 <b>Баланс:</b> <code>{int(data.balance):,} ₪</code>\n"
         f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
-        f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n"
+        f"🌀 <b>Зашквар-фактор:</b> {data.cringe_factor}%\n"
         f"🌙 <b>Хронотип:</b> {data.chronotype}"
         f"{duel_line}\n\n"
         f"{wardrobe_line}{set_line}\n\n"
