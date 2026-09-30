@@ -9959,6 +9959,18 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
             except Exception:
                 pass
         asyncio.create_task(_do_duel_broadcast())
+        # Пуш-уведомление об открытом вызове в ЛС активным юзерам
+        try:
+            from event_push_engine import push_duel_open
+            spawn_task(push_duel_open(
+                bot=message.bot,
+                board_id=board_id,
+                challenger_anon_id=get_anon_id(user_id),
+                amount=amount,
+                exclude_uid=user_id,
+            ), name="push_duel_open")
+        except Exception:
+            pass
 
     try: await message.delete()
     except Exception: pass

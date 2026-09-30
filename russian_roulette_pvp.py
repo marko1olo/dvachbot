@@ -108,7 +108,17 @@ RR_CLICK_PHRASES = [
     "💨 <b>ЩЁЛК!</b> Не в этот раз ({cur_ch}/6)! Анон [ID:{user_anon}] выжил, а в барабане остаётся всё меньше шансов!",
     "💨 <b>ЩЁЛК!</b> Камора {cur_ch}/6 пуста! Анон [ID:{user_anon}] услышал свист в ушах, но пуля осталась в барабане.",
     "💨 <b>ЩЁЛК!</b> Боёк щёлкнул в пустоту ({cur_ch}/6)! Анон [ID:{user_anon}] жив, а градус шизы в дуэли пробил потолок!",
-    "💨 <b>ЩЁЛК!</b> Барабан {cur_ch}/6 пуст! Анон [ID:{user_anon}] оттянул неизбежное. Ход переходит оппоненту."
+    "💨 <b>ЩЁЛК!</b> Барабан {cur_ch}/6 пуст! Анон [ID:{user_anon}] оттянул неизбежное. Ход переходит оппоненту.",
+    "Щёлк! Твоя тупая бошка пока цела, анон.",
+    "Щёлк. Повезло тебе, кусок говна, пули нет.",
+    "Щёлк! Очко сжалось, да? Живи пока, хуесос.",
+    "Осечка. Жаль, я уже хотел посмотреть на твои разлетевшиеся мозги.",
+    "Щёлк, сука! Сегодня не твой день помирать.",
+    "Пусто! Продолжаем рулетку для долбаёбов.",
+    "Щёлк! Ты чуть не обосрался, признайся.",
+    "Барабан прокрутился, пули нет. Давай дальше, омежка.",
+    "Пока живешь, пидораха. Но это ненадолго.",
+    "Щёлк! Пиздец тебе везет. Но пуля-то там есть."
 ]
 
 RR_SHOT_PHRASES = [
@@ -149,7 +159,17 @@ RR_SHOT_PHRASES = [
     "💥 <b>ГРОМОВЫЙ РАСКАТ В ТРЕДЕ!</b> Анон [ID:{lose_anon}] на {cur_ch}-й каморе расплескал остатки интеллекта по всей комнате!",
     "💀 <b>ПРОБИТИЕ БРОНИ!</b> Свинец прошил лоб анона [ID:{lose_anon}] на {cur_ch}-й каморе. Финита ля комедия, сычура!",
     "💥 <b>БАХ! ТУШИТЕ СВЕТ!</b> На {cur_ch}-й каморе пуля поставила точку. Анон [ID:{lose_anon}] падает мордой в грязь!",
-    "💀 <b>РАЗЛЁТ ОСКОЛКОВ КОСТИ!</b> Анон [ID:{lose_anon}] словил ваншот на {cur_ch}-й каморе. Абу довольно потирает руки!"
+    "💀 <b>РАЗЛЁТ ОСКОЛКОВ КОСТИ!</b> Анон [ID:{lose_anon}] словил ваншот на {cur_ch}-й каморе. Абу довольно потирает руки!",
+    "БАМ! БЛЯТЬ! Мозги этого хуесоса теперь на стенке!",
+    "ВЫСТРЕЛ! Отвал башки, в прямом смысле. Прощай, лох.",
+    "БАБАХ! Минус один говноед на борде. Земля стекловатой.",
+    "БДЫЩ! Кровь, кишки, распидорасило! Красота!",
+    "Выстрел! Череп в щепки. Бабки уходят выжившему.",
+    "БАМ! Откинулся, как последний попущ.",
+    "Шмяк. Это звук твоих мозгов, падающих на пол. Труп.",
+    "БЛЯ, ПРЯМ В ЛОБ! Смачный выстрел, минус даун.",
+    "БАХ! Сычу оторвало пол-ебала. Победитель лутает шекели.",
+    "Минус омежка. Изи бабки для выжившего альфы."
 ]
 
 RR_TIMEOUT_COWARD_PHRASES = [
@@ -184,7 +204,14 @@ RR_TIMEOUT_COWARD_PHRASES = [
     "💩 <b>ЖАЛКИЙ СЛИВ БЕЗ БОЯ!</b> 120 секунд позора для анона [ID:{lose_anon}]. Шекели у победителя, а трусу достаётся МУТ НА 30 МИНУТ!",
     "🐔 <b>ДУХ ОМЕЖКИ СЛОМЛЕН!</b> Анон [ID:{lose_anon}] застыл на 120 секунд в позе эмбриона! 🔇 Лови клеймо труса и МУТ НА 30 МИНУТ!",
     "💩 <b>ОПОЗОРИЛСЯ НА ВСЮ БОРДУ!</b> 120 секунд анон [ID:{lose_anon}] тряс губами от ужаса! Авто-луз и МУТ НА 30 МИНУТ!",
-    "🐔 <b>РЕКОРД ТРУСОСТИ!</b> Анон [ID:{lose_anon}] терпел 120 секунд и в итоге обосрался без единого выстрела! 🔇 МУТ НА 30 МИНУТ!"
+    "🐔 <b>РЕКОРД ТРУСОСТИ!</b> Анон [ID:{lose_anon}] терпел 120 секунд и в итоге обосрался без единого выстрела! 🔇 МУТ НА 30 МИНУТ!",
+    "Обосрался от страха и не выстрелил. Слит по тайм-ауту.",
+    "Ссыкло тупо не нажало курок. Позор, блять, и минус шекели.",
+    "Уснул с пистолетом у виска? Хуесос. Бабки переходят победителю.",
+    "Тайм-аут! Трясущиеся ручки не смогли спустить курок.",
+    "Даже застрелиться сам не может, ну что за биомусор.",
+    "Отвис, ливнул, зассал. Типичный куколд.",
+    "Время вышло. Бабки изъяты, трус опущен."
 ]
 
 RR_SURRENDER_PHRASES = [
@@ -215,7 +242,12 @@ RR_SURRENDER_PHRASES = [
     "🏳️ <b>ПОЗОРНАЯ СДАЧА!</b> Анон [ID:{lose_anon}] предпочёл жить омегой, чем умереть героем. Банк слит всухую!",
     "😭 <b>СЫЧИК СДАЛСЯ!</b> Анон [ID:{lose_anon}] вытер нос рукавом и выбросил белый флаг. Тред смеётся над тобой!",
     "🏳️ <b>БЕГСТВО С ДУЭЛИ!</b> Анон [ID:{lose_anon}] нажал капитуляцию, спасая свою никчемную жизнь от револьвера!",
-    "💩 <b>СДАЛСЯ СО СТРАХУ!</b> Анон [ID:{lose_anon}] понял, что смерть дышит в затылок, и позорно капитулировал!"
+    "💩 <b>СДАЛСЯ СО СТРАХУ!</b> Анон [ID:{lose_anon}] понял, что смерть дышит в затылок, и позорно капитулировал!",
+    "Кинул ствол и сбежал. Ору, какое же ты чмо.",
+    "Сдался, лох! Бабки уходят бате.",
+    "Обосрался прямо в штаны и нажал «сдаться». Позорник.",
+    "Не выдержал давления, кусок говна.",
+    "Умолял о пощаде и отдал бабки. Типикал."
 ]
 
 
@@ -645,95 +677,61 @@ async def start_active_rr_game_screens(
             if p2_old and (chat_id, msg_id) == p2_old:
                 continue
             await safe_edit_rr_message(bot, chat_id, msg_id, spectator_text, reply_markup=None)
-        game["broadcast_msgs"] = []
-
-    # 2. Update players' old challenge messages so they know to look at the new message below
-    player_old_text = "💀 <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\nСвежий револьвер отправлен новым сообщением вниз чата ⬇️"
-    if p1_old:
-        await safe_edit_rr_message(bot, p1_old[0], p1_old[1], player_old_text, reply_markup=None)
-    if p2_old and p2_old != p1_old:
-        await safe_edit_rr_message(bot, p2_old[0], p2_old[1], player_old_text, reply_markup=None)
-
-    # 3. Send new fresh banner message(s) to the bottom of the chat
+    # 2. Update players' active game messages directly so buttons are NEVER lost!
     game_text = format_rr_game_message(game)
     game_id = game["game_id"]
     turn = game.get("turn")
     turn_anon = get_anon_id(turn)
 
-    # If both players are in the same chat (e.g. group):
-    if p1_old and p2_old and p1_old[0] == p2_old[0]:
+    is_shared = bool(p1_old and p2_old and p1_old[0] == p2_old[0])
+
+    if is_shared:
         target_chat = p1_old[0]
         kb = get_rr_game_keyboard(game_id, is_finished=False, is_my_turn=True, is_shared_chat=True, turn_anon=turn_anon)
-        sent_msg = await send_banner_message(
-            bot=bot,
-            chat_id=target_chat,
-            caption=game_text,
-            reply_markup=kb,
-            category="russian_roulette",
-            parse_mode="HTML"
-        )
-        if not sent_msg:
-            try:
-                sent_msg = await bot.send_message(
-                    chat_id=target_chat,
-                    text=game_text,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-        if sent_msg:
-            player_msgs[p1] = (target_chat, sent_msg.message_id)
-            player_msgs[p2] = (target_chat, sent_msg.message_id)
-            game["chat_id"] = target_chat
-            game["msg_id"] = sent_msg.message_id
+        # Edit existing card in place so buttons appear instantly
+        edited = await safe_edit_rr_message(bot, p1_old[0], p1_old[1], game_text, reply_markup=kb)
+        if edited:
+            player_msgs[p1] = p1_old
+            player_msgs[p2] = p1_old
+            game["chat_id"] = p1_old[0]
+            game["msg_id"] = p1_old[1]
+        else:
+            # Fallback send fresh
+            sent_msg = await send_banner_message(bot=bot, chat_id=target_chat, caption=game_text, reply_markup=kb, category="russian_roulette", parse_mode="HTML")
+            if not sent_msg:
+                try:
+                    sent_msg = await bot.send_message(chat_id=target_chat, text=game_text, reply_markup=kb, parse_mode="HTML")
+                except Exception:
+                    pass
+            if sent_msg:
+                player_msgs[p1] = (target_chat, sent_msg.message_id)
+                player_msgs[p2] = (target_chat, sent_msg.message_id)
+                game["chat_id"] = target_chat
+                game["msg_id"] = sent_msg.message_id
     else:
-        # Separate direct chats (DMs)
-        # P1 (Challenger)
+        # Separate locations (e.g. personal DMs or distinct chats)
         kb_p1 = get_rr_game_keyboard(game_id, is_finished=False, is_my_turn=(p1 == turn))
-        sent_p1 = await send_banner_message(
-            bot=bot,
-            chat_id=p1,
-            caption=game_text,
-            reply_markup=kb_p1,
-            category="russian_roulette",
-            parse_mode="HTML"
-        )
-        if not sent_p1:
-            try:
-                sent_p1 = await bot.send_message(
-                    chat_id=p1,
-                    text=game_text,
-                    reply_markup=kb_p1,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-        if sent_p1:
-            player_msgs[p1] = (p1, sent_p1.message_id)
-
-        # P2 (Opponent)
         kb_p2 = get_rr_game_keyboard(game_id, is_finished=False, is_my_turn=(p2 == turn))
-        sent_p2 = await send_banner_message(
-            bot=bot,
-            chat_id=p2,
-            caption=game_text,
-            reply_markup=kb_p2,
-            category="russian_roulette",
-            parse_mode="HTML"
-        )
-        if not sent_p2:
-            try:
-                sent_p2 = await bot.send_message(
-                    chat_id=p2,
-                    text=game_text,
-                    reply_markup=kb_p2,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-        if sent_p2:
-            player_msgs[p2] = (p2, sent_p2.message_id)
+
+        # Directly update P1's card in place
+        if p1_old:
+            p1_edited = await safe_edit_rr_message(bot, p1_old[0], p1_old[1], game_text, reply_markup=kb_p1)
+            if p1_edited:
+                player_msgs[p1] = p1_old
+            else:
+                sent_p1 = await send_banner_message(bot=bot, chat_id=p1_old[0], caption=game_text, reply_markup=kb_p1, category="russian_roulette", parse_mode="HTML")
+                if sent_p1:
+                    player_msgs[p1] = (p1_old[0], sent_p1.message_id)
+
+        # Directly update P2's card in place
+        if p2_old:
+            p2_edited = await safe_edit_rr_message(bot, p2_old[0], p2_old[1], game_text, reply_markup=kb_p2)
+            if p2_edited:
+                player_msgs[p2] = p2_old
+            else:
+                sent_p2 = await send_banner_message(bot=bot, chat_id=p2_old[0], caption=game_text, reply_markup=kb_p2, category="russian_roulette", parse_mode="HTML")
+                if sent_p2:
+                    player_msgs[p2] = (p2_old[0], sent_p2.message_id)
 
 
 async def sync_rr_screens(bot: Any, game: Dict[str, Any], last_action_text: Optional[str] = None):
@@ -1552,7 +1550,19 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None = No
             pass
     import asyncio
     asyncio.create_task(_do_broadcast())
-
+    # Пуш-уведомление об открытом столе рулетки в ЛС (только при открытом вызове)
+    if target_id is None:
+        try:
+            from event_push_engine import push_rr_open
+            asyncio.create_task(push_rr_open(
+                bot=message.bot,
+                board_id=board_id,
+                challenger_anon_id=get_anon_id(user_id),
+                bet=bet,
+                exclude_uid=user_id,
+            ))
+        except Exception:
+            pass
 
 # -----------------------------------------------------------------------------
 # CALLBACK QUERY HANDLERS
@@ -1695,7 +1705,7 @@ async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = Non
         opponent_chat_id=opp_chat_id,
         opponent_msg_id=opp_msg_id
     )
-    await callback.answer("⚔️ Дуэль началась! Свежий револьвер отправлен вниз чата ⬇️")
+    await callback.answer("⚔️ Дуэль началась! Стреляй, если твой ход!", show_alert=False)
 
 
 @rr_router.callback_query(F.data.startswith("rr_decline:"))

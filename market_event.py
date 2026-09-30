@@ -251,6 +251,38 @@ async def market_event_generator():
                     })
 
             runtime_logger.info(f"Market event generated: {event_text}")
+
+            # Пуш-уведомления об обновлении черного рынка в ЛС активным юзерам
+            try:
+                from event_push_engine import push_market_event
+                b_bot = None
+                for bid, bots_dict in [(b, None) for b in BOARDS]:
+                    pass
+                # Берём бота для /b/ или первого доступного
+                try:
+                    from shared_state import GLOBAL_BOTS
+                    b_bot = GLOBAL_BOTS.get('b') or (next(iter(GLOBAL_BOTS.values())) if GLOBAL_BOTS else None)
+                except Exception:
+                    pass
+                if b_bot:
+                    for push_board_id in BOARDS:
+                        try:
+                            board_bot = None
+                            try:
+                                from shared_state import GLOBAL_BOTS as _GB
+                                board_bot = _GB.get(push_board_id) or b_bot
+                            except Exception:
+                                board_bot = b_bot
+                            asyncio.create_task(push_market_event(
+                                bot=board_bot,
+                                board_id=push_board_id,
+                                event_text=event_text,
+                            ))
+                        except Exception:
+                            pass
+            except Exception as push_err:
+                runtime_logger.debug(f"Market event push failed: {push_err}")
+
             await asyncio.sleep(120)
 
         except Exception as e:

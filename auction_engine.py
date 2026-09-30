@@ -289,6 +289,28 @@ async def cmd_raid_oligarch(message: types.Message):
         reply_markup=kb
     )
 
+    # Пуш-уведомление о начале рейда активным юзерам доски
+    try:
+        from event_push_engine import push_raid_oligarch
+        from common.anon_identity import get_anon_id
+        from common.database import get_user_global_balance as _get_bal
+        db_push = await get_pool()
+        oligarch_bal = 0
+        if target_id:
+            oligarch_bal = int(await _get_bal(db_push, target_id))
+        oligarch_anon = get_anon_id(target_id) if target_id else "???"
+        potential_loot = min(int(oligarch_bal * 0.10 * 0.30), 60000)
+        asyncio.create_task(push_raid_oligarch(
+            bot=message.bot,
+            board_id=board_id,
+            oligarch_anon_id=oligarch_anon,
+            oligarch_balance=oligarch_bal,
+            potential_loot=potential_loot,
+            exclude_uid=user_id,
+        ))
+    except Exception:
+        pass
+
 
 @auction_router.callback_query(F.data.startswith("raid_join_"))
 async def cb_raid_join(callback: types.CallbackQuery):
