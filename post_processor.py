@@ -18,7 +18,7 @@ import aiohttp
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from common.task_manager import spawn_task
-from common.database import update_post_content, add_channel_copy, create_post, get_stream_active_users, process_mentions_and_notify
+from common.database import update_post_content, add_channel_copy, create_post, get_stream_active_users, process_mentions_and_notify, add_post_copies
 
 from text_assets import VERIFICATION_SUCCESS_MESSAGES
 from shared_state import *
@@ -93,6 +93,7 @@ class NewPostContext:
     reply_to_post: int | None
     is_shadow_muted: bool
     stream: str = 'ru'
+    reply_to_message_id: int | None = None
 
 class NewPostProcessor:
     def __init__(self, context: NewPostContext):
@@ -103,12 +104,13 @@ class NewPostProcessor:
         self.reply_to_post = context.reply_to_post
         self.is_shadow_muted = context.is_shadow_muted
         self.stream = context.stream
+        self.reply_to_message_id = context.reply_to_message_id
 
         self.b_data = board_data.get(self.board_id, {})
         self.current_post_num = None
         self.thread_id = None
         self.recipients = set()
-        self.reply_info_for_author = {}
+        self.reply_info_for_author = {self.user_id: self.reply_to_message_id} if (self.reply_to_message_id and self.user_id > 0) else {}
         self.author_content = {}
         self.final_content = {}
         self.image_bytes_to_send = None
@@ -507,6 +509,8 @@ class NewPostProcessor:
                     for m in messages_to_process if m is not None
                 ]
                 messages_to_save = messages_to_process
+                if author_message_ids_to_archive and self.user_id > 0:
+                    spawn_task(add_post_copies(self.current_post_num, [(self.user_id, mid) for mid in author_message_ids_to_archive]))
                 async with storage_lock:
                     stored = messages_storage.get(self.current_post_num)
                     if stored is not None:
@@ -728,7 +732,8 @@ async def process_new_post(params: shared_state.NewPostParams) -> int | None:
         content=params.content,
         reply_to_post=params.reply_to_post,
         is_shadow_muted=params.is_shadow_muted,
-        stream=params.stream
+        stream=params.stream,
+        reply_to_message_id=getattr(params, 'reply_to_message_id', None)
     )
     processor = NewPostProcessor(context)
     return await processor.execute()

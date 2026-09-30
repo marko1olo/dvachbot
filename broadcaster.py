@@ -464,7 +464,8 @@ class MessageBroadcaster:
                 db_copies = await get_post_copies(self.post_num_for_replies)
                 if db_copies:
                     for rec_id, msg_id in db_copies:
-                        self.db_replies_map[rec_id] = msg_id
+                        if rec_id not in self.db_replies_map:
+                            self.db_replies_map[rec_id] = msg_id
                     async with storage_lock:
                         p_map = post_to_messages.setdefault(self.post_num_for_replies, {})
                         for rec_id, msg_id in db_copies:
@@ -1251,8 +1252,9 @@ class MessageBroadcaster:
                 return res
             if ct in ['sticker', 'video_note', 'dice']:
                 text_result = await _send_plain_text_parts(reason, plain_text)
+                media_res = None
                 if ct == 'dice':
-                    await self.bot_instance.send_dice(
+                    media_res = await self.bot_instance.send_dice(
                         chat_id=uid,
                         emoji=current_content.get('dice_emoji', '🎲'),
                         disable_notification=is_sage,
@@ -1260,13 +1262,20 @@ class MessageBroadcaster:
                     )
                 elif current_content.get("file_id"):
                     send_method = getattr(self.bot_instance, f"send_{ct}")
-                    await send_method(
+                    media_res = await send_method(
                         chat_id=uid,
                         **{ct: current_content.get("file_id")},
                         disable_notification=is_sage,
                         request_timeout=request_timeout,
                     )
-                return text_result
+                combined = []
+                if isinstance(text_result, list):
+                    combined.extend(text_result)
+                elif text_result:
+                    combined.append(text_result)
+                if media_res:
+                    combined.append(media_res)
+                return combined if combined else text_result
             return await _send_plain_text_parts(reason, plain_text)
         
         for attempt in range(max_attempts):

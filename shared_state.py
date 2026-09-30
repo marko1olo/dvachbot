@@ -658,7 +658,7 @@ class BoundedDict(OrderedDict):
 
 
 BOT_MESSAGES_STORAGE_LIMIT = int(os.getenv("BOT_MESSAGES_STORAGE_LIMIT", "12000"))
-BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "15000"))
+BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
 messages_storage = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
 post_to_messages = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
 message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
@@ -836,6 +836,7 @@ class NewPostParams:
     reply_to_post: int | None
     is_shadow_muted: bool
     stream: str = 'ru'
+    reply_to_message_id: int | None = None
 
 STOP_WORDS = set([
     'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 

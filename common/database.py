@@ -1412,6 +1412,34 @@ async def get_post_info_by_copy(recipient_id: int, message_id: int) -> tuple[int
                         if result:
                             return (result[0], result[1])
 
+            # 4. Фолбэк на поиск по message_id в PostCopies (Tier-5 fallback с использованием индекса idx_postcopies_message_id)
+            query_pc_mid = """
+                SELECT p.post_num, p.author_id
+                FROM Posts p
+                JOIN PostCopies pc ON p.post_num = pc.post_num
+                WHERE pc.message_id = ?
+                ORDER BY p.post_num DESC
+                LIMIT 1
+            """
+            async with db.execute(query_pc_mid, (message_id,)) as cursor:
+                result = await cursor.fetchone()
+                if result:
+                    return (result[0], result[1])
+
+            # 5. Фолбэк на поиск по message_id в ChannelCopies
+            query_cc_mid = """
+                SELECT p.post_num, p.author_id
+                FROM Posts p
+                JOIN ChannelCopies cc ON p.post_num = cc.post_num
+                WHERE cc.message_id = ?
+                ORDER BY p.post_num DESC
+                LIMIT 1
+            """
+            async with db.execute(query_cc_mid, (message_id,)) as cursor:
+                result = await cursor.fetchone()
+                if result:
+                    return (result[0], result[1])
+
             return None
     except Exception:
         return None
@@ -7299,7 +7327,20 @@ async def find_post_by_file_id(file_id_substring: str) -> dict | None:
         async with db.execute(query, (file_id_substring, file_id_substring)) as cursor:
             row = await cursor.fetchone()
             
+        if not row:
+            # Fallback к поиску по JSON content в Posts (для постов до миграции PostFiles)
+            query_fallback = """
+                SELECT post_num, board_id, author_id, content, timestamp 
+                FROM Posts 
+                WHERE content LIKE ?
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            """
+            async with db.execute(query_fallback, (f"%{file_id_substring}%",)) as cursor:
+                row = await cursor.fetchone()
+
         if row:
+            import json
             return {
                 'id': row[0],
                 'board_id': row[1],

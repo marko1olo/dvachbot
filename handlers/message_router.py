@@ -24,7 +24,8 @@ from common.html_utils import escape_html
 from common.text_utils import clean_html_tags, sanitize_html
 from common.database import (
     get_post_by_num, update_post_content, get_pool, get_max_post_num,
-    add_or_activate_user, update_shadow_mute, deduct_user_global_balance, add_user_global_balance
+    add_or_activate_user, update_shadow_mute, deduct_user_global_balance, add_user_global_balance,
+    find_post_by_file_id
 )
 from common.db_pool import db_lock
 from common.spam_filter import _check_cross_board_spam, check_rate_limit as _check_rate_limit
@@ -113,6 +114,130 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
         return resolved_post_num, cleaned_text
         
     return None, text
+
+async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = None) -> int | None:
+    """
+    5-уровневый отказоустойчивый резолвер reply_to_post:
+    1. RAM кэш message_to_post
+    2. Поиск в SQLite PostCopies и ChannelCopies по точному (chat_id, message_id)
+    2.5. Поиск по forward_from_chat / forward_from_message_id
+    3. Парсинг заголовка / невидимых zero-width метаданных сообщения
+    4. Поиск по file_id / file_unique_id медиа (кружочки video_note, стикеры, фото без текста)
+    5. Глобальный поиск в PostCopies / ChannelCopies по message_id (индекс idx_postcopies_message_id)
+    При нахождении: кэширует в RAM и гарантирует наличие parent_post в messages_storage.
+    """
+    if not reply_msg:
+        return None
+
+    c_id = chat_id or (reply_msg.chat.id if reply_msg.chat else None)
+    mid = reply_msg.message_id
+    reply_to_post = None
+
+    # Tier 1: Fast RAM lookup
+    if c_id:
+        async with storage_lock:
+            reply_to_post = message_to_post.get((c_id, mid))
+    if not reply_to_post and reply_msg.from_user:
+        async with storage_lock:
+            reply_to_post = message_to_post.get((reply_msg.from_user.id, mid))
+
+    # Tier 2: Database lookup by copy (PostCopies and ChannelCopies)
+    if not reply_to_post and c_id:
+        info = await get_post_info_by_copy(c_id, mid)
+        if info:
+            reply_to_post = info[0]
+
+    if not reply_to_post and reply_msg.from_user:
+        info = await get_post_info_by_copy(reply_msg.from_user.id, mid)
+        if info:
+            reply_to_post = info[0]
+
+    # Tier 2.5: Forwarded message copy lookup
+    if not reply_to_post:
+        fwd_chat = getattr(reply_msg, 'forward_from_chat', None)
+        fwd_mid = getattr(reply_msg, 'forward_from_message_id', None)
+        if fwd_chat and fwd_mid:
+            info = await get_post_info_by_copy(fwd_chat.id, fwd_mid)
+            if info:
+                reply_to_post = info[0]
+
+    # Tier 3: Text / Caption / Invisible Zero-Width metadata extraction
+    if not reply_to_post:
+        from post_helpers import extract_post_num_from_message
+        p_num = extract_post_num_from_message(reply_msg)
+        if p_num and await get_post_by_num(p_num):
+            reply_to_post = p_num
+
+    # Tier 4: Media file_id / file_unique_id lookup (video_note, sticker, photo, etc.)
+    if not reply_to_post:
+        candidate_fids = []
+        for attr in ('video_note', 'sticker', 'photo', 'video', 'animation', 'document', 'voice', 'audio'):
+            val = getattr(reply_msg, attr, None)
+            if not val:
+                continue
+            if isinstance(val, list):
+                for item in val:
+                    fid = getattr(item, 'file_id', None)
+                    if fid: candidate_fids.append(fid)
+                    fuid = getattr(item, 'file_unique_id', None)
+                    if fuid: candidate_fids.append(fuid)
+            else:
+                fid = getattr(val, 'file_id', None)
+                if fid: candidate_fids.append(fid)
+                fuid = getattr(val, 'file_unique_id', None)
+                if fuid: candidate_fids.append(fuid)
+                thumb = getattr(val, 'thumbnail', None) or getattr(val, 'thumb', None)
+                if thumb:
+                    tfid = getattr(thumb, 'file_id', None)
+                    if tfid: candidate_fids.append(tfid)
+                    tfuid = getattr(thumb, 'file_unique_id', None)
+                    if tfuid: candidate_fids.append(tfuid)
+        for cfid in candidate_fids:
+            p_data = await find_post_by_file_id(cfid)
+            if p_data and p_data.get('id'):
+                reply_to_post = p_data['id']
+                break
+
+    # Tier 5: Global message_id fallback in PostCopies / ChannelCopies
+    if not reply_to_post and mid:
+        info = await get_post_info_by_copy(0, mid)
+        if info:
+            reply_to_post = info[0]
+
+    # Post-resolution: cache in RAM and ensure messages_storage is hydrated from SQLite
+    if reply_to_post:
+        async with storage_lock:
+            if c_id:
+                message_to_post[(c_id, mid)] = reply_to_post
+            if reply_msg.from_user:
+                message_to_post[(reply_msg.from_user.id, mid)] = reply_to_post
+            in_storage = reply_to_post in messages_storage
+        if not in_storage:
+            parent_post = await get_post_by_num(reply_to_post)
+            if parent_post:
+                c_data = parent_post.get('content')
+                if isinstance(c_data, str):
+                    try:
+                        import json
+                        c_data = json.loads(c_data)
+                    except Exception:
+                        c_data = {}
+                ts_val = parent_post.get('timestamp')
+                dt_val = datetime.fromtimestamp(ts_val, tz=UTC) if isinstance(ts_val, (int, float)) else ts_val
+                async with storage_lock:
+                    if reply_to_post not in messages_storage:
+                        messages_storage[reply_to_post] = {
+                            "author_id": parent_post.get("author_id"),
+                            "timestamp": dt_val or datetime.now(UTC),
+                            "content": c_data or {},
+                            "board_id": parent_post.get("board_id"),
+                            "thread_id": parent_post.get("thread_id"),
+                            "reply_to_post_num": parent_post.get("reply_to_post_num"),
+                            "chain_depth": 0
+                        }
+
+    return reply_to_post
+
 from bot_helpers import is_admin, _get_msg_content_and_type
 from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level, SPAM_RULES, _check_repeats
 from text_assets import (
@@ -1192,7 +1317,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     content=content,
                     reply_to_post=post_num_to_reply,
                     is_shadow_muted=False,
-                    stream=stream
+                    stream=stream,
+                    reply_to_message_id=message.reply_to_message.message_id if (message.reply_to_message and i == 0) else None
                 ))
                 if post_num:
                     if text_chunk and board_id != 'trash' and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
@@ -1274,53 +1400,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     except TelegramBadRequest: pass
     reply_to_post = None
     if message.reply_to_message:
-        lookup_key = (message.chat.id, message.reply_to_message.message_id)
-        async with storage_lock:
-            reply_to_post = message_to_post.get(lookup_key)
-        if not reply_to_post:
-            info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-            if info:
-                reply_to_post = info[0]
-                async with storage_lock:
-                    message_to_post[lookup_key] = reply_to_post
-        if not reply_to_post:
-            from post_helpers import extract_post_num_from_message
-            potential_id = extract_post_num_from_message(message.reply_to_message)
-            if potential_id and await get_post_by_num(potential_id):
-                reply_to_post = potential_id
-                async with storage_lock:
-                    message_to_post[lookup_key] = reply_to_post
-                try:
-                    print(f"👀 ID #{reply_to_post} восстановлен через заголовок/метаданные сообщения!")
-                except Exception:
-                    pass
-
-    if reply_to_post:
-        # Динамическое подтягивание из БД в RAM при ответе на старый/вытесненный пост
-        async with storage_lock:
-            in_storage = reply_to_post in messages_storage
-        if not in_storage:
-            parent_post = await get_post_by_num(reply_to_post)
-            if parent_post:
-                c_data = parent_post.get('content')
-                if isinstance(c_data, str):
-                    try:
-                        import json
-                        c_data = json.loads(c_data)
-                    except Exception:
-                        c_data = {}
-                ts_val = parent_post.get('timestamp')
-                dt_val = datetime.fromtimestamp(ts_val, tz=UTC) if isinstance(ts_val, (int, float)) else ts_val
-                async with storage_lock:
-                    if reply_to_post not in messages_storage:
-                        messages_storage[reply_to_post] = {
-                            "author_id": parent_post.get("author_id"),
-                            "timestamp": dt_val or datetime.now(UTC),
-                            "content": c_data or {},
-                            "board_id": parent_post.get("board_id"),
-                            "thread_id": parent_post.get("thread_id"),
-                            "reply_to_post_num": parent_post.get("reply_to_post_num"),
-                        }
+        reply_to_post = await resolve_reply_from_message(message.reply_to_message, message.chat.id)
     is_fwd_bot = is_forwarded_from_bot(message, message.bot)
     is_fwd_msg = is_forward_message(message)
     is_forward = is_fwd_bot or is_fwd_msg
@@ -1425,7 +1505,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             content=content,
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
-            stream=stream
+            stream=stream,
+            reply_to_message_id=message.reply_to_message.message_id if message.reply_to_message else None
         ))
         if post_num and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
             is_music = (message.content_type == 'audio') or (message.content_type == 'document' and is_music_document(message.document))
@@ -1846,18 +1927,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
 
             reply_to_post = None
             if message.reply_to_message:
-                async with storage_lock:
-                    lookup_key = (message.chat.id, message.reply_to_message.message_id)
-                    reply_to_post = message_to_post.get(lookup_key)
-                if not reply_to_post:
-                    info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-                    if info:
-                        reply_to_post = info[0]
-                if not reply_to_post:
-                    from post_helpers import extract_post_num_from_message
-                    p_id = extract_post_num_from_message(message.reply_to_message)
-                    if p_id and await get_post_by_num(p_id):
-                        reply_to_post = p_id
+                reply_to_post = await resolve_reply_from_message(message.reply_to_message, message.chat.id)
             raw_caption_html = getattr(message, 'caption_html_text', message.caption or "")
             safe_caption_html = sanitize_html(raw_caption_html)
             is_fwd_group = is_forwarded_from_bot(message, message.bot) or is_forward_message(message)
@@ -1878,7 +1948,8 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                 'board_id': board_id, 'author_id': user_id, 'stream': stream,
                 'timestamp': datetime.now(UTC), 'raw_messages':[], 'caption': safe_caption_html,
                 'reply_to_post': reply_to_post, 'processed_messages': set(),
-                'source_message_ids': set()
+                'source_message_ids': set(),
+                'reply_to_message_id': message.reply_to_message.message_id if message.reply_to_message else None
             })
             group.pop('is_initializing', None)
         except Exception as _mg_init_exc:

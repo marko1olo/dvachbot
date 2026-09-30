@@ -1675,7 +1675,8 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             content=content,
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
-            stream=stream
+            stream=stream,
+            reply_to_message_id=group.get('reply_to_message_id')
         ))
         if i == 0:
             first_post_num = post_num
