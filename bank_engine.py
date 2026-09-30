@@ -9,6 +9,7 @@ robbery safe insulation, fee/penalty calculations, and user bank portfolio summa
 import json
 import logging
 import math
+import os
 import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -379,7 +380,7 @@ async def create_bank_deposit(
     now = time.time()
     locked_until = now + float(tier_info["lockup_seconds"])
 
-    MAX_ACTIVE_DEPOSITS_PER_USER = 15
+    MAX_ACTIVE_DEPOSITS_PER_USER = int(os.getenv("BOT_MAX_ACTIVE_DEPOSITS", "100"))
     async with db.execute(
         "SELECT COUNT(*) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
         (user_id,)
@@ -388,7 +389,7 @@ async def create_bank_deposit(
         active_count = row[0] if row and row[0] is not None else 0
 
     if active_count >= MAX_ACTIVE_DEPOSITS_PER_USER:
-        return False, None, f"Достигнут лимит активных вкладов ({MAX_ACTIVE_DEPOSITS_PER_USER} шт). Снимите старые вклады перед открытием новых."
+        return False, None, f"Достигнут лимит активных вкладов ({active_count}/{MAX_ACTIVE_DEPOSITS_PER_USER} шт). Снимите старые вклады перед открытием новых."
 
     async with db_transaction(db):
         ok, _ = await deduct_user_global_balance(db, user_id, b_id, amount)
@@ -1329,9 +1330,39 @@ async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | N
     if nav_row:
         kb_rows.append(nav_row)
 
+    # Кнопка пакетного снятия всех готовых вкладов
+    ready_count = sum(1 for d in deposits if not d["is_locked"])
+    if ready_count > 1:
+        kb_rows.append([InlineKeyboardButton(text=f"⚡ Снять все доступные ({ready_count} шт)", callback_data="bank_withdraw_all_ready")])
+
     kb_rows.append([InlineKeyboardButton(text="⬅️ Главная Банка", callback_data="bank_main_hub")])
     await _render_bank_view(callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows), category="bank")
     await callback.answer()
+
+
+@bank_router.callback_query(F.data == "bank_withdraw_all_ready")
+async def cb_bank_withdraw_all_ready(callback: types.CallbackQuery, board_id: str | None = None):
+    """Пакетное снятие всех разблокированных депозитов без штрафов."""
+    b_id = board_id or "b"
+    user_id = callback.from_user.id
+    db = await get_pool()
+    total_p, total_a, deposits = await get_user_bank_summary(db, user_id)
+    ready_deposits = [d for d in deposits if not d["is_locked"]]
+
+    if not ready_deposits:
+        await callback.answer("У вас нет готовых к снятию вкладов без штрафа.", show_alert=True)
+        return
+
+    total_withdrawn = 0.0
+    withdrawn_cnt = 0
+    for d in ready_deposits:
+        ok, payout, principal, interest, fee, is_def, err = await withdraw_bank_deposit(db, d["id"], user_id, b_id)
+        if ok:
+            total_withdrawn += payout
+            withdrawn_cnt += 1
+
+    await callback.answer(f"✅ Успешно снято {withdrawn_cnt} вкладов на сумму {total_withdrawn:,.2f} ₪!", show_alert=True)
+    await cb_bank_withdraw_menu(callback, board_id)
 
 
 @bank_router.callback_query(F.data.startswith("bank_withdraw_sel:"))

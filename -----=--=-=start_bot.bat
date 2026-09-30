@@ -1,4 +1,9 @@
 @echo off
+if not defined CONHOST_WRAPPED (
+    set "CONHOST_WRAPPED=1"
+    start "" "%SystemRoot%\System32\conhost.exe" "%ComSpec%" /k call "%~f0" %*
+    exit /b 0
+)
 chcp 65001 >nul
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
@@ -26,7 +31,7 @@ set "WATCHDOG_EXIT=%ERRORLEVEL%"
 
 if exist bot.stop (
     echo.
-    echo [INFO] Controlled stop requested (bot.stop detected).
+    echo [INFO] Controlled stop requested [bot.stop detected].
     del bot.stop
     echo Press any key to close window...
     pause >nul
@@ -35,9 +40,12 @@ if exist bot.stop (
 
 if "%WATCHDOG_EXIT%"=="0" (
     echo.
-    echo [INFO] Bot Supervisor exited cleanly (code 0).
-    echo Check logs\bot_supervisor.log if another instance is already running.
-    echo Press any key to close window...
+    echo ======================================================
+    echo [INFO] Bot Supervisor exited cleanly with code 0.
+    echo Another instance is already running or stop was confirmed.
+    echo To stop the running instance, run stop_bot.bat.
+    echo ======================================================
+    echo Press any key to close this window...
     pause >nul
     exit /b 0
 )

@@ -2425,14 +2425,9 @@ async def apply_shadow_mute(
     info = await get_shadow_mute_info(user_id, board_id)
     
     if info['is_muted'] and is_exponential:
-        remaining = info['remaining_seconds']
-        # Прогрессия при повторных нарушениях правил в муте: +1200с или увеличение остатка
-        new_duration = min(MAX_VIOLATION_ESCALATION_SEC, max(remaining + 1200.0, duration_seconds * 2.0))
-        new_expires_at = now_ts + new_duration
-        log_msg = (
-            f"⏳ [AUTOSHADOWMUTE] Прогрессия за повторное нарушение: user {user_id} на доске {board_id}, "
-            f"остаток был {remaining:.0f}с -> стало {new_duration:.0f}с ({new_duration/60:.1f} мин). Причина: {reason}"
-        )
+        # ЗАПРЕЩЕНО накручивать штраф или продлевать мут пользователю, который уже находится в активном муте!
+        # Мут должен истекать в свой назначенный срок, а не становиться вечным.
+        return info['expires_at'] or (now_ts + info['remaining_seconds'])
     else:
         new_duration = min(BASE_CAP_SEC, duration_seconds)
         new_expires_at = now_ts + new_duration
@@ -4437,56 +4432,36 @@ async def get_and_clear_reaction_queue() -> list[dict]:
     """
     Атомарно извлекает все реакции из очереди и очищает ее.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_transaction
     
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                
-                async with db.execute("SELECT id, user_id, post_num, emoji FROM ReactionQueue;") as cursor:
-                    rows = await cursor.fetchall()
-                    cols = [d[0] for d in cursor.description]
-                
+    db = await get_pool()
+    try:
+        async with db_transaction(db, immediate=True):
+            async with db.execute("SELECT id, user_id, post_num, emoji FROM ReactionQueue;") as cursor:
+                rows = await cursor.fetchall()
                 if not rows:
-                    await db.execute("COMMIT")
                     return []
+                cols = [d[0] for d in cursor.description]
+            
+            result_data = []
+            ids_to_delete = []
+            for row in rows:
+                d = dict(zip(cols, row))
+                result_data.append(d)
+                ids_to_delete.append(d["id"])
                 
-                result_data = []
-                ids_to_delete = []
-                for row in rows:
-                    d = dict(zip(cols, row))
-                    result_data.append(d)
-                    ids_to_delete.append(d["id"])
-                    
-                # Пачками: очередь пишет сайт, разгребает бот. Пока бот лежит,
-                # реакции копятся без потолка, и одним DELETE ... IN (...) их
-                # уже не удалить — запрос упал бы на лимите переменных SQLite,
-                # ROLLBACK отменил бы и чтение, и очередь осталась бы навсегда.
-                for chunk in iter_sql_chunks(ids_to_delete):
-                    placeholders = ','.join('?' for _ in chunk)
-                    await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", chunk)
+            # Пачками: очередь пишет сайт, разгребает бот. Пока бот лежит,
+            # реакции копятся без потолка, и одним DELETE ... IN (...) их
+            # уже не удалить — запрос упал бы на лимите переменных SQLite,
+            # ROLLBACK отменил бы и чтение, и очередь осталась бы навсегда.
+            for chunk in iter_sql_chunks(ids_to_delete):
+                placeholders = ','.join('?' for _ in chunk)
+                await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", chunk)
 
-
-                await db.execute("COMMIT")
-                return result_data
-                
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                print(f"⛔ ОШИБКА в get_and_clear_reaction_queue: {e}.")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"⛔ ОШИБКА в get_and_clear_reaction_queue: {e}.")
-                break
-    return []
+            return result_data
+    except Exception as e:
+        print(f"⛔ ОШИБКА в get_and_clear_reaction_queue: {e}.")
+        return []
 _VIDEO_CACHE: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
 _IMAGE_CACHE: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
 _THREAD_CACHE: Dict[str, List[str]] = defaultdict(list)

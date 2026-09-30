@@ -1517,7 +1517,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
 
     # 0. Crash / Exploit Sticker Protection (Dynamic Lottie Guard)
     from common.lottie_guard import is_sticker_safe, KNOWN_CRASH_FILE_IDS
-    sticker_obj = getattr(msg, 'sticker', None) or (file_obj if raw_content_type == 'sticker' else None)
+    sticker_obj = (getattr(msg, 'sticker', None) or file_obj) if raw_content_type == 'sticker' else None
     if sticker_obj:
         is_safe, guard_reason = await is_sticker_safe(msg.bot, sticker_obj)
         if not is_safe:
@@ -1551,35 +1551,10 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
 
     # If user is already shadow-muted:
     if await is_shadow_muted(user_id, board_id):
-        # Grace period check for in-flight packets / albums:
-        # Если мут выдан недавно (<4с) или это файлы одного пакета/альбома, НЕ накручиваем экспоненциальный штраф!
-        if is_in_mute_grace_period(user_id, now_ts=msg_date_ts):
-            await handle_shadow_mute_continuation(user_id, board_id, reason="In-flight пакет первичного мута")
-            return True
-
-        # Проверяем, совершает ли замученный пользователь НАРУШЕНИЕ ПРАВИЛ (флуд, спам, баян, скам-ссылки)
-        from common.spam_filter import check_flood, check_link_or_ad_spam, _check_cross_board_spam, is_bayan
-        now_check = msg_date_ts
-        is_fl, fl_reason = check_flood(
-            user_id, board_id, now_ts=now_check, record_history=False,
-            is_reply=bool(msg.reply_to_message), posts_count=posts_count,
-            is_media=is_media, media_group_id=media_group_id
-        )
-        text_str = content if isinstance(content, str) else ""
-        is_link, link_reason = check_link_or_ad_spam(user_id, board_id, text_str, now_ts=now_check)
-        payload = text_str or f_uid or f_id or ""
-        is_cb = not _check_cross_board_spam(user_id, board_id, payload, msg_type, raw_content_type, now_ts=now_check, record_history=False)
-        is_by, by_reason = is_bayan(user_id, board_id, content=text_str or None, msg_type=msg_type or raw_content_type, file_unique_id=f_uid, file_id=f_id, now_ts=now_check)
-
-        if is_fl or is_link or is_cb or is_by:
-            # Нарушающая комбинация в муте -> прогрессия мута!
-            viol_reason = fl_reason or link_reason or ("Кросс-борд спам" if is_cb else by_reason)
-            from common.database import apply_shadow_mute
-            await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=f"Нарушение в муте: {viol_reason}", is_exponential=True)
-        else:
-            # Обычное сообщение в муте -> таймер не трогаем, прогрессия не начисляется
-            await handle_shadow_mute_continuation(user_id, board_id, reason="Обычный постинг в муте (без штрафа)")
-
+        # Пользователь уже в теневом муте. Сообщение тихо отбрасывается (drop silently)
+        # через process_shadow_reject без уведомлений о муте и БЕЗ накрутки штрафного времени!
+        # Мут должен истекать в свой назначенный срок, а не становиться вечным.
+        await handle_shadow_mute_continuation(user_id, board_id, reason="Постинг в муте (тихий дроп без продления)")
         return True  # Let handle_message route to process_shadow_reject!
 
     # 1. Comprehensive auto-shadowmute evaluation (Flood, Link/Ad spam, Cross-board, 3+ Bayans in 3 min)

@@ -526,6 +526,15 @@ class NewPostProcessor:
         p_num = self.current_post_num
         c_type = self.final_content.get('type', 'text')
         t_info = f" (тред: #{self.thread_id})" if self.thread_id else ""
+
+        author_delivered = bool(self.author_results and self.author_results[0] and self.author_results[0][1])
+        if not author_delivered and self.user_id > 0 and not self.is_shadow_muted:
+            self.recipients.add(self.user_id)
+            try:
+                print(f"⚠️ [AUTHOR_DELIVERY_FALLBACK] Пост #{p_num} не был подтверждён автору {self.user_id} напрямую. Автор включён в очередь рассылки.")
+            except Exception:
+                pass
+
         recip_count = len(self.recipients) if self.recipients else 0
         try:
             print(f"📥 Пост #{p_num} [/{self.board_id}/]{t_info} получен (тип: {c_type}, получателей: {recip_count})")

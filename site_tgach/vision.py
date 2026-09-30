@@ -284,6 +284,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             skip_groq_models = False
 
             permanent_model_failures = 0
+            had_safety_block = False
 
             timeout = httpx.Timeout(
                 GROQ_HTTP_TIMEOUT_SECONDS,
@@ -448,6 +449,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if finish_reason in ("content_filter", "safety"):
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) blocked by safety filter. Switching to next model candidate.")
                                 permanent_model_failures += 1
+                                had_safety_block = True
                                 if provider == "gemini":
                                     skip_gemini_models = True
                                     logger.info(f"⏭️ [VISION] [{source}] Gemini safety block detected ({finish_reason}). Skipping all remaining Gemini models.")
@@ -514,6 +516,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 if provider == "gemini" and finish_reason in ("safety", "content_filter", "other"):
                                     skip_gemini_models = True
                                     permanent_model_failures += 1
+                                    had_safety_block = True
                                     logger.warning(f"⚠️ [VISION] [{source}] Gemini ({model_name}) empty response due to safety filter ({finish_reason}). Skipping all remaining Gemini models.")
                                 else:
                                     logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) empty response. Trying next model candidate...")
@@ -524,6 +527,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 logger.warning(f"⚠️ [VISION] [{source}] Gemini safety error ({err_str[:120]}). Skipping all remaining Gemini models.")
                                 skip_gemini_models = True
                                 permanent_model_failures += 1
+                                had_safety_block = True
                                 break
                             if "413" in err_str: return "error_413"
                             if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str:
@@ -558,10 +562,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 continue
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing for 120s.")
-                                pool.penalize_token(selected_key, 120.0)
+                                cd_duration = 30.0 if provider == "groq" else 45.0
+                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing for {cd_duration:.0f}s.")
+                                pool.penalize_token(selected_key, cd_duration)
                                 async with _KEY_RATE_LOCK:
-                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + 120.0
+                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
                                     if provider == "gemini":
                                         _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0)
                                     else:
@@ -598,6 +603,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             logger.warning(f"⚠️ [VISION] [{source}] {provider} key failed ({model_name}): {type(e).__name__}: {repr(e)}")
                             available_keys.remove(selected_key)
                             continue
+
+            if had_safety_block:
+                logger.warning(f"🚫 [VISION] [{source}] Image rejected by safety filter. Returning 'safety_rejected'.")
+                return "safety_rejected"
 
             if permanent_model_failures >= len(models_cascade):
                 logger.error(f"\u274c [VISION] [{source}] Image rejected by all models (permanent error). Marking as invalid.")

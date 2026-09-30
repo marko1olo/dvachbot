@@ -543,6 +543,33 @@ async def get_banner_delivery_payload_async(
     return await asyncio.to_thread(get_banner_delivery_payload, category=category, bot_id=bot_id, banner_name=banner_name)
 
 
+def _truncate_html_caption(text: str, limit: int = 950) -> str:
+    """
+    Безопасно обрезает HTML-текст для Telegram caption (макс 1024),
+    не разрывая теги посредине и закрывая все открытые теги, чтобы избежать
+    ошибки "can't parse entities".
+    """
+    if not text or len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    last_open = truncated.rfind('<')
+    last_close = truncated.rfind('>')
+    if last_open > last_close:
+        truncated = truncated[:last_open]
+    tag_pattern = re.compile(r'<(/?)([a-zA-Z0-9\-]+)(?:\s+[^>]*)?>')
+    stack = []
+    for match in tag_pattern.finditer(truncated):
+        is_closing, tag_name = match.group(1), match.group(2).lower()
+        if tag_name in ('b', 'i', 's', 'u', 'code', 'pre', 'a', 'tg-spoiler'):
+            if is_closing:
+                if stack and stack[-1] == tag_name:
+                    stack.pop()
+            else:
+                stack.append(tag_name)
+    closing_tags = ''.join(f"</{tag}>" for tag in reversed(stack))
+    return truncated + closing_tags + "...\n<i>[Текст сокращен]</i>"
+
+
 async def send_banner_message(
     bot: Bot,
     chat_id: int,
@@ -582,9 +609,14 @@ async def send_banner_message(
             return m.animation.file_id
         if getattr(m, "photo", None) and len(m.photo) > 0:
             return m.photo[-1].file_id
-        return None
 
-    # If caption exceeds 1024 chars, send media first (no caption), then reply with text.
+    # If caption exceeds 1024 chars:
+    # If reply_markup is attached (UI menu / interactive keyboard), NEVER send a naked banner without buttons!
+    # Truncate caption safely so the buttons are attached directly to the media message.
+    if len(caption) > 1024 and reply_markup is not None:
+        caption = _truncate_html_caption(caption, limit=950)
+
+    # If caption still exceeds 1024 chars (and no reply_markup), send media first (no caption), then reply with text.
     if len(caption) > 1024:
         media_msg = None
         try:

@@ -85,6 +85,9 @@ VOTEMUTE_ANNOUNCEMENTS = [
     "🎬 <b>СТОП-КАДР! ВАЙПЕР ЗАМОРОЖЕН НАРОДОМ!</b>\n\n📽️ Режиссёры борды (5 анонов) остановили нежелательную сцену с участием Анона <code>[ID:{target_anon}]</code> (пост #{post_num}).\n✂️ <b>Вырезано в монтаже: 30 минут. Права на восстановление кадра выкупить нельзя.</b>",
     "🌪️ <b>ВИХРЬ НАРОДНОГО ГНЕВА УНЁС ВАЙПЕРА!</b>\n\n💨 Торнадо из 5 голосов смёл Анона <code>[ID:{target_anon}]</code> (пост #{post_num}) в безмолвную пустыню!\n🏜️ <b>30 минут в тишине Сахары. Оазис взяток не существует.</b>",
     "🥊 <b>НОКАУТ ПЕРВОГО РАУНДА НАРОДНОГО БОКСЁРСТВА!</b>\n\n🏆 Пять боксёров-анонов отправили Анона <code>[ID:{target_anon}]</code> (пост #{post_num}) в нокаут вотумом!\n💫 <b>В отключке: 30 минут. Нашатырь за шекели недоступен.</b>",
+    "🗳️ <b>СУД ЛИНЧА СОСТОЯЛСЯ — ПРИГОВОР ИСПОЛНЕН!</b>\n\n⚖️ Аноны решили, что Анон <code>[ID:{target_anon}]</code> (пост #{post_num}) слишком громко хрюкал.\n🤐 <b>5 голосов собрано: нарушитель отправлен в мут на 30 минут без права откупа!</b>",
+    "🗳️ <b>ГОЛОСОВАНИЕ ЗА ОБОССЫВАНИЕ ЗАВЕРШЕНО!</b>\n\n🍾 Анон <code>[ID:{target_anon}]</code> (пост #{post_num}) заебал всех своим кринжом.\n🔒 <b>5 анонов проголосовали ЗА: 30 минут на бутылке молчания без взяток!</b>",
+    "🗳️ <b>МУТ-РЕФЕРЕНДУМ УСПЕШНО ЗАКРЫТ!</b>\n\n📌 Анон <code>[ID:{target_anon}]</code> (пост #{post_num}) открыл помойку не в том районе.\n🤐 <b>5 подписей собрано — пасть зашита на 30 минут! /shop бессилен.</b>"
 ]
 
 VOTEMUTE_CARD_DESCRIPTIONS = [
@@ -201,6 +204,30 @@ VOTEMUTE_CARD_DESCRIPTIONS = [
         "⏳ <b>Карантин можно ввести:</b> ещё ~{time_left_min} мин.\n\n"
         "<i>Подпиши санитарное предписание! 5 голосов = карантин 30 минут. Прививка от шизо-вотума не существует.</i>"
     ),
+    (
+        "🗳️ <b>СУД ЛИНЧА: СКИДЫВАЕМСЯ ГОЛОСАМИ</b>\n\n"
+        "🎯 <b>Пост:</b> #{post_num}\n"
+        "👤 <b>Нарушитель:</b> <code>[ID:{anon_tag}]</code>\n"
+        "📊 <b>Голосов:</b> <b>{votes_count}/{votes_req}</b>\n"
+        "⏳ <b>До конца голосования:</b> ~{time_left_min} мин.\n\n"
+        "<i>Очередной говноед заебал тред. Нажми кнопку, чтобы отправить его в мут на 30 минут без права взятки!</i>"
+    ),
+    (
+        "🗳️ <b>ГОЛОСОВАНИЕ ЗА ОБОССЫВАНИЕ ВАЙПЕРА</b>\n\n"
+        "🎯 <b>Кринж-пост:</b> #{post_num}\n"
+        "👤 <b>Пациент:</b> <code>[ID:{anon_tag}]</code>\n"
+        "📊 <b>Собрано голосов:</b> <b>{votes_count}/{votes_req}</b>\n"
+        "⏳ <b>Осталось времени:</b> ~{time_left_min} мин.\n\n"
+        "<i>Этот персонаж порвался и несёт хуйню. Отправим его под шконку молчания? Голосуй кнопкой ниже!</i>"
+    ),
+    (
+        "🗳️ <b>МУТ-РЕФЕРЕНДУМ: ДВАЧЕРСКОЕ ПРАВОСУДИЕ</b>\n\n"
+        "🎯 <b>Обвинение по посту:</b> #{post_num}\n"
+        "👤 <b>Фигурант:</b> <code>[ID:{anon_tag}]</code>\n"
+        "📊 <b>Подписей анонов:</b> <b>{votes_count}/{votes_req}</b>\n"
+        "⏳ <b>Сессия открыта:</b> ~{time_left_min} мин.\n\n"
+        "<i>Открыл помойку не в том районе? Затыкаем вонючую пасть демократично — жми кнопку!</i>"
+    )
 ]
 
 VOTEMUTE_REJECT_TEXTS = [
@@ -657,7 +684,63 @@ async def cmd_votemute(message: types.Message, board_id: Optional[str] = None):
     )
     keyboard = get_votemute_keyboard(target_id, post_num, current_votes, is_executed)
 
-    await message.answer(card_text, reply_markup=keyboard, parse_mode="HTML")
+    sent = await message.answer(card_text, reply_markup=keyboard, parse_mode="HTML")
+    vm_key = generate_votemute_key(target_id, post_num)
+    if sent:
+        async with votemute_lock:
+            vm_rec = active_votemutes.get(vm_key)
+            if vm_rec:
+                vm_rec.setdefault("broadcast_msgs", []).append((sent.chat.id, sent.message_id))
+
+    # Рассылаем интерактивную карточку народного вотума активным юзерам борда
+    if ok and not is_executed:
+        async def _do_votemute_broadcast():
+            try:
+                import shared_state
+                from banner_manager import broadcast_banner_to_users
+                b_data = shared_state.board_data.get(board_id, {})
+                active_users = list(b_data.get('users', {}).get('active', []))
+
+                # Исключаем инициатора (уже получил карточку) и цель
+                exclude_ids = {voter_id, target_id}
+                recipients = [uid for uid in active_users if uid not in exclude_ids]
+
+                async def _on_sent(uid, mid):
+                    async with votemute_lock:
+                        vm_record = active_votemutes.get(vm_key)
+                        if vm_record:
+                            vm_record.setdefault("broadcast_msgs", []).append((uid, mid))
+
+                await broadcast_banner_to_users(
+                    bot=message.bot,
+                    user_ids=recipients,
+                    exclude_uid=voter_id,
+                    caption=card_text,
+                    reply_markup=keyboard,
+                    category="schizo",
+                    parse_mode="HTML",
+                    on_sent=_on_sent,
+                )
+            except Exception as e:
+                logger.warning(f"Error in _do_votemute_broadcast: {e}")
+
+        asyncio.create_task(_do_votemute_broadcast())
+
+        # Пуш-уведомление в ЛС активным пользователям через event_push_engine
+        try:
+            from event_push_engine import push_votemute_open
+            target_tag = get_anon_id(target_id)
+            asyncio.create_task(push_votemute_open(
+                bot=message.bot,
+                board_id=board_id,
+                post_num=post_num,
+                target_anon_id=target_tag,
+                votes_count=current_votes,
+                votes_req=VOTES_REQUIRED,
+                exclude_uid=voter_id,
+            ))
+        except Exception as e:
+            logger.debug(f"Error triggering push_votemute_open: {e}")
 
 
 @votemute_router.callback_query(F.data.startswith("vm_vote:"))
@@ -717,6 +800,27 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
         pass
     except Exception as e:
         logger.error(f"Error updating votemute message card: {e}")
+
+    # При исполнении приговора обновляем все разосланные копии карточки
+    if executed:
+        async with votemute_lock:
+            all_bcast = list(vm_data.get("broadcast_msgs", []))
+        if all_bcast:
+            async def _update_broadcast_cards():
+                for chat_id, msg_id in all_bcast:
+                    if callback.message and chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
+                        continue
+                    try:
+                        await callback.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg_id,
+                            text=new_text,
+                            reply_markup=new_kb,
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+            asyncio.create_task(_update_broadcast_cards())
 
 
 @votemute_router.callback_query(F.data.startswith("vm_info:"))

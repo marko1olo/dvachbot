@@ -392,3 +392,36 @@ class TestVisionCascade:
             assert res is None
             sleep_calls = [c.args[0] for c in mock_sleep.call_args_list if c.args]
             assert any(s >= 2.5 for s in sleep_calls)
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
+    @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=["test-groq-key"])
+    async def test_gemini_safety_filter_returns_safety_rejected_when_groq_fails(
+        self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """When Gemini returns safety and Groq fails (e.g. exhausted/TPD), must return 'safety_rejected'."""
+        mock_gemini_call.return_value = (None, "safety")
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.side_effect = Exception("429 rate limit: tokens per day (TPD) exceeded")
+        mock_openai_cls.return_value = mock_client
+
+        res = await describe_image("/dummy/path.jpg", source="TEST")
+        assert res == "safety_rejected"
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
+    @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=[])
+    async def test_gemini_safety_filter_returns_safety_rejected_when_no_groq_tokens(
+        self, mock_groq_pool, mock_google_pool, mock_gemini_call, mock_prep
+    ):
+        """When Gemini returns safety and no Groq tokens available, must return 'safety_rejected'."""
+        mock_gemini_call.return_value = (None, "safety")
+
+        res = await describe_image("/dummy/path.jpg", source="TEST")
+        assert res == "safety_rejected"
+

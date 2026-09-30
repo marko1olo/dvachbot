@@ -539,14 +539,16 @@ class MessageBroadcaster:
                     interrupted_reason = "phase_budget_guard"
                     break
 
-            send_timeout_sec = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
+            is_album = (self.content.get("type") == "media_group")
             has_raw_media = (
                 bool(self.content.get("image_bytes") or self.content.get("voice_bytes")) or
-                (self.content.get("type") == "media_group" and any(
+                (is_album and any(
                     isinstance(item, dict) and not isinstance(item.get("media") or item.get("file_id"), str)
                     for item in (self.content.get("media") or [])
                 ))
             )
+            is_heavy_delivery = is_album or has_raw_media
+            send_timeout_sec = max(DELIVERY_PER_RECIPIENT_TIMEOUT_SEC, 120.0) if is_heavy_delivery else DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
             current_chunk_limit = 1 if (has_raw_media and self.stats['success'] == 0) else CHUNK_SIZE
             chunk = []
             for _ in range(min(len(queue), current_chunk_limit)):
@@ -619,6 +621,21 @@ class MessageBroadcaster:
                             )
                     else:
                         self.stats['errors'] += 1
+                        runtime_logger.warning(
+                            "delivery_recipient_error %s",
+                            json.dumps(
+                                {
+                                    "board_id": self.board_id,
+                                    "post_num": self.post_num,
+                                    "phase": self.delivery_phase,
+                                    "uid": uid,
+                                    "error_type": type(res).__name__,
+                                    "error_str": str(res)[:300],
+                                },
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        )
                 elif res:
                     # For targeted sends (<=10 recipients, e.g. author copy or pinned msg),
                     # keep the full Message object so caller can inspect file_id or message properties.
@@ -807,7 +824,19 @@ class MessageBroadcaster:
                 )
 
     async def _send_one_guarded(self, uid: int, timeout_sec: float = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC):
-        request_timeout_sec = int(min(DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC, timeout_sec))
+        is_album = (self.content.get("type") == "media_group")
+        has_raw_media = (
+            bool(self.content.get("image_bytes") or self.content.get("voice_bytes")) or
+            (is_album and any(
+                isinstance(item, dict) and not isinstance(item.get("media") or item.get("file_id"), str)
+                for item in (self.content.get("media") or [])
+            ))
+        )
+        is_heavy_delivery = is_album or has_raw_media
+        if is_heavy_delivery:
+            request_timeout_sec = int(max(DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC, timeout_sec))
+        else:
+            request_timeout_sec = int(min(DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC, timeout_sec))
         try:
             return await asyncio.wait_for(
                 self._send_one(uid, request_timeout_sec),

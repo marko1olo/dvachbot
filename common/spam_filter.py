@@ -263,7 +263,30 @@ RE_AD_SCAM = re.compile(
     re.IGNORECASE | re.UNICODE
 )
 RE_URL = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.IGNORECASE)
-URL_WHITELIST = {"tgach.top", "t.me/tgchan_archive", "t.me/tgach_archive", "2ch.hk", "dvach.top"}
+URL_WHITELIST = {
+    "tgchan_archive",
+    "tgach_archive",
+    "t.me/tgchan_archive",
+    "t.me/tgach_archive",
+    "telegram.me/tgchan_archive",
+    "telegram.me/tgach_archive",
+    "https://t.me/tgchan_archive",
+    "https://t.me/tgach_archive",
+    "http://t.me/tgchan_archive",
+    "http://t.me/tgach_archive",
+    "@tgchan_archive",
+    "@tgach_archive",
+    "tgach.top",
+    "https://tgach.top",
+    "http://tgach.top",
+    "2ch.hk",
+    "https://2ch.hk",
+    "http://2ch.hk",
+    "2ch.life",
+    "dvach.top",
+    "https://dvach.top",
+    "http://dvach.top",
+}
 
 # --- Anti-Dox & Phone Leak Patterns ---
 DOX_MASK_REPLACEMENT = "[НОМЕР ТЕЛЕФОНА СКРЫТ / ANTI-DOX]"
@@ -444,7 +467,7 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     if not banned_words:
         return False
 
-    for wl in ["tgach.top", "t.me/tgchan_archive", "t.me/tgach_archive", "tgchan_archive", "tgach_archive"]:
+    for wl in URL_WHITELIST:
         clean_canonical = clean_canonical.replace(wl, "")
 
     clean_with_homoglyphs = clean_canonical.translate(HOMOGLYPH_LATIN_TO_CYRILLIC)
@@ -1039,6 +1062,12 @@ async def apply_shadow_mute(
         pass
 
     # Ensure ghost / shadow posts do not trigger exponential flood mute escalation
+    if is_exponential:
+        from common.database import get_shadow_mute_info
+        info = await get_shadow_mute_info(user_id, board_id)
+        if info.get('is_muted'):
+            return info.get('expires_at') or 0.0
+
     is_flood_reason = any(w in (reason or "").lower() for w in ("флуд", "flood", "burst", "постинг"))
     if is_exponential and is_flood_reason:
         is_exponential = False
@@ -1080,7 +1109,7 @@ async def evaluate_message_for_autoshadowmute(
 ) -> Tuple[bool, str, float]:
     """
     Comprehensive evaluation of an incoming message for auto-shadowmute:
-    1. Check if user is already shadowmuted -> exponential continuation
+    1. Check if user is already shadowmuted -> maintain existing mute (no compounding)
     2. Check for Flood (burst / minute)
     3. Check for Link / Ad / Scam spam
     4. Check for Cross-board spam
@@ -1093,6 +1122,12 @@ async def evaluate_message_for_autoshadowmute(
             return False, "", 0.0
     except Exception:
         pass
+
+    # If user is already shadow-muted, maintain existing mute without extending duration
+    from common.database import is_shadow_muted, get_shadow_mute_info
+    if await is_shadow_muted(user_id, board_id):
+        info = await get_shadow_mute_info(user_id, board_id)
+        return True, "Уже в теневом муте", info.get('expires_at') or 0.0
 
     now = now_ts or time.time()
     text_content = content if isinstance(content, str) else (content.get('text') or content.get('caption') if isinstance(content, dict) else None)

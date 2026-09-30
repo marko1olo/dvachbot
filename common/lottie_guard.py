@@ -149,8 +149,8 @@ async def is_sticker_safe(bot: Bot, sticker: types.Sticker) -> Tuple[bool, str]:
         return False, "cached_malicious"
 
     # Static / WebP stickers are fundamentally safe from Lottie CPU/GPU memory exploits
-    is_animated = getattr(sticker, "is_animated", False)
-    is_video = getattr(sticker, "is_video", False)
+    is_animated = bool(getattr(sticker, "is_animated", False)) if isinstance(getattr(sticker, "is_animated", None), bool) else False
+    is_video = bool(getattr(sticker, "is_video", False)) if isinstance(getattr(sticker, "is_video", None), bool) else False
 
     if not is_animated and not is_video:
         if len(_SAFE_STICKERS) < _MAX_CACHE_SIZE:
@@ -158,7 +158,8 @@ async def is_sticker_safe(bot: Bot, sticker: types.Sticker) -> Tuple[bool, str]:
         return True, "static_webp"
 
     # Video stickers: check file size (Telegram limits webm stickers to 256 KB)
-    file_size = getattr(sticker, "file_size", 0) or 0
+    raw_size = getattr(sticker, "file_size", 0)
+    file_size = raw_size if isinstance(raw_size, (int, float)) else 0
     if is_video:
         if file_size > 512 * 1024:
             return False, f"Video sticker too large: {file_size} bytes"

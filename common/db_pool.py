@@ -410,19 +410,26 @@ class db_transaction:
                     except Exception:
                         pass
                 else:
-                    try:
-                        await self.db.execute("COMMIT")
-                    except Exception as commit_err:
-                        err_msg = str(commit_err).lower()
-                        if "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
-                            logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
-                        else:
-                            logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
-                            try:
-                                await self.db.execute("ROLLBACK")
-                            except Exception:
-                                pass
-                            raise
+                    for commit_attempt in range(3):
+                        try:
+                            await self.db.execute("COMMIT")
+                            break
+                        except Exception as commit_err:
+                            err_msg = str(commit_err).lower()
+                            if "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
+                                logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
+                                break
+                            elif "statements in progress" in err_msg and commit_attempt < 2:
+                                logger.warning(f"⚠️ [DB_POOL] Statements in progress during COMMIT, retrying ({commit_attempt + 1}/3)...")
+                                await asyncio.sleep(0.05)
+                                continue
+                            else:
+                                logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
+                                try:
+                                    await self.db.execute("ROLLBACK")
+                                except Exception:
+                                    pass
+                                raise
         finally:
             if self._lock_acquired:
                 db_lock.release()

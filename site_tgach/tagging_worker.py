@@ -1134,6 +1134,8 @@ async def tagging_loop():
                     ai_response = await get_neuro_tags(resized_bytes)
                     if ai_response in ("error_413", "error_too_large"):
                         tags = "error_too_large"
+                    elif ai_response in ("safety_rejected", "safety_blocked"):
+                        tags = "safety_rejected"
                     elif ai_response == "error_api_exhausted":
                         tags = None  # Force retry
                     elif ai_response == "error_file_invalid":
@@ -1152,10 +1154,19 @@ async def tagging_loop():
                             description = str(parsed.get("description", "")).strip()
                         except json.JSONDecodeError:
                             tags = ai_response
+
+                if tags is not None and file_id in TEMP_FAILED_FILES:
+                    del TEMP_FAILED_FILES[file_id]
+
                 if tags is None and ai_response in (None, "error_api_exhausted"):
                     entry = TEMP_FAILED_FILES.get(file_id)
                     fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
-                    if ai_response == "error_api_exhausted":
+                    if fail_cnt >= 3:
+                        logger.warning(f"⚠️ [TAGGER] AI tagging failed {fail_cnt} times for {file_id[:15]}. Saving visual hashes and marking as 'no_tags'.")
+                        tags = "no_tags"
+                        if file_id in TEMP_FAILED_FILES:
+                            del TEMP_FAILED_FILES[file_id]
+                    elif ai_response == "error_api_exhausted":
                         cooldown_secs = 45
                         logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt} for {file_id[:15]}). Pausing tagger for {cooldown_secs}s. Leaving tags as None to retry later.")
                         TEMP_FAILED_FILES[file_id] = {
@@ -1165,11 +1176,6 @@ async def tagging_loop():
                         tags = None
                         await asyncio.sleep(cooldown_secs)
                         continue
-                    elif fail_cnt >= 3:
-                        logger.warning(f"⚠️ [TAGGER] AI tagging failed {fail_cnt} times for {file_id[:15]}. Saving visual hashes and marking as 'no_tags'.")
-                        tags = "no_tags"
-                        if file_id in TEMP_FAILED_FILES:
-                            del TEMP_FAILED_FILES[file_id]
                     else:
                         cooldown_secs = 10
                         logger.warning(f"⏸️ [TAGGER] Internal error (attempt {fail_cnt}/3 for {file_id[:15]}). Pausing tagger for {cooldown_secs}s cooldown before next file. Skipping DB update to retry later.")

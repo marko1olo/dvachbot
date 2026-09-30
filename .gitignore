@@ -6,6 +6,7 @@
 *.db.before_merge
 *.before_merge
 data/thumbnails/
+last_100_lol_pics/
 
 # Кэш Python
 __pycache__/

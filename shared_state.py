@@ -610,10 +610,6 @@ MODE_FLAGS = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mod
 shadow_fake_post_counters = {}
 
 
-messages_storage = {}
-
-post_to_messages = {}
-
 class BoundedDict(OrderedDict):
     """
     Ordered dictionary with a strict maximum capacity.
@@ -661,7 +657,10 @@ class BoundedDict(OrderedDict):
         return f"BoundedDict(max_size={self.max_size}, {super().__repr__()})"
 
 
-BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
+BOT_MESSAGES_STORAGE_LIMIT = int(os.getenv("BOT_MESSAGES_STORAGE_LIMIT", "12000"))
+BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "15000"))
+messages_storage = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
+post_to_messages = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
 message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
 
 @dataclass
