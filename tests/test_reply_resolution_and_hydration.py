@@ -38,7 +38,7 @@ class TestReplyResolutionAndHydration(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(BOT_POST_CACHE_LIMIT, 2000)
         self.assertGreaterEqual(BOT_COPY_CACHE_POST_LIMIT, 1000)
         self.assertGreaterEqual(BOT_MESSAGE_TO_POST_LIMIT, 50000)
-        self.assertEqual(message_to_post.max_size, 50000)
+        self.assertEqual(message_to_post.max_size, BOT_MESSAGE_TO_POST_LIMIT)
 
     def test_bounded_dict_capacity_and_decoupled_trim(self):
         """Verify BoundedDict retains mappings when post_to_messages is trimmed."""

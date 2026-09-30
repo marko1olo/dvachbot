@@ -459,7 +459,7 @@ def _drop_post_copy_maps_unlocked(post_num: int) -> int:
     if not copies_map:
         return 0
     # post_to_messages is pruned to conserve RAM, but message_to_post retains reverse
-    # mappings as an independent LRU bounded dictionary (up to BOT_MESSAGE_TO_POST_LIMIT=50000)
+    # mappings as an independent LRU bounded dictionary (up to BOT_MESSAGE_TO_POST_LIMIT=500000)
     # so replies to older posts continue to resolve without DB overhead.
     return len(copies_map)
 
@@ -658,7 +658,7 @@ class BoundedDict(OrderedDict):
 
 
 BOT_MESSAGES_STORAGE_LIMIT = int(os.getenv("BOT_MESSAGES_STORAGE_LIMIT", "12000"))
-BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
+BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "500000"))
 messages_storage = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
 post_to_messages = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
 message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
