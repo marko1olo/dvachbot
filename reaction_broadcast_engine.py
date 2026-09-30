@@ -289,31 +289,28 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
 
 
 def _load_state() -> Dict[str, Any]:
-    """Loads broadcast state (timestamp, counts, index) from disk."""
-    if not STATE_FILE.exists():
-        return {
-            "last_broadcast_timestamp": 0.0,
-            "total_broadcasts": 0,
-            "last_text_index": -1,
-            "total_delivered": 0,
-            "total_failed": 0,
-            "total_forbidden": 0
-        }
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return data
-    except Exception as e:
-        logger.warning(f"[reaction_broadcast] Failed to read state file: {e}")
-    return {
+    """Loads broadcast state (timestamp, counts, index, blocked users) from disk."""
+    default_state = {
         "last_broadcast_timestamp": 0.0,
         "total_broadcasts": 0,
         "last_text_index": -1,
         "total_delivered": 0,
         "total_failed": 0,
-        "total_forbidden": 0
+        "total_forbidden": 0,
+        "blocked_user_ids": []
     }
+    if not STATE_FILE.exists():
+        return default_state
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                for k, v in default_state.items():
+                    data.setdefault(k, v)
+                return data
+    except Exception as e:
+        logger.warning(f"[reaction_broadcast] Failed to read state file: {e}")
+    return default_state
 
 
 def _save_state(state: Dict[str, Any]) -> bool:
@@ -345,11 +342,12 @@ def get_next_motivation_text() -> Tuple[int, str]:
     return chosen_idx, REACTION_MOTIVATION_TEXTS[chosen_idx]
 
 
-async def get_reaction_broadcast_recipients(limit: Optional[int] = None) -> List[int]:
+async def get_reaction_broadcast_recipients(limit: Optional[int] = None, exclude_blocked: bool = True) -> List[int]:
     """
     Fetches active direct message recipients from the Users table.
     Filters:
     - user_id > 0 (valid personal Telegram user ID, strictly Direct Messages / PM)
+    - Excludes known blocked_user_ids (users who deleted chat or blocked bot)
     - Orders by recent activity or posts count to prioritize engaged users.
     """
     try:
@@ -367,7 +365,16 @@ async def get_reaction_broadcast_recipients(limit: Optional[int] = None) -> List
         async with db.execute(query) as cursor:
             rows = await cursor.fetchall()
             recipients = [int(row[0]) for row in rows if row and row[0] and int(row[0]) > 0]
-            logger.info(f"[reaction_broadcast] Fetched {len(recipients)} unique user recipients from database")
+            
+            if exclude_blocked:
+                state = _load_state()
+                blocked_set = set(state.get("blocked_user_ids", []))
+                if blocked_set:
+                    before_cnt = len(recipients)
+                    recipients = [uid for uid in recipients if uid not in blocked_set]
+                    logger.info(f"[reaction_broadcast] Filtered out {before_cnt - len(recipients)} previously blocked users")
+                    
+            logger.info(f"[reaction_broadcast] Fetched {len(recipients)} eligible recipients from database")
             return recipients
     except Exception as e:
         logger.error(f"[reaction_broadcast] Failed to query recipients from DB: {e}")
@@ -492,6 +499,7 @@ async def send_reaction_motivation_broadcast(
     delivered = 0
     forbidden = 0
     failed = 0
+    blocked_ids_set = set(state.get("blocked_user_ids", []))
     
     for i, user_id in enumerate(recipients):
         res = await send_single_reaction_motivation(
@@ -503,8 +511,11 @@ async def send_reaction_motivation_broadcast(
         
         if res == "delivered":
             delivered += 1
+            if user_id in blocked_ids_set:
+                blocked_ids_set.discard(user_id)
         elif res == "forbidden":
             forbidden += 1
+            blocked_ids_set.add(user_id)
         else:
             failed += 1
             
@@ -521,6 +532,7 @@ async def send_reaction_motivation_broadcast(
     state["total_delivered"] = state.get("total_delivered", 0) + delivered
     state["total_failed"] = state.get("total_failed", 0) + failed
     state["total_forbidden"] = state.get("total_forbidden", 0) + forbidden
+    state["blocked_user_ids"] = sorted(list(blocked_ids_set))
     _save_state(state)
     
     logger.info(
