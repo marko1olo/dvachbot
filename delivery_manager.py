@@ -1283,17 +1283,21 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
     return True, False
 
 
-async def board_help_worker(board_id: str):
+async def board_help_worker(board_id: str, extended_interval: bool = False):
     """
-    Индивидуальный воркер регулярной рассылки помощи и советов (каждые 4-6 часов).
+    Индивидуальный воркер регулярной рассылки помощи и советов.
+    Интервал: 4–6ч для primary досок (/b/, /sex/), 8–12ч для secondary (/a/, /int/).
     Использует детерминированную рассинхронизацию (staggering) и проверку нагрузки (backpressure).
     """
-    # Размазываем начальный запуск по доскам, чтобы 26 воркеров не стреляли одновременно
-    initial_stagger = (abs(hash(board_id)) % 26) * 60 + random.randint(30, 180)
+    # Размазываем начальный запуск по доскам (4 воркера вместо 26 — флуд не страшен)
+    initial_stagger = (abs(hash(board_id)) % 4) * 120 + random.randint(30, 180)
     await asyncio.sleep(initial_stagger)
     while True:
         try:
-            delay = random.randint(14400, 21600) # от 4 до 6 часов
+            if extended_interval:
+                delay = random.randint(28800, 43200)  # 8–12 часов для /a/, /int/
+            else:
+                delay = random.randint(14400, 21600)  # 4–6 часов для /b/, /sex/
             await asyncio.sleep(delay)
 
             # Проверка бэкпрешера: если доска или система перегружены рассылкой, уступаем дорогу пользовательским постам

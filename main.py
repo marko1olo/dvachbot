@@ -3635,17 +3635,33 @@ WORKER_RESTART_MAX_DELAY_SEC = 60.0
 
 async def help_broadcaster():
     """
-    Менеджер задач. Запускает и управляет независимыми воркерами для рассылки
-    помощи на каждую доску, обеспечивая рассинхронизацию.
+    Менеджер задач. Запускает воркеры рассылки помощи.
+
+    Ограничен до 4 досок во избежание FloodWait на bot pool:
+    - /b/ и /sex/ — высокочастотные (интервал 4–6ч в board_help_worker)
+    - /a/ и /int/  — реже (интервал 8–12ч через extended_interval=True)
+    Остальные 20+ досок не получают help-рассылку: там мало активных юзеров,
+    а 26 параллельных воркеров убивали bot pool FloodWait'ами по 30s.
     """
     await asyncio.sleep(300)  # Общая начальная задержка перед запуском воркеров
+    # Приоритетные доски: всегда, интервал 4–6ч
+    PRIMARY_HELP_BOARDS = {'b', 'sex'}
+    # Дополнительные доски: реже, интервал 8–12ч
+    SECONDARY_HELP_BOARDS = {'a', 'int'}
+
     tasks = []
     for board_id in BOARDS:
         if board_id == 'test':
             continue
-        task = spawn_task(board_help_worker(board_id))
-        tasks.append(task)
-    print(f"✅ Менеджер [help_broadcaster] запустил {len(tasks)} независимых воркеров.")
+        if board_id in PRIMARY_HELP_BOARDS:
+            task = spawn_task(board_help_worker(board_id))
+            tasks.append(task)
+        elif board_id in SECONDARY_HELP_BOARDS:
+            task = spawn_task(board_help_worker(board_id, extended_interval=True))
+            tasks.append(task)
+        # Остальные доски — без help-рассылки
+    print(f"✅ Менеджер [help_broadcaster] запустил {len(tasks)} воркеров "
+          f"(primary={PRIMARY_HELP_BOARDS}, secondary={SECONDARY_HELP_BOARDS}).")
     await asyncio.gather(*tasks)
 async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: str = 'ru'):
     """
