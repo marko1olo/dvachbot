@@ -559,6 +559,20 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 async with _KEY_RATE_LOCK:
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + 3600.0
                                 available_keys.remove(selected_key)
+                                # TPD is an account-level daily limit — if 2+ keys hit TPD in a row,
+                                # all remaining keys will likely fail too: halt the entire provider for 2h
+                                consecutive_429 += 1
+                                if consecutive_429 >= 2 and len(available_keys) == 0:
+                                    halt_sec = 7200.0  # 2 hours — TPD resets at midnight UTC
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} multiple TPD hits ({consecutive_429} keys). Account-level daily limit reached. Halting {provider} for 2h.")
+                                    async with _KEY_RATE_LOCK:
+                                        if provider == "gemini":
+                                            _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
+                                            skip_gemini_models = True
+                                        else:
+                                            _GLOBAL_GROQ_LAST_CALL = time.time() + halt_sec
+                                            skip_groq_models = True
+                                    break
                                 continue
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
@@ -574,13 +588,16 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 available_keys.remove(selected_key)
 
                                 if consecutive_429 >= 2 and len(available_keys) == 0:
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}) and no keys remain. Halting {provider} attempts to protect keys from spam.")
+                                    # All keys exhausted on rate limits — back off for 30 min, not 60 sec.
+                                    # 60s was causing ~15 retry storms per hour, burning all keys each time.
+                                    halt_sec = 1800.0 if provider == "groq" else 300.0
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}) and no keys remain. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
                                     async with _KEY_RATE_LOCK:
                                         if provider == "gemini":
-                                            _GLOBAL_GEMINI_LAST_CALL = time.time() + 60.0
+                                            _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
                                             skip_gemini_models = True
                                         else:
-                                            _GLOBAL_GROQ_LAST_CALL = time.time() + 60.0
+                                            _GLOBAL_GROQ_LAST_CALL = time.time() + halt_sec
                                             skip_groq_models = True
                                     break
 

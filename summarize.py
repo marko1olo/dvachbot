@@ -578,8 +578,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     await asyncio.sleep(0.01 if in_test else 3.0)
                     continue  # try next key, NOT next model
                 if "tokens per day" in err_str.lower() or "tpd" in err_str.lower():
-                    logger.warning(f"⚠️ {provider} daily token limit (TPD) reached for {model_name}. Pausing {provider} for 15m.")
-                    _provider_cooldowns[provider] = time.time() + 900.0
+                    logger.warning(f"⚠️ {provider} daily token limit (TPD) reached for {model_name}. Pausing {provider} for 2h (account-level daily limit).")
+                    _provider_cooldowns[provider] = time.time() + 7200.0  # 2h — TPD is account-wide, not per-key
                     skip_providers.add(provider)
                     break
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
@@ -591,8 +591,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         groq_pool.penalize_token(api_key, 120.0)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}.")
                     if consecutive_429 >= 2:
-                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}). Halting {provider} attempts temporarily.")
-                        _provider_cooldowns[provider] = time.time() + 60.0
+                        # 60s was causing spam loops — 30min for Groq, 5min for Gemini
+                        halt_sec = 1800.0 if provider == "groq" else 300.0
+                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}). Halting {provider} for {int(halt_sec//60)}m.")
+                        _provider_cooldowns[provider] = time.time() + halt_sec
                         skip_providers.add(provider)
                         break
                     in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))

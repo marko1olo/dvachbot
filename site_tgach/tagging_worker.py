@@ -1167,8 +1167,8 @@ async def tagging_loop():
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     elif ai_response == "error_api_exhausted":
-                        cooldown_secs = 45
-                        logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt} for {file_id[:15]}). Pausing tagger for {cooldown_secs}s. Leaving tags as None to retry later.")
+                        cooldown_secs = 600  # 10min — 45s was causing constant retry loops when all API keys hit limits
+                        logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt} for {file_id[:15]}). Pausing tagger for {cooldown_secs//60}m to let rate limits recover.")
                         TEMP_FAILED_FILES[file_id] = {
                             "until": time.time() + 300,
                             "cnt": fail_cnt,
