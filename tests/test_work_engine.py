@@ -6,8 +6,15 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
 import aiosqlite
-from common.work_engine import WORK_VACANCIES, execute_job_action
+from common.work_engine import WORK_VACANCIES, execute_job_action, is_night_shift_active
 import main
+
+
+@pytest.fixture(autouse=True)
+def mock_daytime_work():
+    """Default unit tests assume daytime (no night 1.5x bonus) unless explicitly overridden."""
+    with patch("common.work_engine.is_night_shift_active", return_value=False):
+        yield
 
 
 def test_work_vacancies_structure():
@@ -631,4 +638,27 @@ async def test_work_alert_toggle_callbacks():
             assert data.get("work_alerts_disabled") is True
 
     await db_conn.close()
+
+
+def test_night_shift_active_and_multiplier():
+    """Verifies that night shift (00:00-07:00 MSK) applies 1.5x multiplier."""
+    from datetime import datetime, timezone
+    # 03:00 MSK = 00:00 UTC
+    utc_midnight = int(datetime(2026, 10, 2, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    assert is_night_shift_active(utc_midnight) is True
+
+    # 15:00 MSK = 12:00 UTC
+    utc_noon = int(datetime(2026, 10, 2, 12, 0, 0, tzinfo=timezone.utc).timestamp())
+    assert is_night_shift_active(utc_noon) is False
+
+    # Execute job during night
+    items = {"work_shifts": 0, "work_cooldowns": {}}
+    with patch("common.work_engine.is_night_shift_active", return_value=True), \
+         patch("random.random", return_value=0.5), \
+         patch("random.randint", return_value=100):
+        succ, change, msg, drop = execute_job_action("bottles", items)
+        assert succ is True
+        # 100 base * 1.5 night = 150 (+ 50 milestone ach_first_work) = 200
+        assert change == 200
+        assert "Ночной тариф x1.5" in msg
 

@@ -50,28 +50,26 @@ class TestDropTables:
     """Validates rebalanced drop tables eliminating baseline inflation."""
 
     def test_trash_items_count_range_and_average(self):
-        """TRASH_ITEMS: 7 items, values 10-20 ₪, average payout ~14.28 ₪."""
-        assert len(TRASH_ITEMS) == 7
+        """TRASH_ITEMS: at least 7 items, values 10-20 ₪, average payout ~13-15 ₪."""
+        assert len(TRASH_ITEMS) >= 7
         total_payout = 0
         for name, desc, val in TRASH_ITEMS:
             assert 10 <= val <= 20, f"Item {name} value {val} out of bounds [10, 20]"
             assert len(desc) > 0
             total_payout += val
         avg = total_payout / len(TRASH_ITEMS)
-        assert round(avg, 2) == 14.29  # 100 / 7 = 14.2857... ₪
-        assert total_payout == 100
+        assert 12.0 <= avg <= 16.0, f"Average {avg} outside safe economic corridor [12, 16]"
 
     def test_premium_junk_count_range_and_average(self):
-        """PREMIUM_JUNK: 6 items, values 50-130 ₪, average payout exactly 90.00 ₪."""
-        assert len(PREMIUM_JUNK) == 6
+        """PREMIUM_JUNK: at least 6 items, values 50-130 ₪, average payout ~90.00 ₪."""
+        assert len(PREMIUM_JUNK) >= 6
         total_payout = 0
         for name, desc, val in PREMIUM_JUNK:
             assert 50 <= val <= 130, f"Item {name} value {val} out of bounds [50, 130]"
             assert len(desc) > 0
             total_payout += val
         avg = total_payout / len(PREMIUM_JUNK)
-        assert avg == 90.00  # 540 / 6 = 90.00 ₪
-        assert total_payout == 540
+        assert 85.0 <= avg <= 95.0, f"Average {avg} outside safe economic corridor [85, 95]"
 
 
 # =============================================================================

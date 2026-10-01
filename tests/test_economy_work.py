@@ -121,7 +121,8 @@ class TestEconomyWork(unittest.IsolatedAsyncioTestCase):
              patch("main.get_pool", return_value=self.db_conn):
             await cb_work_action(cb, board_id="b")
             self.assertTrue(cb.answer.called)
-            self.assertIn("сдал бутылки", cb.answer.call_args[0][0].lower())
+            ans = cb.answer.call_args[0][0].lower()
+            self.assertTrue(any(w in ans for w in ["стеклотар", "бутылк"]))
 
         # 2. Second bottles collection within 24h triggers cooldown
         cb2 = self._synthetic_callback("work_bottles")
