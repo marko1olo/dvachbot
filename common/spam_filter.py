@@ -6,7 +6,7 @@ import re
 import difflib
 import unicodedata
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, UTC
 from enum import Enum, auto
@@ -20,6 +20,7 @@ class SpamResult(Enum):
     GLOBAL_BAN_REQUIRED = auto()
     BAYAN_MUTE = auto()
     SHADOW_MUTE_REQUIRED = auto()
+    REPOST_BLOCKED = auto()
 
 # --- Volatile State Trackers ---
 user_spam_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -47,6 +48,8 @@ _bayan_mute_last_ts: Dict[int, float] = defaultdict(float)
 _user_request_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=50))
 # {user_id: deque of (timestamp, text_snippet)}
 _user_link_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
+# {user_id: deque of timestamps for public channel/chat reposts}
+_user_repost_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 
 # --- Constants & Thresholds ---
 BAYAN_WINDOW_SEC = 180          # 3 minutes sliding window
@@ -64,6 +67,19 @@ RATE_FLOOD_WINDOW = 15.0
 MINUTE_FLOOD_LIMIT = 30         # > 30 messages in 60 seconds
 MINUTE_FLOOD_WINDOW = 60.0
 FLOOD_BASE_MUTE_SEC = 300.0     # 5 minutes base shadowmute for fast flood (not 20m!)
+
+# Repost / Forward from public channels limits & responses
+REPOST_LIMIT_PER_MINUTE = 4
+REPOST_WINDOW_SEC = 60.0
+REPOST_FLOOD_MUTE_SEC = 1200.0  # Standard 20 minutes shadowmute for news repost spammers
+
+REPOST_FLOOD_RESPONSES: List[str] = [
+    "Уймись, ковбой, тут не личка твоей блядины, чтобы твоё говно репощенное читать!",
+    "Тормози, шлюхопересыльщик. Тут борда, а не помойка для репостов из твоих ссаных пабликов.",
+    "Завали ебало с репостами. 4 штуки в минуту — твой потолок, дальше иди в свой Твиттер сри.",
+    "Хватит форвардить этот кал, шизоид. Своими словами пиши или пиздуй отсюда.",
+    "Репостоблядь detected. Уйми пальцы, тут никто твой пересланный мусор читать не нанимался.",
+]
 
 # User Tiers and Flood Limits (Послабления и скидки для ветеранов)
 USER_TIERS = {
@@ -819,6 +835,202 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
     return False, ""
 
 
+# --- Repost / Channel Forward Anti-Spam ---
+
+def is_repost_from_public(message: Any) -> bool:
+    """
+    Detects if a Telegram message is a forward/repost from an external public channel or group/chat.
+    Distinguishes public reposts from regular user forwards (forward_from / MessageOriginUser).
+    Supports aiogram 2.x, 3.x, and dictionary representations.
+    """
+    if message is None:
+        return False
+
+    # 1. Check forward_origin (aiogram 3.x / Telegram Bot API 7.0+)
+    origin = getattr(message, 'forward_origin', None)
+    if origin is None and isinstance(message, dict):
+        origin = message.get('forward_origin')
+
+    if origin is not None:
+        origin_type = getattr(origin, 'type', None)
+        if origin_type is None and isinstance(origin, dict):
+            origin_type = origin.get('type')
+
+        if origin_type in ('channel', 'chat'):
+            return True
+        if origin_type in ('user', 'hidden_user'):
+            return False
+
+        cls_name = type(origin).__name__
+        if cls_name in ('MessageOriginChannel', 'MessageOriginChat'):
+            return True
+        if cls_name in ('MessageOriginUser', 'MessageOriginHiddenUser'):
+            return False
+
+        if getattr(origin, 'chat', None) or getattr(origin, 'sender_chat', None):
+            return True
+        if isinstance(origin, dict) and (origin.get('chat') or origin.get('sender_chat')):
+            return True
+
+    # 2. Check forward_from_chat (legacy / aiogram 2.x & 3.x)
+    # In Telegram Bot API, forward_from_chat is present ONLY for channels or anonymous chat forwards
+    f_chat = getattr(message, 'forward_from_chat', None)
+    if f_chat is None and isinstance(message, dict):
+        f_chat = message.get('forward_from_chat')
+
+    if f_chat is not None:
+        chat_type = getattr(f_chat, 'type', None)
+        if chat_type is None and isinstance(f_chat, dict):
+            chat_type = f_chat.get('type')
+        if chat_type:
+            if chat_type in ('channel', 'supergroup', 'group', 'chat'):
+                return True
+        else:
+            return True
+
+    return False
+
+
+def get_repost_flood_response(index: int | None = None) -> str:
+    """Returns a toxic Dvach response for exceeding the repost limit."""
+    import random
+    if index is not None and 0 <= index < len(REPOST_FLOOD_RESPONSES):
+        return REPOST_FLOOD_RESPONSES[index]
+    return random.choice(REPOST_FLOOD_RESPONSES)
+
+
+def reset_repost_tracker(user_id: int | None = None) -> None:
+    """Resets repost flood tracker for a user or globally."""
+    if user_id is not None:
+        _user_repost_timestamps.pop(user_id, None)
+    else:
+        _user_repost_timestamps.clear()
+
+
+def check_repost_spam(
+    user_id: int | Any,
+    message: Any = None,
+    board_id: str = "b",
+    now_ts: float | None = None,
+    record_history: bool = True,
+    is_repost: bool | None = None,
+    auto_apply_mute: bool = True,
+    mute_duration_sec: float = REPOST_FLOOD_MUTE_SEC,
+) -> Tuple[bool, str]:
+    """
+    Checks if an incoming message is a repost from a public channel/chat and enforces
+    the limit of at most 4 reposts per sliding 60 seconds from a single user on a board/bot.
+
+    If limit is exceeded (5th and subsequent reposts within 60 seconds):
+    1. Returns (True, toxic_repost_response).
+    2. Spawns standard shadowmute task if auto_apply_mute is True and loop is running.
+
+    If within limit or message is not a repost:
+    Returns (False, "").
+    """
+    # Defensive unwrapping if message passed as first argument
+    if not isinstance(user_id, int):
+        if message is None:
+            message = user_id
+            user_id = getattr(getattr(message, 'from_user', None), 'id', None)
+            if user_id is None and isinstance(message, dict):
+                user_id = (message.get('from') or {}).get('id') or message.get('user_id')
+            if not isinstance(user_id, int):
+                user_id = 0
+
+    if is_repost is None:
+        is_repost = is_repost_from_public(message) if message is not None else False
+
+    if not is_repost:
+        return False, ""
+
+    try:
+        from bot_helpers import is_admin
+        if user_id and is_admin(user_id, board_id):
+            return False, ""
+    except Exception:
+        pass
+
+    now = float(now_ts) if now_ts is not None else time.time()
+    tracker = _user_repost_timestamps[user_id]
+
+    # Prune timestamps older than sliding window
+    while tracker and (now - float(tracker[0]) > REPOST_WINDOW_SEC):
+        tracker.popleft()
+
+    # Monotonic safety
+    if tracker and now < float(tracker[-1]):
+        now = float(tracker[-1])
+
+    if len(tracker) >= REPOST_LIMIT_PER_MINUTE:
+        response = get_repost_flood_response()
+        logger.warning(
+            f"🚫 REPOST SPAM: User {user_id} exceeded repost limit ({len(tracker)} reposts in {REPOST_WINDOW_SEC}s) on /{board_id}/"
+        )
+        if auto_apply_mute and user_id:
+            try:
+                loop = asyncio.get_running_loop()
+                from common.task_manager import spawn_task
+                spawn_task(
+                    apply_shadow_mute(
+                        user_id=user_id,
+                        board_id=board_id,
+                        duration_seconds=mute_duration_sec,
+                        reason=f"Спам репостами из пабликов (>4/мин): {response}",
+                        is_exponential=False
+                    )
+                )
+            except RuntimeError:
+                pass  # No running event loop (e.g. sync test)
+            except Exception as e:
+                logger.warning(f"Failed to spawn shadow mute task for repost spam (user {user_id}): {e}")
+        return True, response
+
+    if record_history:
+        tracker.append(now)
+
+    return False, ""
+
+
+async def check_repost_spam_async(
+    user_id: int | Any,
+    message: Any = None,
+    board_id: str = "b",
+    now_ts: float | None = None,
+    record_history: bool = True,
+    is_repost: bool | None = None,
+    auto_apply_mute: bool = True,
+    mute_duration_sec: float = REPOST_FLOOD_MUTE_SEC,
+) -> Tuple[bool, str, float]:
+    """
+    Async version of check_repost_spam.
+    If limit is exceeded, applies shadowmute directly and awaits it.
+    Returns: (is_blocked: bool, toxic_response: str, expires_at: float)
+    """
+    is_blocked, response = check_repost_spam(
+        user_id=user_id,
+        message=message,
+        board_id=board_id,
+        now_ts=now_ts,
+        record_history=record_history,
+        is_repost=is_repost,
+        auto_apply_mute=False,  # Explicitly awaited below
+    )
+    expires_at = 0.0
+    if is_blocked and auto_apply_mute and isinstance(user_id, int) and user_id:
+        try:
+            expires_at = await apply_shadow_mute(
+                user_id=user_id,
+                board_id=board_id,
+                duration_seconds=mute_duration_sec,
+                reason=f"Спам репостами из пабликов (>4/мин): {response}",
+                is_exponential=False
+            )
+        except Exception as e:
+            logger.warning(f"Error applying shadow mute for repost spam (user {user_id}): {e}")
+    return is_blocked, response, expires_at
+
+
 def _check_repeats(
     user_id: int,
     b_data: dict,
@@ -1048,6 +1260,7 @@ async def apply_shadow_mute(
     record_shadow_mute_applied(user_id)
     _user_media_burst_tracker.pop(user_id, None)
     _seen_media_groups.pop(user_id, None)
+    _user_repost_timestamps.pop(user_id, None)
     try:
         if (user_id, board_id) in _user_request_timestamps:
             _user_request_timestamps[(user_id, board_id)].clear()
@@ -1280,6 +1493,7 @@ def get_board_spam_stats(board_id: str) -> dict:
         "bayan_tracked_users": len(_bayan_tracker),
         "media_burst_tracked_users": len(_user_media_burst_tracker),
         "active_media_groups": sum(len(g) for g in _seen_media_groups.values()),
+        "repost_tracked_users": len(_user_repost_timestamps),
     }
 
 def acquire_spam_lock(user_id: int):
