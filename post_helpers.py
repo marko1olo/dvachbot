@@ -1199,6 +1199,9 @@ def _get_random_header_prefix(lang: str = 'ru') -> str:
     if rand_prefix < 0.166: return "Кошкодевочка - "
     if rand_prefix < 0.168: return "Свиноёб - "
     if rand_prefix < 0.170: return "Ариец - "
+    if rand_prefix < 0.176: return "Кобилджон - "
+    if rand_prefix < 0.182: return "Брентон Таррант - "
+    if rand_prefix < 0.188: return "Херобрин - "
     return ""
 
 async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru') -> str:

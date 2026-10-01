@@ -7,13 +7,16 @@ from post_helpers import _get_random_header_prefix, format_header
 
 
 def test_get_random_header_prefix_aryan():
-    """Verify that 'Ариец - ' prefix is returned in range [0.168, 0.170) and empty string for >= 0.170."""
+    """Verify that 'Ариец - ', 'Кобилджон - ', 'Брентон Таррант - ', 'Херобрин - ' prefixes are returned and empty string for >= 0.188."""
     test_cases = [
         (0.167, "Свиноёб - "),
         (0.168, "Ариец - "),
         (0.169, "Ариец - "),
         (0.16999, "Ариец - "),
-        (0.170, ""),
+        (0.171, "Кобилджон - "),
+        (0.177, "Брентон Таррант - "),
+        (0.183, "Херобрин - "),
+        (0.188, ""),
         (0.250, ""),
         (0.800, ""),
     ]
@@ -25,7 +28,7 @@ def test_get_random_header_prefix_aryan():
 
 
 def test_get_random_header_prefix_distribution_monte_carlo():
-    """Verify calibrated probability is ~17% (up to 0.170) and 'Ариец - ' drops under Monte Carlo."""
+    """Verify calibrated probability is ~18.8% (up to 0.188) and all prefixes drop under Monte Carlo."""
     rng = random.Random(42)
     trials = 20000
     counts = {}
@@ -38,10 +41,13 @@ def test_get_random_header_prefix_distribution_monte_carlo():
     total_with_prefix = sum(cnt for pfx, cnt in counts.items() if pfx != "")
     prefix_rate = total_with_prefix / trials
 
-    # Expected threshold is 0.170 (17.0%). Monte Carlo over 20,000 trials should stay within [15.5%, 18.5%]
-    assert 0.155 <= prefix_rate <= 0.185, f"Prefix rate {prefix_rate:.4f} outside of expected range 15.5-18.5%"
+    # Expected threshold is 0.188 (18.8%). Monte Carlo over 20,000 trials should stay within [17.0%, 20.5%]
+    assert 0.170 <= prefix_rate <= 0.205, f"Prefix rate {prefix_rate:.4f} outside of expected range 17.0-20.5%"
 
     assert "Ариец - " in counts, "Prefix 'Ариец - ' was never generated"
+    assert "Кобилджон - " in counts, "Prefix 'Кобилджон - ' was never generated"
+    assert "Брентон Таррант - " in counts, "Prefix 'Брентон Таррант - ' was never generated"
+    assert "Херобрин - " in counts, "Prefix 'Херобрин - ' was never generated"
     assert counts["Ариец - "] > 0
 
 
