@@ -734,7 +734,7 @@ def check_flood(
                 posts_count = get_cached_user_posts(user_id)
             tier = get_user_tier(posts_count)
             mult = tier.get('multiplier', 1.0)
-            max_media_allowed = int(MEDIA_BURST_MAX_ITEMS * (1.2 if mult > 1.0 else 1.0))
+            max_media_allowed = int(MEDIA_BURST_MAX_ITEMS * (1.8 if mult >= 1.75 else (1.2 if mult > 1.0 else 1.0)))
             if burst['count'] <= max_media_allowed:
                 # Absorbed into media burst buffer!
                 return False, ""
@@ -775,9 +775,15 @@ def check_flood(
     tier_rate = tier['rate_limit']
     tier_minute = tier['minute_limit']
 
+    # Apply media bonuses for media messages so albums/batches do not falsely trip flood
+    if is_media:
+        tier_burst += MEDIA_BURST_BONUS
+        tier_rate += MEDIA_RATE_BONUS
+        tier_minute += MEDIA_MINUTE_BONUS
+
     # 1. Burst flood: > burst_limit in burst_window
     mult = tier.get('multiplier', 1.0)
-    burst_limit = int(8 * mult) if is_reply else tier_burst
+    burst_limit = int(max(tier_burst, 8 * mult)) if is_reply else tier_burst
     burst_window = 10.0 if is_reply else tier.get('burst_window', BURST_FLOOD_WINDOW)
     burst_count = sum(1 for ts in current_timestamps if now - ts <= burst_window)
     if burst_count > burst_limit:
@@ -1262,15 +1268,8 @@ async def apply_shadow_mute(
     _seen_media_groups.pop(user_id, None)
     _user_repost_timestamps.pop(user_id, None)
     try:
-        if (user_id, board_id) in _user_request_timestamps:
-            _user_request_timestamps[(user_id, board_id)].clear()
-        else:
-            _user_request_timestamps[(user_id, board_id)].clear()
-    except Exception:
-        pass
-    try:
-        if user_id in _user_request_timestamps:
-            _user_request_timestamps[user_id].clear()
+        _user_request_timestamps.pop(user_id, None)
+        _user_request_timestamps.pop((user_id, board_id), None)
     except Exception:
         pass
 
@@ -1368,6 +1367,10 @@ async def evaluate_message_for_autoshadowmute(
         from common.database import apply_shadow_mute
         tier = get_user_tier(posts_count or 0)
         base_mute = tier.get('flood_base_mute_sec', FLOOD_BASE_MUTE_SEC)
+        logger.warning(
+            f"🚫 [SPAM_FILTER_TRIGGER: FLOOD] user={user_id} board={board_id} posts={posts_count} "
+            f"tier={tier.get('name')} reason='{flood_reason}' duration={base_mute}s"
+        )
         expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=base_mute, reason=flood_reason, is_exponential=False)
         return True, flood_reason, expires_at
 
@@ -1376,6 +1379,9 @@ async def evaluate_message_for_autoshadowmute(
         is_link_spam, link_reason = check_link_or_ad_spam(user_id, board_id, text_content, now_ts=now)
         if is_link_spam:
             from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: LINK_OR_AD] user={user_id} board={board_id} reason='{link_reason}' duration={BAYAN_BASE_MUTE_SEC}s"
+            )
             expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=link_reason, is_exponential=False)
             return True, link_reason, expires_at
 
@@ -1385,6 +1391,9 @@ async def evaluate_message_for_autoshadowmute(
         if not _check_cross_board_spam(user_id, board_id, payload, msg_type, raw_content_type):
             cb_reason = f"Кросс-борд веерный спам по доскам"
             from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: CROSS_BOARD] user={user_id} board={board_id} duration={BAYAN_BASE_MUTE_SEC}s"
+            )
             expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=cb_reason, is_exponential=False)
             return True, cb_reason, expires_at
 
@@ -1403,6 +1412,9 @@ async def evaluate_message_for_autoshadowmute(
     if is_bayan_trigger:
         reason = f"3+ баяна за 3 минуты"
         from common.database import apply_shadow_mute
+        logger.warning(
+            f"🚫 [SPAM_FILTER_TRIGGER: BAYAN] user={user_id} board={board_id} duration={bayan_mute_sec}s"
+        )
         expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=float(bayan_mute_sec), reason=reason, is_exponential=False)
         return True, reason, expires_at
 

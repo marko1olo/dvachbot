@@ -134,8 +134,10 @@ class NewPostProcessor:
                     import traceback; traceback.print_exc()
                 return False
             if self.user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][self.user_id]:
+                logger.warning(f"🚫 [POST DROPPED: THREAD_LOCAL_MUTE] user={self.user_id} thread={self.thread_id} board={self.board_id}")
                 return False
             if self.user_id in thread_info.get('local_shadow_mutes', {}) and time.time() < thread_info['local_shadow_mutes'][self.user_id]:
+                logger.info(f"👻 [POST GHOSTED: THREAD_LOCAL_SHADOW_MUTE] user={self.user_id} thread={self.thread_id} board={self.board_id}")
                 self.is_shadow_muted = True
             self.recipients = set(thread_info.get('subscribers', set())) - {self.user_id}
         else:
@@ -277,17 +279,74 @@ class NewPostProcessor:
             thread_id_from_bot=self.thread_id,
             stream=self.stream
         )
+        
+        # Fallback retry if create_post returned None (e.g. temporary SQLite lock/timeout)
+        if self.current_post_num is None:
+            max_retries = 3
+            delays = [0.5, 1.2, 2.5]
+            for attempt in range(max_retries):
+                retry_delay = delays[attempt] if attempt < len(delays) else 2.0
+                logger.warning(
+                    f"⚠️ [POST_RECORD_RETRY] create_post returned None for user={self.user_id} board={self.board_id}. "
+                    f"Retrying ({attempt + 1}/{max_retries}) after {retry_delay}s..."
+                )
+                await asyncio.sleep(retry_delay)
+                self.current_post_num = await create_post(
+                    board_id=self.board_id,
+                    author_id=self.user_id,
+                    content=self.final_content,
+                    timestamp=now_dt.timestamp(),
+                    reply_to=self.reply_to_post,
+                    is_shadow_muted=self.is_shadow_muted,
+                    is_from_site=False,
+                    thread_id_from_bot=self.thread_id,
+                    stream=self.stream
+                )
+                if self.current_post_num is not None:
+                    logger.info(
+                        f"✅ [POST_RECORD_RESCUED] Post #{self.current_post_num} successfully created on retry {attempt + 1} "
+                        f"for user={self.user_id} board={self.board_id}"
+                    )
+                    break
+
         if self.current_post_num is not None and self.user_id > 0:
             spawn_task(update_user_verification_stats(self.user_id, self.board_id, self.bot_instance, self.stream))
+            try:
+                from daily_abu_airdrop_engine import check_and_grant_newbie_post_bonus
+                spawn_task(check_and_grant_newbie_post_bonus(self.user_id, self.board_id, self.bot_instance))
+            except Exception:
+                pass
 
         if self.current_post_num is None:
-            if self.reply_to_post and self.user_id > 0:
+            logger.error(
+                f"❌ [POST_RECORD_FAILED: DB_EXHAUSTED] Could not create post for user={self.user_id} "
+                f"board={self.board_id} reply_to={self.reply_to_post}"
+            )
+            if self.user_id > 0:
                 try:
                     lang = 'en' if self.board_id == 'int' else 'ru'
-                    error_text = "Error: The post you are replying to has been deleted." if lang == 'en' else "Ошибка: пост, на который вы отвечаете, был удален."
+                    error_text = None
+                    if self.reply_to_post:
+                        # Check if parent post actually exists before claiming it was deleted
+                        from common.database import get_post_by_num
+                        parent_post = await get_post_by_num(self.reply_to_post)
+                        if not parent_post:
+                            error_text = (
+                                "Error: The post you are replying to has been deleted."
+                                if lang == 'en'
+                                else "Ошибка: пост, на который вы отвечаете, был удален."
+                            )
+                    if not error_text:
+                        error_text = (
+                            "⚠️ Database is temporarily busy. Please re-send your message in a few seconds."
+                            if lang == 'en'
+                            else "⚠️ Сервер временно перегружен, база данных занята. Пожалуйста, отправьте сообщение повторно через пару секунд."
+                        )
                     await self.bot_instance.send_message(self.user_id, error_text)
                 except (TelegramForbiddenError, TelegramBadRequest):
-                    import traceback; traceback.print_exc()
+                    pass
+                except Exception as ex:
+                    logger.warning(f"Failed to send failure notification to user {self.user_id}: {ex}")
             return False
 
         if not self.is_shadow_muted:

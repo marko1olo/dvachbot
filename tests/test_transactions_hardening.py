@@ -168,3 +168,97 @@ async def test_concurrent_transactions_stress(tmp_path):
             assert abs(row[0] - 1000.0) < 1e-4
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_db_transaction_recovers_orphaned_transaction(tmp_path):
+    """
+    Верифицирует, что если соединение оставлено в режиме активной зависшей транзакции
+    (например, от предыдущей отмененной задачи), db_transaction автоматически сбрасывает её
+    и успешно проводит новую транзакцию без ошибки 'cannot start a transaction within a transaction'.
+    """
+    db_path = str(tmp_path / "test_orphan.db")
+    db = await _init_test_db(db_path)
+    try:
+        # Создаем осиротевшую транзакцию напрямую через BEGIN IMMEDIATE
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (999, 'b', 50.0)")
+        assert getattr(db, "in_transaction", False) or getattr(db._conn, "in_transaction", False)
+
+        # Теперь вызываем db_transaction: она должна обнаружить зомби-транзакцию, сделать ROLLBACK
+        # и успешно начать и закоммитить свою новую транзакцию
+        async with db_transaction(db):
+            await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (1000, 'b', 77.0)")
+
+        # Проверяем, что зомби-транзакция (user 999) была откатана
+        async with db.execute("SELECT balance FROM Users WHERE user_id = 999") as c:
+            row = await c.fetchone()
+            assert row is None
+
+        # А новая (user 1000) успешно закоммичена
+        async with db.execute("SELECT balance FROM Users WHERE user_id = 1000") as c:
+            row = await c.fetchone()
+            assert row is not None
+            assert row[0] == 77.0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_db_transaction_cancellation_releases_lock_and_rolls_back(tmp_path):
+    """
+    Верифицирует, что при отмене задачи (TimeoutError) внутри db_transaction,
+    замок db_lock не зависает и транзакция не остается висеть в БД.
+    """
+    db_path = str(tmp_path / "test_cancel.db")
+    db = await _init_test_db(db_path)
+    from common.db_pool import db_lock
+    try:
+        try:
+            async with asyncio.timeout(0.05):
+                async with db_transaction(db):
+                    await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (1001, 'b', 10.0)")
+                    await asyncio.sleep(1.0)
+        except TimeoutError:
+            pass
+
+        # Проверяем, что замок db_lock освобожден
+        assert not db_lock.locked()
+
+        # Проверяем, что следующая транзакция выполняется без дедлока и ошибок
+        async with db_transaction(db):
+            await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (1002, 'b', 20.0)")
+
+        # 1001 отменен, 1002 сохранен
+        async with db.execute("SELECT balance FROM Users WHERE user_id = 1001") as c:
+            assert await c.fetchone() is None
+        async with db.execute("SELECT balance FROM Users WHERE user_id = 1002") as c:
+            row = await c.fetchone()
+            assert row is not None and row[0] == 20.0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_lazy_lock_recovers_dead_owner_task():
+    """
+    Верифицирует, что если задача-владелец LazyLock завершилась без вызова release(),
+    следующий вызов acquire() принудительно восстанавливает замок вместо бесконечного ожидания.
+    """
+    lock = LazyLock()
+
+    async def abandoned_holder():
+        await lock.acquire()
+        # Завершаемся без release()
+
+    task = asyncio.create_task(abandoned_holder())
+    await task
+
+    # Владелец завершен
+    assert task.done()
+    # Теперь другая задача пытается захватить замок — она не должна зависнуть
+    acquired = await asyncio.wait_for(lock.acquire(), timeout=1.0)
+    assert acquired is True
+    assert lock.is_owned_by_current_task()
+    lock.release()
+    assert not lock.locked()

@@ -1936,16 +1936,16 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                 )
             
             await db.execute("COMMIT")
+        except Exception as e:
+            try: await db.execute("ROLLBACK")
+            except: pass
             try:
                 from shared_state import board_data
                 if board_id in board_data:
                     board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
             except Exception:
                 pass
-        except Exception as e:
-            try: await db.execute("ROLLBACK")
-            except: pass
-            print(f"⛔ Error updating shadow mute: {e}")
+            logging.getLogger("database").error(f"⛔ Error updating shadow mute for user {user_id}: {e}")
 async def create_thread(thread_id: str, board_id: str, op_id: int, title: str, created_at: float, stream: str = 'ru'):
     """
     Создает новую запись о треде в таблице Threads и обновляет локацию.
@@ -2044,7 +2044,7 @@ async def create_post(
 ) -> Optional[int]:
     global _CACHED_MAX_POST_NUM
     # Локальный импорт, чтобы гарантировать наличие db_lock без правки шапки файла
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
     
     local_logger = logging.LoggerAdapter(logging.getLogger(__name__), {'request_id': request_id_for_log})
     # Anti-Dox: auto-mask leaked phone numbers in post content (unless admin)
@@ -2066,22 +2066,17 @@ async def create_post(
 
     content_json = fast_json_dumps(content, default=_json_serializer)
     
-    # Глобальный Lock: защищает от состояния гонки между задачами внутри одного процесса бота
+    # Защищенная транзакция через db_transaction: автоматический ROLLBACK при таймауте/ошибке,
+    # защита от зависания db_lock и сброс осиротевших транзакций.
     try:
-        async with db_lock:
-            async with asyncio.timeout(45.0):
-                for attempt in range(10):
-                    try:
-                        db = await get_pool()
-                        if not db or not db._running: 
-                            return None
-                        
-                        # BEGIN IMMEDIATE: Ключевой момент. 
-                        # Сразу запрашиваем блокировку на запись (Reserved Lock).
-                        # Если база занята сайтом, мы будем ждать здесь (busy_timeout), а не внутри SELECT.
-                        # Это предотвращает Deadlock (ситуацию, когда оба процесса прочли и оба ждут записи).
-                        await db.execute("BEGIN IMMEDIATE")
-                        
+        async with asyncio.timeout(45.0):
+            db = await get_pool()
+            if not db or not getattr(db, "_running", True): 
+                return None
+
+            for attempt in range(10):
+                try:
+                    async with db_transaction(db, immediate=True):
                         # Проверка доски (чтение внутри транзакции безопасно)
                         async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
                             if not await c.fetchone():
@@ -2194,34 +2189,27 @@ async def create_post(
                         if not is_shadow_muted:
                             await db.execute("INSERT INTO BroadcastQueue (post_num, created_at, is_sent_to_tg) VALUES (?, ?, 0)", (post_num, timestamp))
 
-                        # Явный коммит транзакции
-                        await db.execute("COMMIT")
-                        if _CACHED_MAX_POST_NUM is not None:
-                            _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
-                        return post_num
-                        
-                    except sqlite3.OperationalError as e:
-                        # Если транзакция была начата, откатываем её
-                        try: await db.execute("ROLLBACK")
-                        except: pass
-                        
-                        if "locked" in str(e).lower() or "busy" in str(e).lower():
-                            # Экспоненциальная задержка при занятой базе
-                            wait_time = min(0.1 * (2 ** attempt), 2.0)
-                            await db_sleep(wait_time)
-                            continue
-                        return None
-                    except Exception as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
-                        # Логируем ошибку, но не крашим бота
-                        if 'local_logger' in locals():
-                            local_logger.error(f"Error in create_post: {e}", exc_info=True)
-                        else:
-                            print(f"Error in create_post: {e}")
-                        return None
+                    if _CACHED_MAX_POST_NUM is not None:
+                        _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
+                    return post_num
+                    
+                except sqlite3.OperationalError as e:
+                    err_str = str(e).lower()
+                    if ("locked" in err_str or "busy" in err_str or "cannot start a transaction" in err_str) and attempt < 9:
+                        wait_time = min(0.15 * (2 ** attempt), 2.5)
+                        logging.getLogger("database").warning(
+                            f"⚠️ [CREATE_POST_DB_BUSY] Attempt {attempt + 1}/10 for board={board_id} author={author_id}: {e}. Retrying in {wait_time:.2f}s..."
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+                    logging.getLogger("database").error(f"❌ [CREATE_POST_SQL_ERROR] author={author_id} board={board_id}: {e}")
+                    return None
+                except Exception as e:
+                    logging.getLogger("database").error(f"❌ [CREATE_POST_EXCEPTION] author={author_id} board={board_id}: {e}", exc_info=True)
+                    return None
     except Exception as exc:
-        print(f"⚠️ create_post timeout / lock error: {exc}")
+        exc_desc = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        logging.getLogger("database").error(f"⚠️ [CREATE_POST_LOCK_TIMEOUT] author={author_id} board={board_id}: {exc_desc}")
         return None
     return None
 async def get_user_status(user_id: int, board_id: str) -> Optional[str]:
@@ -6601,15 +6589,15 @@ async def register_media_repost(board_id: str, file_unique_id: str, post_num: in
 
     1 — файл видят впервые, 2+ — баян. Работает на file_unique_id, который
     Telegram кладёт прямо в апдейт: ни скачивания, ни хеширования, один
-    индексированный upsert по первичному ключу (замерено ~60 мкс на 500k
-    записей — примерно в 3000 раз дешевле одного send_photo).
+    индексированный upsert по первичному ключу.
 
-    При любой ошибке возвращает 1: баян — украшение, оно не должно мешать
+    Защищён через db_lock от конфликтов с транзакциями create_post и параллельной записью.
+    При любой ошибке или таймауте тихо возвращает 1: баян — украшение, оно не должно мешать
     публикации поста.
     """
     if not board_id or not file_unique_id:
         return 1
-    from common.db_pool import get_pool
+    from common.db_pool import get_pool, db_lock, db_transaction
 
     upsert = """
         INSERT INTO MediaReposts (board_id, file_unique_id, times, first_post_num, first_seen)
@@ -6619,26 +6607,30 @@ async def register_media_repost(board_id: str, file_unique_id: str, post_num: in
     """
     params = (board_id, file_unique_id, post_num, time.time())
     try:
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(5.0):
             db = await get_pool()
-            try:
-                async with db.execute(upsert + " RETURNING times", params) as cursor:
-                    row = await cursor.fetchone()
-                if row:
-                    return int(row[0])
-            except Exception:
-                await db.execute(upsert, params)
-                async with db.execute(
-                    "SELECT times FROM MediaReposts WHERE board_id = ? AND file_unique_id = ?",
-                    (board_id, file_unique_id),
-                ) as cursor:
-                    row = await cursor.fetchone()
-                if row:
-                    return int(row[0])
+            if not db or not getattr(db, "_running", True):
+                return 1
+            async with db_transaction(db, immediate=True):
+                try:
+                    async with db.execute(upsert + " RETURNING times", params) as cursor:
+                        row = await cursor.fetchone()
+                    if row and row[0] is not None:
+                        return int(row[0])
+                except Exception:
+                    await db.execute(upsert, params)
+                    async with db.execute(
+                        "SELECT times FROM MediaReposts WHERE board_id = ? AND file_unique_id = ?",
+                        (board_id, file_unique_id),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                    if row and row[0] is not None:
+                        return int(row[0])
         return 1
     except Exception as e:
-        logging.getLogger("database").warning(f"⚠️ [REPOST] Учёт баяна не удался: {e}")
+        logging.getLogger("database").debug(f"[REPOST] Учёт баяна пропущен ({type(e).__name__}): {e}")
         return 1
+
 
 
 async def get_duplicate_counts(file_ids: list[str]) -> dict:
@@ -9325,12 +9317,11 @@ async def postcopies_daily_cleanup_loop():
 
             # Регулярное удаление просроченных записей мутов:
             try:
-                from common.db_pool import get_pool, db_lock
+                from common.db_pool import get_pool, db_transaction
                 db = await get_pool()
                 if db:
-                    async with db_lock:
+                    async with db_transaction(db, immediate=True):
                         await db.execute("DELETE FROM Mutes WHERE expires_at < ?", (time.time(),))
-                        await db.commit()
             except Exception as e:
                 logging.getLogger("database").error(f"⚠️ [MUTES_CLEANUP] Ошибка чистки просроченных мутов: {e}")
         except asyncio.CancelledError:
@@ -9344,19 +9335,27 @@ async def clean_expired_mutes() -> int:
     """
     Удаляет все истекшие муты из таблицы Mutes и синхронизирует board_data в памяти.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_transaction
     now_ts = time.time()
-    async with db_lock:
+    for attempt in range(5):
         try:
             db = await get_pool()
-            async with db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,)) as cursor:
-                deleted = cursor.rowcount
+            if not db or not getattr(db, "_running", True):
+                return 0
+            async with db_transaction(db, immediate=True):
+                async with db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,)) as cursor:
+                    deleted = cursor.rowcount
             if deleted > 0:
                 logging.getLogger("database").info(f"🧹 [MUTES_CLEANUP] Удалено {deleted} просроченных мутов из базы данных.")
             return deleted
         except Exception as e:
+            err_str = str(e).lower()
+            if ("locked" in err_str or "busy" in err_str or "cannot start a transaction" in err_str) and attempt < 4:
+                await asyncio.sleep(0.2 * (2 ** attempt))
+                continue
             logging.getLogger("database").error(f"⚠️ [MUTES_CLEANUP] Ошибка быстрой чистки просроченных мутов: {e}")
             return 0
+    return 0
 
 
 import math

@@ -1007,13 +1007,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         except Exception:
             pass
     if not board_id:
-        try:
-            print(f"⚠️ [MSG REJECTED] board_id is None for user={user_id} bot={message.bot.id}")
-        except Exception:
-            pass
+        logger.warning(f"🚫 [MSG DROPPED: NO_BOARD] user={user_id} bot={message.bot.id}")
         return
     if board_id in THREAD_BOARDS:
         if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
+            logger.warning(f"🚫 [MSG DROPPED: INVALID_THREAD] user={user_id} board={board_id}")
             try: await message.delete()
             except TelegramBadRequest: pass
             return
@@ -1074,9 +1072,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             return
         supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'] 
         if message.content_type not in supported_types:
+            logger.warning(f"🚫 [MSG DROPPED: UNSUPPORTED_TYPE] user={user_id} board={board_id} type={message.content_type}")
             await message.delete()
             return
         if message.content_type == 'text' and not (message.text and message.text.strip()):
+            logger.warning(f"🚫 [MSG DROPPED: EMPTY_TEXT] user={user_id} board={board_id}")
             await message.delete()
             return
 
@@ -1106,12 +1106,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
 
         if not is_admin(user_id, board_id):
             if user_id in b_data['users']['banned']:
+                logger.warning(f"🚫 [MSG DROPPED: BANNED_USER] user={user_id} board={board_id}")
                 try:
                     await message.delete()
                 except TelegramBadRequest: pass
                 return
             mute_until = b_data.get('mutes', {}).get(user_id)
             if mute_until and mute_until > datetime.now(UTC):
+                logger.warning(f"🚫 [MSG DROPPED: MUTE_ACTIVE] user={user_id} board={board_id} mute_until={mute_until}")
                 try:
                     await message.delete()
                 except TelegramBadRequest: pass
@@ -1244,9 +1246,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
     
     from common.database import is_shadow_muted as check_db_shadow_muted
-    is_shadow_muted = (not is_admin(user_id, board_id) and 
-                       ((user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
-                        await check_db_shadow_muted(user_id, board_id)))
+    db_sm = await check_db_shadow_muted(user_id, board_id)
+    ram_sm = bool(user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+    is_shadow_muted = (not is_admin(user_id, board_id) and (ram_sm or db_sm))
                        
     if multi_reply_blocks:
         try: await message.delete()
@@ -1301,6 +1303,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
             
             if is_shadow_muted:
+                logger.info(f"👻 [MULTI_REPLY: SHADOW_MUTE] user={user_id} board={board_id} reply_to={post_num_to_reply}")
                 await process_shadow_reject(shared_state.ShadowRejectContext(
                     bot=message.bot,
                     board_id=board_id,
@@ -1320,6 +1323,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     stream=stream,
                     reply_to_message_id=message.reply_to_message.message_id if (message.reply_to_message and i == 0) else None
                 ))
+                if not post_num:
+                    logger.error(f"❌ [MULTI_REPLY: PROCESS_NEW_POST_FAILED] user={user_id} board={board_id} reply_to={post_num_to_reply}")
                 if post_num:
                     if text_chunk and board_id != 'trash' and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
                         spawn_task(trigger_cyberchad_with_rate_limit(
@@ -1489,6 +1494,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             content['repost_count'] = _times
 
     if is_shadow_muted:
+        logger.info(f"👻 [MSG DIVERTED: SHADOW_MUTE] user={user_id} board={board_id} reply_to={reply_to_post}")
         await process_shadow_reject(shared_state.ShadowRejectContext(
             bot=message.bot,
             board_id=board_id,
@@ -1508,6 +1514,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             stream=stream,
             reply_to_message_id=message.reply_to_message.message_id if message.reply_to_message else None
         ))
+        if not post_num:
+            logger.error(
+                f"❌ [MSG DROPPED: PROCESS_NEW_POST_RETURNED_NONE] user={user_id} board={board_id} "
+                f"reply_to={reply_to_post} text={repr(text_for_corpus or content.get('text') or '')[:80]}"
+            )
         if post_num and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
             is_music = (message.content_type == 'audio') or (message.content_type == 'document' and is_music_document(message.document))
             if message.content_type in ('voice', 'video_note') and board_id != 'trash':
@@ -1635,6 +1646,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         # Пользователь уже в теневом муте. Сообщение тихо отбрасывается (drop silently)
         # через process_shadow_reject без уведомлений о муте и БЕЗ накрутки штрафного времени!
         # Мут должен истекать в свой назначенный срок, а не становиться вечным.
+        logger.info(f"👻 [CHECK_SPAM: ALREADY_SHADOW_MUTED] user={user_id} board={board_id}")
         await handle_shadow_mute_continuation(user_id, board_id, reason="Постинг в муте (тихий дроп без продления)")
         return True  # Let handle_message route to process_shadow_reject!
 
@@ -1653,15 +1665,14 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         media_group_id=media_group_id
     )
     if should_mute:
-        # User is placed into silent shadow-mute in DB and RAM.
-        # Return True so handle_message smoothly routes to process_shadow_reject (Ghost Posting)
-        # instead of deleting the message without confirmation.
+        logger.warning(f"🚫 [CHECK_SPAM: SHADOW_MUTE_TRIGGERED] user={user_id} board={board_id} reason='{mute_reason}' exp={mute_exp}")
         return True
 
     # 2. Legacy / rate limit analysis
     result, level = await analyze_message_for_spam(user_id, board_id, content, msg_type, raw_content_type, skip_bayan=True)
     if result == SpamResult.GLOBAL_BAN_REQUIRED:
         msg_str = f"🚨 [GLOBAL] РЕЙД-БОТ / СПАМЕР ОБНАРУЖЕН: user {user_id}. Выдан глобальный теневой мут на 7 дней везде кроме /b/."
+        logger.warning(f"🚨 [CHECK_SPAM: GLOBAL_BAN_TRIGGERED] user={user_id}")
         print(msg_str)
         from common.database import update_shadow_mute, log_global_event
         spawn_task(log_global_event('bot', msg_str))
@@ -1672,8 +1683,10 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                 spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
         return True  # Route to process_shadow_reject!
     elif result in (SpamResult.BAYAN_MUTE, SpamResult.SHADOW_MUTE_REQUIRED):
+        logger.info(f"👻 [CHECK_SPAM: BAYAN_OR_SHADOW] user={user_id} board={board_id} result={result}")
         return True  # Route to process_shadow_reject!
     elif result == SpamResult.BAN_REQUIRED:
+        logger.warning(f"🚫 [CHECK_SPAM: RATE_LIMIT_BAN] user={user_id} board={board_id} type={msg_type}")
         from common.database import apply_shadow_mute
         await apply_shadow_mute(user_id, board_id, duration_seconds=300.0, reason=f"Рейт-лимит спама {msg_type}", is_exponential=False)
         return True  # Route to process_shadow_reject!
@@ -1688,6 +1701,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
 
     b_data = board_data[board_id]
     if not _check_repeats(user_id, b_data, (content, msg_type), rules, violations):
+        logger.warning(f"🚫 [CHECK_SPAM: REPEAT_SPAM] user={user_id} board={board_id} type={msg_type}")
         from common.database import apply_shadow_mute
         await apply_shadow_mute(user_id, board_id, duration_seconds=300.0, reason=f"Спам повторами {msg_type}", is_exponential=False)
         return True  # Route to process_shadow_reject!

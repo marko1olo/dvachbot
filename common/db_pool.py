@@ -4,9 +4,14 @@ import atexit
 import sqlite3
 import os
 import logging
+import contextvars
+import time
 from common.config import DB_NAME
 
 logger = logging.getLogger("db_pool")
+
+# Отслеживание глубины транзакций для конкретной asyncio задачи
+_task_tx_depth = contextvars.ContextVar("_task_tx_depth", default=0)
 
 
 def _patch_aiosqlite_safe_worker():
@@ -89,6 +94,7 @@ class LazyLock:
         self._loop = None
         self._owner = None
         self._depth = 0
+        self._acquired_at = 0.0
 
     def _get_lock(self):
         try:
@@ -100,9 +106,10 @@ class LazyLock:
             self._loop = loop
             self._owner = None
             self._depth = 0
+            self._acquired_at = 0.0
         return self._lock
 
-    async def acquire(self):
+    async def acquire(self, timeout: float = None):
         lock = self._get_lock()
         try:
             current = asyncio.current_task()
@@ -114,9 +121,28 @@ class LazyLock:
             self._depth += 1
             return True
 
-        res = await lock.acquire()
+        # Защита от мертвого владельца: если владелец уже завершился (done),
+        # сбрасываем замок, чтобы не зависать намертво!
+        if self._owner is not None and getattr(self._owner, "done", lambda: False)():
+            logger.error(
+                f"🚨 [LAZY_LOCK] Владелец замка {self._owner} завершился (done), но замок не освободил! Принудительный сброс замка."
+            )
+            self._depth = 0
+            self._owner = None
+            self._acquired_at = 0.0
+            if self._lock and self._lock.locked():
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
+
+        if timeout is not None:
+            res = await asyncio.wait_for(lock.acquire(), timeout=timeout)
+        else:
+            res = await lock.acquire()
         self._owner = current
         self._depth = 1
+        self._acquired_at = time.monotonic()
         return res
 
     def release(self):
@@ -131,6 +157,7 @@ class LazyLock:
                 if self._depth <= 0:
                     self._depth = 0
                     self._owner = None
+                    self._acquired_at = 0.0
                     if self._lock.locked():
                         self._lock.release()
             else:
@@ -139,6 +166,7 @@ class LazyLock:
                 else:
                     self._depth = 0
                     self._owner = None
+                    self._acquired_at = 0.0
                     if self._lock.locked():
                         self._lock.release()
 
@@ -153,6 +181,8 @@ class LazyLock:
             current = asyncio.current_task()
         except RuntimeError:
             current = None
+        if self._owner is not None and getattr(self._owner, "done", lambda: False)():
+            return False
         return current is not None and self._owner is current
 
     def locked_by_current_task(self) -> bool:
@@ -216,9 +246,9 @@ async def get_pool():
                 # isolation_level=None ОТКЛЮЧАЕТ неявные транзакции.
                 # Теперь мы обязаны сами писать BEGIN/COMMIT, но получаем полный контроль
                 # и возможность использовать BEGIN IMMEDIATE для предотвращения дедлоков.
-                conn = await aiosqlite.connect(DB_NAME, timeout=60.0, isolation_level=None)
+                conn = await aiosqlite.connect(DB_NAME, timeout=30.0, isolation_level=None)
                 
-                await conn.execute("PRAGMA busy_timeout = 60000;")  
+                await conn.execute("PRAGMA busy_timeout = 25000;")  
                 await conn.execute("PRAGMA journal_mode=WAL;")
                 await conn.execute("PRAGMA synchronous = NORMAL;")
                 await conn.execute("PRAGMA temp_store = MEMORY;")
@@ -324,13 +354,42 @@ async def db_sleep(delay: float):
             db_lock._depth = saved_depth
 
 
+async def reset_orphaned_transaction(db=None) -> bool:
+    """
+    Проверяет наличие зависшей/осиротевшей транзакции на соединении и принудительно
+    сбрасывает её через ROLLBACK.
+    Возвращает True, если был выполнен ROLLBACK.
+    """
+    global _db_connection
+    conn = db or _db_connection
+    if not conn:
+        return False
+    in_tx = getattr(conn, "in_transaction", False)
+    if not in_tx:
+        core = getattr(conn, "_conn", None)
+        if core:
+            in_tx = getattr(core, "in_transaction", False)
+    if in_tx:
+        try:
+            await conn.execute("ROLLBACK")
+            logger.warning("🔄 [DB_POOL] Успешно сброшена зависшая транзакция на соединении через ROLLBACK.")
+            return True
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "no transaction is active" not in err_msg:
+                logger.error(f"❌ [DB_POOL] Ошибка сброса зависшей транзакции: {e}")
+    return False
+
+
 class db_transaction:
     """
     Асинхронный контекстный менеджер для безопасного выполнения транзакций.
     - Автоматически захватывает db_lock (если текущая задача им еще не владеет).
+    - Защищает от дедлоков и утечек при отмене задач / таймаутах.
+    - Автоматически обнаруживает и откатывает (ROLLBACK) зависшие осиротевшие транзакции.
     - Предотвращает ошибки SQLite 'cannot start a transaction within a transaction'
       путем использования SAVEPOINT при вложенных транзакциях.
-    - Поддерживает автоматический retry при sqlite3.OperationalError: database is locked.
+    - Поддерживает автоматический retry при sqlite3.OperationalError: database is locked / busy.
     - Гарантирует отсутствие 'cannot commit - no transaction is active' и 'cannot rollback'.
     - Корректно откатывает только свой savepoint при вложенной ошибке или всю транзакцию на верхнем уровне.
     """
@@ -349,49 +408,79 @@ class db_transaction:
         is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
         is_owned = is_owned_fn() if callable(is_owned_fn) else False
         if not is_owned:
-            await db_lock.acquire()
-            self._lock_acquired = True
-
-        if self.db is None:
-            self.db = await get_pool()
-
-        in_tx = getattr(self.db, "in_transaction", False)
-        if not in_tx:
-            conn = getattr(self.db, "_conn", None)
-            if conn:
-                in_tx = getattr(conn, "in_transaction", False)
-
-        for attempt in range(self.max_retries):
             try:
-                if in_tx:
-                    self._is_nested = True
-                    db_transaction._sp_counter += 1
-                    self._savepoint_name = f"sp_{id(self)}_{db_transaction._sp_counter}"
-                    await self.db.execute(f"SAVEPOINT {self._savepoint_name}")
-                else:
-                    self._is_nested = False
-                    if self.immediate:
-                        await self.db.execute("BEGIN IMMEDIATE")
+                await db_lock.acquire()
+                self._lock_acquired = True
+            except BaseException:
+                if self._lock_acquired:
+                    db_lock.release()
+                    self._lock_acquired = False
+                raise
+
+        try:
+            if self.db is None:
+                self.db = await get_pool()
+
+            depth = _task_tx_depth.get()
+            if depth == 0:
+                self._is_nested = False
+                # Проверяем наличие осиротевшей транзакции от предыдущего отмененного таска
+                await reset_orphaned_transaction(self.db)
+            else:
+                self._is_nested = True
+
+            for attempt in range(self.max_retries):
+                try:
+                    if self._is_nested:
+                        db_transaction._sp_counter += 1
+                        self._savepoint_name = f"sp_{id(self)}_{db_transaction._sp_counter}"
+                        await self.db.execute(f"SAVEPOINT {self._savepoint_name}")
                     else:
-                        await self.db.execute("BEGIN")
-                break
-            except Exception as e:
-                err_str = str(e).lower()
-                if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
-                    if self._lock_acquired:
-                        db_lock.release()
-                        self._lock_acquired = False
-                    await asyncio.sleep(self.base_delay * (2 ** attempt))
-                    if not is_owned:
-                        await db_lock.acquire()
-                        self._lock_acquired = True
-                else:
-                    raise
-        return self.db
+                        if self.immediate:
+                            await self.db.execute("BEGIN IMMEDIATE")
+                        else:
+                            await self.db.execute("BEGIN")
+                    break
+                except Exception as e:
+                    err_str = str(e).lower()
+                    # Если предыдущий отмененный запрос в воркере aiosqlite успел включить транзакцию
+                    if "cannot start a transaction within a transaction" in err_str and not self._is_nested:
+                        logger.warning("⚠️ [DB_POOL] 'cannot start a transaction' на верхнем уровне! Сбрасываем зомби-транзакцию...")
+                        try:
+                            await self.db.execute("ROLLBACK")
+                        except Exception:
+                            pass
+                        if attempt < self.max_retries - 1:
+                            await asyncio.sleep(self.base_delay * (attempt + 1))
+                            continue
+
+                    if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
+                        if self._lock_acquired:
+                            db_lock.release()
+                            self._lock_acquired = False
+                        await asyncio.sleep(self.base_delay * (2 ** attempt))
+                        if not is_owned:
+                            await db_lock.acquire()
+                            self._lock_acquired = True
+                    else:
+                        raise
+
+            _task_tx_depth.set(depth + 1)
+            return self.db
+        except BaseException:
+            # Гарантируем немедленное освобождение лока при любой ошибке или таймауте внутри __aenter__
+            if self._lock_acquired:
+                db_lock.release()
+                self._lock_acquired = False
+            raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         try:
+            depth = _task_tx_depth.get()
+            _task_tx_depth.set(max(0, depth - 1))
+
             if exc_type is not None:
+                # Ошибка или отмена/таймаут
                 if self._is_nested and self._savepoint_name:
                     try:
                         await self.db.execute(f"ROLLBACK TO {self._savepoint_name}")
@@ -404,6 +493,7 @@ class db_transaction:
                     except Exception:
                         pass
             else:
+                # Штатный выход
                 if self._is_nested and self._savepoint_name:
                     try:
                         await self.db.execute(f"RELEASE {self._savepoint_name}")
@@ -471,13 +561,23 @@ async def safe_begin_immediate(db) -> bool:
         if conn:
             in_tx = getattr(conn, "in_transaction", False)
     if in_tx:
-        return False
+        if _task_tx_depth.get() == 0:
+            logger.warning("⚠️ [DB_POOL] safe_begin_immediate: обнаружена осиротевшая транзакция, сбрасываем...")
+            await reset_orphaned_transaction(db)
+        else:
+            return False
     try:
         await db.execute("BEGIN IMMEDIATE")
         return True
     except Exception as e:
-        if "cannot start a transaction within a transaction" in str(e).lower():
-            return False
+        err_str = str(e).lower()
+        if "cannot start a transaction within a transaction" in err_str:
+            try:
+                await db.execute("ROLLBACK")
+                await db.execute("BEGIN IMMEDIATE")
+                return True
+            except Exception:
+                return False
         raise
 
 

@@ -102,6 +102,11 @@ except ImportError:
     weekly_airdrop_loop = None
 
 try:
+    from daily_abu_airdrop_engine import daily_airdrop_loop
+except ImportError:
+    daily_airdrop_loop = None
+
+try:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
@@ -27017,15 +27022,14 @@ async def mutes_cleanup_loop():
             # Санитария просроченных cursed_until и TTL shadowbans
             now_ts = int(time.time())
             try:
-                from common.db_pool import get_pool, db_lock
+                from common.db_pool import get_pool, db_transaction
                 db = await get_pool()
                 if db:
-                    async with db_lock:
+                    async with db_transaction(db, immediate=True):
                         await db.execute("UPDATE Users SET cursed_until = 0 WHERE cursed_until > 0 AND cursed_until < ?", (now_ts,))
                         await db.execute("UPDATE Users SET shadow_ban_sticker = 0 WHERE shadow_ban_sticker > 1 AND shadow_ban_sticker < ?", (now_ts,))
                         await db.execute("UPDATE Users SET shadow_ban_gif = 0 WHERE shadow_ban_gif > 1 AND shadow_ban_gif < ?", (now_ts,))
                         await db.execute("UPDATE Users SET shadow_ban_media = 0 WHERE shadow_ban_media > 1 AND shadow_ban_media < ?", (now_ts,))
-                        await db.commit()
             except Exception as e:
                 logger.warning(f"[mutes_cleanup] Ошибка очистки TTL shadowbans / cursed_until: {e}")
 
@@ -28274,6 +28278,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "wealth_tax_daily": lambda: wealth_tax_daily_loop(bots),
         "auction_finalizer": lambda: auction_finalizer_loop(bots),
         "weekly_airdrop": lambda: weekly_airdrop_loop(bots) if callable(weekly_airdrop_loop) else asyncio.sleep(0),
+        "daily_airdrop": lambda: daily_airdrop_loop(bots) if callable(daily_airdrop_loop) else asyncio.sleep(0),
         "periodic_stats_publisher": lambda: periodic_publisher.periodic_stats_publisher(
             bots,
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())
