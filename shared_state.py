@@ -1011,5 +1011,13 @@ __all__ = [
     'get_user_daily_shop_buys_async',
     'record_shop_purchase',
     'record_shop_purchase_async',
+    'set_partyvan_victim_immunity',
+    'get_partyvan_victim_immunity',
+    'set_partyvan_user_cooldown',
+    'get_partyvan_user_cooldown',
+    'set_partyvan_board_cooldown',
+    'get_partyvan_board_cooldown',
+    'BOT_MESSAGE_TO_POST_LIMIT',
+    'check_shop_purchase_limit',
 ]
 
