@@ -3177,7 +3177,34 @@ class ModeTransformer:
         self.text_key = None
         self.plain_text = ""
         self.allow_visual = False
-        self.header = self.modified_content.get('header') or f"Пост /{self.board_id}/"
+
+        # 1. Resolve reply_to_post from content or caller frame (NewPostProcessor)
+        self.reply_to_post = self.modified_content.get('reply_to_post')
+        if not self.reply_to_post:
+            try:
+                import sys
+                f = sys._getframe(1)
+                for _ in range(4):
+                    if f is None:
+                        break
+                    caller_self = f.f_locals.get('self')
+                    if caller_self and hasattr(caller_self, 'reply_to_post') and caller_self.reply_to_post:
+                        self.reply_to_post = caller_self.reply_to_post
+                        break
+                    f = f.f_back
+            except Exception:
+                pass
+
+        if self.reply_to_post:
+            self.modified_content['reply_to_post'] = self.reply_to_post
+
+        # 2. Header resolution with reply awareness
+        if self.modified_content.get('header'):
+            self.header = self.modified_content['header']
+        elif self.reply_to_post:
+            self.header = f"Пост /{self.board_id}/ >>{self.reply_to_post}"
+        else:
+            self.header = f"Пост /{self.board_id}/"
 
     def _check_active_mode(self) -> bool:
         return any(self.b_data.get(mode) for mode in MODE_FLAGS)
@@ -3188,7 +3215,22 @@ class ModeTransformer:
         if not self.text_key:
             return False
         self.plain_text = clean_html_tags(self.modified_content.get(self.text_key, '')) or ""
-        self.allow_visual = (self.modified_content.get('type') == 'text') and (len(self.plain_text) < 180)
+
+        # Extract reply_to from text if not already identified
+        if not self.reply_to_post and self.plain_text:
+            m = re.search(r'(?:>>|#|&gt;&gt;)(\d+)', self.plain_text)
+            if m:
+                try:
+                    self.reply_to_post = int(m.group(1))
+                    self.modified_content['reply_to_post'] = self.reply_to_post
+                    if not self.modified_content.get('header'):
+                        self.header = f"Пост /{self.board_id}/ >>{self.reply_to_post}"
+                except (ValueError, TypeError):
+                    pass
+
+        # Measure user content length excluding reply link prefix so replies aren't cut off
+        effective_text = re.sub(r'^(?:>>\d+\s*)+', '', self.plain_text).strip()
+        self.allow_visual = (self.modified_content.get('type') == 'text') and (len(effective_text) < 180)
         return True
 
     async def _run_transformation(self):
@@ -3229,6 +3271,8 @@ class ModeTransformer:
             if res_type == 'image' and self.allow_visual:
                 self.modified_content['type'] = 'photo'
                 self.modified_content['image_bytes'] = res_data
+                if self.reply_to_post:
+                    self.modified_content['reply_to_post'] = self.reply_to_post
                 if 'text' in self.modified_content: self.modified_content['text'] = ''
                 if 'caption' in self.modified_content: self.modified_content['caption'] = ''
                 p_num = self.modified_content.get('post_num', 'new')

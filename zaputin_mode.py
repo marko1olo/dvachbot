@@ -1021,10 +1021,13 @@ def zaputin_transform(text: str, header: str = None):
 
     # Визуальный пост для коротких сообщений (если передан header)
     if header:
-        if len(transformed_text) < 180 and random.random() < 0.25:
+        clean_text_check = re.sub(r'^(?:>>\d+\s*)+', '', text).strip()
+        if len(clean_text_check) < 180 and random.random() < 0.25:
             try:
                 from mode_visuals import create_visual_post
                 clean_text = transformed_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '').strip()
+                if re.search(r'>>\d+|#\d+', header):
+                    clean_text = re.sub(r'^(?:>>\d+\s*)+', '', clean_text).strip()
                 image_bytes = create_visual_post(mode='zaputin', text=clean_text, header=header)
                 if image_bytes:
                     return ('image', image_bytes)

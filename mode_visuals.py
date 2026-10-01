@@ -236,8 +236,19 @@ def create_visual_post(mode, text, header=None):
             clean_h = ""
             if header:
                 clean_h = header.replace("<i>", "").replace("</i>", "").replace("###", "").strip()
-                for em in ["💙", "💛", "🇺🇦", "🚜", "🐷", "🔥", "✈️", "💥", "👑", "⚡", "🎯", "🇵🇱", "🧠"]:
+                for em in ["💙", "💛", "🇺🇦", "🚜", "🐷", "🔥", "✈️", "💥", "👑", "⚡", "🎯", "🇵🇱", "🧠", "🇷🇺"]:
                     clean_h = clean_h.replace(em, "").strip()
+                clean_h = re.sub(r'[\U00010000-\U0010ffff]', '', clean_h).strip()
+
+            # If header didn't specify a reply, but text contains >>12345, reflect it in clean_h
+            if not re.search(r'>>\d+|#\d+', clean_h):
+                m_rep = re.search(r'(?:>>|#)(\d+)', text)
+                if m_rep:
+                    clean_h = f"Ответ на #{m_rep.group(1)}"
+
+            # If clean_h has a reply reference, strip redundant leading >>12345 from text
+            if re.search(r'>>\d+|#\d+|Ответ', clean_h, re.IGNORECASE):
+                text = re.sub(r'^(?:>>\d+\s*)+', '', text).strip()
 
             def wrap_text_str(odraw, txt, font, max_w):
                 words = txt.split()
@@ -335,8 +346,20 @@ def create_visual_post(mode, text, header=None):
                 else:
                     def_head = "БАЗА ДВАЧА"
 
-                head_txt = clean_h if clean_h else def_head
+                is_reply_header = bool(re.search(r'>>\d+|#\d+|ответ', clean_h.lower()))
+                is_generic_board = bool(re.fullmatch(r'Пост\s*/[a-zA-Z0-9_-]+/?', clean_h))
+
+                if is_reply_header:
+                    head_txt = clean_h
+                elif not clean_h or is_generic_board:
+                    head_txt = def_head
+                else:
+                    head_txt = clean_h
+
                 hw = draw.textlength(head_txt, font=f_dem_head)
+                if hw > 860:
+                    f_dem_head = get_font_by_size(32)
+                    hw = draw.textlength(head_txt, font=f_dem_head)
                 draw.text(((1024 - hw)/2, 680), head_txt, font=f_dem_head, fill=(255, 215, 40, 255))
                 
                 wrapped = wrap_text_str(draw, text, f_dem_sub, 860)
