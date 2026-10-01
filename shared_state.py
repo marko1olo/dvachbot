@@ -1006,6 +1006,10 @@ __all__ = [
     '_DUEL_TIMEOUT',
     'make_duel_token',
     'resolve_duel_token',
-    'ROAST_COOLDOWN'
+    'ROAST_COOLDOWN',
+    'get_user_daily_shop_buys',
+    'get_user_daily_shop_buys_async',
+    'record_shop_purchase',
+    'record_shop_purchase_async',
 ]
 
