@@ -208,7 +208,7 @@ async def check_and_grant_newbie_post_bonus(
         return False
 
     try:
-        from common.db_pool import get_pool, db_lock
+        from common.db_pool import get_pool, db_lock, db_transaction
         from common.database import (
             add_user_global_balance,
             record_user_transaction,
@@ -223,76 +223,98 @@ async def check_and_grant_newbie_post_bonus(
         db = await get_pool()
 
         async with db_lock:
-            # Получаем текущий posts_count и active_items
-            async with db.execute(
-                "SELECT SUM(posts_count), MAX(active_items) FROM Users WHERE user_id = ?",
-                (user_id,)
-            ) as cur:
-                row = await cur.fetchone()
+            async with db_transaction(db):
+                # 1. Проверяем, не забанен ли пользователь
+                async with db.execute(
+                    "SELECT status FROM Users WHERE user_id = ? AND status = 'banned'",
+                    (user_id,)
+                ) as cur:
+                    if await cur.fetchone():
+                        return False
 
-            if not row:
-                return False
+                # 2. Проверяем, нет ли уже транзакции выдачи гранта (абсолютная защита от дублирования)
+                async with db.execute(
+                    "SELECT COUNT(*) FROM UserTransactions WHERE user_id = ? AND category = 'newbie_grant'",
+                    (user_id,)
+                ) as cur:
+                    row = await cur.fetchone()
+                    if row and int(row[0] or 0) > 0:
+                        return False
 
-            total_posts = int(row[0] or 0)
-            raw_items = row[1]
+                # 3. Проверяем active_items по всем записям пользователя
+                async with db.execute(
+                    "SELECT board_id, active_items FROM Users WHERE user_id = ?",
+                    (user_id,)
+                ) as cur:
+                    user_rows = await cur.fetchall()
 
-            # Проверяем условие ньюфага
-            if total_posts > NEWBIE_GRANT_MAX_POSTS:
-                return False
+                for r in user_rows:
+                    raw_items = r[1]
+                    if raw_items:
+                        try:
+                            items_data = json.loads(raw_items)
+                            if items_data.get("newbie_abu_grant"):
+                                return False
+                        except (json.JSONDecodeError, TypeError):
+                            pass
 
-            # Парсим active_items для проверки флага
-            try:
-                active_items = json.loads(raw_items) if raw_items else {}
-            except (json.JSONDecodeError, TypeError):
-                active_items = {}
+                # 4. Проверяем условие ньюфага по числу постов
+                async with db.execute(
+                    "SELECT SUM(posts_count) FROM Users WHERE user_id = ?",
+                    (user_id,)
+                ) as cur:
+                    p_row = await cur.fetchone()
+                    total_posts = int(p_row[0] or 0) if p_row and p_row[0] is not None else 0
 
-            if active_items.get("newbie_abu_grant"):
-                return False  # Уже выдавали
-
-            # Проверяем, нет ли записи в UserTransactions (дополнительная защита)
-            async with db.execute(
-                "SELECT COUNT(*) FROM UserTransactions WHERE user_id = ? AND category = 'newbie_grant'",
-                (user_id,)
-            ) as cur:
-                row = await cur.fetchone()
-                if row and int(row[0] or 0) > 0:
-                    # Есть транзакция, но флага нет — синхронизируем флаг и выходим
-                    active_items["newbie_abu_grant"] = True
-                    await db.execute(
-                        "UPDATE Users SET active_items = ? WHERE user_id = ?",
-                        (json.dumps(active_items, ensure_ascii=False), user_id)
-                    )
-                    await db.commit()
+                if total_posts > NEWBIE_GRANT_MAX_POSTS:
                     return False
 
-            # Проверяем, хватает ли в Фонде Абу
-            fund_total = await get_abu_fund_total(db)
-            if fund_total < NEWBIE_GRANT_AMOUNT:
-                logger.warning(
-                    f"[NewbieGrant] Abu fund too low ({fund_total:.0f} ₪) for user {user_id}"
+                # 5. Проверяем, хватает ли в Фонде Абу (не даём уйти в минус и не создаём шекели из воздуха)
+                fund_total = await get_abu_fund_total(db)
+                if fund_total < NEWBIE_GRANT_AMOUNT:
+                    logger.warning(
+                        f"[NewbieGrant] Abu fund too low ({fund_total:.0f} ₪) for user {user_id}"
+                    )
+                    return False
+
+                # 6. Атомарно списываем из фонда Абу внутри транзакции
+                await deduct_from_abu_fund(db, float(NEWBIE_GRANT_AMOUNT), reason=f"newbie_grant_{user_id}")
+
+                # 7. Выдаём грант на баланс и фиксируем в UserTransactions
+                await add_user_global_balance(db, user_id, board_id, float(NEWBIE_GRANT_AMOUNT))
+                await record_user_transaction(
+                    db=db,
+                    user_id=user_id,
+                    amount=float(NEWBIE_GRANT_AMOUNT),
+                    category="newbie_grant",
+                    description="Приветственный грант ньюфагу от Фонда Абу"
                 )
-                return False
 
-            # Выдаём грант
-            await add_user_global_balance(db, user_id, board_id, float(NEWBIE_GRANT_AMOUNT))
-            await record_user_transaction(
-                db=db,
-                user_id=user_id,
-                amount=float(NEWBIE_GRANT_AMOUNT),
-                category="newbie_grant",
-                description=f"Приветственный грант ньюфагу от Фонда Абу"
-            )
+                # 8. Выставляем флаг во всех записях Users
+                has_current_board = False
+                for b_row in user_rows:
+                    b_board = b_row[0]
+                    if b_board == board_id:
+                        has_current_board = True
+                    try:
+                        ai_dict = json.loads(b_row[1]) if b_row[1] else {}
+                    except (json.JSONDecodeError, TypeError):
+                        ai_dict = {}
+                    ai_dict["newbie_abu_grant"] = True
+                    await db.execute(
+                        "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                        (json.dumps(ai_dict, ensure_ascii=False), user_id, b_board)
+                    )
 
-            # Выставляем флаг в active_items
-            active_items["newbie_abu_grant"] = True
-            await db.execute(
-                "UPDATE Users SET active_items = ? WHERE user_id = ?",
-                (json.dumps(active_items, ensure_ascii=False), user_id)
-            )
-            await db.commit()
-
-        # Списываем из фонда (вне db_lock — у deduct_from_abu_fund есть своя защита)
-        await deduct_from_abu_fund(db, float(NEWBIE_GRANT_AMOUNT), reason=f"newbie_grant_{user_id}")
+                if not has_current_board:
+                    init_items = {"newbie_abu_grant": True}
+                    await db.execute(
+                        """
+                        INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                        """,
+                        (user_id, board_id, json.dumps(init_items, ensure_ascii=False))
+                    )
 
         logger.info(f"[NewbieGrant] Granted {NEWBIE_GRANT_AMOUNT} ₪ to newbie {user_id}")
 
@@ -331,16 +353,27 @@ async def check_and_grant_newbie_post_bonus(
 async def fetch_daily_qualified_users(db) -> list[int]:
     """
     Возвращает список user_id, написавших > DAILY_MIN_POSTS_QUALIFY постов за последние 24 часа.
-    Исключает системные (author_id <= 0) и теневые посты.
+    Исключает системные (author_id <= 0), теневые посты и забаненных пользователей.
     """
     since_ts = time.time() - 86400.0
-    query = """
-        SELECT author_id
-        FROM Posts
-        WHERE timestamp >= ?
-          AND author_id > 0
-          AND IFNULL(is_shadow, 0) = 0
-        GROUP BY author_id
+    has_status_col = False
+    try:
+        async with db.execute("PRAGMA table_info(Users)") as cur:
+            cols = [row[1] for row in await cur.fetchall()]
+            has_status_col = "status" in cols
+    except Exception:
+        has_status_col = False
+
+    status_filter = "AND p.author_id NOT IN (SELECT user_id FROM Users WHERE status = 'banned')" if has_status_col else ""
+
+    query = f"""
+        SELECT p.author_id
+        FROM Posts p
+        WHERE p.timestamp >= ?
+          AND p.author_id > 0
+          AND IFNULL(p.is_shadow, 0) = 0
+          {status_filter}
+        GROUP BY p.author_id
         HAVING COUNT(*) > ?
     """
     async with db.execute(query, (since_ts, DAILY_MIN_POSTS_QUALIFY)) as cur:
@@ -351,14 +384,17 @@ async def fetch_daily_qualified_users(db) -> list[int]:
 def pick_daily_winners(qualified: list[int]) -> list[int]:
     """
     Выбирает победителей с равными шансами (1 билет на юзера, без учёта числа постов).
-    Количество победителей: min(len(qualified), DAILY_WINNER_COUNT_MAX), но не менее
+    Количество победителей: min(len(unique_qualified), DAILY_WINNER_COUNT_MAX), но не менее
     DAILY_WINNER_COUNT_MIN (если квалифицированных меньше — берём всех).
     """
     if not qualified:
         return []
-    n = min(len(qualified), DAILY_WINNER_COUNT_MAX)
-    n = max(n, min(DAILY_WINNER_COUNT_MIN, len(qualified)))
-    return random.sample(qualified, n)
+    unique_qualified = list(dict.fromkeys(qualified))
+    if not unique_qualified:
+        return []
+    n = min(len(unique_qualified), DAILY_WINNER_COUNT_MAX)
+    n = max(n, min(DAILY_WINNER_COUNT_MIN, len(unique_qualified)))
+    return random.sample(unique_qualified, n)
 
 
 def format_daily_board_announcement(
@@ -406,7 +442,7 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
     Полный цикл ежесуточного честного аирдропа.
     Возвращает словарь с результатом.
     """
-    from common.db_pool import db_lock
+    from common.db_pool import db_lock, db_transaction
     from common.database import (
         add_user_global_balance,
         record_user_transaction,
@@ -421,7 +457,7 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
 
     now_ts = time.time()
 
-    # ── 1. Защита от двойного запуска (5-часовое окно) ──────────────────────
+    # ── 1. Защита от двойного запуска (минимум 20-часовое окно) ──────────────────────
     async with db_lock:
         async with db.execute(
             "SELECT value FROM GlobalStats WHERE key = 'last_daily_airdrop_run'"
@@ -429,7 +465,7 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
             row = await cur.fetchone()
         last_run_ts = float(row[0]) if row and row[0] else 0.0
 
-    if last_run_ts > 0 and (now_ts - last_run_ts) < 5 * 3600:
+    if last_run_ts > 0 and (now_ts - last_run_ts) < (20 * 3600):
         logger.info(f"[DailyAirdrop] Skipped — ran recently at {last_run_ts:.0f}")
         return {"status": "skipped", "reason": "already_ran_recently"}
 
@@ -456,45 +492,54 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
 
     # ── 4. Проверяем казну Абу ───────────────────────────────────────────────
     current_fund = await get_abu_fund_total(db)
+    if current_fund <= 0 or current_fund < winner_count * 100:
+        logger.warning(f"[DailyAirdrop] Abu fund critically low ({current_fund:.0f} ₪). Skipping.")
+        return {"status": "skipped", "reason": "abu_fund_empty"}
+
     if current_fund < total_payout:
-        # Если фонд маловат — урезаем приз до 50% от фонда, распределяем равномерно
-        if current_fund < winner_count * 100:
-            logger.warning(f"[DailyAirdrop] Abu fund critically low ({current_fund:.0f} ₪). Skipping.")
-            return {"status": "skipped", "reason": "abu_fund_empty"}
-        payout_per_winner = max(100, int((current_fund * 0.5) / winner_count))
+        # Урезаем приз до 50% от фонда, но не менее 100 ₪ на победителя и не более остатка фонда
+        payout_per_winner = max(100, int((current_fund * 0.5) // winner_count))
+        payout_per_winner = min(payout_per_winner, int(current_fund // winner_count))
         total_payout = winner_count * payout_per_winner
 
-    # ── 5. Начисляем шекели ──────────────────────────────────────────────────
+    # ── 5. Начисляем шекели атомарно внутри db_transaction ──────────────────
     credited_count = 0
+    actual_payout = 0.0
+    remaining_fund = current_fund
+
     async with db_lock:
-        for uid in winners:
-            try:
-                await add_user_global_balance(db, uid, "b", float(payout_per_winner))
-                await record_user_transaction(
-                    db=db,
-                    user_id=uid,
-                    amount=float(payout_per_winner),
-                    category="daily_airdrop",
-                    description=f"Ежесуточный аирдроп Фонда Абу"
+        async with db_transaction(db):
+            for uid in winners:
+                try:
+                    await add_user_global_balance(db, uid, "b", float(payout_per_winner))
+                    await record_user_transaction(
+                        db=db,
+                        user_id=uid,
+                        amount=float(payout_per_winner),
+                        category="daily_airdrop",
+                        description="Ежесуточный аирдроп Фонда Абу"
+                    )
+                    credited_count += 1
+                except Exception as e:
+                    logger.error(f"[DailyAirdrop] Credit failed for {uid}: {e}")
+
+            actual_payout = float(credited_count * payout_per_winner)
+
+            # Фиксируем время запуска
+            await db.execute(
+                "INSERT INTO GlobalStats (key, value) VALUES ('last_daily_airdrop_run', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = ?",
+                (str(now_ts), str(now_ts))
+            )
+
+            # ── 6. Списываем из фонда Абу ровно то, что было начислено ────────
+            if actual_payout > 0:
+                remaining_fund = await deduct_from_abu_fund(
+                    db, actual_payout, reason="daily_airdrop"
                 )
-                credited_count += 1
-            except Exception as e:
-                logger.error(f"[DailyAirdrop] Credit failed for {uid}: {e}")
 
-        # Фиксируем время запуска
-        await db.execute(
-            "INSERT INTO GlobalStats (key, value) VALUES ('last_daily_airdrop_run', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = ?",
-            (str(now_ts), str(now_ts))
-        )
-        await db.commit()
-
-    # ── 6. Списываем из фонда Абу ────────────────────────────────────────────
-    remaining_fund = await deduct_from_abu_fund(
-        db, float(total_payout), reason="daily_airdrop"
-    )
     logger.info(
-        f"[DailyAirdrop] Credited {total_payout:,} ₪ to {credited_count} winners. "
+        f"[DailyAirdrop] Credited {actual_payout:,} ₪ to {credited_count} winners. "
         f"Abu fund remaining: {remaining_fund:,.0f} ₪"
     )
 

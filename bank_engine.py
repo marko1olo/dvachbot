@@ -92,7 +92,7 @@ TIER_ALIASES: Dict[str, str] = {
     "skuf": "skuf",
     "term_3d": "skuf",
     "deposit_skuf": "skuf",
-    "сыч": "skuf",
+    "скуф": "skuf",
     "mmm_abu": "mmm_abu",
     "mmm": "mmm_abu",
     "pyramid": "mmm_abu",
@@ -380,18 +380,18 @@ async def create_bank_deposit(
     now = time.time()
     locked_until = now + float(tier_info["lockup_seconds"])
 
-    MAX_ACTIVE_DEPOSITS_PER_USER = int(os.getenv("BOT_MAX_ACTIVE_DEPOSITS", "100"))
-    async with db.execute(
-        "SELECT COUNT(*) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
-        (user_id,)
-    ) as c:
-        row = await c.fetchone()
-        active_count = row[0] if row and row[0] is not None else 0
-
-    if active_count >= MAX_ACTIVE_DEPOSITS_PER_USER:
-        return False, None, f"Достигнут лимит активных вкладов ({active_count}/{MAX_ACTIVE_DEPOSITS_PER_USER} шт). Снимите старые вклады перед открытием новых."
-
     async with db_transaction(db):
+        MAX_ACTIVE_DEPOSITS_PER_USER = int(os.getenv("BOT_MAX_ACTIVE_DEPOSITS", "100"))
+        async with db.execute(
+            "SELECT COUNT(*) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
+            (user_id,)
+        ) as c:
+            row = await c.fetchone()
+            active_count = row[0] if row and row[0] is not None else 0
+
+        if active_count >= MAX_ACTIVE_DEPOSITS_PER_USER:
+            return False, None, f"Достигнут лимит активных вкладов ({active_count}/{MAX_ACTIVE_DEPOSITS_PER_USER} шт). Снимите старые вклады перед открытием новых."
+
         ok, _ = await deduct_user_global_balance(db, user_id, b_id, amount)
         if not ok:
             cur_bal = await get_user_global_balance(db, user_id)
@@ -630,19 +630,31 @@ async def execute_abu_bank_haircut(
     
     Возвращает отчет со статистикой списаний.
     """
-    haircut_pct = max(0.30, min(0.50, float(haircut_pct)))
-    threshold = float(threshold)
+    try:
+        haircut_pct = float(haircut_pct)
+        if math.isnan(haircut_pct) or math.isinf(haircut_pct):
+            haircut_pct = 0.40
+    except (ValueError, TypeError):
+        haircut_pct = 0.40
+    haircut_pct = max(0.30, min(0.50, haircut_pct))
+
+    try:
+        threshold = float(threshold)
+        if math.isnan(threshold) or math.isinf(threshold) or threshold < 0:
+            threshold = 500000.0
+    except (ValueError, TypeError):
+        threshold = 500000.0
 
     query = """
-        SELECT id, user_id, board_id, tier_id, principal, accrued_interest
+        SELECT id, user_id, board_id, tier_id, principal, accrued_interest, last_accrual_at, created_at, daily_rate
         FROM BankDeposits
-        WHERE status = 'active' AND principal >= ?
+        WHERE status = 'active' AND (principal >= ? OR (principal + accrued_interest) >= ?)
     """
     affected_deposits = []
     affected_users = set()
     total_confiscated = 0.0
 
-    async with db.execute(query, (threshold,)) as c:
+    async with db.execute(query, (threshold, threshold)) as c:
         rows = await c.fetchall()
 
     if not rows:
@@ -661,8 +673,18 @@ async def execute_abu_bank_haircut(
     from common.bot_helpers import _get_user_active_items
     from achievements_engine import check_and_unlock_achievement
 
-    for dep_id, user_id, board_id, tier_id, principal, accrued_interest in rows:
+    now = time.time()
+    for dep_id, user_id, board_id, tier_id, principal, accrued_interest, last_accrual_at, created_at, daily_rate in rows:
         principal = float(principal)
+        tier_info = get_tier_info(tier_id) or BANK_TIERS.get(tier_id, BANK_TIERS["sych"])
+        d_rate = float(daily_rate) if daily_rate is not None else float(tier_info["daily_rate"])
+        base_accrued = float(accrued_interest or 0.0)
+        last_accrual = float(last_accrual_at or created_at or now)
+        elapsed = max(0.0, now - last_accrual)
+        rate_per_sec = d_rate / 86400.0
+        instant_accrual = principal * rate_per_sec * elapsed
+        new_accrued = round(base_accrued + instant_accrual, 2)
+
         shave = round(principal * haircut_pct, 2)
         new_principal = round(principal - shave, 2)
         total_confiscated += shave
@@ -675,16 +697,17 @@ async def execute_abu_bank_haircut(
             "tier_id": tier_id,
             "old_principal": principal,
             "shaved_amount": shave,
-            "new_principal": new_principal
+            "new_principal": new_principal,
+            "accrued_interest": new_accrued,
         }
         affected_deposits.append(detail)
 
         if not dry_run:
             async with db_transaction(db):
-                # Обновляем тело вклада
+                # Обновляем тело вклада и фиксируем начисленные проценты до момента стрижки
                 await db.execute(
-                    "UPDATE BankDeposits SET principal = ? WHERE id = ?",
-                    (new_principal, dep_id)
+                    "UPDATE BankDeposits SET principal = ?, accrued_interest = ?, last_accrual_at = ? WHERE id = ?",
+                    (new_principal, new_accrued, now, dep_id)
                 )
                 # Переводим конфискованное в Казну Абу
                 await add_to_abu_fund(db, shave, donor_id=user_id, reason=f"Стрижка вкладов Абу (-{int(haircut_pct*100)}%) со вклада #{dep_id}")
@@ -702,8 +725,12 @@ async def execute_abu_bank_haircut(
                     unlocked, _ = check_and_unlock_achievement(user_items, "ach_mmm_investor")
                     if unlocked:
                         await db.execute(
-                            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                            (json.dumps(user_items), user_id, board_id or "b")
+                            """
+                            INSERT INTO Users (user_id, board_id, active_items)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                            """,
+                            (user_id, board_id or "b", json.dumps(user_items))
                         )
                 except Exception as e:
                     logger.error(f"Error awarding ach_mmm_investor to {user_id}: {e}")

@@ -106,58 +106,64 @@ def is_forwarded_from_bot(message: Any, bot_instance: Any = None) -> bool:
     # 1. forward_origin (aiogram 3 / Bot API 7.0+)
     origin = getattr(message, 'forward_origin', None)
     if origin:
-        sender_user = getattr(origin, 'sender_user', None)
-        if sender_user:
-            if getattr(sender_user, 'is_bot', False):
-                return True
-            if bot_id and sender_user.id == bot_id:
-                return True
-            try:
-                import shared_state
-                if sender_user.id in getattr(shared_state, 'GLOBAL_BOTS', {}):
+        origin_type = getattr(origin, 'type', None)
+        if origin_type != 'channel':
+            sender_user = getattr(origin, 'sender_user', None)
+            if sender_user and not callable(sender_user):
+                if getattr(sender_user, 'is_bot', None) is True:
                     return True
-                if hasattr(shared_state, 'BOT_ID') and sender_user.id == shared_state.BOT_ID:
+                if bot_id and getattr(sender_user, 'id', None) == bot_id:
                     return True
-            except Exception:
-                pass
-            username = getattr(sender_user, 'username', '') or ''
-            if username.lower().endswith('bot'):
-                return True
+                try:
+                    import shared_state
+                    s_id = getattr(sender_user, 'id', None)
+                    if s_id and s_id in getattr(shared_state, 'GLOBAL_BOTS', {}):
+                        return True
+                    if hasattr(shared_state, 'BOT_ID') and s_id == shared_state.BOT_ID:
+                        return True
+                except Exception:
+                    pass
+                username = getattr(sender_user, 'username', '')
+                if isinstance(username, str) and username.lower().endswith('bot'):
+                    return True
 
         sender_chat = getattr(origin, 'sender_chat', None) or getattr(origin, 'chat', None)
-        if sender_chat:
+        if sender_chat and not callable(sender_chat):
             try:
                 import shared_state
-                if hasattr(shared_state, 'ARCHIVE_CHANNEL_ID') and sender_chat.id == shared_state.ARCHIVE_CHANNEL_ID:
+                sc_id = getattr(sender_chat, 'id', None)
+                if hasattr(shared_state, 'ARCHIVE_CHANNEL_ID') and sc_id == shared_state.ARCHIVE_CHANNEL_ID:
                     return True
             except Exception:
                 pass
 
     # 2. legacy forward_from
     ff = getattr(message, 'forward_from', None)
-    if ff:
-        if getattr(ff, 'is_bot', False):
+    if ff and not callable(ff):
+        if getattr(ff, 'is_bot', None) is True:
             return True
-        if bot_id and ff.id == bot_id:
+        if bot_id and getattr(ff, 'id', None) == bot_id:
             return True
         try:
             import shared_state
-            if ff.id in getattr(shared_state, 'GLOBAL_BOTS', {}):
+            ff_id = getattr(ff, 'id', None)
+            if ff_id and ff_id in getattr(shared_state, 'GLOBAL_BOTS', {}):
                 return True
-            if hasattr(shared_state, 'BOT_ID') and ff.id == shared_state.BOT_ID:
+            if hasattr(shared_state, 'BOT_ID') and ff_id == shared_state.BOT_ID:
                 return True
         except Exception:
             pass
-        username = getattr(ff, 'username', '') or ''
-        if username.lower().endswith('bot'):
+        username = getattr(ff, 'username', '')
+        if isinstance(username, str) and username.lower().endswith('bot'):
             return True
 
     # 3. legacy forward_from_chat
     fc = getattr(message, 'forward_from_chat', None)
-    if fc:
+    if fc and not callable(fc):
         try:
             import shared_state
-            if hasattr(shared_state, 'ARCHIVE_CHANNEL_ID') and fc.id == shared_state.ARCHIVE_CHANNEL_ID:
+            fc_id = getattr(fc, 'id', None)
+            if hasattr(shared_state, 'ARCHIVE_CHANNEL_ID') and fc_id == shared_state.ARCHIVE_CHANNEL_ID:
                 return True
         except Exception:
             pass

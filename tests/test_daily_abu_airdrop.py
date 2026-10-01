@@ -133,3 +133,89 @@ async def test_daily_airdrop_execution(isolated_test_db):
         assert res["status"] == "success"
         assert res["winner_count"] == 5
         assert res["payout_per_winner"] == DAILY_PRIZE_PER_WINNER
+
+        # Verify all 5 transactions were recorded without data loss
+        async with db.execute("SELECT COUNT(*) FROM UserTransactions WHERE category = 'daily_airdrop'") as cur:
+            tx_count = (await cur.fetchone())[0]
+            assert tx_count == 5
+
+        # Duplicate run within 20h window is skipped
+        res_dup = await execute_daily_airdrop(db, bots)
+        assert res_dup["status"] == "skipped"
+        assert res_dup["reason"] == "already_ran_recently"
+
+
+@pytest.mark.asyncio
+async def test_newbie_grant_empty_abu_fund(isolated_test_db):
+    db = isolated_test_db
+    user_id = 999888
+    # Abu fund is 0
+    await db.execute(
+        "INSERT INTO GlobalStats (key, value) VALUES ('abu_yacht_fund', '0') "
+        "ON CONFLICT(key) DO UPDATE SET value = '0'"
+    )
+    await db.execute(
+        "INSERT INTO Users (user_id, board_id, balance, posts_count, active_items) VALUES (?, 'b', 0, 1, '{}')",
+        (user_id,)
+    )
+    await db.commit()
+
+    mock_bot = mock.AsyncMock()
+    with mock.patch("common.db_pool.get_pool", return_value=db):
+        res = await check_and_grant_newbie_post_bonus(user_id, "b", mock_bot)
+        assert res is False
+
+        # Balance remains 0
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ?", (user_id,)) as cur:
+            assert (await cur.fetchone())[0] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_daily_airdrop_empty_fund_skipped(isolated_test_db):
+    db = isolated_test_db
+    now_ts = time.time()
+    await db.execute(
+        "INSERT INTO GlobalStats (key, value) VALUES ('abu_yacht_fund', '0') "
+        "ON CONFLICT(key) DO UPDATE SET value = '0'"
+    )
+    # 3 active users
+    for uid in [7001, 7002, 7003]:
+        await db.execute("INSERT INTO Users (user_id, board_id, balance, posts_count) VALUES (?, 'b', 0, 5)", (uid,))
+        for i in range(3):
+            await db.execute(
+                "INSERT INTO Posts (board_id, author_id, content, timestamp, is_shadow) VALUES ('b', ?, '{}', ?, 0)",
+                (uid, now_ts - 100 - i * 10)
+            )
+    await db.commit()
+
+    with mock.patch("common.db_pool.get_pool", return_value=db):
+        res = await execute_daily_airdrop(db, {})
+        assert res["status"] == "skipped"
+        assert res["reason"] == "abu_fund_empty"
+
+
+@pytest.mark.asyncio
+async def test_fetch_daily_qualified_users_excludes_banned(isolated_test_db):
+    db = isolated_test_db
+    now_ts = time.time()
+    # User 6001: active, 3 posts
+    await db.execute("INSERT INTO Users (user_id, board_id, balance, posts_count, status) VALUES (6001, 'b', 0, 3, 'active')")
+    for i in range(3):
+        await db.execute("INSERT INTO Posts (board_id, author_id, content, timestamp, is_shadow) VALUES ('b', 6001, '{}', ?, 0)", (now_ts - 50,))
+    # User 6002: banned, 3 posts
+    await db.execute("INSERT INTO Users (user_id, board_id, balance, posts_count, status) VALUES (6002, 'b', 0, 3, 'banned')")
+    for i in range(3):
+        await db.execute("INSERT INTO Posts (board_id, author_id, content, timestamp, is_shadow) VALUES ('b', 6002, '{}', ?, 0)", (now_ts - 50,))
+    await db.commit()
+
+    qualified = await fetch_daily_qualified_users(db)
+    assert 6001 in qualified
+    assert 6002 not in qualified
+
+
+def test_pick_daily_winners_deduplicates_input():
+    # List with duplicated user IDs
+    qualified_with_dupes = [101, 101, 102, 102, 103, 103]
+    winners = pick_daily_winners(qualified_with_dupes)
+    assert len(winners) == len(set(winners))
+

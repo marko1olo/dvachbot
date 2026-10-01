@@ -283,3 +283,100 @@ async def test_handle_message_drops_active_mute():
 
     board_data[board_id]["mutes"].pop(user_id, None)
 
+
+@pytest.mark.asyncio
+async def test_handle_message_repost_spam_shadowmutes_and_drops():
+    """
+    Verifies that handle_message drops the 5th repost from a public channel,
+    replies with toxic Dvach response, and deletes the offending message.
+    """
+    from handlers.message_router import handle_message
+    from aiogram import types
+
+    user_id = 99887766
+    board_id = "b"
+    board_data.setdefault(board_id, {})
+    board_data[board_id].setdefault("users", {"active": set(), "banned": set()})
+    board_data[board_id].setdefault("mutes", {})
+    board_data[board_id].setdefault("shadow_mutes", {})
+    board_data[board_id].setdefault("single_photo_counter", {})
+    board_data[board_id].setdefault("last_activity", {})
+    board_data[board_id].setdefault("user_settings", {})
+
+    msg = mock.MagicMock(spec=types.Message)
+    msg.message_id = 2001
+    msg.content_type = "text"
+    msg.text = "Forwarded message from public channel"
+    msg.caption = None
+    msg.forward_origin = mock.MagicMock()
+    msg.forward_origin.type = "channel"
+    msg.from_user = mock.MagicMock(spec=types.User)
+    msg.from_user.id = user_id
+    msg.from_user.is_bot = False
+    msg.chat = mock.MagicMock(spec=types.Chat)
+    msg.chat.id = user_id
+    msg.reply_to_message = None
+    msg.forward_from = None
+    msg.forward_from_chat = None
+    msg.sticker = None
+    msg.bot = mock.MagicMock(id=999999999)
+    msg.delete = mock.AsyncMock()
+    warn_reply_mock = mock.MagicMock()
+    msg.answer = mock.AsyncMock(return_value=warn_reply_mock)
+
+    with mock.patch("handlers.message_router.is_admin", return_value=False), \
+         mock.patch("common.spam_filter.check_repost_spam_async", new=mock.AsyncMock(return_value=(True, "Хватит форвардить этот кал, шизоид.", 1001200.0))), \
+         mock.patch("handlers.message_router.logger.warning") as mock_log_warn, \
+         mock.patch("common.bot_helpers.process_new_post", new=mock.AsyncMock()) as mock_proc:
+        await handle_message(msg, board_id=board_id)
+        msg.answer.assert_awaited_once_with("Хватит форвардить этот кал, шизоид.")
+        msg.delete.assert_awaited_once()
+        mock_proc.assert_not_called()
+        assert any("MSG DROPPED: REPOST_SPAM" in str(c) for c in mock_log_warn.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_handle_media_group_init_db_failure_resilience():
+    """
+    Verifies that handle_media_group_init gracefully survives DB errors during
+    shadowmute check and continues using RAM fallback.
+    """
+    from handlers.message_router import handle_media_group_init
+    from aiogram import types
+
+    user_id = 44556677
+    board_id = "b"
+    board_data.setdefault(board_id, {})
+    board_data[board_id].setdefault("users", {"active": set(), "banned": set()})
+    board_data[board_id].setdefault("mutes", {})
+    board_data[board_id].setdefault("shadow_mutes", {})
+    board_data[board_id].setdefault("single_photo_counter", {})
+    board_data[board_id].setdefault("last_activity", {})
+    board_data[board_id].setdefault("user_settings", {})
+
+    msg = mock.MagicMock(spec=types.Message)
+    msg.message_id = 3001
+    msg.media_group_id = "mg_resilience_test_123"
+    msg.content_type = "photo"
+    msg.photo = [mock.MagicMock(file_id="ph_123", file_size=1024)]
+    msg.caption = "Test album resilience"
+    msg.from_user = mock.MagicMock(spec=types.User)
+    msg.from_user.id = user_id
+    msg.from_user.is_bot = False
+    msg.chat = mock.MagicMock(spec=types.Chat)
+    msg.chat.id = user_id
+    msg.reply_to_message = None
+    msg.forward_from = None
+    msg.forward_from_chat = None
+    msg.bot = mock.MagicMock(id=999999999)
+    msg.delete = mock.AsyncMock()
+
+    with mock.patch("handlers.message_router.is_admin", return_value=False), \
+         mock.patch("common.database.is_shadow_muted", new=mock.AsyncMock(side_effect=RuntimeError("DB locked / pool failure"))), \
+         mock.patch("common.spam_filter.check_flood", return_value=(False, 0.0)), \
+         mock.patch("common.spam_filter.check_repost_spam_async", new=mock.AsyncMock(return_value=(False, "", 0.0))):
+        # Should not raise exception despite DB failure
+        res = await handle_media_group_init(msg, board_id=board_id)
+        assert res is None
+
+

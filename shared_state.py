@@ -15,8 +15,8 @@ from common.task_manager import spawn_task
 
 RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
-RE_MULTI_REPLY = re.compile(r'>>(\d+)')
-RE_MULTI_REPLY_LOCAL = re.compile(r'>>(\d+)')
+RE_MULTI_REPLY = re.compile(r'(?:>>|&gt;&gt;)(\d+)')
+RE_MULTI_REPLY_LOCAL = re.compile(r'(?:>>|&gt;&gt;)(\d+)')
 
 
 from common.board_config import BOARD_CONFIG

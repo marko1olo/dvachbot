@@ -1142,7 +1142,29 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 return
             elif mute_until:
                 b_data.setdefault('mutes', {}).pop(user_id, None)
-            
+
+        # Check repost spam from public channels (limit 4/min -> 20m shadowmute + variative toxic response)
+        if not is_admin(user_id, board_id):
+            from common.spam_filter import is_repost_from_public, check_repost_spam_async
+            if is_repost_from_public(message, message.bot):
+                is_repost_blocked, toxic_response, mute_exp = await check_repost_spam_async(
+                    user_id, message, board_id=board_id, auto_apply_mute=True, bot_instance=message.bot
+                )
+                if is_repost_blocked:
+                    logger.warning(
+                        f"🚫 [MSG DROPPED: REPOST_SPAM] user={user_id} board={board_id}: {toxic_response}"
+                    )
+                    try:
+                        sent_msg = await message.answer(toxic_response)
+                        spawn_task(delete_message_after_delay(sent_msg, 20))
+                    except Exception:
+                        pass
+                    try:
+                        await message.delete()
+                    except Exception:
+                        pass
+                    return
+
         cursed_text_override = None
         if not is_admin(user_id, board_id) and (message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice'])):
             db_p = await get_pool()
@@ -1241,8 +1263,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     except Exception as e:
         print(f"Error in handle_message: {e}")
         return
-    # Собираем текст для поиска мульти-ответов из текста или подписи к медиа
-    input_text = cursed_text_override if cursed_text_override else (message.text or message.caption or "")
+    # Собираем текст для поиска мульти-ответов из текста или подписи к медиа (с сохранением HTML-сущностей)
+    input_text = cursed_text_override if cursed_text_override else (html_text_content if html_text_content else (message.text or message.caption or ""))
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
     
     from common.database import is_shadow_muted as check_db_shadow_muted
@@ -1280,7 +1302,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if not post_exists:
                 continue
             
-            formatted_chunk = RE_REPLY_QUOTE_FORMAT.sub(replacer, escape_html(text_chunk))
+            formatted_chunk = RE_REPLY_QUOTE_FORMAT.sub(replacer, sanitize_html(text_chunk))
             
             # Прикрепляем медиа к первому посту в цепочке ответов, остальные — текст
             if i == 0 and media_type:
@@ -1814,6 +1836,8 @@ def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bo
     - Игнорирует случаи, когда в тексте меньше двух ссылок >>post_num.
     - Ограничивает количество ответов до 3. 4-й и последующие блоки
       присоединяются к тексту 3-го блока.
+    - Сохраняет префиксный текст перед первым ответом в первый блок.
+    - При стаканье цитат (например, >>1 >>2 текст) распространяет текст на пустые блоки.
     :param text: Исходный текст сообщения.
     :return: Кортеж, где:
              - Первый элемент: список кортежей (post_num, text_chunk).
@@ -1827,6 +1851,7 @@ def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bo
     if len(matches) < 2:
         return [], False
     blocks = []
+    prefix = text[:matches[0].start()].strip()
     for i, current_match in enumerate(matches):
         try:
             post_num = int(current_match.group(1))
@@ -1836,6 +1861,8 @@ def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bo
         is_last_match = (i == len(matches) - 1)
         text_end = len(text) if is_last_match else matches[i + 1].start()
         text_chunk = text[text_start:text_end].strip()
+        if i == 0 and prefix:
+            text_chunk = f"{prefix} {text_chunk}".strip() if text_chunk else prefix
         blocks.append((post_num, text_chunk))
     if len(blocks) > 3:
         limit_hit = True
@@ -1843,6 +1870,12 @@ def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bo
         merged_text_content = text[third_block_content_start_pos:].strip()
         merged_third_block = (blocks[2][0], merged_text_content)
         blocks = blocks[:2] + [merged_third_block]
+
+    # Inherit text backwards for stacked quotes (e.g. ">>1 >>2 >>3 text")
+    for idx in range(len(blocks) - 2, -1, -1):
+        if not blocks[idx][1] and blocks[idx + 1][1]:
+            blocks[idx] = (blocks[idx][0], blocks[idx + 1][1])
+
     return blocks, limit_hit
 
 async def _send_notification_quietly(bot: Bot, chat_id: int, text: str) -> None:
@@ -1883,12 +1916,17 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         return
     b_data = board_data[board_id]
     if not is_admin(user_id, board_id):
-        # Shadow mute — silent drop
-        from common.database import is_shadow_muted as _sm_mg
-        from common.db_pool import get_pool as _get_pool_mg
-        _db_mg = await _get_pool_mg()
-        if await _sm_mg(user_id, board_id, db=_db_mg):
-            return
+        # Shadow mute — silent drop (resilient to DB lock/timeouts)
+        try:
+            from common.database import is_shadow_muted as _sm_mg
+            from common.db_pool import get_pool as _get_pool_mg
+            _db_mg = await _get_pool_mg()
+            if await _sm_mg(user_id, board_id, db=_db_mg):
+                return
+        except Exception:
+            b_sm = b_data.get('shadow_mutes', {})
+            if user_id in b_sm and b_sm[user_id] > datetime.now(UTC):
+                return
         mutes = b_data.get('mutes', {})
         if user_id in b_data.get('users', {}).get('banned', set()) or \
            (mutes.get(user_id) and mutes[user_id] > datetime.now(UTC)):
@@ -1913,6 +1951,29 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         
     if is_leader:
         try:
+            # Проверка на репост-спам из публичных каналов (лимит 4/мин, 20м шедоумут)
+            if not is_admin(user_id, board_id):
+                from common.spam_filter import is_repost_from_public, check_repost_spam_async
+                if is_repost_from_public(message, message.bot):
+                    is_repost_blocked, toxic_reply, mute_exp = await check_repost_spam_async(
+                        user_id, message, board_id=board_id, auto_apply_mute=True,
+                        media_group_id=media_group_id, bot_instance=message.bot
+                    )
+                    if is_repost_blocked:
+                        logger.warning(f"🚫 [MEDIA_GROUP_REPOST_SPAM_BLOCKED] user={user_id} board={board_id}: {toxic_reply}")
+                        try:
+                            sent_msg = await message.answer(toxic_reply)
+                            spawn_task(delete_message_after_delay(sent_msg, 20))
+                        except Exception:
+                            pass
+                        current_media_groups.pop(media_group_key, None)
+                        _mt = media_group_timers.pop(media_group_key, None)
+                        if _mt and not _mt.done():
+                            _mt.cancel()
+                        if 'init_event' in group:
+                            group['init_event'].set()
+                        return
+
             # Проверяем только flood для медиагруппы — НЕ используем fake 'text' тип,
             # чтобы медиагруппы не засчитывались в rate-limit текстовых сообщений.
             # Это устраняло ложные автомуты при активной дискуссии + медиагруппах.

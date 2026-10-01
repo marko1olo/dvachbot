@@ -44,6 +44,12 @@ from common.spam_filter import (
     BAYAN_WINDOW_SEC,
     BAYAN_THRESHOLD,
     BAYAN_BASE_MUTE_SEC,
+    is_repost_from_public,
+    check_repost_spam,
+    check_repost_spam_async,
+    reset_repost_tracker,
+    REPOST_FLOOD_RESPONSES,
+    REPOST_FLOOD_MUTE_SEC,
 )
 from common.database import (
     is_shadow_muted,
@@ -64,6 +70,7 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
         _user_link_timestamps.clear()
         cross_board_spam_tracker.clear()
         shared_state.board_data.clear()
+        reset_repost_tracker()
         
         self.user_id = 999111222
         self.admin_id = 7777777
@@ -81,6 +88,7 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         common.config.ADMIN_IDS.discard(self.admin_id)
         site_tgach.admin_config.ADMIN_IDS.discard(self.admin_id)
+        reset_repost_tracker()
 
     async def test_three_bayans_in_three_minutes_triggers_twenty_min_mute(self):
         """3 bayans within 180s must trigger exactly 20 minutes (1200s) shadowmute."""
@@ -290,3 +298,157 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
             exp2 = await apply_shadow_mute(self.user_id, self.board_id, duration_seconds=5000.0, is_exponential=False)
             self.assertLessEqual(exp2, now + 1801.0)
             self.assertGreaterEqual(exp2, now + 1795.0)
+
+    async def test_repost_spam_limit_triggers_shadowmute_and_toxic_response(self):
+        """
+        Public channel reposts limit is 4/min.
+        1st..4th reposts within 60s pass.
+        5th repost is blocked, applies 20m (1200s) shadowmute, and returns a variative toxic response.
+        """
+        base_time = 1000000.0
+        mock_msg = MagicMock()
+        mock_msg.forward_origin = MagicMock()
+        mock_msg.forward_origin.type = "channel"
+        mock_msg.media_group_id = None
+
+        with patch('common.database.apply_shadow_mute', new=AsyncMock(return_value=base_time + 1200.0)):
+            # 1st to 4th repost: allowed
+            for i in range(4):
+                is_blocked, resp = check_repost_spam(
+                    user_id=self.user_id,
+                    message=mock_msg,
+                    board_id=self.board_id,
+                    now_ts=base_time + (i * 5.0),
+                    auto_apply_mute=False
+                )
+                self.assertFalse(is_blocked)
+                self.assertEqual(resp, "")
+
+            # 5th repost: blocked with toxic response and shadowmute
+            is_blocked, resp, exp = await check_repost_spam_async(
+                user_id=self.user_id,
+                message=mock_msg,
+                board_id=self.board_id,
+                now_ts=base_time + 25.0,
+                auto_apply_mute=True,
+                mute_duration_sec=REPOST_FLOOD_MUTE_SEC
+            )
+            self.assertTrue(is_blocked)
+            self.assertIn(resp, REPOST_FLOOD_RESPONSES)
+            self.assertGreaterEqual(exp, base_time + 1199.0)
+
+    async def test_repost_spam_media_group_album_deduplication(self):
+        """
+        An album of 10 forwarded photos from a channel must count as 1 repost, not 10.
+        4 entire albums in a minute pass; 5th album is blocked.
+        """
+        base_time = 1000000.0
+
+        with patch('common.spam_filter.apply_shadow_mute', new=AsyncMock(return_value=base_time + 1200.0)), \
+             patch('common.database.apply_shadow_mute', new=AsyncMock(return_value=base_time + 1200.0)):
+            # Send 4 distinct albums (each having 10 photos with same media_group_id)
+            for album_idx in range(4):
+                mg_id = f"album_{album_idx}"
+                for photo_idx in range(10):
+                    mock_msg = MagicMock()
+                    mock_msg.forward_origin = MagicMock()
+                    mock_msg.forward_origin.type = "channel"
+                    mock_msg.media_group_id = mg_id
+                    is_blocked, resp = check_repost_spam(
+                        user_id=self.user_id,
+                        message=mock_msg,
+                        board_id=self.board_id,
+                        now_ts=base_time + (album_idx * 10.0) + (photo_idx * 0.05),
+                        media_group_id=mg_id,
+                        auto_apply_mute=False
+                    )
+                    self.assertFalse(is_blocked, f"Album {album_idx} photo {photo_idx} falsely blocked")
+
+            # 5th album (all 10 photos) must be blocked
+            mg_id_5 = "album_4"
+            for photo_idx in range(10):
+                mock_msg = MagicMock()
+                mock_msg.forward_origin = MagicMock()
+                mock_msg.forward_origin.type = "channel"
+                mock_msg.media_group_id = mg_id_5
+                is_blocked, resp, exp = await check_repost_spam_async(
+                    user_id=self.user_id,
+                    message=mock_msg,
+                    board_id=self.board_id,
+                    now_ts=base_time + 45.0 + (photo_idx * 0.05),
+                    media_group_id=mg_id_5,
+                    auto_apply_mute=True
+                )
+                self.assertTrue(is_blocked)
+                self.assertIn(resp, REPOST_FLOOD_RESPONSES)
+
+    async def test_repost_spam_exempts_bot_and_archive_forwards(self):
+        """
+        Forwards from our bot or archive channel are not external channel spam.
+        """
+        mock_msg = MagicMock()
+        mock_bot = MagicMock(id=999999)
+        mock_msg.bot = mock_bot
+        mock_msg.forward_from = MagicMock(is_bot=True, id=999999)
+
+        with patch('common.forward_utils.is_forwarded_from_bot', return_value=True):
+            is_repost = is_repost_from_public(mock_msg, mock_bot)
+            self.assertFalse(is_repost)
+            is_blocked, _ = check_repost_spam(self.user_id, mock_msg, board_id=self.board_id, bot_instance=mock_bot)
+            self.assertFalse(is_blocked)
+
+    def test_multi_reply_split_with_prefix_stacked_quotes_and_html_entities(self):
+        """
+        Verifies _parse_and_split_multi_replies:
+        1. Correctly handles &gt;&gt; HTML entities from Telegram.
+        2. Preserves prefix text before the first quote into block 0.
+        3. Inherits text backwards for stacked quotes (>>1 >>2 >>3 text) without creating blank posts.
+        """
+        from handlers.message_router import _parse_and_split_multi_replies
+
+        # 1. Standard HTML escaped quotes (&gt;&gt;)
+        text1 = "&gt;&gt;1001 ответ первому &gt;&gt;1002 ответ второму"
+        blocks1, hit1 = _parse_and_split_multi_replies(text1)
+        self.assertFalse(hit1)
+        self.assertEqual(len(blocks1), 2)
+        self.assertEqual(blocks1[0], (1001, "ответ первому"))
+        self.assertEqual(blocks1[1], (1002, "ответ второму"))
+
+        # 2. Introductory text before first >> quote
+        text2 = "Поясняю ситуацию: >>2001 согласен >>2002 против"
+        blocks2, hit2 = _parse_and_split_multi_replies(text2)
+        self.assertFalse(hit2)
+        self.assertEqual(len(blocks2), 2)
+        self.assertEqual(blocks2[0], (2001, "Поясняю ситуацию: согласен"))
+        self.assertEqual(blocks2[1], (2002, "против"))
+
+        # 3. Stacked quotes (>>1 >>2 >>3 общий ответ)
+        text3 = ">>3001 >>3002 >>3003 оба не правы"
+        blocks3, hit3 = _parse_and_split_multi_replies(text3)
+        self.assertFalse(hit3)
+        self.assertEqual(len(blocks3), 3)
+        self.assertEqual(blocks3[0], (3001, "оба не правы"))
+        self.assertEqual(blocks3[1], (3002, "оба не правы"))
+        self.assertEqual(blocks3[2], (3003, "оба не правы"))
+
+    def test_sanitize_html_balances_unclosed_tags_and_discards_orphan_tags(self):
+        """
+        Verifies sanitize_html balances unclosed tags and strips orphan tags,
+        guaranteeing safe delivery to Telegram HTML parse mode.
+        """
+        from common.text_utils import sanitize_html
+
+        # Unclosed <b> and <i>
+        res1 = sanitize_html("<b>Жирный текст без закрытия")
+        self.assertEqual(res1, "<b>Жирный текст без закрытия</b>")
+
+        res2 = sanitize_html("<i>Курсив <b>Жирный</b>")
+        self.assertEqual(res2, "<i>Курсив <b>Жирный</b></i>")
+
+        # Unclosed <blockquote expandable>
+        res3 = sanitize_html("<blockquote expandable>Цитата без закрытия")
+        self.assertEqual(res3, "<blockquote expandable>Цитата без закрытия</blockquote>")
+
+        # Orphan closing tags
+        res4 = sanitize_html("Текст без открытия</b> продолжение")
+        self.assertEqual(res4, "Текст без открытия продолжение")

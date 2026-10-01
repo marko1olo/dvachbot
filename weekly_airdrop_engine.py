@@ -72,16 +72,27 @@ async def fetch_weekly_contributors(db, days: int = 7, min_posts: int = MIN_POST
     Исключает системные аккаунты (author_id <= 0) и теневые посты.
     """
     since_ts = time.time() - (days * 86400)
-    query = """
+    has_status_col = False
+    try:
+        async with db.execute("PRAGMA table_info(Users)") as cur:
+            cols = [row[1] for row in await cur.fetchall()]
+            has_status_col = "status" in cols
+    except Exception:
+        has_status_col = False
+
+    status_filter = "AND p.author_id NOT IN (SELECT user_id FROM Users WHERE status = 'banned')" if has_status_col else ""
+
+    query = f"""
         SELECT
-            author_id,
+            p.author_id,
             COUNT(*) as total_posts,
-            SUM(CASE WHEN content LIKE '%file_id%' OR content LIKE '%photo%' OR content LIKE '%video%' THEN 1 ELSE 0 END) as media_posts
-        FROM Posts
-        WHERE timestamp >= ?
-          AND author_id > 0
-          AND IFNULL(is_shadow, 0) = 0
-        GROUP BY author_id
+            SUM(CASE WHEN p.content LIKE '%file_id%' OR p.content LIKE '%photo%' OR p.content LIKE '%video%' THEN 1 ELSE 0 END) as media_posts
+        FROM Posts p
+        WHERE p.timestamp >= ?
+          AND p.author_id > 0
+          AND IFNULL(p.is_shadow, 0) = 0
+          {status_filter}
+        GROUP BY p.author_id
         HAVING total_posts >= ?
         ORDER BY total_posts DESC
     """
@@ -537,48 +548,63 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
     total_posts_week = sum(c["posts_count"] for c in contributors)
     # Проверяем баланс Казны Яхты Абу (закрытый контур экономики)
     current_fund = await get_abu_fund_total(db)
+    if current_fund <= 0:
+        logger.warning("Weekly airdrop skipped: Abu Yacht Fund is empty (0 ₪).")
+        return {"status": "skipped", "reason": "abu_fund_empty"}
+
     total_pool = calculate_weekly_pool(total_posts_week, abu_fund_total=current_fund)
-    if current_fund > 0 and total_pool > current_fund:
+    if total_pool > current_fund:
         total_pool = round(current_fund * 0.5, 2)
+
+    if total_pool < len(contributors):
+        logger.warning(f"Weekly airdrop skipped: pool ({total_pool:.0f} ₪) too low for {len(contributors)} contributors.")
+        return {"status": "skipped", "reason": "abu_fund_empty"}
 
     allocations = compute_airdrop_allocations(contributors, total_pool)
 
-    # 3. Транзакционно начисляем баланс
+    # 3. Транзакционно начисляем баланс внутри атомарной db_transaction
+    from common.db_pool import db_transaction
+
     total_credited = 0
     credited_count = 0
+    remaining_fund = current_fund
 
     async with db_lock:
-        for item in allocations:
-            uid = item["user_id"]
-            payout = item["payout"]
-            if payout <= 0:
-                continue
-            try:
-                await add_user_global_balance(db, uid, "b", float(payout))
-                await record_user_transaction(
-                    db=db,
-                    user_id=uid,
-                    amount=float(payout),
-                    category="airdrop",
-                    description=f"Еженедельный аирдроп за {item['posts_count']} постов"
-                )
-                credited_count += 1
-                total_credited += payout
-            except Exception as e:
-                logger.error(f"Failed to credit airdrop for user {uid}: {e}")
+        async with db_transaction(db):
+            for item in allocations:
+                uid = item["user_id"]
+                payout = item["payout"]
+                if payout <= 0:
+                    continue
+                try:
+                    await add_user_global_balance(db, uid, "b", float(payout))
+                    await record_user_transaction(
+                        db=db,
+                        user_id=uid,
+                        amount=float(payout),
+                        category="airdrop",
+                        description=f"Еженедельный аирдроп за {item['posts_count']} постов"
+                    )
+                    credited_count += 1
+                    total_credited += payout
+                except Exception as e:
+                    logger.error(f"Failed to credit airdrop for user {uid}: {e}")
 
-        # Фиксируем дату успешного выполнения
-        await db.execute(
-            """
-            INSERT INTO GlobalStats (key, value) VALUES ('last_weekly_airdrop_run', ?)
-            ON CONFLICT(key) DO UPDATE SET value = ?
-            """,
-            (str(now_ts), str(now_ts))
-        )
-        await db.commit()
+            # Фиксируем дату успешного выполнения
+            await db.execute(
+                """
+                INSERT INTO GlobalStats (key, value) VALUES ('last_weekly_airdrop_run', ?)
+                ON CONFLICT(key) DO UPDATE SET value = ?
+                """,
+                (str(now_ts), str(now_ts))
+            )
 
-    # Списываем средства из Казны Яхты Абу (закрытый контур экономики)
-    remaining_fund = await deduct_from_abu_fund(db, float(total_credited), reason="weekly_airdrop")
+            # Списываем средства из Казны Яхты Абу ровно столько, сколько реально начислено
+            if total_credited > 0:
+                remaining_fund = await deduct_from_abu_fund(db, float(total_credited), reason="weekly_airdrop")
+            else:
+                remaining_fund = await get_abu_fund_total(db)
+
     logger.info(f"🛥️ [AIRDROP] Из Казны Яхты Абу списано {total_credited:,} ₪. Остаток в казне: {remaining_fund:,.2f} ₪")
     logger.info(f"✅ [AIRDROP] Успешно начислено {total_credited:,} ₪ ({credited_count} получателей).")
 

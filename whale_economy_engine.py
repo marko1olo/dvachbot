@@ -39,6 +39,8 @@ def calculate_whale_safe_price(n: int) -> int:
     """
     if n < 0:
         n = 0
+    if n > 40:
+        n = 40
     return int(50000 * (1.5 ** n))
 
 
@@ -241,10 +243,13 @@ async def buy_whale_safe(db: Any, user_id: int, board_id: str = "b") -> Dict[str
             # Increment daily open counter
             ai["whale_safes_opened_today"] = n + 1
 
-            # Save state
+            # Save state reliably (UPSERT)
             await db.execute(
-                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                (json.dumps(ai), user_id, board_id)
+                """
+                INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?)
+                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                """,
+                (user_id, board_id, json.dumps(ai, ensure_ascii=False))
             )
 
             if ai.get("custom_title") and ai.get("title_expires_at"):
@@ -414,15 +419,7 @@ async def place_auction_bid(
                     "error": f"Недостаточно шекелей для ставки! Требуется {bid_amount:,} ₪, у тебя {int(user_bal):,} ₪."
                 }
 
-            # 3. Refund previous winner 100% of their escrowed bid
-            if cur_winner is not None and cur_bid > 0:
-                await add_user_global_balance(db, cur_winner, board_id, cur_bid)
-                await record_user_transaction(
-                    db, cur_winner, cur_bid, 'auction_refund',
-                    f'Возврат ставки на аукционе #{auction_id} ({title})'
-                )
-
-            # 4. Deduct new bid from current bidder
+            # 3. Deduct new bid from current bidder FIRST (fail-safe before any refund)
             ok, _ = await deduct_user_global_balance(db, user_id, board_id, bid_amount)
             if not ok:
                 return {"ok": False, "error": "Ошибка списания средств с баланса."}
@@ -430,6 +427,14 @@ async def place_auction_bid(
                 db, user_id, -bid_amount, 'auction',
                 f'Ставка на аукционе #{auction_id} ({title})'
             )
+
+            # 4. Refund previous winner 100% of their escrowed bid ONLY AFTER new bid is deducted
+            if cur_winner is not None and cur_bid > 0:
+                await add_user_global_balance(db, cur_winner, board_id, cur_bid)
+                await record_user_transaction(
+                    db, cur_winner, cur_bid, 'auction_refund',
+                    f'Возврат ставки на аукционе #{auction_id} ({title})'
+                )
 
             # 5. Anti-sniping extension
             new_ends_at = ends_at
@@ -508,8 +513,11 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                         ai["vip_pin_voucher"] = True
                         ai["pin_vouchers"] = ai.get("pin_vouchers", 0) + 1
                         await db.execute(
-                            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                            (json.dumps(ai), winner_id, board_id)
+                            """
+                            INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?)
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                            """,
+                            (winner_id, board_id, json.dumps(ai, ensure_ascii=False))
                         )
 
                     elif lot_type == "custom_badge":
@@ -522,8 +530,11 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                             ai = json.loads(srow[0]) if (srow and srow[0]) else {}
                         ai["custom_badge"] = title
                         await db.execute(
-                            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                            (json.dumps(ai), winner_id, board_id)
+                            """
+                            INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?)
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                            """,
+                            (winner_id, board_id, json.dumps(ai, ensure_ascii=False))
                         )
 
                     finished_list.append({
@@ -596,7 +607,7 @@ def calculate_wealth_tax(balance: float, idle_hours: float = 0.0) -> float:
     - > 5,000,000 ₪: 5.0% / day
     - Idle surcharge: 1.5x multiplier if balance > 500,000 and idle_hours >= 72.0.
     """
-    if not isinstance(balance, (int, float)) or balance <= 5000:
+    if not isinstance(balance, (int, float)) or math.isnan(balance) or math.isinf(balance) or balance <= 5000:
         return 0.0
 
     if balance <= 50000:

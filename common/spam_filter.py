@@ -50,6 +50,8 @@ _user_request_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=50
 _user_link_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 # {user_id: deque of timestamps for public channel/chat reposts}
 _user_repost_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
+# {user_id: {media_group_id: {'first_ts': float, 'blocked': bool, 'response': str}}}
+_seen_repost_media_groups: Dict[int, Dict[str, dict]] = defaultdict(dict)
 
 # --- Constants & Thresholds ---
 BAYAN_WINDOW_SEC = 180          # 3 minutes sliding window
@@ -843,14 +845,22 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
 
 # --- Repost / Channel Forward Anti-Spam ---
 
-def is_repost_from_public(message: Any) -> bool:
+def is_repost_from_public(message: Any, bot_instance: Any = None) -> bool:
     """
     Detects if a Telegram message is a forward/repost from an external public channel or group/chat.
     Distinguishes public reposts from regular user forwards (forward_from / MessageOriginUser).
+    Excludes messages forwarded from our own bot or archive channels.
     Supports aiogram 2.x, 3.x, and dictionary representations.
     """
     if message is None:
         return False
+
+    try:
+        from common.forward_utils import is_forwarded_from_bot
+        if is_forwarded_from_bot(message, bot_instance):
+            return False
+    except Exception:
+        pass
 
     # 1. Check forward_origin (aiogram 3.x / Telegram Bot API 7.0+)
     origin = getattr(message, 'forward_origin', None)
@@ -909,8 +919,10 @@ def reset_repost_tracker(user_id: int | None = None) -> None:
     """Resets repost flood tracker for a user or globally."""
     if user_id is not None:
         _user_repost_timestamps.pop(user_id, None)
+        _seen_repost_media_groups.pop(user_id, None)
     else:
         _user_repost_timestamps.clear()
+        _seen_repost_media_groups.clear()
 
 
 def check_repost_spam(
@@ -922,10 +934,13 @@ def check_repost_spam(
     is_repost: bool | None = None,
     auto_apply_mute: bool = True,
     mute_duration_sec: float = REPOST_FLOOD_MUTE_SEC,
+    media_group_id: str | None = None,
+    bot_instance: Any = None,
 ) -> Tuple[bool, str]:
     """
     Checks if an incoming message is a repost from a public channel/chat and enforces
     the limit of at most 4 reposts per sliding 60 seconds from a single user on a board/bot.
+    Supports media_group_id deduplication so 1 album counts as 1 repost.
 
     If limit is exceeded (5th and subsequent reposts within 60 seconds):
     1. Returns (True, toxic_repost_response).
@@ -944,8 +959,13 @@ def check_repost_spam(
             if not isinstance(user_id, int):
                 user_id = 0
 
+    if media_group_id is None and message is not None:
+        media_group_id = getattr(message, 'media_group_id', None)
+        if media_group_id is None and isinstance(message, dict):
+            media_group_id = message.get('media_group_id')
+
     if is_repost is None:
-        is_repost = is_repost_from_public(message) if message is not None else False
+        is_repost = is_repost_from_public(message, bot_instance=bot_instance) if message is not None else False
 
     if not is_repost:
         return False, ""
@@ -958,6 +978,20 @@ def check_repost_spam(
         pass
 
     now = float(now_ts) if now_ts is not None else time.time()
+
+    # Media group deduplication: subsequent items of the same album do not re-count
+    if media_group_id:
+        mg_str = str(media_group_id)
+        user_mg_map = _seen_repost_media_groups[user_id]
+        # Prune expired albums older than 60s
+        expired = [k for k, v in list(user_mg_map.items()) if now - v.get('first_ts', 0) > REPOST_WINDOW_SEC]
+        for k in expired:
+            user_mg_map.pop(k, None)
+
+        if mg_str in user_mg_map:
+            entry = user_mg_map[mg_str]
+            return entry.get('blocked', False), entry.get('response', "")
+
     tracker = _user_repost_timestamps[user_id]
 
     # Prune timestamps older than sliding window
@@ -973,6 +1007,10 @@ def check_repost_spam(
         logger.warning(
             f"🚫 REPOST SPAM: User {user_id} exceeded repost limit ({len(tracker)} reposts in {REPOST_WINDOW_SEC}s) on /{board_id}/"
         )
+        if media_group_id:
+            _seen_repost_media_groups[user_id][str(media_group_id)] = {
+                'first_ts': now, 'blocked': True, 'response': response
+            }
         if auto_apply_mute and user_id:
             try:
                 loop = asyncio.get_running_loop()
@@ -992,6 +1030,11 @@ def check_repost_spam(
                 logger.warning(f"Failed to spawn shadow mute task for repost spam (user {user_id}): {e}")
         return True, response
 
+    if media_group_id:
+        _seen_repost_media_groups[user_id][str(media_group_id)] = {
+            'first_ts': now, 'blocked': False, 'response': ""
+        }
+
     if record_history:
         tracker.append(now)
 
@@ -1007,6 +1050,8 @@ async def check_repost_spam_async(
     is_repost: bool | None = None,
     auto_apply_mute: bool = True,
     mute_duration_sec: float = REPOST_FLOOD_MUTE_SEC,
+    media_group_id: str | None = None,
+    bot_instance: Any = None,
 ) -> Tuple[bool, str, float]:
     """
     Async version of check_repost_spam.
@@ -1021,6 +1066,9 @@ async def check_repost_spam_async(
         record_history=record_history,
         is_repost=is_repost,
         auto_apply_mute=False,  # Explicitly awaited below
+        mute_duration_sec=mute_duration_sec,
+        media_group_id=media_group_id,
+        bot_instance=bot_instance,
     )
     expires_at = 0.0
     if is_blocked and auto_apply_mute and isinstance(user_id, int) and user_id:
@@ -1267,6 +1315,7 @@ async def apply_shadow_mute(
     _user_media_burst_tracker.pop(user_id, None)
     _seen_media_groups.pop(user_id, None)
     _user_repost_timestamps.pop(user_id, None)
+    _seen_repost_media_groups.pop(user_id, None)
     try:
         _user_request_timestamps.pop(user_id, None)
         _user_request_timestamps.pop((user_id, board_id), None)

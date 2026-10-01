@@ -700,3 +700,93 @@ async def test_abu_bank_haircut_event_lifecycle(bank_db):
         items = json.loads(user_row[0] or "{}")
         assert "ach_mmm_investor" in items.get("unlocked_achievements", [])
 
+
+@pytest.mark.asyncio
+async def test_tier_aliases_mapping():
+    """Verify tier alias normalization works correctly for all aliases including сыч and скуф."""
+    be = _get_bank_module()
+    assert be.normalize_tier_id("сыч") == "sych"
+    assert be.normalize_tier_id("сейф") == "sych"
+    assert be.normalize_tier_id("скуф") == "skuf"
+    assert be.normalize_tier_id("skuf") == "skuf"
+    assert be.normalize_tier_id("ммм") == "mmm_abu"
+    assert be.normalize_tier_id("пирамида") == "mmm_abu"
+
+
+@pytest.mark.asyncio
+async def test_bank_max_active_deposits_limit(bank_db):
+    """Verify BOT_MAX_ACTIVE_DEPOSITS is strictly enforced."""
+    import os
+    be = _get_bank_module()
+    user_id = 998877
+    await common.database.add_user_global_balance(bank_db, user_id, "b", 100_000.0)
+
+    os.environ["BOT_MAX_ACTIVE_DEPOSITS"] = "2"
+    try:
+        ok1, dep1, _ = await be.create_bank_deposit(bank_db, user_id, "b", "sych", 1_000.0)
+        assert ok1 is True
+        ok2, dep2, _ = await be.create_bank_deposit(bank_db, user_id, "b", "sych", 1_000.0)
+        assert ok2 is True
+
+        # 3rd deposit must fail due to limit
+        ok3, dep3, err = await be.create_bank_deposit(bank_db, user_id, "b", "sych", 1_000.0)
+        assert ok3 is False
+        assert dep3 is None
+        assert "лимит активных вкладов" in err
+    finally:
+        os.environ.pop("BOT_MAX_ACTIVE_DEPOSITS", None)
+
+
+@pytest.mark.asyncio
+async def test_abu_bank_haircut_accrued_interest_capitalization(bank_db):
+    """
+    Verify that execute_abu_bank_haircut:
+    1. Materializes interest accrued prior to haircut and updates last_accrual_at.
+    2. Shaves principal accurately.
+    3. Allows post-haircut withdrawal without losing pre-haircut interest.
+    """
+    be = _get_bank_module()
+    user_id = 445566
+    await common.database.add_user_global_balance(bank_db, user_id, "b", 1_000_000.0)
+
+    now = time.time()
+    ok, dep, _ = await be.create_bank_deposit(bank_db, user_id, "b", "sych", 600_000.0)
+    assert ok is True
+
+    # Simulate 2 days elapsed (2 * 86400s) on sych tier (0.5% daily rate = 3,000/day = 6,000 total)
+    simulated_creation = now - (2 * 86400)
+    await bank_db.execute(
+        "UPDATE BankDeposits SET created_at = ?, last_accrual_at = ? WHERE id = ?",
+        (simulated_creation, simulated_creation, dep["id"])
+    )
+
+    # Execute haircut of 40% on threshold 500,000
+    res = await be.execute_abu_bank_haircut(bank_db, haircut_pct=0.40, threshold=500_000.0, dry_run=False)
+    assert res["status"] == "success"
+    assert res["affected_deposits_count"] == 1
+    assert res["total_confiscated"] == 240_000.0  # 40% of 600,000
+
+    # Verify DB state: principal = 360,000, accrued_interest materialized (~6,000), last_accrual_at updated
+    async with bank_db.execute(
+        "SELECT principal, accrued_interest, last_accrual_at FROM BankDeposits WHERE id = ?",
+        (dep["id"],)
+    ) as c:
+        row = await c.fetchone()
+        p, acc, last_acc = row
+        assert p == 360_000.0
+        assert acc >= 5990.0  # ~6,000 accrued
+        assert last_acc >= now - 5  # timestamp advanced to haircut time
+
+    # Withdraw immediately after haircut
+    ok_w, payout, principal, interest_paid, fee, is_def, err = await be.withdraw_bank_deposit(
+        bank_db, dep["id"], user_id, "b"
+    )
+    assert ok_w is True
+    assert principal == 360_000.0
+    assert interest_paid >= 5990.0  # Prior accrued interest was NOT lost!
+    expected_gross = 360_000.0 + interest_paid
+    expected_fee = round(expected_gross * 0.01, 2)
+    assert payout == round(expected_gross - expected_fee, 2)
+
+
+

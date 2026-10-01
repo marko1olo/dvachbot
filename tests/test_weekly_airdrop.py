@@ -215,3 +215,24 @@ async def test_fetch_weekly_contributors_and_execute_airdrop():
         res2 = await execute_weekly_airdrop(db, bots)
         assert res2["status"] == "skipped"
         assert res2["reason"] == "already_ran_recently"
+
+
+@pytest.mark.asyncio
+async def test_weekly_airdrop_empty_fund_skipped():
+    async with aiosqlite.connect(":memory:") as db:
+        await db.execute("CREATE TABLE Posts (post_num INTEGER PRIMARY KEY, board_id TEXT, author_id INTEGER, content TEXT, timestamp REAL, is_shadow INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE Users (user_id INTEGER, board_id TEXT, balance REAL DEFAULT 0.0, PRIMARY KEY (user_id, board_id))")
+        await db.execute("CREATE TABLE UserTransactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, category TEXT, description TEXT, timestamp INTEGER)")
+        await db.execute("CREATE TABLE GlobalStats (key TEXT PRIMARY KEY, value TEXT)")
+        # Abu fund is 0
+        await db.execute("INSERT INTO GlobalStats (key, value) VALUES ('abu_yacht_fund', '0')")
+        now = time.time()
+        for i in range(10):
+            await db.execute("INSERT INTO Posts VALUES (?, 'b', 1, '{}', ?, 0)", (i+1, now - i * 100))
+        await db.commit()
+
+        mock_bot = AsyncMock()
+        res = await execute_weekly_airdrop(db, {"b": mock_bot})
+        assert res["status"] == "skipped"
+        assert res["reason"] == "abu_fund_empty"
+
