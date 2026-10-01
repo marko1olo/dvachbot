@@ -133,7 +133,7 @@ _VICTIM_ROB_COOLDOWNS: dict[int, float] = {}
 
 def get_target_grief_protection_remaining(target_id: int) -> int:
     """
-    Возвращает оставшееся время (сек) иммунитета цели от повторных атак (окно 5 мин / 300 сек).
+    Возвращает оставшееся время (сек) иммунитета цели от повторных атак (окно 90 сек).
     """
     now = time.time()
     last_attack = _TARGET_LAST_ATTACKED_TS.get(target_id, 0.0)
@@ -141,9 +141,9 @@ def get_target_grief_protection_remaining(target_id: int) -> int:
         return int(last_attack - now)
     return 0
 
-def register_target_attack(target_id: int, duration_seconds: int = 2700, attacker_id: int | None = None):
+def register_target_attack(target_id: int, duration_seconds: int = 90, attacker_id: int | None = None):
     """
-    Регистрирует атаку на цель, включая окно анти-гриферской защиты (по умолчанию 45 минут / 2700 сек).
+    Регистрирует атаку на цель, включая окно анти-гриферской защиты (по умолчанию 90 сек / 1.5 мин).
     Защищает от эксплойта самоатаки: если attacker_id == target_id, иммунитет не дается.
     """
     if attacker_id is not None and attacker_id == target_id:
@@ -152,7 +152,7 @@ def register_target_attack(target_id: int, duration_seconds: int = 2700, attacke
 
 def get_victim_rob_cooldown_remaining(target_id: int) -> int:
     """
-    Возвращает оставшееся время (сек) иммунитета жертвы от повторных ограблений (20 минут).
+    Возвращает оставшееся время (сек) иммунитета жертвы от повторных ограблений (1-2 минуты).
     """
     now = time.time()
     expire_ts = _VICTIM_ROB_COOLDOWNS.get(target_id, 0.0)
@@ -162,32 +162,32 @@ def get_victim_rob_cooldown_remaining(target_id: int) -> int:
 
 def set_victim_rob_cooldown(target_id: int, cooldown_seconds: int | None = None):
     """
-    Устанавливает кулдаун жертвы от повторных ограблений (рандом 5-15 минут: больничка / мусарня).
+    Устанавливает кулдаун жертвы от повторных ограблений (рандом 1-2 минуты / 60-120 сек: больничка).
     """
     if cooldown_seconds is None:
-        cooldown_seconds = random.randint(300, 900)
+        cooldown_seconds = random.randint(60, 120)
     _VICTIM_ROB_COOLDOWNS[target_id] = time.time() + cooldown_seconds
 
-def calculate_escalating_combat_cooldown(attacker_id: int, base_seconds: int = 180) -> int:
+def calculate_escalating_combat_cooldown(attacker_id: int, base_seconds: int = 30) -> int:
     """
     Рассчитывает прогрессивный кулдаун для атакующего при частых сериях атак (эскалация спама).
-    Если атакующий спамит чаще чем раз в 60 сек, кулдаун прогрессивно увеличивается: x1 -> x2 -> x4.
+    Динамичный бой: 30с -> 60с -> максимум 180с (3 мин).
     """
     now = time.time()
     history = _ATTACKER_SERIES_HISTORY[attacker_id]
-    # Очищаем атаки старше 10 минут
-    history = [ts for ts in history if now - ts < 600]
+    # Очищаем атаки старше 5 минут
+    history = [ts for ts in history if now - ts < 300]
     history.append(now)
     _ATTACKER_SERIES_HISTORY[attacker_id] = history
     
-    # Считаем атаки за последние 3 минуты
-    recent_fast_attacks = sum(1 for ts in history if now - ts < 180)
+    # Считаем атаки за последние 2 минуты
+    recent_fast_attacks = sum(1 for ts in history if now - ts < 120)
     if recent_fast_attacks <= 1:
         return base_seconds
     elif recent_fast_attacks == 2:
         return base_seconds * 2
     else:
-        return min(base_seconds * 4, 1800) # Максимум 30 мин кулдауна
+        return min(base_seconds * 3, 180) # Максимум 3 мин кулдауна
 
 def get_combat_cooldown_remaining(user_id: int) -> int:
     """
@@ -199,12 +199,18 @@ def get_combat_cooldown_remaining(user_id: int) -> int:
         return int(last - now)
     return 0
 
-def set_combat_cooldown(user_id: int, cooldown_seconds: int = 180):
+def set_combat_cooldown(user_id: int, cooldown_seconds: int = 30):
     """
-    Устанавливает глобальный боевой кулдаун (с учетом прогрессивной эскалации).
+    Устанавливает глобальный боевой кулдаун (с учетом прогрессивной эскалации, базовый 30с).
     """
     actual_cooldown = calculate_escalating_combat_cooldown(user_id, cooldown_seconds)
     _GLOBAL_COMBAT_COOLDOWNS[user_id] = time.time() + actual_cooldown
+
+def clear_combat_cooldown(user_id: int):
+    """
+    Снимает глобальный боевой кулдаун (например, при снятии пены огнетушителя / аминазином).
+    """
+    _GLOBAL_COMBAT_COOLDOWNS.pop(user_id, None)
 
 _GLOBAL_WORK_COOLDOWNS: Dict[int, Dict[str, int]] = defaultdict(dict)
 
@@ -226,7 +232,7 @@ _BOARD_PARTYVAN_COOLDOWNS: Dict[str, float] = {}
 _VICTIM_PARTYVAN_IMMUNITY: Dict[int, float] = {}  # user_id -> expires_at timestamp
 
 # --- Алиасы с «абсолютным» интерфейсом (принимают expires_at timestamp) ---
-# main.py вызывает set_partyvan_user_cooldown(user_id, current_time + 3600)
+# main.py вызывает set_partyvan_user_cooldown(user_id, current_time + 600)
 
 def get_partyvan_user_cooldown(user_id: int) -> float:
     """Возвращает абсолютный timestamp окончания куладуна (0.0 если нет)."""
@@ -267,7 +273,7 @@ def get_user_partyvan_cooldown_remaining(user_id: int) -> int:
         return int(last - now)
     return 0
 
-def set_user_partyvan_cooldown(user_id: int, cooldown_seconds: int = 3600):
+def set_user_partyvan_cooldown(user_id: int, cooldown_seconds: int = 600):
     _USER_PARTYVAN_COOLDOWNS[user_id] = time.time() + cooldown_seconds
 
 def get_board_partyvan_cooldown_remaining(board_id: str) -> int:
@@ -277,8 +283,9 @@ def get_board_partyvan_cooldown_remaining(board_id: str) -> int:
         return int(last - now)
     return 0
 
-def set_board_partyvan_cooldown(board_id: str, cooldown_seconds: int = 1800):
+def set_board_partyvan_cooldown(board_id: str, cooldown_seconds: int = 300):
     _BOARD_PARTYVAN_COOLDOWNS[board_id] = time.time() + cooldown_seconds
+
 
 
 def count_active_attacker_effects(item_type: str, attacker_id: int) -> int:
@@ -400,14 +407,14 @@ async def check_shop_purchase_limit_async(db, user_id: int, item: str) -> tuple[
     return True, current, limit
 
 
-_ATTACK_WINDOW_SEC = 3 * 3600 # 3 hours
-_MAX_TARGETS_PER_WINDOW = 2
+_ATTACK_WINDOW_SEC = 3600 # 1 hour
+_MAX_TARGETS_PER_WINDOW = 5
 _ATTACKER_TARGET_HISTORY: dict[int, list[tuple[float, int]]] = {}
 _ATTACKER_ABUSE_WARNINGS: dict[int, int] = {}
 
 def check_attack_abuse_limit(attacker_id: int, target_id: int) -> tuple[bool, str, int]:
     """
-    Защита от массовых мутов и доносов (максимум 2 уникальные жертвы за 3 часа).
+    Защита от массовых мутов и доносов (максимум 5 уникальных жертв за 1 час).
     Возвращает: (is_blocked: bool, outcome: str, fine_amount: int)
       - 'allowed': действие разрешено.
       - 'warning': 1-я попытка превысить порог (предупреждение, действие заблокировано).
@@ -889,6 +896,7 @@ __all__ = [
     'calculate_escalating_combat_cooldown',
     'get_combat_cooldown_remaining',
     'set_combat_cooldown',
+    'clear_combat_cooldown',
     'count_active_attacker_effects',
     'register_attacker_effect',
     'check_attack_abuse_limit',

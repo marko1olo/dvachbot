@@ -886,6 +886,13 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     """Resolves true author_id from a replied message across memory and DB copies."""
     if not msg or not msg.reply_to_message:
         return None
+
+    reply_user = msg.reply_to_message.from_user
+    if reply_user and not reply_user.is_bot:
+        return reply_user.id
+    if msg.reply_to_message.forward_from and not msg.reply_to_message.forward_from.is_bot:
+        return msg.reply_to_message.forward_from.id
+
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
@@ -905,6 +912,18 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
             info = await get_post_info_by_copy(target_chat_id, reply_mid)
             if info:
                 post_num = info[0]
+                if info[1] is not None:
+                    return info[1]
+        except Exception:
+            pass
+
+    if not post_num:
+        try:
+            from common.text_utils import extract_post_num_from_message_text
+            reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+            extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
+            if extracted_pnum:
+                post_num = extracted_pnum
         except Exception:
             pass
 
@@ -924,6 +943,23 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
             return db_author_id
     except Exception:
         pass
+
+    try:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        async with db.execute(
+            "SELECT p.author_id FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?",
+            (target_chat_id, reply_mid)
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception:
+        pass
+
+    if reply_user and reply_user.is_bot:
+        return 0
+
     return None
 
 

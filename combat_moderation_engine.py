@@ -104,16 +104,15 @@ def record_combat_attack(attacker_id: int, target_id: int, weapon_type: str):
     _TARGET_PAIR_LAST_ATTACK[(attacker_id, target_id)] = now
 
 
-def check_pair_attack_cooldown(attacker_id: int, target_id: int) -> Tuple[bool, int]:
+def check_pair_attack_cooldown(attacker_id: int, target_id: int, cooldown_seconds: float = 900.0) -> Tuple[bool, int]:
     """
-    Prevents an attacker from griefing the EXACT SAME target repeatedly within 15 minutes.
-    Returns (is_blocked, remaining_seconds).
+    Prevents an attacker from griefing the EXACT SAME target repeatedly within the cooldown window.
+    Returns (is_blocked, remaining_seconds). Default 900s, configurable for live dynamic combat (e.g. 180s).
     """
     now = time.time()
     last_ts = _TARGET_PAIR_LAST_ATTACK.get((attacker_id, target_id), 0.0)
-    cooldown = 900.0  # 15 minutes
-    if now - last_ts < cooldown:
-        return True, int(cooldown - (now - last_ts))
+    if now - last_ts < cooldown_seconds:
+        return True, int(cooldown_seconds - (now - last_ts))
     return False, 0
 
 
@@ -415,7 +414,7 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
     from common.bot_helpers import remove_regular_mute
     await remove_regular_mute(sess.target_id, sess.board_id)
     from shared_state import set_partyvan_victim_immunity
-    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)
+    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 300)
 
     # Fine the false accuser / abusive attacker
     try:
@@ -507,7 +506,7 @@ async def callback_combat_bail(callback: types.CallbackQuery):
 
     await remove_regular_mute(sess.target_id, sess.board_id)
     from shared_state import set_partyvan_victim_immunity
-    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)
+    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 300)
 
     sess.is_bailed = True
     sess.bailed_by = payer_id

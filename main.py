@@ -4071,6 +4071,7 @@ BASE_SHOP_PRICES = {
     'schizopill': 650,
     'janitor': 850,
     'partyvan': 1500,
+    'extinguisher_obep': 1200,
     # 💊 Аптека и защита
     'pills': 60,
     'shield': 500,
@@ -4183,6 +4184,7 @@ def _build_weapons_shop_content(user_id: int, balance: float):
     p_schizo = get_current_item_price('schizopill')
     p_jan = get_current_item_price('janitor', user_id=user_id, balance=balance)
     p_van = get_current_item_price('partyvan')
+    p_ext = get_current_item_price('extinguisher_obep')
 
     text = (
         f"⚔️ <b>ЧЕРНЫЙ РЫНОК ОРУЖИЯ И ТОКСИЧНОСТИ</b>\n"
@@ -4197,8 +4199,9 @@ def _build_weapons_shop_content(user_id: int, balance: float):
         f"8. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Проклятие поноса: /curse)\n"
         f"9. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Проклятие шизы: /schizopill)\n"
         f"10. 🚮 <b>Билет Дворника (6ч)</b> — <i>{p_jan} ₪</i> (Права удаления /del)\n"
-        f"11. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 12ч через /partyvan)\n\n"
-        f"💡 <i>Смыть любой дебафф (флаги, говно, блевоту, шизу) можно Аминазином в Аптеке или командой /cure!</i>"
+        f"11. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 5-30м через /partyvan)\n"
+        f"12. 🧯 <b>Огнетушитель ОБЭП</b> — <i>{p_ext} ₪</i> (Защита от /raid_oligarch и тушение: /extinguish)\n\n"
+        f"💡 <i>Смыть любой дебафф (флаги, говно, блевоту, шизу, пену) можно Аминазином в Аптеке или Огнетушителем /extinguish!</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4222,7 +4225,8 @@ def _build_weapons_shop_content(user_id: int, balance: float):
             InlineKeyboardButton(text=f"🚮 Билет Дворника ({p_jan}₪)", callback_data="shop_buy_janitor")
         ],
         [
-            InlineKeyboardButton(text=f"🚔 Пативэн ({p_van}₪)", callback_data="shop_buy_partyvan")
+            InlineKeyboardButton(text=f"🚔 Пативэн ({p_van}₪)", callback_data="shop_buy_partyvan"),
+            InlineKeyboardButton(text=f"🧯 Огнетушитель ({p_ext}₪)", callback_data="shop_buy_extinguisher_obep")
         ],
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
     ])
@@ -4362,7 +4366,7 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         f"💊 <b>АПТЕКА, ЗАЩИТА И КОРРУПЦИЯ</b>\n"
         f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
         f"1. 💊 <b>Аминазин</b> — <i>{p_pills} ₪</i> (Моментально смывает ВСЕ дебаффы: флаги UA/RU 🇺🇦🇷🇺, говно 💩, блевоту 🤮, понос и шизу. Команда: /cure)\n"
-        f"2. 🪞 <b>Зеркальный щит (6ч)</b> — <i>{p_shield} ₪</i> (Отражает любые PvP-атаки и дебаффы прямо в нападающего!)\n"
+        f"2. 🪞 <b>Зеркальный щит (1ч)</b> — <i>{p_shield} ₪</i> (Отражает любые PvP-атаки и дебаффы прямо в нападающего!)\n"
         f"3. 📜 <b>Взятка модератору</b> — <i>{p_bribe} ₪</i> (Моментально снимает обычный мут. Команда: /bribe)\n"
         f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Пассивная защита от грабежа и говна)\n"
         f"5. 🎖️ <b>Ксива полковника</b> — <i>{p_ksiva} ₪</i> (100% спасение от облавы пативана)\n"
@@ -5754,8 +5758,16 @@ async def _build_inventory_content(user_id: int, board_id: str):
         left_m = (cursed_until - now) // 60
         buffs.append(f"🚽 <b>Проклятие поноса:</b> Активно ({left_m} мин)")
 
+    foamed_until = items.get("foamed_until", 0)
+    if foamed_until > now:
+        left_m = max(1, (foamed_until - now) // 60)
+        buffs.append(f"🧯 <b>Залит пеной (обезоружен):</b> ({left_m} мин)")
+
     # Weapons & Combat items
     weapons = []
+    if items.get("extinguisher_obep"):
+        charges = items.get("extinguisher_obep_charges", 1)
+        weapons.append(f"🧯 <b>Огнетушитель ОБЭП:</b> {charges} зар. <i>(/extinguish)</i>")
     if items.get("mute_gun"):
         weapons.append("🔇 <b>Мут-Ган:</b> 1 шт. <i>(Реплай + /shoot)</i>")
     if items.get("partyvan_gun"):
@@ -6157,20 +6169,30 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                 msg = "🔇 Ты купил Мут-Ган! Сделай Reply на пост с командой /shoot, чтобы кикнуть анона на 1 час."
 
         elif item == "shield":
-            max_cap = now + 7 * 86400
+            max_cap = now + 4 * 3600
             current_shield = active_items.get("shield_until", 0)
             base = current_shield if current_shield > now else now
-            new_until = min(base + 6 * 3600, max_cap)
+            new_until = min(base + 1 * 3600, max_cap)
             active_items["reflect_shield_until"] = new_until
             active_items["shield_until"] = new_until
-            msg = "🪞 Зеркало заднего вида активировано на 6 часов! Любые PvP-атаки (мут-ган, заточка, говно, блевота, перцовка, пативэн) отрикошетят прямо в нападающего."
+            active_items["shield"] = True
+            msg = "🪞 Зеркало заднего вида активировано на 1 час! Любые PvP-атаки (мут-ган, заточка, говно, блевота, перцовка, пативэн, проклятие, шиза) отрикошетят прямо в нападающего."
 
         elif item == "partyvan":
             if active_items.get("partyvan_gun"):
                 err_msg = "У тебя уже есть вызов Пативэна! Сделай Reply + /partyvan"
             else:
                 active_items["partyvan_gun"] = True
-                msg = "🚔 Ты оплатил вызов Пативэна! Сделай Reply на пост с командой /partyvan (мут на 12 часов)."
+                msg = "🚔 Ты оплатил вызов Пативэна! Сделай Reply на пост с командой /partyvan (мут на 5-30 минут)."
+
+        elif item == "extinguisher_obep":
+            cur_charges = active_items.get("extinguisher_obep_charges", 1 if active_items.get("extinguisher_obep") else 0)
+            if cur_charges >= 3:
+                err_msg = "🧯 У тебя уже полный баллон Огнетушителя ОБЭП (максимум 3 заряда)!"
+            else:
+                active_items["extinguisher_obep"] = True
+                active_items["extinguisher_obep_charges"] = cur_charges + 1
+                msg = f"🧯 Огнетушитель ОБЭП приобретен (зарядов: {cur_charges + 1}/3)! Защищает от /raid_oligarch и тушит дебаффы/обезоруживает через /extinguish."
 
         elif item == "shit":
             if active_items.get("shit_gun"):
@@ -6502,29 +6524,25 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
     now_ts = time.time()
     now_dt = datetime.now(UTC)
 
-    # 1. Проверка активного мута в памяти
+    # 1. Проверка активного мута в памяти (только публичные боевые муты 'mutes', без внутренних 'shadow_mutes')
     if board_id in board_data:
         m_end = board_data[board_id].get('mutes', {}).get(target_id)
         if m_end and m_end > now_dt:
             return True, "уже находится в муте"
-        sm_end = board_data[board_id].get('shadow_mutes', {}).get(target_id)
-        if sm_end and sm_end > now_dt:
-            return True, "уже находится в теневом муте"
 
     # 2. Проверка активного мута и проклятия в базе данных
     if db is None:
         db = await get_pool()
         
     try:
-        # Проверка таблицы Mutes
+        # Проверка таблицы Mutes (только боевые муты 'mute', без теневых 'shadow')
         async with db.execute(
-            "SELECT expires_at, mute_type FROM Mutes WHERE user_id = ? AND board_id = ? AND expires_at > ?",
+            "SELECT expires_at, mute_type FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute' AND expires_at > ?",
             (target_id, board_id, now_ts)
         ) as cursor:
             row = await cursor.fetchone()
             if row:
-                m_type = "в КПЗ / муте" if row[1] == "mute" else "в теневом муте"
-                return True, m_type
+                return True, "в КПЗ / муте"
 
         # Проверка Users (cursed_until и active_items)
         async with db.execute(
@@ -6552,7 +6570,7 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
 
 async def handle_attack_abuse_check(message: types.Message, db, board_id: str, user_id: int, target_id: int) -> bool:
     """
-    Защита от спама мутами и платным оружием (максимум 2 уникальные жертвы за 3 часа).
+    Защита от спама мутами и платным оружием (максимум 5 уникальных жертв за 1 час).
     При 1-м превышении — предупреждение.
     При 2-м превышении — штурм спецназа, деанон, штраф 1,000₪ и мут на 1 час.
     """
@@ -6566,7 +6584,7 @@ async def handle_attack_abuse_check(message: types.Message, db, board_id: str, u
     if outcome == "warning":
         await message.answer(
             "⚠️ <b>ВНИМАНИЕ! ПРЕВЫШЕН ЛИМИТ НАПАДЕНИЙ!</b>\n\n"
-            "Ты уже атаковал оружием и мутами 2 человек за последние 3 часа.\n"
+            "Ты уже атаковал оружием и мутами 5 человек за последний час.\n"
             "Остынь и не мешай общению! При повторной попытке к тебе выедет спецназ, тебя сдеанонят и оштрафуют на 1,000 ₪ как злостного нарушителя порядка!",
             parse_mode="HTML"
         )
@@ -6672,14 +6690,14 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     db = await get_pool()
     current_time = int(time.time())
 
-    # --- Иммунитет и отлёт атаки для новичков (< 50 постов) ---
+    # --- Иммунитет и отлёт атаки для новичков (< 15 постов) ---
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
-        set_partyvan_victim_immunity(target_id, current_time + 3600)
-        await message.reply("🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\nВыстрел срикошетил! Цель защищена статусом новичка (менее 50 постов на борде). Дай человеку освоиться!\n<i>(Мут-Ган остался в твоем рюкзаке, жертва получила иммунитет на 1 час)</i>", parse_mode="HTML")
+    if target_posts < 15:
+        set_partyvan_victim_immunity(target_id, current_time + 180)
+        await message.reply("🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\nВыстрел срикошетил! Цель защищена статусом новичка (менее 15 постов на борде). Дай человеку освоиться!\n<i>(Мут-Ган остался в твоем рюкзаке, жертва получила иммунитет на 3 минуты)</i>", parse_mode="HTML")
         return
 
-    # --- Полный иммунитет жертвы после предыдущей атаки/мута (1 час) ---
+    # --- Полный иммунитет жертвы после предыдущей атаки/мута ---
     victim_immunity = get_partyvan_victim_immunity(target_id)
     if victim_immunity > current_time:
         cd_left = int(victim_immunity - current_time)
@@ -6689,7 +6707,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.reply(
             f"🛡️ <b>ЖЕРТВА ПОД ЗАЩИТОЙ!</b>\n"
             f"Анон недавно перенес атаку / отбыл наказание и имеет полный иммунитет ещё <b>{time_str}</b>.\n"
-            f"<i>(Мут-Ган остался в твоем рюкзаке, кулдаун жертвы 1 час)</i>",
+            f"<i>(Мут-Ган остался в твоем рюкзаке)</i>",
             parse_mode="HTML"
         )
         return
@@ -6702,8 +6720,8 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     if await check_target_grief_protection(message, target_id, user_id, board_id):
         return
 
-    # Защита от преследования одной и той же цели (15 мин кулдаун между атаками на ту же пару)
-    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id)
+    # Защита от преследования одной и той же цели (2 мин кулдаун между атаками на ту же пару)
+    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id, cooldown_seconds=120.0)
     if is_pair_blocked:
         rem_min = pair_rem // 60
         rem_sec = pair_rem % 60
@@ -6793,7 +6811,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
-        set_combat_cooldown(user_id, 180)
+        set_combat_cooldown(user_id, 30)
         register_target_attack(target_id)
         await message.answer("👟 <b>ТЯГИ БАРХАТНЫЕ СПАСЛИ!</b>\nЖертва на бархатных подкрадулях ловко увернулась от выстрела Мут-Гана (0 мутов)!", parse_mode="HTML")
         return
@@ -6808,7 +6826,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
             async with db_lock:
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
                 await db.commit()
-            set_combat_cooldown(user_id, 180)
+            set_combat_cooldown(user_id, 30)
             register_target_attack(target_id)
             await message.answer("🧥 <b>ПЛАЩ НЕО РАССЕЯЛ ВЫСТРЕЛ!</b>\nЖертва растворилась в коде Матрицы! Выстрел Мут-Гана пролетел сквозь пустоту.", parse_mode="HTML")
             return
@@ -6828,6 +6846,8 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
                     is_bounced = True
                     action_type = "bounced"
                     t_items["reflect_shield_until"] = 0
+                    t_items["shield_until"] = 0
+                    t_items["shield"] = False
                     active_items["mute_gun"] = False
                     await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                                      (json.dumps(t_items), target_id, board_id))
@@ -6852,7 +6872,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     register_target_attack(target_id)
-    set_combat_cooldown(user_id, 180)
+    set_combat_cooldown(user_id, 30)
 
     if action_type == "tinfoil":
         if tinfoil_destroyed:
@@ -6901,8 +6921,8 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     await apply_regular_mute(target_id, board_id, duration_sec)
     register_attacker_effect("mute_gun", user_id, target_id, duration_sec)
     record_combat_attack(user_id, target_id, "shoot")
-    set_combat_cooldown(user_id, 180)
-    set_partyvan_victim_immunity(target_id, current_time + duration_sec + 3600)
+    set_combat_cooldown(user_id, 30)
+    set_partyvan_victim_immunity(target_id, current_time + duration_sec + 180)
     
     # Регистрация интерактивной сессии апелляции (кнопки народного протеста и залога)
     session_id = create_combat_appeal_session(board_id, user_id, target_id, "shoot", duration_sec, message.chat.id)
@@ -6993,10 +7013,10 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
         return
 
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
+    if target_posts < 15:
         await message.answer(
             "🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\n"
-            "Цель защищена статусом новичка (менее 50 постов на борде). Дай человеку освоиться!\n"
+            "Цель защищена статусом новичка (менее 15 постов на борде). Дай человеку освоиться!\n"
             "<i>(Перцовка осталась в твоем инвентаре)</i>",
             parse_mode="HTML"
         )
@@ -7018,6 +7038,8 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
         elif t_items.get("reflect_shield_until", 0) > current_time:
             action_type = "reflected"
             t_items["reflect_shield_until"] = 0
+            t_items["shield_until"] = 0
+            t_items["shield"] = False
             active_items["pepperspray_gun"] = False
             active_items["peppersprayed_until"] = current_time + 1800
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
@@ -7165,10 +7187,10 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
+    if target_posts < 15:
         await message.answer(
             "🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\n"
-            "Цель защищена статусом новичка (менее 50 постов на борде). Грабить новичков западло, заточка осталась при тебе.",
+            "Цель защищена статусом новичка (менее 15 постов на борде). Грабить новичков западло, заточка осталась при тебе.",
             parse_mode="HTML"
         )
         return
@@ -7204,7 +7226,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     # Забираем предмет
     active_items["knife_gun"] = False
     register_target_attack(target_id)
-    set_combat_cooldown(user_id, 60)
+    set_combat_cooldown(user_id, 30)
 
     from wardrobe_engine import get_wardrobe_total_stats
     t_stats = get_wardrobe_total_stats(t_items, current_time=current_time)
@@ -7259,6 +7281,8 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     if t_items.get("reflect_shield_until", 0) > current_time:
         # Зеркало заднего вида отражает грабеж обратно в нападающего!
         t_items["reflect_shield_until"] = 0
+        t_items["shield_until"] = 0
+        t_items["shield"] = False
         loss = min(int(u_balance * pct), 1000)
         async with db_lock:
             if loss > 0:
@@ -7509,10 +7533,10 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         return
 
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
+    if target_posts < 15:
         await message.answer(
             "🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\n"
-            "Цель защищена статусом новичка (менее 50 постов на борде). Метать говно в новичков запрещено, кусок говна остался при тебе.",
+            "Цель защищена статусом новичка (менее 15 постов на борде). Метать говно в новичков запрещено, кусок говна остался при тебе.",
             parse_mode="HTML"
         )
         return
@@ -7528,7 +7552,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         return
 
     active_items["shit_gun"] = False
-    set_combat_cooldown(user_id, 60)
+    set_combat_cooldown(user_id, 30)
 
     from wardrobe_engine import get_wardrobe_total_stats
     t_stats = get_wardrobe_total_stats(t_items, current_time=current_time)
@@ -7563,6 +7587,8 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
 
     if t_items.get("reflect_shield_until", 0) > current_time:
         t_items["reflect_shield_until"] = 0
+        t_items["shield_until"] = 0
+        t_items["shield"] = False
         active_items["shit_until"] = current_time + duration_sec
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
@@ -8002,7 +8028,11 @@ async def cmd_cure(message: types.Message, board_id: str | None, stream: str = '
         active_items.get("flag_ua_until", 0) > now or
         active_items.get("flag_ru_until", 0) > now or
         active_items.get("peppersprayed_until", 0) > now or
-        active_items.get("cursed_until", 0) > now
+        active_items.get("cursed_until", 0) > now or
+        active_items.get("schizo_pill_until", 0) > now or
+        active_items.get("schizo_until", 0) > now or
+        active_items.get("foamed_until", 0) > now or
+        active_items.get("disarmed_until", 0) > now
     )
 
     async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
@@ -8011,7 +8041,7 @@ async def cmd_cure(message: types.Message, board_id: str | None, stream: str = '
             has_debuff = True
 
     if not has_debuff:
-        await message.reply("✨ <b>У тебя нет активных дебаффов!</b>\nТы абсолютно чист: нет ни флагов (🇺🇦/🇷🇺), ни говна (💩), ни блевоты (🤮), ни шизы.", parse_mode="HTML")
+        await message.reply("✨ <b>У тебя нет активных дебаффов!</b>\nТы абсолютно чист: нет ни флагов (🇺🇦/🇷🇺), ни говна (💩), ни блевоты (🤮), ни шизы, ни пены.", parse_mode="HTML")
         return
 
     price = get_current_item_price('pills')
@@ -8027,7 +8057,7 @@ async def cmd_cure(message: types.Message, board_id: str | None, stream: str = '
 
     await record_user_transaction(db, user_id, -price, 'shop', 'Покупка: Аминазин (/cure)')
 
-    DEBUFF_KEYS = ("shit_until", "vomit_until", "flag_ua_until", "flag_ru_until", "peppersprayed_until", "cursed_until", "schizo_pill_until", "schizo_until")
+    DEBUFF_KEYS = ("shit_until", "vomit_until", "flag_ua_until", "flag_ru_until", "peppersprayed_until", "cursed_until", "schizo_pill_until", "schizo_until", "foamed_until", "disarmed_until")
     for k in DEBUFF_KEYS:
         active_items.pop(k, None)
 
@@ -8046,8 +8076,263 @@ async def cmd_cure(message: types.Message, board_id: str | None, stream: str = '
                              (json.dumps(row_items), user_id, b_row_id))
         await db.commit()
 
+    from shared_state import clear_combat_cooldown
+    clear_combat_cooldown(user_id)
+
     await log_global_event('bot', f"💊 CURE: Юзер {user_id} принял Аминазин за {price} ₪ на /{board_id}/ (дебаффы сняты)")
-    await message.reply(f"💊 <b>ТЫ ПРИНЯЛ АМИНАЗИН ЗА {price} ₪!</b>\nВсе дебаффы (флаги 🇺🇦/🇷🇺, говно 💩, блевота 🤮, понос и шиза) моментально смыты! Твои посты снова чистые.", parse_mode="HTML")
+    await message.reply(f"💊 <b>ТЫ ПРИНЯЛ АМИНАЗИН ЗА {price} ₪!</b>\nВсе дебаффы (флаги 🇺🇦/🇷🇺, говно 💩, блевота 🤮, понос, шиза и пена) моментально смыты! Твои посты снова чистые.", parse_mode="HTML")
+
+
+@dp.message(Command("extinguish", "тушить", "огнетушитель", "extinguisher", "потушить", ignore_case=True, ignore_mention=True))
+async def cmd_extinguish(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id:
+        return
+    user_id = message.from_user.id
+    db = await get_pool()
+    now = int(time.time())
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("extinguisher_obep"):
+        await message.reply(
+            "❌ <b>У тебя нет Огнетушителя ОБЭП!</b>\nКупи его в магазине: /shop (раздел Оружие) или выиграй в Сейфе Олигарха.",
+            parse_mode="HTML"
+        )
+        return
+
+    cur_charges = active_items.get("extinguisher_obep_charges", 1)
+    if cur_charges <= 0:
+        active_items.pop("extinguisher_obep", None)
+        active_items.pop("extinguisher_obep_charges", None)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.reply("❌ <b>Твой Огнетушитель пуст!</b> Заряди новый в /shop.", parse_mode="HTML")
+        return
+
+    DEBUFF_KEYS = (
+        "shit_until", "vomit_until", "flag_ua_until", "flag_ru_until",
+        "peppersprayed_until", "cursed_until", "schizo_pill_until", "schizo_until",
+        "foamed_until", "disarmed_until"
+    )
+
+    def _consume_charge(ai: dict) -> int:
+        rem = ai.get("extinguisher_obep_charges", 1) - 1
+        if rem <= 0:
+            ai.pop("extinguisher_obep", None)
+            ai.pop("extinguisher_obep_charges", None)
+            return 0
+        else:
+            ai["extinguisher_obep_charges"] = rem
+            return rem
+
+    target_id = None
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+
+    # 1. САМООЧИЩЕНИЕ (без реплая, цель не определена или реплай на себя)
+    if not target_id or target_id == 0 or target_id == user_id:
+        has_debuff = any(active_items.get(k, 0) > now for k in DEBUFF_KEYS)
+        if not has_debuff:
+            async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                row = await c.fetchone()
+                if row and row[0] and row[0] > now:
+                    has_debuff = True
+
+        if not has_debuff:
+            await message.reply(
+                f"✨ <b>У тебя нет активных дебаффов!</b>\nТы абсолютно чист: нет ни флагов (🇺🇦/🇷🇺), ни говна (💩), ни блевоты (🤮), ни шизы.\n<i>(Заряд огнетушителя сохранён: осталось {cur_charges}/3)</i>",
+                parse_mode="HTML"
+            )
+            return
+
+        rem_charges = _consume_charge(active_items)
+        for k in DEBUFF_KEYS:
+            active_items.pop(k, None)
+
+        from shared_state import clear_combat_cooldown
+        clear_combat_cooldown(user_id)
+
+        async with db_lock:
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (user_id,))
+            async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (user_id,)) as cur:
+                user_rows = await cur.fetchall()
+            for b_row_id, raw_items in user_rows:
+                try:
+                    row_items = json.loads(raw_items) if raw_items else {}
+                except Exception:
+                    row_items = {}
+                for k in DEBUFF_KEYS:
+                    row_items.pop(k, None)
+                if b_row_id == board_id:
+                    row_items = active_items
+                else:
+                    if rem_charges <= 0:
+                        row_items.pop("extinguisher_obep", None)
+                        row_items.pop("extinguisher_obep_charges", None)
+                    else:
+                        row_items["extinguisher_obep"] = True
+                        row_items["extinguisher_obep_charges"] = rem_charges
+                await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(row_items), user_id, b_row_id))
+            await db.commit()
+
+        await log_global_event('bot', f"🧯 EXTINGUISH_SELF: Юзер {user_id} смыл с себя все дебаффы Огнетушителем ОБЭП на /{board_id}/ (осталось {rem_charges} зар.)")
+        await message.reply(
+            f"🧯 <b>ОГНЕТУШИТЕЛЬ ОБЭП: САМООЧИЩЕНИЕ!</b>\n"
+            f"Ты сорвал чеку и окатил себя плотной очищающей пеной!\n"
+            f"Все токсичные дебаффы (говно 💩, блевота 🤮, флаги 🇺🇦/🇷🇺, перец, понос и шиза) моментально смыты!\n"
+            f"<i>(Осталось зарядов: {rem_charges}/3)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # 2. ПРИМЕНЕНИЕ С РЕПЛАЕМ НА ДРУГОГО ПОЛЬЗОВАТЕЛЯ
+    t_items = await _get_user_active_items(db, target_id, board_id)
+
+    target_has_debuff = any(t_items.get(k, 0) > now for k in DEBUFF_KEYS)
+    if not target_has_debuff:
+        async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
+            row = await c.fetchone()
+            if row and row[0] and row[0] > now:
+                target_has_debuff = True
+
+    # СЦЕНАРИЙ А: СПАСАТЕЛЬ / МЕДИК (У цели есть токсичные дебаффы)
+    if target_has_debuff:
+        rem_charges = _consume_charge(active_items)
+        for k in DEBUFF_KEYS:
+            t_items.pop(k, None)
+
+        from shared_state import clear_combat_cooldown
+        clear_combat_cooldown(target_id)
+
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ?", (target_id,))
+            async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (target_id,)) as cur:
+                target_rows = await cur.fetchall()
+            for b_row_id, raw_items in target_rows:
+                try:
+                    row_items = json.loads(raw_items) if raw_items else {}
+                except Exception:
+                    row_items = {}
+                for k in DEBUFF_KEYS:
+                    row_items.pop(k, None)
+                if b_row_id == board_id:
+                    row_items = t_items
+                await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(row_items), target_id, b_row_id))
+            await db.commit()
+
+        await log_global_event('bot', f"🧯 EXTINGUISH_RESCUE: Юзер {user_id} спас {target_id} от дебаффов Огнетушителем ОБЭП на /{board_id}/ (осталось {rem_charges} зар.)")
+        await message.reply(
+            f"🧯 <b>СПАСАТЕЛЬНАЯ ОПЕРАЦИЯ ОБЭП!</b>\n\n"
+            f"Анон <b>[{get_anon_id(user_id)}]</b> вскрыл Огнетушитель ОБЭП и залил пеной жертву травли <b>[{get_anon_id(target_id)}]</b>!\n"
+            f"✨ Все дебаффы (говно 💩, блевота 🤮, флаги 🇺🇦/🇷🇺, понос и шиза) нейтрализованы!\n"
+            f"<i>(У спасателя осталось зарядов: {rem_charges}/3)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # СЦЕНАРИЙ Б: АКТИВНОЕ ПЕННОЕ ОБЕЗОРУЖИВАНИЕ (У цели нет дебаффов -> атака пеной)
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    target_posts = await get_user_posts_count(db, target_id, board_id)
+    if target_posts < 15:
+        await message.answer(
+            "🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\n"
+            "Цель защищена статусом новичка (менее 15 постов на борде). Нельзя заливать новичков пеной!\n"
+            f"<i>(Заряд огнетушителя сохранён: {cur_charges}/3)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    from shared_state import get_combat_cooldown_remaining, register_target_attack, set_combat_cooldown
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\nСледующая атака доступна через <b>{cd_rem}с</b>.",
+            parse_mode="HTML"
+        )
+        return
+
+    if t_items.get("foamed_until", 0) > now:
+        await message.answer(
+            f"🧯 <b>Цель уже залита пеной!</b> Подожди, пока пена осядет.\n<i>(Заряд сохранён: {cur_charges}/3)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    register_target_attack(target_id)
+    rem_charges = _consume_charge(active_items)
+
+    # Проверка Зеркального Щита цели
+    if t_items.get("reflect_shield_until", 0) > now or t_items.get("shield_until", 0) > now:
+        t_items["reflect_shield_until"] = 0
+        t_items["shield_until"] = 0
+        t_items["shield"] = False
+
+        # Нападающий сам попадает под свою пену и разоружается
+        disarmed_attacker_guns = []
+        for g in ("mute_gun", "partyvan_gun", "knife_gun", "shit_gun", "vomit_gun", "flag_ua_gun", "flag_ru_gun", "laxative_gun", "schizopill_gun"):
+            if active_items.pop(g, None):
+                disarmed_attacker_guns.append(g)
+
+        active_items["foamed_until"] = now + 300
+        active_items["disarmed_until"] = now + 300
+        set_combat_cooldown(user_id, 300)
+
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+
+        await log_global_event('bot', f"🪞 EXTINGUISH_BOUNCE: Огнетушитель от {user_id} отскочил в щит {target_id}! Нападающий сам в пене.")
+        await message.answer(
+            "🪞 <b>ОТРАЖЕНИЕ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\n\n"
+            f"Анон <b>[{get_anon_id(target_id)}]</b> выставил Зеркальный Щит!\n"
+            f"Струя пены из Огнетушителя ОБЭП отрикошетила прямо в лицо нападающему <b>[{get_anon_id(user_id)}]</b>!\n"
+            f"💨 <b>Эффект рикошета:</b> Нападающий сам залит пеной и обезоружен на 5 минут!\n"
+            f"<i>(Зеркало цели разбито. У нападающего осталось {rem_charges}/3 зарядов огнетушителя)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Успешное обезоруживание цели пеной
+    disarmed_target_guns = []
+    for g in ("mute_gun", "partyvan_gun", "knife_gun", "shit_gun", "vomit_gun", "flag_ua_gun", "flag_ru_gun", "laxative_gun", "schizopill_gun"):
+        if t_items.pop(g, None):
+            disarmed_target_guns.append(g)
+
+    t_items["foamed_until"] = now + 300
+    t_items["disarmed_until"] = now + 300
+    set_combat_cooldown(target_id, 300)
+    set_combat_cooldown(user_id, 30)
+
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(active_items), user_id, board_id))
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(t_items), target_id, board_id))
+        await db.commit()
+
+    guns_note = f" (выбито оружие: {len(disarmed_target_guns)} шт.)" if disarmed_target_guns else ""
+    await log_global_event('bot', f"🧯 EXTINGUISH_DISARM: Юзер {user_id} залил пеной и обезоружил {target_id} на /{board_id}/ (осталось {rem_charges} зар.)")
+    await message.reply(
+        f"🧯 <b>ОБЭП НАКРЫЛ С ПЕНОЙ!</b>\n\n"
+        f"Анон <b>[{get_anon_id(user_id)}]</b> выпустил струю пены из Огнетушителя ОБЭП в лицо анону <b>[{get_anon_id(target_id)}]</b>!\n"
+        f"🎯 <b>Эффект:</b> Плотная пена залепила глаза и руки! Полное обезоруживание на 5 минут{guns_note}! Атаки и применение оружия заблокированы.\n"
+        f"<i>(Осталось зарядов: {rem_charges}/3)</i>",
+        parse_mode="HTML"
+    )
 
 
 @dp.message(Command("curse", "laxative", "понос", "слабительное", ignore_case=True, ignore_mention=True))
@@ -8079,10 +8364,10 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         return
 
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
+    if target_posts < 15:
         await message.answer(
             "🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\n"
-            "Цель защищена статусом новичка (менее 50 постов на борде). Нельзя травить новичков слабительным!\n"
+            "Цель защищена статусом новичка (менее 15 постов на борде). Нельзя травить новичков слабительным!\n"
             "<i>(Слабительное осталось в твоем рюкзаке)</i>",
             parse_mode="HTML"
         )
@@ -8146,6 +8431,21 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("🥼 <b>СЕТ «ПАЛАТА №6» СПАС!</b>\nПациент в смирительной рубашке и фольге обладает полным иммунитетом к слабительному (0 дебаффов)!", parse_mode="HTML")
         return
 
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        t_items["reflect_shield_until"] = 0
+        t_items["shield_until"] = 0
+        t_items["shield"] = False
+        active_items["laxative_gun"] = False
+        active_items["cursed_until"] = current_time + 1800
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ?, cursed_until = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), current_time + 1800, user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+        await message.answer("🪞 <b>РИКОШЕТ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\nСлабительное отразилось от Зеркала жертвы прямо тебе в кружку!\nТеперь у ТЕБЯ словесный понос на 30 минут!\n<i>(Зеркало жертвы израсходовано)</i>", parse_mode="HTML")
+        return
+
     if t_items.get("tinfoil_hat", 0) > current_time:
         active_items["laxative_gun"] = False
         destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=4.0, burn_chance=0.10)
@@ -8194,7 +8494,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     from common.debuff_phrases import get_curse_hit_text
     await message.answer(get_curse_hit_text(), parse_mode="HTML")
 
-@dp.message(Command("schizopill", "schizo_pill", "шизотаблетка", "шизопил"))
+@dp.message(Command("schizopill", "schizo_pill", "schizo", "шиза", "таблетка", "шизотаблетка", "шизопил", "pill", ignore_case=True, ignore_mention=True))
 async def cmd_schizopill(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -8234,10 +8534,10 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
         return
 
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
+    if target_posts < 15:
         await message.answer(
             "🔰 <b>ОТЛЁТ АТАКИ! ИММУНИТЕТ НОВИЧКА!</b>\n"
-            "Цель защищена статусом новичка (менее 50 постов на борде). Кормить новичков шизотаблетками запрещено!\n"
+            "Цель защищена статусом новичка (менее 15 постов на борде). Кормить новичков шизотаблетками запрещено!\n"
             "<i>(Шизо-Таблетка осталась в твоем рюкзаке)</i>",
             parse_mode="HTML"
         )
@@ -8283,6 +8583,21 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
         await message.answer("🧠 <b>МЕНТАЛЬНЫЙ ИММУНИТЕТ!</b>\nЭрудиция Онотоле / Пациента Палаты №6 нейтрализовала действие Шизо-Таблетки!", parse_mode="HTML")
+        return
+
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        t_items["reflect_shield_until"] = 0
+        t_items["shield_until"] = 0
+        t_items["shield"] = False
+        active_items["schizopill_gun"] = False
+        active_items["schizo_pill_until"] = current_time + 1800
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+        await message.answer("🪞 <b>РИКОШЕТ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\nШизо-таблетка отскочила от Зеркала жертвы прямо тебе в рот!\nТеперь ТЫ бредишь шизой на 30 минут!\n<i>(Зеркало жертвы израсходовано)</i>", parse_mode="HTML")
         return
 
     if t_items.get("tinfoil_hat", 0) > current_time:
@@ -8337,7 +8652,7 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
     except Exception:
         pass
 
-@dp.message(Command("partyvan"))
+@dp.message(Command("partyvan", "пативэн", "пативен", "омон", "автозак", ignore_case=True, ignore_mention=True))
 async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -8383,11 +8698,11 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
         return
 
-    # --- Иммунитет и отлёт доноса для новичков (< 50 постов) ---
+    # --- Иммунитет и отлёт доноса для новичков (< 15 постов) ---
     target_posts = await get_user_posts_count(db, target_id, board_id)
-    if target_posts < 50:
-        set_partyvan_victim_immunity(target_id, current_time + 3600)
-        await message.reply("🔰 <b>ОТЛЁТ ДОНОСА! ИММУНИТЕТ НОВИЧКА!</b>\nДежурный порвал донос: цель защищена статусом новичка (менее 50 постов на борде). ОМОН не выезжает по новичкам!\n<i>(Рация осталась в твоем рюкзаке, жертва получила иммунитет на 1 час)</i>", parse_mode="HTML")
+    if target_posts < 15:
+        set_partyvan_victim_immunity(target_id, current_time + 180)
+        await message.reply("🔰 <b>ОТЛЁТ ДОНОСА! ИММУНИТЕТ НОВИЧКА!</b>\nДежурный порвал донос: цель защищена статусом новичка (менее 15 постов на борде). ОМОН не выезжает по новичкам!\n<i>(Рация осталась в твоем рюкзаке, жертва получила иммунитет на 3 минуты)</i>", parse_mode="HTML")
         return
 
     # Проверка идемпотентности: цель уже отбывает длительный срок в КПЗ (> 3ч)
@@ -8396,7 +8711,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer("🚔 <b>Вызов отменен:</b> Эта цель УЖЕ откисает в КПЗ!\nРация осталась в твоем рюкзаке.", parse_mode="HTML")
         return
 
-    # --- Пер-юзерный куладун на вызов пативэна: 1 час ---
+    # --- Пер-юзерный кулдаун на вызов пативэна: 10 минут ---
     user_pv_cd = get_partyvan_user_cooldown(user_id)
     if user_pv_cd > current_time:
         cd_left = int(user_pv_cd - current_time)
@@ -8405,12 +8720,12 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer(
             f"⏳ <b>Пативэн на перезарядке!</b>\n"
             f"Ты уже вызывал ОМОН. Следующий вызов через <b>{cd_min}м {cd_sec}с</b>.\n"
-            f"<i>(Куладун 1 час между вызовами от одного аккаунта)</i>",
+            f"<i>(Кулдаун 10 минут между вызовами от одного аккаунта)</i>",
             parse_mode="HTML"
         )
         return
 
-    # --- Пер-борд куладун: 30 минут между вызовами на одну доску ---
+    # --- Пер-борд кулдаун: 5 минут между вызовами на одну доску ---
     board_pv_cd = get_partyvan_board_cooldown(board_id)
     if board_pv_cd > current_time:
         cd_left = int(board_pv_cd - current_time)
@@ -8419,12 +8734,12 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer(
             f"🚔 <b>ОМОН занят!</b>\n"
             f"Наряд ещё не вернулся на базу. Вызов на эту доску снова доступен через <b>{cd_min}м {cd_sec}с</b>.\n"
-            f"<i>(Куладун 30 минут по доске между вызовами)</i>",
+            f"<i>(Кулдаун 5 минут по доске между вызовами)</i>",
             parse_mode="HTML"
         )
         return
 
-    # --- Иммунитет жертвы: 1 час после освобождения ---
+    # --- Иммунитет жертвы: 5 минут после освобождения ---
     victim_immunity = get_partyvan_victim_immunity(target_id)
     if victim_immunity > current_time:
         cd_left = int(victim_immunity - current_time)
@@ -8433,7 +8748,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer(
             f"🛡️ <b>Жертва под защитой!</b>\n"
             f"Анон недавно перенес атаку / вышел из КПЗ и имеет иммунитет ещё <b>{cd_min}м {cd_sec}с</b>.\n"
-            f"<i>(Иммунитет жертвы 1 час после освобождения/взятки)</i>",
+            f"<i>(Иммунитет жертвы после освобождения/взятки)</i>",
             parse_mode="HTML"
         )
         return
@@ -8444,8 +8759,8 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if await check_target_grief_protection(message, target_id, user_id, board_id):
         return
 
-    # Защита от преследования одной и той же цели (15 мин кулдаун между атаками на ту же пару)
-    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id)
+    # Защита от преследования одной и той же цели (2 мин кулдаун между атаками на ту же пару)
+    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id, cooldown_seconds=120.0)
     if is_pair_blocked:
         rem_min = pair_rem // 60
         rem_sec = pair_rem % 60
@@ -8515,7 +8830,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         except Exception: pass
         return
 
-    set_combat_cooldown(user_id, 180)
+    set_combat_cooldown(user_id, 30)
 
     from wardrobe_engine import get_wardrobe_total_stats
     t_stats = get_wardrobe_total_stats(t_items, current_time=current_time)
@@ -8546,6 +8861,8 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if t_items.get("reflect_shield_until", 0) > current_time:
         active_items["partyvan_gun"] = False
         t_items["reflect_shield_until"] = 0
+        t_items["shield_until"] = 0
+        t_items["shield"] = False
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
@@ -8606,11 +8923,11 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     register_attacker_effect("partyvan_gun", user_id, target_id, duration_sec)
     register_target_attack(target_id)
     record_combat_attack(user_id, target_id, "partyvan")
-    set_partyvan_victim_immunity(target_id, current_time + duration_sec + 3600)
+    set_partyvan_victim_immunity(target_id, current_time + duration_sec + 300)
 
-    # Выставляем куладуны: 1ч на юзера, 30м на доску
-    set_partyvan_user_cooldown(user_id, current_time + 3600)
-    set_partyvan_board_cooldown(board_id, current_time + 1800)
+    # Выставляем кулдауны: 10м на юзера, 5м на доску
+    set_partyvan_user_cooldown(user_id, current_time + 600)
+    set_partyvan_board_cooldown(board_id, current_time + 300)
 
     # Регистрация интерактивной сессии апелляции (кнопки народного протеста и залога)
     session_id = create_combat_appeal_session(board_id, user_id, target_id, "partyvan", duration_sec, message.chat.id)
@@ -23945,7 +24262,11 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
                 is_janitor = True
 
     if not admin_status and not is_janitor:
-        try: await message.delete()
+        try:
+            err_txt = "⚠️ <b>У тебя нет прав дворника!</b>\nКупи Билет Дворника в магазине: /shop (раздел «Оружие и атака»)." if lang != 'en' else "⚠️ <b>You don't have Janitor rights!</b>\nBuy a Janitor Ticket in /shop."
+            sent = await message.answer(err_txt, parse_mode="HTML")
+            spawn_task(delete_message_after_delay(sent, 7))
+            await message.delete()
         except Exception: pass
         return
 
@@ -25174,6 +25495,14 @@ async def admin_back_to_main(callback: types.CallbackQuery):
 async def get_author_id_by_reply(msg: types.Message) -> int | None:
     if not msg.reply_to_message:
         return None
+
+    # 0. Прямой ответ на сообщение живого пользователя (не бота)
+    reply_user = msg.reply_to_message.from_user
+    if reply_user and not reply_user.is_bot:
+        return reply_user.id
+    if msg.reply_to_message.forward_from and not msg.reply_to_message.forward_from.is_bot:
+        return msg.reply_to_message.forward_from.id
+
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
@@ -25203,6 +25532,23 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
     if db_author_id is not None:
         return db_author_id
+
+    # Фолбэк на таблицу ChannelCopies
+    try:
+        db = await get_pool()
+        async with db.execute(
+            "SELECT p.author_id FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?",
+            (target_chat_id, reply_mid)
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception:
+        pass
+
+    if reply_user and reply_user.is_bot:
+        return 0
+
     return None
 
 async def get_post_num_by_reply(msg: types.Message) -> int | None:

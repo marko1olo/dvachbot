@@ -267,7 +267,7 @@ def test_work_engine_durability_fix_and_perks():
         "work_shifts": 1,
     }
 
-    with patch("random.random", return_value=0.5):
+    with patch("random.random", return_value=0.5), patch("common.work_engine.is_night_shift_active", return_value=False):
         success, earned, msg, drop = work_engine.execute_job_action(
             job_id="bottles",
             current_items=expired_items,
