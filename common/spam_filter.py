@@ -52,6 +52,7 @@ _user_link_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 _user_repost_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 # {user_id: {media_group_id: {'first_ts': float, 'blocked': bool, 'response': str}}}
 _seen_repost_media_groups: Dict[int, Dict[str, dict]] = defaultdict(dict)
+_last_auto_cleanup_ts: float = 0.0
 
 # --- Constants & Thresholds ---
 BAYAN_WINDOW_SEC = 180          # 3 minutes sliding window
@@ -703,6 +704,12 @@ def check_flood(
     except Exception:
         now = time.time()
 
+    # Periodic sanitation check (every 60s)
+    global _last_auto_cleanup_ts
+    if now - _last_auto_cleanup_ts > 60.0:
+        _last_auto_cleanup_ts = now
+        prune_stale_spam_filter_state(now_ts=now)
+
     # 1. Handle media groups (albums): subsequent files of the same album within window are NOT new flood messages
     if media_group_id:
         mg_str = str(media_group_id)
@@ -711,6 +718,8 @@ def check_flood(
         expired = [mg for mg, entry in list(mg_map.items()) if now - (entry['first_ts'] if isinstance(entry, dict) else entry) > MEDIA_GROUP_WINDOW]
         for mg in expired:
             mg_map.pop(mg, None)
+        if not mg_map:
+            _seen_media_groups.pop(user_id, None)
 
         mg_entry = mg_map.get(mg_str)
         if isinstance(mg_entry, dict):
@@ -987,6 +996,8 @@ def check_repost_spam(
         expired = [k for k, v in list(user_mg_map.items()) if now - v.get('first_ts', 0) > REPOST_WINDOW_SEC]
         for k in expired:
             user_mg_map.pop(k, None)
+        if not user_mg_map:
+            _seen_repost_media_groups.pop(user_id, None)
 
         if mg_str in user_mg_map:
             entry = user_mg_map[mg_str]
@@ -1557,8 +1568,184 @@ def get_board_spam_stats(board_id: str) -> dict:
         "repost_tracked_users": len(_user_repost_timestamps),
     }
 
+def prune_idle_user_spam_locks(max_keep: int = 1500) -> int:
+    """Removes idle locks from user_spam_locks where lock is not acquired and has no waiters."""
+    if len(user_spam_locks) <= max_keep:
+        return 0
+    stale = []
+    for uid, lock in list(user_spam_locks.items()):
+        try:
+            if not lock.locked() and not getattr(lock, "_waiters", None):
+                stale.append(uid)
+                if len(user_spam_locks) - len(stale) <= max_keep:
+                    break
+        except Exception:
+            continue
+    for uid in stale:
+        user_spam_locks.pop(uid, None)
+    return len(stale)
+
+
+def prune_stale_spam_filter_state(now_ts: float | None = None) -> dict[str, int]:
+    """
+    Sanitizes all in-memory spam filter trackers (TTL and LRU cleanup).
+    Prevents memory leaks when 50,000+ users interact with the bot.
+    Returns dictionary with counts of pruned entries.
+    """
+    now = float(now_ts) if now_ts is not None else time.time()
+    pruned: dict[str, int] = {}
+
+    # 1. user_spam_locks
+    pruned["user_spam_locks"] = prune_idle_user_spam_locks(max_keep=1000)
+
+    # 2. _seen_media_groups: {user_id: {mg_id: {'first_ts': float, ...}}}
+    stale_mg_users = []
+    for uid, mg_map in list(_seen_media_groups.items()):
+        if not mg_map:
+            stale_mg_users.append(uid)
+            continue
+        expired = [
+            mg for mg, entry in list(mg_map.items())
+            if now - (entry['first_ts'] if isinstance(entry, dict) else (entry if isinstance(entry, (int, float)) else 0.0)) > MEDIA_GROUP_WINDOW
+        ]
+        for mg in expired:
+            mg_map.pop(mg, None)
+        if not mg_map:
+            stale_mg_users.append(uid)
+    for uid in stale_mg_users:
+        _seen_media_groups.pop(uid, None)
+    pruned["_seen_media_groups"] = len(stale_mg_users)
+
+    # 3. _seen_repost_media_groups: {user_id: {mg_id: {'first_ts': float, ...}}}
+    stale_rmg_users = []
+    for uid, rmg_map in list(_seen_repost_media_groups.items()):
+        if not rmg_map:
+            stale_rmg_users.append(uid)
+            continue
+        expired = [
+            k for k, v in list(rmg_map.items())
+            if now - (v.get('first_ts', 0.0) if isinstance(v, dict) else 0.0) > REPOST_WINDOW_SEC
+        ]
+        for k in expired:
+            rmg_map.pop(k, None)
+        if not rmg_map:
+            stale_rmg_users.append(uid)
+    for uid in stale_rmg_users:
+        _seen_repost_media_groups.pop(uid, None)
+    pruned["_seen_repost_media_groups"] = len(stale_rmg_users)
+
+    # 4. _user_request_timestamps: {user_id: deque}
+    stale_req_users = []
+    for uid, tracker in list(_user_request_timestamps.items()):
+        while tracker and (now - float(tracker[0]) > MINUTE_FLOOD_WINDOW):
+            tracker.popleft()
+        if not tracker:
+            stale_req_users.append(uid)
+    for uid in stale_req_users:
+        _user_request_timestamps.pop(uid, None)
+    pruned["_user_request_timestamps"] = len(stale_req_users)
+
+    # 5. _bayan_tracker: {user_id: deque}
+    stale_bayan_users = []
+    for uid, tracker in list(_bayan_tracker.items()):
+        while tracker and (now - tracker[0][0] > BAYAN_WINDOW_SEC):
+            tracker.popleft()
+        if not tracker:
+            stale_bayan_users.append(uid)
+    for uid in stale_bayan_users:
+        _bayan_tracker.pop(uid, None)
+    pruned["_bayan_tracker"] = len(stale_bayan_users)
+
+    # 6. _bayan_mute_count & _bayan_mute_last_ts
+    stale_bayan_mutes = []
+    for uid, last_ts in list(_bayan_mute_last_ts.items()):
+        if now - last_ts > BAYAN_RESET_SEC:
+            stale_bayan_mutes.append(uid)
+    for uid in stale_bayan_mutes:
+        _bayan_mute_last_ts.pop(uid, None)
+        _bayan_mute_count.pop(uid, None)
+    pruned["_bayan_mute_counters"] = len(stale_bayan_mutes)
+
+    # 7. _user_link_timestamps & _user_repost_timestamps
+    stale_links = []
+    for uid, tracker in list(_user_link_timestamps.items()):
+        while tracker and (now - float(tracker[0][0] if isinstance(tracker[0], tuple) else tracker[0]) > 60.0):
+            tracker.popleft()
+        if not tracker:
+            stale_links.append(uid)
+    for uid in stale_links:
+        _user_link_timestamps.pop(uid, None)
+    pruned["_user_link_timestamps"] = len(stale_links)
+
+    stale_reposts = []
+    for uid, tracker in list(_user_repost_timestamps.items()):
+        while tracker and (now - float(tracker[0]) > REPOST_WINDOW_SEC):
+            tracker.popleft()
+        if not tracker:
+            stale_reposts.append(uid)
+    for uid in stale_reposts:
+        _user_repost_timestamps.pop(uid, None)
+    pruned["_user_repost_timestamps"] = len(stale_reposts)
+
+    # 8. _user_media_burst_tracker: {user_id: dict}
+    stale_bursts = []
+    for uid, burst in list(_user_media_burst_tracker.items()):
+        if burst.get('last_ts', 0.0) == 0.0 or (now - burst.get('last_ts', 0.0) > MEDIA_BURST_GAP * 3):
+            stale_bursts.append(uid)
+    for uid in stale_bursts:
+        _user_media_burst_tracker.pop(uid, None)
+    pruned["_user_media_burst_tracker"] = len(stale_bursts)
+
+    # 9. _shadow_mute_applied_ts: {user_id: float}
+    stale_mute_grace = []
+    for uid, applied_ts in list(_shadow_mute_applied_ts.items()):
+        if now - applied_ts > MUTE_GRACE_PERIOD_SEC * 10:
+            stale_mute_grace.append(uid)
+    for uid in stale_mute_grace:
+        _shadow_mute_applied_ts.pop(uid, None)
+    pruned["_shadow_mute_applied_ts"] = len(stale_mute_grace)
+
+    # 10. _user_posts_count_cache: {user_id: (ts, count)}
+    stale_cache = []
+    for uid, val in list(_user_posts_count_cache.items()):
+        if isinstance(val, tuple) and len(val) >= 1:
+            if now - val[0] > USER_POSTS_CACHE_TTL:
+                stale_cache.append(uid)
+        else:
+            stale_cache.append(uid)
+    for uid in stale_cache:
+        _user_posts_count_cache.pop(uid, None)
+    pruned["_user_posts_count_cache"] = len(stale_cache)
+
+    # 11. _spam_violations: {board_id: {user_id: {'level': int, 'last_reset': datetime}}}
+    now_dt = datetime.now(UTC)
+    clean_v_count = 0
+    for b_id, v_map in list(_spam_violations.items()):
+        stale_v_users = []
+        for uid, v in list(v_map.items()):
+            lr = v.get('last_reset')
+            if lr is not None:
+                if isinstance(lr, (int, float)):
+                    if now - lr > 300 and v.get('level', 0) == 0:
+                        stale_v_users.append(uid)
+                elif hasattr(lr, 'tzinfo'):
+                    if lr.tzinfo is None:
+                        lr = lr.replace(tzinfo=UTC)
+                    if now_dt - lr > timedelta(minutes=5) and v.get('level', 0) == 0:
+                        stale_v_users.append(uid)
+        for uid in stale_v_users:
+            v_map.pop(uid, None)
+        clean_v_count += len(stale_v_users)
+    pruned["_spam_violations"] = clean_v_count
+
+    return pruned
+
+
 def acquire_spam_lock(user_id: int):
+    if len(user_spam_locks) > 3000:
+        prune_idle_user_spam_locks(max_keep=1500)
     return user_spam_locks[user_id]
+
 
 def get_spam_violation_level(board_id: str, user_id: int) -> int:
     return _spam_violations[board_id].get(user_id, {}).get('level', 0)

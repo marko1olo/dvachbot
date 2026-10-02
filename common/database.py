@@ -9911,7 +9911,7 @@ async def add_to_abu_fund(db, amount: float, donor_id: int = 0, reason: str = ""
                 """,
                 (str(amount), amount)
             )
-            await db.commit()
+            await safe_commit(db)
         except Exception:
             pass
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
@@ -9952,7 +9952,7 @@ async def deduct_from_abu_fund(db, amount: float, reason: str = "") -> float:
                 """,
                 (amount,)
             )
-            await db.commit()
+            await safe_commit(db)
         except Exception:
             pass
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():

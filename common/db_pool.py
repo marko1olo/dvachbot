@@ -587,6 +587,8 @@ async def safe_commit(db, started_by_caller: bool = True):
     """
     if not started_by_caller or db is None:
         return
+    if _task_tx_depth.get() > 0:
+        return
     in_tx = getattr(db, "in_transaction", False)
     if not in_tx:
         conn = getattr(db, "_conn", None)
@@ -607,6 +609,8 @@ async def safe_rollback(db, started_by_caller: bool = True):
     Безопасно откатывает транзакцию, если она активна и была начата данным контекстом.
     """
     if not started_by_caller or db is None:
+        return
+    if _task_tx_depth.get() > 0:
         return
     in_tx = getattr(db, "in_transaction", False)
     if not in_tx:

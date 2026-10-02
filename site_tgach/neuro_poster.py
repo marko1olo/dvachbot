@@ -181,104 +181,113 @@ class NeuroManager:
     async def _safe_api_call(self, messages, max_tokens, temperature, model=None):
         """
         Универсальная обертка для запросов к Groq с поддержкой TUN/VPN.
+        Автоматически перенаправляет мультимодальные (image_url) запросы сразу на Gemini Vision,
+        не спамя текстовую модель Groq заведомо невалидными запросами.
         """
+        has_images = any(
+            isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"] if isinstance(p, dict))
+            for m in messages if isinstance(m, dict)
+        )
+
         target_model = model or AI_CONFIG["model"]
         
-        # Пробуем 3 раза с разными ключами
-        for i in range(3):
-            api_key = groq_pool.get_token()
-            if not api_key: 
-                logger.error("❌ No Groq API keys available.")
-                return None
+        # Если в запросе нет картинок — пробуем Groq (текстовая генерация)
+        if not has_images:
+            for i in range(3):
+                api_key = groq_pool.get_token()
+                if not api_key: 
+                    logger.error("❌ No Groq API keys available.")
+                    break
 
-            # Стратегии подключения: Прокси (если задан) -> Прямое
-            strategies = []
-            if PROXY_URL:
-                strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
-            strategies.append({"proxy": None, "name": "Direct"})
+                # Стратегии подключения: Прокси (если задан) -> Прямое
+                strategies = []
+                if PROXY_URL:
+                    strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
+                strategies.append({"proxy": None, "name": "Direct"})
 
-            for strategy in strategies:
-                try:
-                    # local_address="0.0.0.0" фиксит проблемы с TUN на Windows
-                    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
-                    
-                    async with httpx.AsyncClient(
-                        proxy=strategy["proxy"], 
-                        transport=transport,
-                        verify=False,
-                        timeout=40.0
-                    ) as http_client:
+                for strategy in strategies:
+                    try:
+                        # local_address="0.0.0.0" фиксит проблемы с TUN на Windows
+                        transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
                         
-                        async with AsyncOpenAI(
-                            api_key=api_key, 
-                            base_url=AI_CONFIG["base_url"],
-                            http_client=http_client,
-                            max_retries=0
-                        ) as client:
-                             completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
-                             if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
-                                 content = completion.choices[0].message.content
-                                 if content:
-                                     import re
-                                     # Сначала вырезаем закрытые теги
-                                     content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                     content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                     # Если нейронка оборвалась и не закрыла тег, вырезаем всё от <think> до конца
-                                     content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                     content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
-                                 return content
+                        async with httpx.AsyncClient(
+                            proxy=strategy["proxy"], 
+                            transport=transport,
+                            verify=False,
+                            timeout=40.0
+                        ) as http_client:
+                            
+                            async with AsyncOpenAI(
+                                api_key=api_key, 
+                                base_url=AI_CONFIG["base_url"],
+                                http_client=http_client,
+                                max_retries=0
+                            ) as client:
+                                 completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
+                                 if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
+                                     content = completion.choices[0].message.content
+                                     if content:
+                                         import re
+                                         content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                         content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                         content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                         content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+                                     return content
 
-                except Exception as e:
-                    err_str = str(e)
-                    # Если лимит токена - пробуем следующий ключ (break из цикла стратегий)
-                    if "429" in err_str or "rate limit" in err_str.lower():
-                        logger.warning(f"⚠️ Groq Rate Limit via {strategy['name']}. Switching key...")
-                        break 
-                    
-                    if (
-                        re.search(r'\b401\b', err_str)
-                        or "unauthorized" in err_str.lower()
-                        or "invalid api key" in err_str.lower()
-                    ) and "413" not in err_str:
-                        logger.warning(f"⚠️ Groq key {api_key[:12]}... is unauthorized (401). Setting 15m cooldown.")
-                        groq_pool.penalize_token(api_key, 900.0)
-                        break
+                    except Exception as e:
+                        err_str = str(e)
+                        if "429" in err_str or "rate limit" in err_str.lower():
+                            logger.warning(f"⚠️ Groq Rate Limit via {strategy['name']}. Penalizing key...")
+                            groq_pool.penalize_token(api_key, 120.0)
+                            await asyncio.sleep(2.5)
+                            break 
+                        
+                        if (
+                            re.search(r'\b401\b', err_str)
+                            or "unauthorized" in err_str.lower()
+                            or "invalid api key" in err_str.lower()
+                        ) and "413" not in err_str:
+                            logger.warning(f"⚠️ Groq key {api_key[:12]}... is unauthorized (401). Setting 15m cooldown.")
+                            groq_pool.penalize_token(api_key, 900.0)
+                            break
 
-                    # Если ошибка сети - пробуем следующую стратегию (continue внутри цикла стратегий)
-                    # logger.warning(f"⚠️ Network error via {strategy['name']}: {e}")
-                    continue
-            
-            # Если вышли из цикла стратегий без return и без break (т.е. обе стратегии упали, но не из-за лимитов)
-            # то пробуем следующий ключ
+                        continue
         
-        # Fallback to Google Gemini if Groq failed
-        google_key = google_pool.get_token()
-        if google_key:
-            gemini_models = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
-            for g_model in gemini_models:
-                try:
-                    async with httpx.AsyncClient(verify=False, timeout=25.0) as http_client:
-                        async with AsyncOpenAI(
-                            api_key=google_key,
-                            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                            http_client=http_client,
-                            max_retries=0
-                        ) as g_client:
-                            completion = await _execute_completion(g_client, g_model, messages, max_tokens, temperature)
-                            if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
-                                content = completion.choices[0].message.content
-                                if content:
-                                    import re
-                                    content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                    content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                    content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                    content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+        # Fallback to Google Gemini (or primary path for image analysis)
+        gemini_keys = google_pool.get_all_active_tokens()
+        if gemini_keys:
+            gemini_models = ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash-lite"]
+            for g_key in gemini_keys[:5]:
+                for g_model in gemini_models:
+                    try:
+                        async with httpx.AsyncClient(verify=False, timeout=25.0) as http_client:
+                            async with AsyncOpenAI(
+                                api_key=g_key,
+                                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                                http_client=http_client,
+                                max_retries=0
+                            ) as g_client:
+                                completion = await _execute_completion(g_client, g_model, messages, max_tokens, temperature)
+                                if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
+                                    content = completion.choices[0].message.content
                                     if content:
-                                        logger.info(f"✅ Neuro-poster fallback success via Gemini ({g_model})")
-                                        return content
-                except Exception as g_err:
-                    logger.warning(f"⚠️ Gemini fallback failed for {g_model}: {g_err}")
-                    continue
+                                        import re
+                                        content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                        content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                        content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                        content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+                                        if content:
+                                            logger.info(f"✅ Neuro-poster success via Gemini ({g_model})")
+                                            return content
+                    except Exception as g_err:
+                        err_str = str(g_err).lower()
+                        if "429" in err_str:
+                            google_pool.penalize_token(g_key, 60.0)
+                        elif "401" in err_str or "403" in err_str:
+                            google_pool.ban_token(g_key)
+                        await asyncio.sleep(0.5)
+                        logger.warning(f"⚠️ Gemini fallback failed for {g_model}: {g_err}")
+                        continue
 
         logger.error("❌ Groq & Gemini: All attempts failed.")
         return None

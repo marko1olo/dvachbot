@@ -37,7 +37,7 @@ This module is designed to be extensible and maintainable, allowing for future e
 """
 import asyncio
 from common.thread_manager import get_threads_data, get_thread_info, set_thread_info, delete_thread_data, acquire_thread_lock, get_thread_locks_count, get_active_threads, trim_thread_posts, save_threads_data, initialize_board_threads
-from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker, IMAGE_SPAM_LIMIT, IMAGE_SPAM_WINDOW
+from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker, IMAGE_SPAM_LIMIT, IMAGE_SPAM_WINDOW, prune_stale_spam_filter_state
 from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type, _site_public_url, _site_file_source
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
@@ -579,7 +579,9 @@ def generate_anon_name(user_id: int, stream: str = 'ru') -> str:
 def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
     """Truncate text to fit Telegram's UTF-16 code unit limit while preserving HTML tag balance."""
     from common.text_chunker import safe_html_truncate
-    return safe_html_truncate(text, max_units=max_utf16)
+    from common.text_utils import balance_html_tags
+    truncated = safe_html_truncate(text, max_units=max_utf16)
+    return balance_html_tags(truncated)
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
@@ -9648,10 +9650,10 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
         pct_str = t[:-1]
         try:
             pct = float(pct_str)
-            if 0 < pct <= 100:
+            if not math.isnan(pct) and not math.isinf(pct) and 0 < pct <= 100:
                 amt = int(sender_balance * (pct / 100.0))
                 return (amt if amt > 0 else None), ("empty_balance" if amt <= 0 else None)
-        except ValueError:
+        except (ValueError, OverflowError):
             pass
 
     multiplier = 1
@@ -9667,9 +9669,14 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
 
     try:
         val = float(t) * multiplier
-        if val <= 0:
+        if math.isnan(val) or math.isinf(val) or val <= 0:
             return None, "negative_or_zero"
-        return int(val), None
+        if val > 10_000_000:
+            return None, "too_large"
+        int_val = int(val)
+        if int_val <= 0:
+            return None, "negative_or_zero"
+        return int_val, None
     except (ValueError, OverflowError):
         return None, "invalid_format"
 
@@ -9865,7 +9872,7 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
 
 
     # Обработка edge cases сумм
-    if amount is None or amount <= 0:
+    if amount is None or math.isnan(amount) or math.isinf(amount) or amount <= 0:
         if err_reason == "empty_balance":
             await message.reply(
                 "🦴 <b>Ты нищ как церковная крыса!</b>\n"
@@ -9877,6 +9884,12 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
             await message.reply(
                 "💸 <b>Твоих шекелей не хватит даже на налог Абу!</b>\n"
                 "Комиссия за перевод съедает весь твой баланс. Подкопи шекелей через /work.",
+                parse_mode="HTML"
+            )
+        elif err_reason == "too_large":
+            await message.reply(
+                "🏦 <b>Финмониторинг Абу заблокировал перевод!</b>\n"
+                "Максимальная сумма одной транзакции — <b>10 000 000 ₪</b>. Не ломай экономику борды, олигарх мамкин.",
                 parse_mode="HTML"
             )
         elif err_reason == "negative_or_zero":
@@ -10154,7 +10167,11 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         return
 
     try:
-        amount = int(args[0]) if args else 0
+        val = float(args[0]) if args else 0.0
+        if math.isnan(val) or math.isinf(val) or val <= 0:
+            amount = 0
+        else:
+            amount = int(val)
     except Exception:
         amount = 0
 
@@ -20889,6 +20906,9 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
 
     for name, locks in (("generate_locks", generate_locks), ("user_spam_locks", user_spam_locks)):
         _note(name, _prune_idle_locks(locks))
+
+    for k, cnt in prune_stale_spam_filter_state(now).items():
+        _note(f"spam_filter:{k}", cnt)
 
     def _to_sec(val) -> float:
         if isinstance(val, (int, float)):

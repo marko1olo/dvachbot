@@ -453,6 +453,8 @@ def get_equipped_gear(active_items: Dict[str, Any], current_time: Optional[int] 
             has_exp = f"{eq_id}_expires" in active_items
             if is_perm or (expires > now if has_exp else True):
                 equipped[slot] = CLOTHING_CATALOG[eq_id]
+            else:
+                active_items.pop(f"equipped_{slot}", None)
 
     return equipped
 
@@ -502,6 +504,8 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
             has_exp = f"{item_id}_expires" in active_items
             if is_perm or (expires > now if has_exp else True):
                 equipped[slot] = CLOTHING_CATALOG[item_id]
+            else:
+                active_items.pop(f"equipped_{slot}", None)
 
 
     # 2. Identify active sets

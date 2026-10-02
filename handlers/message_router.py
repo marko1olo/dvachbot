@@ -1172,15 +1172,19 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             now_curr = time.time()
             can_call_llm = (now_curr - _LAST_DEBUFF_LLM_TS.get(user_id, 0.0) >= 4.0)
 
+            raw_text = (message.text or message.caption or "").strip()
+            # Вызываем LLM только на осмысленный текст (>= 5 символов и не чисто знаки препинания/эмодзи)
+            is_meaningful_text = len(raw_text) >= 5 and not bool(re.match(r"^[\W\d_]+$", raw_text))
+
             if c_items.get("cursed_until", 0) > now_curr:
-                original_text = message.text or message.caption or ""
+                original_text = raw_text
                 rewritten = None
-                if can_call_llm:
+                if can_call_llm and is_meaningful_text:
                     _LAST_DEBUFF_LLM_TS[user_id] = now_curr
                     from summarize import dispatch_llm_completion
                     prompt = "Перепиши этот текст от лица человека, у которого прямо во время речи начался взрывной понос. Прерывай предложения многоточиями, вставляй крики боли (ААА, БЛЯЯ, УУУФ), звуки бульканья в животе (БУРЛК-БУРЛК) и панику. Обязательно сохрани изначальный смысл текста, но пропусти его через призму невыносимой боли в животе и попыток сдержать кал. Пиши грязно, сыро, без ИИ-шаблонов. Текст жертвы:"
                     try:
-                        rewritten = await asyncio.wait_for(dispatch_llm_completion(prompt, original_text, model_preference="fast"), timeout=3.0)
+                        rewritten = await asyncio.wait_for(dispatch_llm_completion(prompt, original_text, model_preference="fast"), timeout=8.0)
                         if len(rewritten) > 1000:
                             rewritten = rewritten[:1000]
                     except Exception:
@@ -1190,7 +1194,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     farts = ["БУРЛК-БУРЛК...", "ПФФФРТ...", "БЛЯЯЯЯ!", "УУУФ...", "АААА ТЕРПЕТЬ НЕТ СИЛ!"]
                     f1 = random.choice(farts)
                     f2 = random.choice(farts)
-                    rewritten = f"{f1} {original_text} ... {f2}"
+                    rewritten = f"{f1} {original_text} ... {f2}" if original_text else f"{f1} {f2}"
                 
                 try: await message.delete()
                 except Exception: pass
@@ -1198,14 +1202,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 cursed_text_override = f"🚽 [ПРОКЛЯТЫЙ ПОНОСОМ]\n{rewritten}"
 
             if c_items.get("schizo_pill_until", 0) > now_curr and not cursed_text_override:
-                original_text = message.text or message.caption or ""
+                original_text = raw_text
                 rewritten = None
-                if can_call_llm:
+                if can_call_llm and is_meaningful_text:
                     _LAST_DEBUFF_LLM_TS[user_id] = now_curr
                     from summarize import dispatch_llm_completion
                     prompt = "Перепиши этот текст от лица абсолютно поехавшего шизофреника, конспиролога и параноика. Везде заговоры, рептилоиды, ЦРУ, излучение от вышек 5G и массоны. Перескакивай с мысли на мысль, пиши капсом случайные СЛОВА, используй много восклицательных знаков и вопросов. Сохрани изначальный смысл текста, но пропусти его через шизофазию и паранойю. Текст пациента:"
                     try:
-                        rewritten = await asyncio.wait_for(dispatch_llm_completion(prompt, original_text, model_preference="fast"), timeout=3.0)
+                        rewritten = await asyncio.wait_for(dispatch_llm_completion(prompt, original_text, model_preference="fast"), timeout=8.0)
                         if len(rewritten) > 1000:
                             rewritten = rewritten[:1000]
                     except Exception:
@@ -1215,7 +1219,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     schizo_tags = ["ОНИ СЛЕДЯТ ЗА МНОЙ!!", "ВЫШКИ 5G ОБЛУЧАЮТ!!", "РЕПТИЛОИДЫ КРУГОМ!!", "ШИЗОФАЗИЯ!!"]
                     s1 = random.choice(schizo_tags)
                     s2 = random.choice(schizo_tags)
-                    rewritten = f"{s1} {original_text} {s2}"
+                    rewritten = f"{s1} {original_text} {s2}" if original_text else f"{s1} {s2}"
                 
                 try: await message.delete()
                 except Exception: pass

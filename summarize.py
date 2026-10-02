@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import hashlib
 import random
 import httpx
 import logging
@@ -20,6 +22,10 @@ GROQ_CONFIG = {
 }
 
 _SHARED_HTTP_CLIENT = None
+# Внутрипамятный TTL кэш ответов саммари для одинаковых входных данных (защита от холостых вызовов)
+_SUMMARY_CACHE: dict[str, tuple[str, float]] = {}
+_CACHE_MAX_ENTRIES = 256
+
 # Ограничиваем параллельные LLM-вызовы Персоны: строго 1 одновременно
 # Иначе 10+ конкурентных горутин дёргают все ключи одновременно и спамят 429
 _PERSONA_SEMAPHORE: asyncio.Semaphore | None = None
@@ -222,6 +228,22 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
     Prioritizes high-throughput Gemini models with Groq Qwen failover.
     Automatically activates extractive summary fallback if all LLMs are down/rate-limited.
     """
+    # Guard against completely empty or whitespace-only dumps (saves wasted token calls)
+    if not text_dump or not text_dump.strip():
+        logger.warning("⚠️ dispatch_llm_completion received empty text_dump. Skipping LLM call.")
+        return ""
+
+    in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    cache_key = None
+    if not in_test:
+        cache_key = hashlib.sha256(f"{model_preference or 'default'}:{prompt.strip()}:{text_dump.strip()}".encode("utf-8")).hexdigest()
+        now_ts = time.time()
+        if cache_key in _SUMMARY_CACHE:
+            cached_val, expires_at = _SUMMARY_CACHE[cache_key]
+            if now_ts < expires_at:
+                logger.info(f"⚡ [LLM Cache Hit] Returning cached response for {model_preference or 'default'} (key={cache_key[:8]}).")
+                return cached_val
+
     if model_preference in ("persona", "persona_gemini"):
         # Persona / Cyberchad: строго 1 параллельный вызов через семафор
         async with _get_persona_semaphore():
@@ -238,6 +260,12 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
                 return generate_extractive_summary(text_dump, prompt, paragraph_count=4)
             except Exception as ext_err:
                 logger.error(f"Extractive fallback error: {ext_err}")
+    elif cache_key and not in_test and raw_res:
+        # Save to cache: 180s for normal summaries, 10s micro-burst for personas
+        ttl = 10.0 if model_preference in ("persona", "persona_gemini") else 180.0
+        if len(_SUMMARY_CACHE) >= _CACHE_MAX_ENTRIES:
+            _SUMMARY_CACHE.clear()
+        _SUMMARY_CACHE[cache_key] = (raw_res, time.time() + ttl)
 
     return raw_res
 
@@ -271,7 +299,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 ("gemini-3.6-flash", "gemini"),
                 ("gemini-3.7-flash", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
+                ("llama-3.3-70b-versatile", "groq"),
                 ("openai/gpt-oss-120b", "groq"),
+                ("llama-3.1-8b-instant", "groq"),
                 ("openai/gpt-oss-20b", "groq"),
             ]
         )
@@ -289,6 +319,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         remaining_fast = [m for m in top_fast if m != chosen_fast]
         models_cascade = [chosen_fast] + remaining_fast + [
             ("gemini-3.6-flash", "gemini"),
+            ("llama-3.1-8b-instant", "groq"),
             ("qwen/qwen3.8-27b", "groq"),
             ("openai/gpt-oss-20b", "groq"),
         ]
@@ -305,13 +336,17 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
+            ("llama-3.3-70b-versatile", "groq"),
             ("openai/gpt-oss-120b", "groq"),
+            ("llama-3.1-8b-instant", "groq"),
             ("openai/gpt-oss-20b", "groq"),
         ]
     elif model_preference in ("qwen", "llama", "groq"):
         models_cascade = [
             ("qwen/qwen3.8-27b", "groq"),
+            ("llama-3.3-70b-versatile", "groq"),
             ("openai/gpt-oss-120b", "groq"),
+            ("llama-3.1-8b-instant", "groq"),
             ("openai/gpt-oss-20b", "groq"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
@@ -329,7 +364,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.8-27b", "groq"),
+            ("llama-3.3-70b-versatile", "groq"),
             ("openai/gpt-oss-120b", "groq"),
+            ("llama-3.1-8b-instant", "groq"),
             ("openai/gpt-oss-20b", "groq"),
         ]
 
@@ -400,8 +437,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             logger.info(f"All keys for {provider} are in cooldown. Skipping model {model_name}.")
             continue
 
-        # Cap keys tried per model to max 5 healthy keys to prevent endless polling
-        active_keys = active_keys[:5]
+        # Cap keys tried per model to max 8 healthy keys to ensure full pool utilization
+        active_keys = active_keys[:8]
 
         # Безопасный лимит выходных токенов: для Gemini None (без урезания)
         # Для Groq: для persona 1024 токена, для summary 3500 токенов
@@ -413,7 +450,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         else:
             model_max_tokens = 3500
 
-        # Защита Groq от 413 Payload Too Large
+        # Защита от 413 Payload Too Large и избыточного сжигания токенов
         effective_sys = system_instruction
         effective_dump = text_dump
         if provider == "groq":
@@ -429,6 +466,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 if len(effective_dump) > 15000:
                     # Для лонгридов саммари на Groq сохраняем самые свежие посты в пределах 15k символов во избежание 413
                     effective_dump = effective_dump[-15000:]
+        elif provider == "gemini":
+            if not is_persona and len(effective_dump) > 35000:
+                # Ограничиваем простыню контекста для Gemini 35k символов во избежание сжигания токенов и задержек
+                effective_dump = effective_dump[-35000:]
 
         messages = [
             {"role": "system", "content": effective_sys},

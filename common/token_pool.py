@@ -128,13 +128,28 @@ class TokenRotator:
             return random.choice(active)
 
     def get_all_active_tokens(self) -> list[str]:
-        """Возвращает все активные дедуплицированные токены в порядке очереди."""
+        """
+        Возвращает все активные дедуплицированные токены в порядке очереди.
+        Автоматически сдвигает указатель (Round-Robin ротация) на каждом вызове,
+        чтобы распределять нагрузку по всему пулу ключей равномерно, а не долбить первый ключ.
+        Приоритезирует токены, не находящиеся на штрафном кулдауне.
+        """
         with self._lock:
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return []
-            idx = self._index % len(active)
-            return active[idx:] + active[:idx]
+            now = time.time()
+            ready = [t for t in active if self._cooldown_until.get(t, 0.0) <= now]
+            cooling = [t for t in active if self._cooldown_until.get(t, 0.0) > now]
+
+            if ready:
+                idx = self._index % len(ready)
+                self._index = (self._index + 1) % len(ready)
+                return ready[idx:] + ready[:idx] + cooling
+            else:
+                idx = self._index % len(active)
+                self._index = (self._index + 1) % len(active)
+                return active[idx:] + active[:idx]
 
     async def acquire_token_async(self, min_interval: float | None = None, max_wait: float = 15.0) -> tuple[str | None, float]:
         """
