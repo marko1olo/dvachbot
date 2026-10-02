@@ -110,9 +110,10 @@ class TestBoundedDict:
         assert bd["w"] == 4
 
     def test_shared_state_message_to_post_is_bounded(self):
-        """Verifies shared_state.message_to_post is an instance of BoundedDict with max_size=20000."""
+        """Verifies shared_state.message_to_post is an instance of BoundedDict with max_size >= 20000."""
         assert isinstance(shared_state.message_to_post, BoundedDict)
-        assert shared_state.message_to_post.max_size == 20000
+        assert shared_state.message_to_post.max_size >= 20000
+        assert shared_state.message_to_post.max_size == shared_state.BOT_MESSAGE_TO_POST_LIMIT
 
     def test_db_fallback_simulation_on_cache_eviction(self):
         """

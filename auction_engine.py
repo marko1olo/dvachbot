@@ -10,6 +10,7 @@ as well as auction_router handling /auction, /bid, /whale_safe, and /raid_oligar
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -149,7 +150,10 @@ async def cmd_bid(message: types.Message):
     try:
         auction_id = int(parts[1])
         bid_amount = float(parts[2])
-    except ValueError:
+        if math.isnan(bid_amount) or math.isinf(bid_amount) or bid_amount <= 0:
+            await message.reply("❌ Ставка должна быть положительным числом!")
+            return
+    except (ValueError, OverflowError):
         await message.reply("❌ ID аукциона и сумма ставки должны быть числами!")
         return
 

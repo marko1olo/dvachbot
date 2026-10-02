@@ -151,12 +151,28 @@ def safe_html_truncate(text: str, max_units: int = 4000, suffix: str = "…") ->
     while count_tg_utf16_units(res) > max_units and split_idx > 1 and trim_iters < max_trim_iters:
         trim_iters += 1
         split_idx = max(1, split_idx - 50)
+
+        # Guard against splitting inside tag or entity during stepdown
+        last_lt = text.rfind("<", 0, split_idx)
+        last_gt = text.rfind(">", 0, split_idx)
+        if last_lt > last_gt:
+            split_idx = last_lt
+
+        last_amp = text.rfind("&", 0, split_idx)
+        last_semi = text.rfind(";", 0, split_idx)
+        if last_amp > last_semi and (split_idx - last_amp) < 12:
+            split_idx = last_amp
+
+        if split_idx <= 0:
+            split_idx = 1
+
         raw_part = text[:split_idx].rstrip()
         open_tags = get_open_tags(raw_part)
         closing = build_closing_tags(open_tags)
         res = raw_part + suffix + closing
 
-    return res
+    from common.text_utils import balance_html_tags
+    return balance_html_tags(res)
 
 
 def _find_split_idx(source: str, limit_char_idx: int) -> int:

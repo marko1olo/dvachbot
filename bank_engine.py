@@ -193,22 +193,26 @@ def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float
     if txt.endswith("%"):
         try:
             pct_val = float(txt[:-1])
-            if pct_val <= 0:
+            if math.isnan(pct_val) or math.isinf(pct_val) or pct_val <= 0 or pct_val > 100:
                 return None
             return max(0.0, round(wallet_balance * (pct_val / 100.0), 2))
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
 
     # k / m суффиксы
     try:
         if txt.endswith("k") or txt.endswith("к"):
-            return round(float(txt[:-1]) * 1000.0, 2)
+            val = float(txt[:-1]) * 1000.0
         elif txt.endswith("m") or txt.endswith("м"):
-            return round(float(txt[:-1]) * 1000000.0, 2)
+            val = float(txt[:-1]) * 1000000.0
         else:
             val = float(txt)
-            return round(val, 2) if val > 0 else None
-    except ValueError:
+        if math.isnan(val) or math.isinf(val) or val <= 0:
+            return None
+        if val > 1_000_000_000:
+            return None
+        return round(val, 2)
+    except (ValueError, OverflowError):
         return None
 
 

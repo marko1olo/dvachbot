@@ -16,6 +16,7 @@ import re
 import asyncio
 import random
 import secrets
+import math
 from typing import Dict, Optional, Tuple, Any, List
 from aiogram import types, F, Dispatcher, Router
 from aiogram.filters import Command
@@ -418,6 +419,14 @@ async def create_dice_challenge(
     """
     Creates a new PvP Dice challenge with bet escrow verification.
     """
+    try:
+        bet_val = float(bet)
+        if math.isnan(bet_val) or math.isinf(bet_val):
+            return False, "❌ Некорректная сумма ставки.", None
+        bet = int(bet_val)
+    except (ValueError, TypeError, OverflowError):
+        return False, "❌ Некорректная сумма ставки.", None
+
     if bet < MIN_DICE_BET:
         return False, f"❌ Минимальная ставка в Дайс-Дуэль: <b>{MIN_DICE_BET} ₪</b>.", None
     if bet > MAX_DICE_BET:
@@ -1389,6 +1398,13 @@ def register_dice_duel_handlers(dp: Any):
                 bet_amount = int(user_bal)
             elif arg.isdigit():
                 bet_amount = int(arg)
+            else:
+                try:
+                    val = float(arg)
+                    if not math.isnan(val) and not math.isinf(val) and val > 0:
+                        bet_amount = int(val)
+                except Exception:
+                    pass
 
         if bet_amount is None:
             # Show interactive lobby menu

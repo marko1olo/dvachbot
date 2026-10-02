@@ -5,9 +5,35 @@ def split_text(text: str, limit: int) -> list[str]:
     """
     Разбивает длинный текст на части, не превышающие лимит Telegram.
     Добавляет нумерацию (1/N) к частям.
+    Если текст содержит HTML-разметку, сохраняет баланс тегов между частями.
     """
+    if not text:
+        return [""]
     if len(text) <= limit:
         return [text]
+
+    # Если в тексте есть HTML-теги, используем HTML-aware разбиение
+    if "<" in text and ">" in text:
+        try:
+            from common.text_chunker import chunk_html_message
+            from common.text_utils import balance_html_tags
+            # Резервируем место под суффикс нумерации \n(XX/YY)
+            suffix_reserve = 25
+            effective_limit = max(50, limit - suffix_reserve)
+            chunks = chunk_html_message(text, max_chars=effective_limit)
+            total = len(chunks)
+            if total > 1:
+                result = []
+                for i, chunk in enumerate(chunks):
+                    suffix = f"\n({i+1}/{total})"
+                    balanced = balance_html_tags(chunk)
+                    result.append(balanced + suffix)
+                return result
+            elif total == 1:
+                return [balance_html_tags(chunks[0])]
+        except Exception:
+            pass
+
     parts = []
     lines = text.split('\n')
     current_part = ""
@@ -18,7 +44,7 @@ def split_text(text: str, limit: int) -> list[str]:
             current_part = ""
         while len(line) > limit:
             split_at = line.rfind(' ', 0, limit)
-            if split_at == -1: # Если пробелов нет, режем по лимиту
+            if split_at <= 0:  # Если пробелов нет, режем по лимиту
                 split_at = limit
             parts.append(line[:split_at])
             line = line[split_at:].lstrip()
@@ -34,6 +60,6 @@ def split_text(text: str, limit: int) -> list[str]:
             suffix = f"\n({i+1}/{total_parts})"
             part_limit = limit - len(suffix)
             if len(parts[i]) > part_limit:
-                 parts[i] = parts[i][:part_limit] # Обрезаем, если нужно
+                 parts[i] = parts[i][:part_limit]  # Обрезаем, если нужно
             parts[i] += suffix
     return parts
