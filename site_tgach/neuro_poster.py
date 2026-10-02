@@ -174,6 +174,20 @@ async def _execute_groq_post(client, url: str, headers: dict, json_data: dict):
 
 logger = logging.getLogger("neuro_poster")
 
+_PROVIDER_LAST_CALL = {"groq": 0.0, "gemini": 0.0}
+_PROVIDER_PACE_LOCK = asyncio.Lock()
+
+async def _throttle_poster_provider(provider: str, min_interval: float = 2.5) -> None:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    async with _PROVIDER_PACE_LOCK:
+        now = time.time()
+        last = _PROVIDER_LAST_CALL.get(provider, 0.0)
+        wait = min_interval - (now - last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _PROVIDER_LAST_CALL[provider] = time.time()
+
 class NeuroManager:
     def __init__(self, bot):
         self.bot = bot
@@ -207,6 +221,7 @@ class NeuroManager:
 
                 for strategy in strategies:
                     try:
+                        await _throttle_poster_provider("groq", min_interval=2.5)
                         # local_address="0.0.0.0" фиксит проблемы с TUN на Windows
                         transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
                         
@@ -260,6 +275,7 @@ class NeuroManager:
             for g_key in gemini_keys[:5]:
                 for g_model in gemini_models:
                     try:
+                        await _throttle_poster_provider("gemini", min_interval=2.5)
                         async with httpx.AsyncClient(verify=False, timeout=25.0) as http_client:
                             async with AsyncOpenAI(
                                 api_key=g_key,
@@ -285,7 +301,7 @@ class NeuroManager:
                             google_pool.penalize_token(g_key, 60.0)
                         elif "401" in err_str or "403" in err_str:
                             google_pool.ban_token(g_key)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(2.5)
                         logger.warning(f"⚠️ Gemini fallback failed for {g_model}: {g_err}")
                         continue
 

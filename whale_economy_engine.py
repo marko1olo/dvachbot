@@ -373,6 +373,8 @@ async def place_auction_bid(
         return {"ok": False, "error": "Некорректная сумма ставки."}
     if math.isnan(bid_amount) or math.isinf(bid_amount) or bid_amount <= 0:
         return {"ok": False, "error": "Ставка должна быть положительным конечным числом."}
+    if bid_amount > 10_000_000_000:
+        return {"ok": False, "error": "Ставка превышает максимальный лимит аукциона (10 млрд ₪)."}
 
     now = time.time()
 

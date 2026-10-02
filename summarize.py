@@ -25,6 +25,7 @@ _SHARED_HTTP_CLIENT = None
 # Внутрипамятный TTL кэш ответов саммари для одинаковых входных данных (защита от холостых вызовов)
 _SUMMARY_CACHE: dict[str, tuple[str, float]] = {}
 _CACHE_MAX_ENTRIES = 256
+_IN_FLIGHT_REQUESTS: dict[str, asyncio.Future] = {}
 
 # Ограничиваем параллельные LLM-вызовы Персоны: строго 1 одновременно
 # Иначе 10+ конкурентных горутин дёргают все ключи одновременно и спамят 429
@@ -244,30 +245,71 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
                 logger.info(f"⚡ [LLM Cache Hit] Returning cached response for {model_preference or 'default'} (key={cache_key[:8]}).")
                 return cached_val
 
-    if model_preference in ("persona", "persona_gemini"):
-        # Persona / Cyberchad: строго 1 параллельный вызов через семафор
-        async with _get_persona_semaphore():
-            raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
-    else:
-        raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
-
-    # CASCADE FALLBACK: If LLMs failed completely or returned error
-    if not raw_res or raw_res.startswith("Нейронка сдохла"):
-        # If this is a real text dump (not a unit-test with mock 'Text'), generate rich extractive summary!
-        if len(text_dump.strip()) >= 50 and model_preference not in ("persona", "persona_gemini"):
-            logger.warning("🛡️ All LLMs failed/exhausted. Activating intelligent extractive summary fallback!")
+        # Single-Flight Request Coalescing:
+        # If another concurrent coroutine is already generating this exact response, await its result
+        in_flight_fut = _IN_FLIGHT_REQUESTS.get(cache_key)
+        if in_flight_fut is not None and not in_flight_fut.done():
+            logger.info(f"⚡ [Single-Flight Coalesce] Awaiting in-flight request for {model_preference or 'default'} (key={cache_key[:8]}).")
             try:
-                return generate_extractive_summary(text_dump, prompt, paragraph_count=4)
-            except Exception as ext_err:
-                logger.error(f"Extractive fallback error: {ext_err}")
-    elif cache_key and not in_test and raw_res:
-        # Save to cache: 180s for normal summaries, 10s micro-burst for personas
-        ttl = 10.0 if model_preference in ("persona", "persona_gemini") else 180.0
-        if len(_SUMMARY_CACHE) >= _CACHE_MAX_ENTRIES:
-            _SUMMARY_CACHE.clear()
-        _SUMMARY_CACHE[cache_key] = (raw_res, time.time() + ttl)
+                return await asyncio.shield(in_flight_fut)
+            except Exception as e:
+                logger.debug(f"In-flight request join error: {e}")
 
-    return raw_res
+    my_fut = None
+    if cache_key and not in_test:
+        try:
+            loop = asyncio.get_running_loop()
+            my_fut = loop.create_future()
+            _IN_FLIGHT_REQUESTS[cache_key] = my_fut
+        except Exception:
+            my_fut = None
+
+    raw_res = ""
+    try:
+        if model_preference in ("persona", "persona_gemini"):
+            # Persona / Cyberchad: строго 1 параллельный вызов через семафор
+            async with _get_persona_semaphore():
+                # Double-checked locking inside semaphore in case preceding coroutine filled the cache
+                if cache_key and not in_test and cache_key in _SUMMARY_CACHE:
+                    c_val, c_exp = _SUMMARY_CACHE[cache_key]
+                    if time.time() < c_exp:
+                        raw_res = c_val
+                        return raw_res
+                raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
+        else:
+            raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
+
+        # CASCADE FALLBACK: If LLMs failed completely or returned error
+        if not raw_res or raw_res.startswith("Нейронка сдохла"):
+            # If this is a real text dump (not a unit-test with mock 'Text'), generate rich extractive summary!
+            if len(text_dump.strip()) >= 20 and model_preference not in ("persona", "persona_gemini"):
+                logger.warning("🛡️ All LLMs failed/exhausted. Activating intelligent extractive summary fallback!")
+                try:
+                    raw_res = generate_extractive_summary(text_dump, prompt, paragraph_count=4)
+                except Exception as ext_err:
+                    logger.error(f"Extractive fallback error: {ext_err}")
+        elif cache_key and not in_test and raw_res:
+            # Save to cache: 180s for normal summaries, 10s micro-burst for personas
+            ttl = 10.0 if model_preference in ("persona", "persona_gemini") else 180.0
+            now = time.time()
+            if len(_SUMMARY_CACHE) >= _CACHE_MAX_ENTRIES:
+                # Evict expired entries first
+                expired = [k for k, (_, exp) in _SUMMARY_CACHE.items() if exp <= now]
+                for k in expired:
+                    _SUMMARY_CACHE.pop(k, None)
+                # If still at max capacity, evict oldest entries (25% batch)
+                if len(_SUMMARY_CACHE) >= _CACHE_MAX_ENTRIES:
+                    oldest = sorted(_SUMMARY_CACHE.items(), key=lambda it: it[1][1])[:max(1, _CACHE_MAX_ENTRIES // 4)]
+                    for k, _ in oldest:
+                        _SUMMARY_CACHE.pop(k, None)
+            _SUMMARY_CACHE[cache_key] = (raw_res, now + ttl)
+
+        return raw_res
+    finally:
+        if my_fut is not None:
+            if not my_fut.done():
+                my_fut.set_result(raw_res)
+            _IN_FLIGHT_REQUESTS.pop(cache_key, None)
 
 
 # Канонический алиас для обратной совместимости
@@ -451,6 +493,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             model_max_tokens = 3500
 
         # Защита от 413 Payload Too Large и избыточного сжигания токенов
+        if len(text_dump) > 80000:
+            text_dump = text_dump[:10000] + "\n\n[...часть гигантского треда сокращена во избежание 413...]\n\n" + text_dump[-50000:]
+
         effective_sys = system_instruction
         effective_dump = text_dump
         if provider == "groq":
@@ -469,6 +514,13 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         elif provider == "gemini":
             if not is_persona and len(effective_dump) > 35000:
                 # Ограничиваем простыню контекста для Gemini 35k символов во избежание сжигания токенов и задержек
+                effective_dump = effective_dump[-35000:]
+            elif is_persona and len(effective_dump) > 10000:
+                effective_dump = effective_dump[:3500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-6000:]
+        else:
+            if is_persona and len(effective_dump) > 8000:
+                effective_dump = effective_dump[:3000] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-4500:]
+            elif not is_persona and len(effective_dump) > 35000:
                 effective_dump = effective_dump[-35000:]
 
         messages = [

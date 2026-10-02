@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from summarize import summarize_text_with_hf
@@ -267,4 +268,69 @@ def test_get_telegraph_token_generation_failure():
          patch("summarize._telegraph_create_account_sync", side_effect=Exception("Failed")):
         assert get_telegraph_token() == ""
     summarize._telegraph_token_cache = None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_single_flight_coalescing():
+    """20 concurrent requests with identical prompt coalesce into 1 single LLM call."""
+    import summarize
+    call_count = 0
+
+    async def mock_inner(prompt, text_dump, hf_token=None, model_preference=None):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.05)
+        return "Coalesced Result"
+
+    with patch.dict("os.environ", {"PYTEST_CURRENT_TEST": ""}):
+        with patch.object(summarize, "_summarize_inner", side_effect=mock_inner):
+            summarize._SUMMARY_CACHE.clear()
+            summarize._IN_FLIGHT_REQUESTS.clear()
+
+            tasks = [
+                summarize.dispatch_llm_completion("test prompt", "identical thread dump text")
+                for _ in range(20)
+            ]
+            results = await asyncio.gather(*tasks)
+
+            assert len(results) == 20
+            for r in results:
+                assert r == "Coalesced Result"
+            # Exactly 1 call made despite 20 concurrent tasks!
+            assert call_count == 1
+            summarize._SUMMARY_CACHE.clear()
+            summarize._IN_FLIGHT_REQUESTS.clear()
+
+
+@pytest.mark.asyncio
+async def test_extractive_summary_fallback_on_total_llm_failure():
+    """When all LLMs fail, extractive summary fallback kicks in seamlessly."""
+    import summarize
+    text_dump = "Анон: Первый пост треда.\nАнон: Второй пост с обсуждением.\nАнон: Третий пост с подробностями."
+    with patch.object(summarize, "_summarize_inner", return_value="Нейронка сдохла. Не удалось сгенерировать саммари."):
+        result = await summarize.dispatch_llm_completion("Сделай саммари", text_dump, model_preference=None)
+        assert result is not None
+        assert not result.startswith("Нейронка сдохла")
+        assert "Сводка" in result or "палаты" in result or "Первый" in result
+
+
+@pytest.mark.asyncio
+async def test_giant_dump_pre_truncation_prevents_413():
+    """Text dumps > 80,000 characters are safely pre-truncated to prevent HTTP 413."""
+    import summarize
+    giant_text = "Анон: пост в треде длинный текст. " * 3000  # ~100k chars
+    captured_dumps = []
+
+    async def mock_gemini_call(http_client, model_name, api_key, system_instruction, user_text, temperature, timeout):
+        captured_dumps.append(user_text)
+        return "Summary of giant thread", "stop"
+
+    with patch("summarize._call_gemini_native_rest", side_effect=mock_gemini_call):
+        with patch("summarize.google_pool.get_all_active_tokens", return_value=["test-key"]):
+            res = await summarize.dispatch_llm_completion("Саммари", giant_text, model_preference="gemini")
+            assert res == "Summary of giant thread"
+            assert len(captured_dumps) == 1
+            # Dump sent to API must be comfortably capped well below 80k
+            assert len(captured_dumps[0]) <= 35000
+
 

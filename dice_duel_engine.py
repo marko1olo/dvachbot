@@ -24,7 +24,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, C
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 import shared_state
-from common.db_pool import get_pool, db_lock
+from common.db_pool import get_pool, db_lock, db_transaction
 from common.database import (
     get_user_global_balance,
     add_user_global_balance,
@@ -522,30 +522,31 @@ async def accept_dice_challenge(
         return False, "🔇 Создатель дуэли находится в муте. Игра отменена.", None
 
     async with db_lock:
-        bal_c = await get_user_global_balance(db, challenger_id)
-        bal_a = await get_user_global_balance(db, acceptor_id)
+        async with db_transaction(db):
+            bal_c = await get_user_global_balance(db, challenger_id)
+            bal_a = await get_user_global_balance(db, acceptor_id)
 
-        if bal_c < bet:
-            async with dice_engine_lock: _rollback_state()
-            return False, "❌ У создателя вызова уже не хватает шекелей на балансе!", None
-        if bal_a < bet:
-            async with dice_engine_lock: _rollback_state()
-            return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, твой баланс: <b>{int(bal_a):,} ₪</b>.", None
+            if bal_c < bet:
+                async with dice_engine_lock: _rollback_state()
+                return False, "❌ У создателя вызова уже не хватает шекелей на балансе!", None
+            if bal_a < bet:
+                async with dice_engine_lock: _rollback_state()
+                return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, твой баланс: <b>{int(bal_a):,} ₪</b>.", None
 
-        # Atomic Escrow deduction with safe rollback
-        ok_c, _ = await deduct_user_global_balance(db, challenger_id, board_id, bet)
-        ok_a, _ = await deduct_user_global_balance(db, acceptor_id, board_id, bet)
+            # Atomic Escrow deduction with safe rollback
+            ok_c, _ = await deduct_user_global_balance(db, challenger_id, board_id, bet)
+            ok_a, _ = await deduct_user_global_balance(db, acceptor_id, board_id, bet)
 
-        if not (ok_c and ok_a):
-            if ok_c:
-                await add_user_global_balance(db, challenger_id, board_id, bet)
-            if ok_a:
-                await add_user_global_balance(db, acceptor_id, board_id, bet)
-            async with dice_engine_lock: _rollback_state()
-            return False, "❌ Ошибка списания средств. У одного из игроков изменился баланс.", None
+            if not (ok_c and ok_a):
+                if ok_c:
+                    await add_user_global_balance(db, challenger_id, board_id, bet)
+                if ok_a:
+                    await add_user_global_balance(db, acceptor_id, board_id, bet)
+                async with dice_engine_lock: _rollback_state()
+                return False, "❌ Ошибка списания средств. У одного из игроков изменился баланс.", None
 
-        await record_user_transaction(db, challenger_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')
-        await record_user_transaction(db, acceptor_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')
+            await record_user_transaction(db, challenger_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')
+            await record_user_transaction(db, acceptor_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')
 
     async with dice_engine_lock:
         game["player_2"] = acceptor_id
@@ -740,13 +741,14 @@ async def _finish_dice_game(
         rake = max(1, int(bet * DICE_TIE_RAKE_PERCENT))
         refund_amt = bet - rake
         async with db_lock:
-            await add_user_global_balance(db, p1, board_id, refund_amt)
-            if p2:
-                await add_user_global_balance(db, p2, board_id, refund_amt)
-            await add_to_abu_fund(db, rake * 2)
-            await record_user_transaction(db, p1, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
-            if p2:
-                await record_user_transaction(db, p2, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
+            async with db_transaction(db):
+                await add_user_global_balance(db, p1, board_id, refund_amt)
+                if p2:
+                    await add_user_global_balance(db, p2, board_id, refund_amt)
+                await add_to_abu_fund(db, rake * 2)
+                await record_user_transaction(db, p1, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
+                if p2:
+                    await record_user_transaction(db, p2, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
 
         game["outcome"] = "draw"
         game["payout"] = refund_amt
@@ -783,12 +785,13 @@ async def _finish_dice_game(
         win_payout = total_pot - rake
 
         async with db_lock:
-            if winner_id:
-                await add_user_global_balance(db, winner_id, board_id, win_payout)
-                tx_desc = f'Выигрыш в Дайс-Дуэль #{game_id}' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
-                await record_user_transaction(db, winner_id, win_payout, 'dice_duel', tx_desc)
-            if not is_burn_rake:
-                await add_to_abu_fund(db, rake)
+            async with db_transaction(db):
+                if winner_id:
+                    await add_user_global_balance(db, winner_id, board_id, win_payout)
+                    tx_desc = f'Выигрыш в Дайс-Дуэль #{game_id}' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
+                    await record_user_transaction(db, winner_id, win_payout, 'dice_duel', tx_desc)
+                if not is_burn_rake:
+                    await add_to_abu_fund(db, rake)
 
         game["outcome"] = "win"
         game["winner"] = winner_id
@@ -1393,14 +1396,28 @@ def register_dice_duel_handlers(dp: Any):
             user_bal = await get_user_global_balance(db, user_id)
 
         if len(tokens) > 1:
-            arg = tokens[1].lower().replace("к", "000").replace("k", "000").replace("м", "000000").replace("m", "000000")
-            if arg in ("all", "вабанк", "ва-банк", "всё", "все"):
+            arg = tokens[1].lower().strip().replace(" ", "").replace(",", ".")
+            for suffix in ["₪", "шекелей", "шекеля", "шекель", "рублей", "рубля", "руб", "р", "rub", "$", "usd"]:
+                if arg.endswith(suffix):
+                    arg = arg[:-len(suffix)].strip()
+                    break
+
+            if arg in ("all", "вабанк", "ва-банк", "всё", "все", "макс", "max"):
                 bet_amount = int(user_bal)
-            elif arg.isdigit():
-                bet_amount = int(arg)
             else:
+                multiplier = 1
+                if arg.endswith(("kk", "кк")):
+                    multiplier = 1_000_000
+                    arg = arg[:-2]
+                elif arg.endswith(("k", "к")):
+                    multiplier = 1_000
+                    arg = arg[:-1]
+                elif arg.endswith(("m", "м")):
+                    multiplier = 1_000_000
+                    arg = arg[:-1]
+
                 try:
-                    val = float(arg)
+                    val = float(arg) * multiplier
                     if not math.isnan(val) and not math.isinf(val) and val > 0:
                         bet_amount = int(val)
                 except Exception:

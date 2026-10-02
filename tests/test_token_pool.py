@@ -36,6 +36,14 @@ class TestTokenRotator(unittest.TestCase):
         rotator.remove_token("tok3")
         self.assertEqual(rotator.get_token(), "tok1")
 
+    def test_penalize_token_prioritizes_ready_token(self):
+        rotator = TokenRotator("tok1,tok2")
+        rotator.penalize_token("tok1", duration=120.0)
+        # tok1 is on cooldown, get_token should return tok2
+        self.assertEqual(rotator.get_token(), "tok2")
+        self.assertEqual(rotator.get_token(), "tok2")
+        self.assertEqual(rotator.get_random(), "tok2")
+
 class TestHfPairRotator(unittest.TestCase):
     @patch.dict('os.environ', {'HF_ACCOUNTS': ''})
     def test_empty_accounts(self):

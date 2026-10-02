@@ -12,17 +12,24 @@ except ImportError:
     import traceback; traceback.print_exc()
 from broadcaster import MessageBroadcaster, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
 from utils import split_text
-from common.text_chunker import safe_html_truncate
+from common.text_chunker import safe_html_truncate, count_tg_utf16_units
 from common.text_utils import clean_html_for_tg, balance_html_tags
 
 def safe_truncate_post(text: str, max_chars: int = 4096) -> str:
     """
     Safely truncates post text to fit Telegram limit while ensuring valid, balanced HTML tags.
+    Guarantees the output never exceeds max_chars UTF-16 code units.
     """
     if not text:
         return ""
     truncated = safe_html_truncate(text, max_units=max_chars)
-    return balance_html_tags(truncated)
+    balanced = balance_html_tags(truncated)
+    if count_tg_utf16_units(balanced) <= max_chars:
+        return balanced
+    headroom = count_tg_utf16_units(balanced) - max_chars + 30
+    safe_limit = max(10, max_chars - headroom)
+    re_truncated = safe_html_truncate(text, max_units=safe_limit)
+    return balance_html_tags(re_truncated)
 
 from summarize import summarize_text_with_hf
 from common.database import create_post, update_post_content, get_all_channel_copies, get_post_copies, delete_post_by_num

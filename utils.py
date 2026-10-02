@@ -9,14 +9,18 @@ def split_text(text: str, limit: int) -> list[str]:
     """
     if not text:
         return [""]
-    if len(text) <= limit:
-        return [text]
 
     # Если в тексте есть HTML-теги, используем HTML-aware разбиение
     if "<" in text and ">" in text:
         try:
-            from common.text_chunker import chunk_html_message
+            from common.text_chunker import chunk_html_message, count_tg_utf16_units, safe_html_truncate
             from common.text_utils import balance_html_tags
+
+            # Если полный текст после балансировки тегов помещается целиком в лимит
+            balanced_full = balance_html_tags(text)
+            if count_tg_utf16_units(balanced_full) <= limit:
+                return [balanced_full]
+
             # Резервируем место под суффикс нумерации \n(XX/YY)
             suffix_reserve = 25
             effective_limit = max(50, limit - suffix_reserve)
@@ -27,12 +31,23 @@ def split_text(text: str, limit: int) -> list[str]:
                 for i, chunk in enumerate(chunks):
                     suffix = f"\n({i+1}/{total})"
                     balanced = balance_html_tags(chunk)
+                    if count_tg_utf16_units(balanced + suffix) > limit:
+                        avail = max(10, limit - count_tg_utf16_units(suffix))
+                        balanced = safe_html_truncate(balanced, max_units=avail, suffix="")
+                        balanced = balance_html_tags(balanced)
                     result.append(balanced + suffix)
                 return result
             elif total == 1:
-                return [balance_html_tags(chunks[0])]
+                balanced = balance_html_tags(chunks[0])
+                if count_tg_utf16_units(balanced) > limit:
+                    balanced = safe_html_truncate(balanced, max_units=limit, suffix="")
+                    balanced = balance_html_tags(balanced)
+                return [balanced]
         except Exception:
             pass
+
+    if len(text) <= limit:
+        return [text]
 
     parts = []
     lines = text.split('\n')

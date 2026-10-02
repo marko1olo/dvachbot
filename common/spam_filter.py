@@ -714,12 +714,13 @@ def check_flood(
     if media_group_id:
         mg_str = str(media_group_id)
         mg_map = _seen_media_groups[user_id]
-        # Prune expired
-        expired = [mg for mg, entry in list(mg_map.items()) if now - (entry['first_ts'] if isinstance(entry, dict) else entry) > MEDIA_GROUP_WINDOW]
+        # Prune expired entries
+        expired = [
+            mg for mg, entry in list(mg_map.items())
+            if now - (entry['first_ts'] if isinstance(entry, dict) else (entry if isinstance(entry, (int, float)) else 0.0)) > MEDIA_GROUP_WINDOW
+        ]
         for mg in expired:
             mg_map.pop(mg, None)
-        if not mg_map:
-            _seen_media_groups.pop(user_id, None)
 
         mg_entry = mg_map.get(mg_str)
         if isinstance(mg_entry, dict):
@@ -732,7 +733,7 @@ def check_flood(
             return False, ""
         else:
             # First item in this media group
-            mg_map[mg_str] = {'first_ts': now, 'count': 1}
+            _seen_media_groups[user_id][mg_str] = {'first_ts': now, 'count': 1}
 
     # 2. Media burst buffering: protects rapid image series / albums without media_group_id
     if is_media:
@@ -993,11 +994,9 @@ def check_repost_spam(
         mg_str = str(media_group_id)
         user_mg_map = _seen_repost_media_groups[user_id]
         # Prune expired albums older than 60s
-        expired = [k for k, v in list(user_mg_map.items()) if now - v.get('first_ts', 0) > REPOST_WINDOW_SEC]
+        expired = [k for k, v in list(user_mg_map.items()) if now - (v.get('first_ts', 0) if isinstance(v, dict) else 0) > REPOST_WINDOW_SEC]
         for k in expired:
             user_mg_map.pop(k, None)
-        if not user_mg_map:
-            _seen_repost_media_groups.pop(user_id, None)
 
         if mg_str in user_mg_map:
             entry = user_mg_map[mg_str]
@@ -1560,11 +1559,11 @@ def get_board_spam_stats(board_id: str) -> dict:
     return {
         "spam_violations": len(_spam_violations[board_id]),
         "spam_tracker_users": len(_spam_trackers[board_id]),
-        "spam_tracker_items": sum(len(items) for items in _spam_trackers[board_id].values()),
+        "spam_tracker_items": sum(len(items) for items in list(_spam_trackers[board_id].values())),
         "image_spam_items": len(image_spam_tracker[board_id]),
         "bayan_tracked_users": len(_bayan_tracker),
         "media_burst_tracked_users": len(_user_media_burst_tracker),
-        "active_media_groups": sum(len(g) for g in _seen_media_groups.values()),
+        "active_media_groups": sum(len(g) for g in list(_seen_media_groups.values())),
         "repost_tracked_users": len(_user_repost_timestamps),
     }
 

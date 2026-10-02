@@ -82,107 +82,114 @@ async def _safe_groq_json(messages, max_tokens=1024):
         strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
     strategies.append({"proxy": None, "name": "Direct"})
 
-    for current_model in GROQ_MODELS:
-        for i in range(2):
-            token = groq_pool.get_token()
-            if not token:
-                logger.error("❌ No Groq tokens available.")
-                return None
+    has_images = any(
+        isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"] if isinstance(p, dict))
+        for m in messages if isinstance(m, dict)
+    )
 
-            for strategy in strategies:
-                try:
-                    transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
-                    async with httpx.AsyncClient(
-                        timeout=GROQ_TIMEOUT, proxy=strategy["proxy"], transport=transport, verify=False
-                    ) as client:
-                        resp = await _execute_groq_post(
-                            client,
-                            "https://api.groq.com/openai/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {token}"},
-                            json_data={
-                                "model": current_model,
-                                "messages": messages,
-                                "max_tokens": max_tokens,
-                                "temperature": 0.1,
-                            },
-                        )
+    # Groq models (qwen/qwen3.8-27b) are text-only: bypass Groq if images are present to avoid 400 errors
+    if not has_images:
+        for current_model in GROQ_MODELS:
+            for i in range(2):
+                token = groq_pool.get_token()
+                if not token:
+                    logger.error("❌ No Groq tokens available.")
+                    return None
 
-                        if resp.status_code == 200:
-                            raw_content = resp.json()["choices"][0]["message"]["content"].strip()
-                            content = raw_content
-                            if "<think>" in content:
-                                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                for strategy in strategies:
+                    try:
+                        transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+                        async with httpx.AsyncClient(
+                            timeout=GROQ_TIMEOUT, proxy=strategy["proxy"], transport=transport, verify=False
+                        ) as client:
+                            resp = await _execute_groq_post(
+                                client,
+                                "https://api.groq.com/openai/v1/chat/completions",
+                                headers={"Authorization": f"Bearer {token}"},
+                                json_data={
+                                    "model": current_model,
+                                    "messages": messages,
+                                    "max_tokens": max_tokens,
+                                    "temperature": 0.1,
+                                },
+                            )
+
+                            if resp.status_code == 200:
+                                raw_content = resp.json()["choices"][0]["message"]["content"].strip()
+                                content = raw_content
                                 if "<think>" in content:
-                                    content = re.sub(r'<think>.*', '', content, flags=re.DOTALL).strip()
-                            if "```" in content:
-                                match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
-                                if match:
-                                    content = match.group(1).strip()
-                            # Извлекаем JSON объект по внешним фигурным скобкам, если модель добавила текст
-                            json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                            if json_match:
-                                content = json_match.group(0).strip()
-                            if not content:
-                                logger.debug(f"DeepCheck response was pure reasoning without JSON payload from {current_model}")
-                                return None
-                            try:
-                                return json.loads(content)
-                            except json.JSONDecodeError as jde:
-                                logger.warning(f"DeepCheck JSON Parse Warning: {jde} | Raw AI Response: {raw_content[:150]}")
-                                return None
-                        elif resp.status_code == 429:
-                            logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}. Penalizing key and cooling down 2.5s.")
-                            groq_pool.penalize_token(token, 120.0)
-                            await asyncio.sleep(2.5)
-                            break
-                        elif resp.status_code == 404:
-                            logger.warning(f"⚠️ Groq model {current_model} not found (404). Cooldown 2.5s, skipping model.")
-                            groq_pool.penalize_token(token, 2.5)
-                            await asyncio.sleep(2.5)
-                            break
-                        elif resp.status_code == 401:
+                                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                                    if "<think>" in content:
+                                        content = re.sub(r'<think>.*', '', content, flags=re.DOTALL).strip()
+                                if "```" in content:
+                                    match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
+                                    if match:
+                                        content = match.group(1).strip()
+                                # Извлекаем JSON объект по внешним фигурным скобкам, если модель добавила текст
+                                json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                                if json_match:
+                                    content = json_match.group(0).strip()
+                                if not content:
+                                    logger.debug(f"DeepCheck response was pure reasoning without JSON payload from {current_model}")
+                                    return None
+                                try:
+                                    return json.loads(content)
+                                except json.JSONDecodeError as jde:
+                                    logger.warning(f"DeepCheck JSON Parse Warning: {jde} | Raw AI Response: {raw_content[:150]}")
+                                    return None
+                            elif resp.status_code == 429:
+                                logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}. Penalizing key and cooling down 2.5s.")
+                                groq_pool.penalize_token(token, 120.0)
+                                await asyncio.sleep(2.5)
+                                break
+                            elif resp.status_code == 404:
+                                logger.warning(f"⚠️ Groq model {current_model} not found (404). Cooldown 2.5s, skipping model.")
+                                groq_pool.penalize_token(token, 2.5)
+                                await asyncio.sleep(2.5)
+                                break
+                            elif resp.status_code == 401:
+                                logger.warning(
+                                    f"⚠️ Groq key {token[:12]}... is unauthorized (401). Setting 15m cooldown."
+                                )
+                                groq_pool.penalize_token(token, 900.0)
+                                break
+                            else:
+                                logger.warning(
+                                    f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
+                                )
+                                if resp.status_code == 400 and "refusal" in resp.text.lower():
+                                    logger.warning("DeepCheck API refusal, skipping without false positive penalty.")
+                                    return None
+                                await asyncio.sleep(2.5)
+                                break
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if (
+                            (re.search(r'\b401\b', err_str)
+                            or "unauthorized" in err_str
+                            or "invalid api key" in err_str)
+                            and "413" not in err_str
+                        ):
                             logger.warning(
-                                f"⚠️ Groq key {token[:12]}... is unauthorized (401). Setting 15m cooldown."
+                                f"⚠️ Groq key {token[:12]}... is unauthorized (401 Exception). Setting 15m cooldown."
                             )
                             groq_pool.penalize_token(token, 900.0)
                             break
-                        else:
-                            logger.warning(
-                                f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
-                            )
-                            if resp.status_code == 400 and "refusal" in resp.text.lower():
-                                logger.warning("DeepCheck API refusal, skipping without false positive penalty.")
-                                return None
+                        if "429" in err_str or "rate limit" in err_str:
+                            groq_pool.penalize_token(token, 120.0)
                             await asyncio.sleep(2.5)
                             break
-                except Exception as e:
-                    err_str = str(e).lower()
-                    if (
-                        (re.search(r'\b401\b', err_str)
-                        or "unauthorized" in err_str
-                        or "invalid api key" in err_str)
-                        and "413" not in err_str
-                    ):
-                        logger.warning(
-                            f"⚠️ Groq key {token[:12]}... is unauthorized (401 Exception). Setting 15m cooldown."
-                        )
-                        groq_pool.penalize_token(token, 900.0)
-                        break
-                    if "429" in err_str or "rate limit" in err_str:
-                        groq_pool.penalize_token(token, 120.0)
-                        await asyncio.sleep(2.5)
-                        break
-                    if "404" in err_str or "not found" in err_str:
-                        groq_pool.penalize_token(token, 2.5)
-                        await asyncio.sleep(2.5)
-                        break
-                    if strategy["proxy"] is not None:
-                        logger.warning(f"⚠️ [DeepCheck] Proxy connection failed ({e}), falling back to Direct connection...")
-                        continue
-                    else:
-                        logger.error(f"DeepCheck Req Failed ({strategy['name']}): {e}")
-                        await asyncio.sleep(2.5)
-                        break
+                        if "404" in err_str or "not found" in err_str:
+                            groq_pool.penalize_token(token, 2.5)
+                            await asyncio.sleep(2.5)
+                            break
+                        if strategy["proxy"] is not None:
+                            logger.warning(f"⚠️ [DeepCheck] Proxy connection failed ({e}), falling back to Direct connection...")
+                            continue
+                        else:
+                            logger.error(f"DeepCheck Req Failed ({strategy['name']}): {e}")
+                            await asyncio.sleep(2.5)
+                            break
 
     # === РЕЗЕРВНЫЙ ФОЛБЭК НА GEMINI VISION ===
     gemini_keys = google_pool.get_all_active_tokens()
@@ -219,6 +226,10 @@ async def _safe_groq_json(messages, max_tokens=1024):
                             google_pool.penalize_token(g_key, 120.0)
                             await asyncio.sleep(2.5)
                             break
+                        elif resp.status_code in (401, 403):
+                            logger.warning(f"⚠️ [DeepCheck] Gemini key ...{g_key[-6:]} returned {resp.status_code}. Banning key.")
+                            google_pool.ban_token(g_key)
+                            break
                         elif resp.status_code == 404:
                             logger.warning(f"⚠️ [DeepCheck] Gemini model {g_model} returned 404. Cooldown 2.5s, skipping model.")
                             google_pool.penalize_token(g_key, 2.5)
@@ -230,6 +241,8 @@ async def _safe_groq_json(messages, max_tokens=1024):
                     err_str = str(g_err).lower()
                     if "429" in err_str:
                         google_pool.penalize_token(g_key, 120.0)
+                    elif "401" in err_str or "403" in err_str or "permission" in err_str:
+                        google_pool.ban_token(g_key)
                     elif "404" in err_str:
                         google_pool.penalize_token(g_key, 2.5)
                     await asyncio.sleep(2.5)

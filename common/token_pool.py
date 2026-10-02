@@ -109,15 +109,18 @@ class TokenRotator:
     def get_token(self) -> str | None:
         """
         Классический честный Round-Robin выбор ключа.
-        Пропускает забаненные токены.
+        Пропускает забаненные токены и приоритезирует токены, не находящиеся на штрафном кулдауне.
         """
         with self._lock:
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return None
-            token = active[self._index % len(active)]
-            self._index = (self._index + 1) % len(active)
-            self._last_used[token] = time.time()
+            now = time.time()
+            ready = [t for t in active if self._cooldown_until.get(t, 0.0) <= now]
+            candidates = ready if ready else active
+            token = candidates[self._index % len(candidates)]
+            self._index = (self._index + 1) % len(candidates)
+            self._last_used[token] = now
             return token
 
     def get_random(self) -> str | None:
@@ -125,7 +128,10 @@ class TokenRotator:
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return None
-            return random.choice(active)
+            now = time.time()
+            ready = [t for t in active if self._cooldown_until.get(t, 0.0) <= now]
+            candidates = ready if ready else active
+            return random.choice(candidates)
 
     def get_all_active_tokens(self) -> list[str]:
         """

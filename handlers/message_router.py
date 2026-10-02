@@ -1444,22 +1444,30 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     # Ничего не качаем и не хешируем, просто читаем готовое поле.
     _media_unique_id = None
     if message.content_type == 'text':
-        text_for_corpus = message.text
-        html_val = getattr(message, 'html_text', None)
-        raw_text_html = html_val if isinstance(html_val, str) else (message.text or "")
-        safe_html_text = sanitize_html(raw_text_html)
-        if is_forward or contains_board_post_header(safe_html_text):
-            safe_html_text = format_forwarded_quote(safe_html_text, is_forward=is_forward)
+        if cursed_text_override:
+            safe_html_text = sanitize_html(cursed_text_override)
+            text_for_corpus = cursed_text_override
+        else:
+            text_for_corpus = message.text
+            html_val = getattr(message, 'html_text', None)
+            raw_text_html = html_val if isinstance(html_val, str) else (message.text or "")
+            safe_html_text = sanitize_html(raw_text_html)
+            if is_forward or contains_board_post_header(safe_html_text):
+                safe_html_text = format_forwarded_quote(safe_html_text, is_forward=is_forward)
         content.update({'text': safe_html_text})
     elif message.content_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
-        text_for_corpus = message.caption
         file_id_obj = getattr(message, message.content_type, [])
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
-        caption_html_val = getattr(message, 'caption_html_text', None)
-        raw_caption_html = caption_html_val if isinstance(caption_html_val, str) else (message.caption or "")
-        safe_caption_html = sanitize_html(raw_caption_html)
-        if safe_caption_html and (is_forward or contains_board_post_header(safe_caption_html)):
-            safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_forward)
+        if cursed_text_override:
+            safe_caption_html = sanitize_html(cursed_text_override)
+            text_for_corpus = cursed_text_override
+        else:
+            text_for_corpus = message.caption
+            caption_html_val = getattr(message, 'caption_html_text', None)
+            raw_caption_html = caption_html_val if isinstance(caption_html_val, str) else (message.caption or "")
+            safe_caption_html = sanitize_html(raw_caption_html)
+            if safe_caption_html and (is_forward or contains_board_post_header(safe_caption_html)):
+                safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_forward)
         content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
         _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         file_name = getattr(file_id_obj, 'file_name', None)

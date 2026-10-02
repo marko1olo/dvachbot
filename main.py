@@ -28801,7 +28801,7 @@ async def analyze_report_with_ai(reported_post_text: str, dossier_text: str) -> 
 _REPORT_CONTEXT_CACHE = BoundedDict(max_size=5000)
 
 def _get_or_create_report_token(author_id: int, post_num: int, board_id: str, chat_id: int, msg_id: int) -> str:
-    token = f"{post_num}_{abs(msg_id) % 10000000}"
+    token = f"{post_num}_{chat_id}_{msg_id}"
     _REPORT_CONTEXT_CACHE[token] = {
         "author_id": author_id,
         "post_num": post_num,
@@ -28810,6 +28810,40 @@ def _get_or_create_report_token(author_id: int, post_num: int, board_id: str, ch
         "msg_id": msg_id,
     }
     return token
+
+async def _resolve_report_context(token: str, board_id: str | None = None) -> dict | None:
+    ctx = _REPORT_CONTEXT_CACHE.get(token)
+    if ctx:
+        return ctx
+    parts = token.split("_")
+    p_num, c_id, m_id = 0, 0, 0
+    if len(parts) >= 3:
+        p_num = int(parts[0]) if parts[0].lstrip("-").isdecimal() else 0
+        c_id = int(parts[1]) if parts[1].lstrip("-").isdecimal() else 0
+        m_id = int(parts[2]) if parts[2].lstrip("-").isdecimal() else 0
+    elif len(parts) == 2:
+        p_num = int(parts[0]) if parts[0].lstrip("-").isdecimal() else 0
+        m_id = int(parts[1]) if parts[1].lstrip("-").isdecimal() else 0
+
+    if p_num > 0:
+        try:
+            from common.database import get_post_by_num
+            p_data = await get_post_by_num(p_num)
+            if p_data:
+                author_id = p_data.get("author_id", 0)
+                b_id = p_data.get("board_id") or board_id or "b"
+                recovered = {
+                    "author_id": author_id,
+                    "post_num": p_num,
+                    "board_id": b_id,
+                    "chat_id": c_id,
+                    "msg_id": m_id
+                }
+                _REPORT_CONTEXT_CACHE[token] = recovered
+                return recovered
+        except Exception as e:
+            runtime_logger.warning(f"Error recovering report context for token {token}: {e}")
+    return None
 
 def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id: str, chat_id: int, msg_id: int):
     """
@@ -29007,7 +29041,7 @@ async def on_report_toggle_option(callback: types.CallbackQuery, board_id: str |
         try:
             new_mask = int(parts[1])
             token = parts[2]
-            ctx = _REPORT_CONTEXT_CACHE.get(token)
+            ctx = await _resolve_report_context(token, board_id)
             if not ctx:
                 await callback.answer("Сессия модерации устарела", show_alert=True)
                 return
@@ -29064,7 +29098,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
         try:
             mask = int(parts[1])
             token = parts[2]
-            ctx = _REPORT_CONTEXT_CACHE.get(token)
+            ctx = await _resolve_report_context(token, board_id)
             if not ctx:
                 await callback.answer("Сессия модерации устарела", show_alert=True)
                 return
@@ -29217,13 +29251,13 @@ async def on_report_dismiss(callback: types.CallbackQuery, board_id: str | None 
         post_num = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else 0
     elif len(parts) == 2:
         token = parts[1]
-        ctx = _REPORT_CONTEXT_CACHE.get(token)
+        ctx = await _resolve_report_context(token, board_id)
         if ctx:
             b_id = ctx["board_id"]
             post_num = ctx["post_num"]
         else:
             b_id = board_id or "b"
-            post_num = int(token.split("_")[0]) if token and token.split("_")[0].isdecimal() else 0
+            post_num = int(token.split("_")[0]) if token and token.split("_")[0].lstrip("-").isdecimal() else 0
     else:
         await callback.answer("Ошибка формата данных")
         return

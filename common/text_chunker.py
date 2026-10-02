@@ -113,8 +113,15 @@ def safe_html_truncate(text: str, max_units: int = 4000, suffix: str = "…") ->
     """
     if not text:
         return ""
-    if count_tg_utf16_units(text) <= max_units:
+
+    open_tags = get_open_tags(text)
+    if not open_tags and count_tg_utf16_units(text) <= max_units:
         return text
+
+    closing = build_closing_tags(open_tags)
+    closing_units = count_tg_utf16_units(closing)
+    if open_tags and count_tg_utf16_units(text) + closing_units <= max_units:
+        return text + closing
 
     suffix_units = count_tg_utf16_units(suffix)
     effective_limit = max(10, max_units - suffix_units - 50)
@@ -141,11 +148,13 @@ def safe_html_truncate(text: str, max_units: int = 4000, suffix: str = "…") ->
     if split_idx <= 0:
         split_idx = max(1, limit_idx)
 
+    from common.text_utils import balance_html_tags
+
     raw_part = text[:split_idx].rstrip()
     open_tags = get_open_tags(raw_part)
     closing = build_closing_tags(open_tags)
 
-    res = raw_part + suffix + closing
+    res = balance_html_tags(raw_part + suffix + closing)
     max_trim_iters = 100
     trim_iters = 0
     while count_tg_utf16_units(res) > max_units and split_idx > 1 and trim_iters < max_trim_iters:
@@ -169,10 +178,9 @@ def safe_html_truncate(text: str, max_units: int = 4000, suffix: str = "…") ->
         raw_part = text[:split_idx].rstrip()
         open_tags = get_open_tags(raw_part)
         closing = build_closing_tags(open_tags)
-        res = raw_part + suffix + closing
+        res = balance_html_tags(raw_part + suffix + closing)
 
-    from common.text_utils import balance_html_tags
-    return balance_html_tags(res)
+    return res
 
 
 def _find_split_idx(source: str, limit_char_idx: int) -> int:
