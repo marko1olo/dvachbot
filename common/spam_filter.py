@@ -72,14 +72,14 @@ MINUTE_FLOOD_WINDOW = 60.0
 FLOOD_BASE_MUTE_SEC = 300.0     # 5 minutes base shadowmute for fast flood (not 20m!)
 
 # Repost / Forward from public channels limits & responses
-REPOST_LIMIT_PER_MINUTE = 4
+REPOST_LIMIT_PER_MINUTE = 6
 REPOST_WINDOW_SEC = 60.0
-REPOST_FLOOD_MUTE_SEC = 1200.0  # Standard 20 minutes shadowmute for news repost spammers
+REPOST_FLOOD_MUTE_SEC = 120.0  # 2 minutes shadowmute for news repost spammers (was 1200s / 20m)
 
 REPOST_FLOOD_RESPONSES: List[str] = [
     "Уймись, ковбой, тут не личка твоей блядины, чтобы твоё говно репощенное читать!",
     "Тормози, шлюхопересыльщик. Тут борда, а не помойка для репостов из твоих ссаных пабликов.",
-    "Завали ебало с репостами. 4 штуки в минуту — твой потолок, дальше иди в свой Твиттер сри.",
+    "Завали ебало с репостами. Тут борда, а не твой сраный Твиттер для бесконечных форвардов.",
     "Хватит форвардить этот кал, шизоид. Своими словами пиши или пиздуй отсюда.",
     "Репостоблядь detected. Уйми пальцы, тут никто твой пересланный мусор читать не нанимался.",
 ]
@@ -96,6 +96,8 @@ USER_TIERS = {
         'repeat_bonus': 0,
         'flood_base_mute_sec': 300.0,
         'multiplier': 1.0,
+        'repost_limit': 4,
+        'can_repost_mute': True,
     },
     'anon': {
         'name': 'Анон',
@@ -107,6 +109,8 @@ USER_TIERS = {
         'repeat_bonus': 0,
         'flood_base_mute_sec': 240.0,
         'multiplier': 1.25,
+        'repost_limit': 6,
+        'can_repost_mute': True,
     },
     'veteran': {
         'name': 'Ветеран',
@@ -118,6 +122,8 @@ USER_TIERS = {
         'repeat_bonus': 1,
         'flood_base_mute_sec': 120.0,
         'multiplier': 1.5,
+        'repost_limit': 8,
+        'can_repost_mute': True,
     },
     'oldfag': {
         'name': 'Олдфаг',
@@ -129,6 +135,8 @@ USER_TIERS = {
         'repeat_bonus': 2,
         'flood_base_mute_sec': 90.0,
         'multiplier': 1.75,
+        'repost_limit': 10,
+        'can_repost_mute': False,  # Total immunity from shadowmutes for reposts
     },
     'ancient': {
         'name': 'Древний Олдфаг',
@@ -140,6 +148,8 @@ USER_TIERS = {
         'repeat_bonus': 2,
         'flood_base_mute_sec': 60.0,
         'multiplier': 2.0,
+        'repost_limit': 12,
+        'can_repost_mute': False,  # Total immunity from shadowmutes for reposts
     },
 }
 
@@ -925,11 +935,21 @@ def get_repost_flood_response(index: int | None = None) -> str:
     return random.choice(REPOST_FLOOD_RESPONSES)
 
 
-def reset_repost_tracker(user_id: int | None = None) -> None:
-    """Resets repost flood tracker for a user or globally."""
+def reset_repost_tracker(user_id: int | None = None, board_id: str | None = None) -> None:
+    """Resets repost flood tracker for a user (optionally on specific board) or globally."""
     if user_id is not None:
-        _user_repost_timestamps.pop(user_id, None)
-        _seen_repost_media_groups.pop(user_id, None)
+        if board_id is not None:
+            _user_repost_timestamps.pop((user_id, str(board_id)), None)
+            _user_repost_timestamps.pop(user_id, None)
+            _seen_repost_media_groups.pop((user_id, str(board_id)), None)
+            _seen_repost_media_groups.pop(user_id, None)
+        else:
+            for k in list(_user_repost_timestamps.keys()):
+                if k == user_id or (isinstance(k, tuple) and k[0] == user_id):
+                    _user_repost_timestamps.pop(k, None)
+            for k in list(_seen_repost_media_groups.keys()):
+                if k == user_id or (isinstance(k, tuple) and k[0] == user_id):
+                    _seen_repost_media_groups.pop(k, None)
     else:
         _user_repost_timestamps.clear()
         _seen_repost_media_groups.clear()
@@ -943,18 +963,22 @@ def check_repost_spam(
     record_history: bool = True,
     is_repost: bool | None = None,
     auto_apply_mute: bool = True,
-    mute_duration_sec: float = REPOST_FLOOD_MUTE_SEC,
+    mute_duration_sec: float | None = None,
     media_group_id: str | None = None,
     bot_instance: Any = None,
+    posts_count: int | None = None,
 ) -> Tuple[bool, str]:
     """
     Checks if an incoming message is a repost from a public channel/chat and enforces
-    the limit of at most 4 reposts per sliding 60 seconds from a single user on a board/bot.
+    sliding 60 seconds repost limits tailored to user tier (from 4 for newbies up to 12 for ancients).
+    Per-board tracking prevents cross-board rate-limit collisions.
     Supports media_group_id deduplication so 1 album counts as 1 repost.
 
-    If limit is exceeded (5th and subsequent reposts within 60 seconds):
+    If limit is exceeded:
     1. Returns (True, toxic_repost_response).
-    2. Spawns standard shadowmute task if auto_apply_mute is True and loop is running.
+    2. Spawns shadowmute only for aggressive/persistent spam or spambots.
+       Oldfags/ancients have total immunity from shadowmutes.
+       First minor infractions for anons are dropped with warning without shadowmutes.
 
     If within limit or message is not a repost:
     Returns (False, "").
@@ -988,11 +1012,12 @@ def check_repost_spam(
         pass
 
     now = float(now_ts) if now_ts is not None else time.time()
+    tracker_key = (user_id, str(board_id)) if (user_id and board_id) else user_id
 
     # Media group deduplication: subsequent items of the same album do not re-count
     if media_group_id:
         mg_str = str(media_group_id)
-        user_mg_map = _seen_repost_media_groups[user_id]
+        user_mg_map = _seen_repost_media_groups[tracker_key]
         # Prune expired albums older than 60s
         expired = [k for k, v in list(user_mg_map.items()) if now - (v.get('first_ts', 0) if isinstance(v, dict) else 0) > REPOST_WINDOW_SEC]
         for k in expired:
@@ -1002,7 +1027,7 @@ def check_repost_spam(
             entry = user_mg_map[mg_str]
             return entry.get('blocked', False), entry.get('response', "")
 
-    tracker = _user_repost_timestamps[user_id]
+    tracker = _user_repost_timestamps[tracker_key]
 
     # Prune timestamps older than sliding window
     while tracker and (now - float(tracker[0]) > REPOST_WINDOW_SEC):
@@ -1012,25 +1037,46 @@ def check_repost_spam(
     if tracker and now < float(tracker[-1]):
         now = float(tracker[-1])
 
-    if len(tracker) >= REPOST_LIMIT_PER_MINUTE:
+    # Resolve user tier for repost limits
+    if posts_count is None and isinstance(user_id, int) and user_id > 0:
+        posts_count = get_cached_user_posts(user_id)
+    tier = get_user_tier(posts_count if posts_count is not None else 0)
+    repost_limit = tier.get('repost_limit', REPOST_LIMIT_PER_MINUTE)
+    can_mute = tier.get('can_repost_mute', True)
+
+    if len(tracker) >= repost_limit:
         response = get_repost_flood_response()
         logger.warning(
-            f"🚫 REPOST SPAM: User {user_id} exceeded repost limit ({len(tracker)} reposts in {REPOST_WINDOW_SEC}s) on /{board_id}/"
+            f"🚫 REPOST SPAM: User {user_id} exceeded repost limit ({len(tracker)}/{repost_limit} in {REPOST_WINDOW_SEC}s) on /{board_id}/"
         )
         if media_group_id:
-            _seen_repost_media_groups[user_id][str(media_group_id)] = {
+            _seen_repost_media_groups[tracker_key][str(media_group_id)] = {
                 'first_ts': now, 'blocked': True, 'response': response
             }
-        if auto_apply_mute and user_id:
+
+        # Record blocked attempts in tracker so persistent flood can be detected
+        if record_history:
+            tracker.append(now)
+
+        # Mute policy:
+        # - Oldfags/Ancients: total immunity from shadowmutes.
+        # - Newbies (< 20 posts): auto-mute applies immediately (neutralizes spambots).
+        # - Anons / Veterans: 1st and 2nd excess reposts are dropped + warned only;
+        #   shadowmute applies only if user aggressively keeps spamming (>= repost_limit + 3 attempts).
+        is_persistent = (len(tracker) >= repost_limit + 3) or (posts_count is not None and posts_count < 20)
+        should_shadow_mute = auto_apply_mute and can_mute and is_persistent
+
+        if should_shadow_mute and user_id:
             try:
                 loop = asyncio.get_running_loop()
                 from common.task_manager import spawn_task
+                eff_mute_dur = mute_duration_sec if mute_duration_sec is not None else REPOST_FLOOD_MUTE_SEC
                 spawn_task(
                     apply_shadow_mute(
                         user_id=user_id,
                         board_id=board_id,
-                        duration_seconds=mute_duration_sec,
-                        reason=f"Спам репостами из пабликов (>4/мин): {response}",
+                        duration_seconds=eff_mute_dur,
+                        reason=f"Спам репостами из пабликов (>{repost_limit}/мин): {response}",
                         is_exponential=False
                     )
                 )
@@ -1041,7 +1087,7 @@ def check_repost_spam(
         return True, response
 
     if media_group_id:
-        _seen_repost_media_groups[user_id][str(media_group_id)] = {
+        _seen_repost_media_groups[tracker_key][str(media_group_id)] = {
             'first_ts': now, 'blocked': False, 'response': ""
         }
 
@@ -1059,15 +1105,25 @@ async def check_repost_spam_async(
     record_history: bool = True,
     is_repost: bool | None = None,
     auto_apply_mute: bool = True,
-    mute_duration_sec: float = REPOST_FLOOD_MUTE_SEC,
+    mute_duration_sec: float | None = None,
     media_group_id: str | None = None,
     bot_instance: Any = None,
+    posts_count: int | None = None,
 ) -> Tuple[bool, str, float]:
     """
     Async version of check_repost_spam.
-    If limit is exceeded, applies shadowmute directly and awaits it.
+    If limit is exceeded and mute criteria met, applies shadowmute directly and awaits it.
     Returns: (is_blocked: bool, toxic_response: str, expires_at: float)
     """
+    if posts_count is None and isinstance(user_id, int) and user_id > 0:
+        posts_count = get_cached_user_posts(user_id)
+    tier = get_user_tier(posts_count if posts_count is not None else 0)
+    repost_limit = tier.get('repost_limit', REPOST_LIMIT_PER_MINUTE)
+    can_mute = tier.get('can_repost_mute', True)
+
+    tracker_key = (user_id, str(board_id)) if (user_id and board_id) else user_id
+    tracker = _user_repost_timestamps[tracker_key]
+
     is_blocked, response = check_repost_spam(
         user_id=user_id,
         message=message,
@@ -1079,15 +1135,20 @@ async def check_repost_spam_async(
         mute_duration_sec=mute_duration_sec,
         media_group_id=media_group_id,
         bot_instance=bot_instance,
+        posts_count=posts_count,
     )
     expires_at = 0.0
-    if is_blocked and auto_apply_mute and isinstance(user_id, int) and user_id:
+    is_persistent = (len(tracker) >= repost_limit + 3) or (posts_count is not None and posts_count < 20)
+    should_shadow_mute = is_blocked and auto_apply_mute and can_mute and is_persistent and isinstance(user_id, int) and user_id
+
+    if should_shadow_mute:
+        eff_mute_dur = mute_duration_sec if mute_duration_sec is not None else REPOST_FLOOD_MUTE_SEC
         try:
             expires_at = await apply_shadow_mute(
                 user_id=user_id,
                 board_id=board_id,
-                duration_seconds=mute_duration_sec,
-                reason=f"Спам репостами из пабликов (>4/мин): {response}",
+                duration_seconds=eff_mute_dur,
+                reason=f"Спам репостами из пабликов (>{repost_limit}/мин): {response}",
                 is_exponential=False
             )
         except Exception as e:
