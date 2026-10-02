@@ -971,6 +971,7 @@ __all__ = [
     'state',
     'MODE_FLAGS',
     'shadow_fake_post_counters',
+    'BoundedDict',
     'messages_storage',
     'post_to_messages',
     'message_to_post',
