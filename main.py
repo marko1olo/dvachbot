@@ -28798,6 +28798,19 @@ async def analyze_report_with_ai(reported_post_text: str, dossier_text: str) -> 
         }
 
 
+_REPORT_CONTEXT_CACHE = BoundedDict(max_size=5000)
+
+def _get_or_create_report_token(author_id: int, post_num: int, board_id: str, chat_id: int, msg_id: int) -> str:
+    token = f"{post_num}_{abs(msg_id) % 10000000}"
+    _REPORT_CONTEXT_CACHE[token] = {
+        "author_id": author_id,
+        "post_num": post_num,
+        "board_id": board_id,
+        "chat_id": chat_id,
+        "msg_id": msg_id,
+    }
+    return token
+
 def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id: str, chat_id: int, msg_id: int):
     """
     Builds an interactive multi-select inline keyboard for report moderation.
@@ -28811,33 +28824,34 @@ def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id
       64 (1<<6): Вайп sdel (1 час)
       128 (1<<7): Вайп sdel (24 часа)
     """
+    token = _get_or_create_report_token(author_id, post_num, board_id, chat_id, msg_id)
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
 
     sm8_icon = "☑️" if (mask & 1) else "🔲"
     sm24_icon = "☑️" if (mask & 2) else "🔲"
-    builder.button(text=f"{sm8_icon} ШМ 8ч + sdel 1ч", callback_data=f"rep_t:{mask ^ 1}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text=f"{sm24_icon} ШМ 24ч", callback_data=f"rep_t:{mask ^ 2}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{sm8_icon} ШМ 8ч + sdel 1ч", callback_data=f"rep_t:{mask ^ 1}:{token}")
+    builder.button(text=f"{sm24_icon} ШМ 24ч", callback_data=f"rep_t:{mask ^ 2}:{token}")
 
     sm4d_icon = "☑️" if (mask & 4) else "🔲"
     del_icon = "☑️" if (mask & 32) else "🔲"
-    builder.button(text=f"{sm4d_icon} ШМ 4 дня", callback_data=f"rep_t:{mask ^ 4}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text=f"{del_icon} Удалить пост", callback_data=f"rep_t:{mask ^ 32}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{sm4d_icon} ШМ 4 дня", callback_data=f"rep_t:{mask ^ 4}:{token}")
+    builder.button(text=f"{del_icon} Удалить пост", callback_data=f"rep_t:{mask ^ 32}:{token}")
 
     tmedia_icon = "☑️" if (mask & 8) else "🔲"
     tgif_icon = "☑️" if (mask & 16) else "🔲"
-    builder.button(text=f"{tmedia_icon} Toggle Media", callback_data=f"rep_t:{mask ^ 8}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text=f"{tgif_icon} Toggle GIF", callback_data=f"rep_t:{mask ^ 16}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{tmedia_icon} Toggle Media", callback_data=f"rep_t:{mask ^ 8}:{token}")
+    builder.button(text=f"{tgif_icon} Toggle GIF", callback_data=f"rep_t:{mask ^ 16}:{token}")
 
     w1_icon = "☑️" if (mask & 64) else "🔲"
     w24_icon = "☑️" if (mask & 128) else "🔲"
-    builder.button(text=f"{w1_icon} Вайп sdel 1ч", callback_data=f"rep_t:{mask ^ 64}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text=f"{w24_icon} Вайп sdel 24ч", callback_data=f"rep_t:{mask ^ 128}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{w1_icon} Вайп sdel 1ч", callback_data=f"rep_t:{mask ^ 64}:{token}")
+    builder.button(text=f"{w24_icon} Вайп sdel 24ч", callback_data=f"rep_t:{mask ^ 128}:{token}")
 
     sel_count = bin(mask).count('1')
     apply_text = f"🚀 Применить ({sel_count})" if sel_count > 0 else "🚀 Применить выбранное"
-    builder.button(text=apply_text, callback_data=f"rep_x:{mask}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text="❌ Отклонить", callback_data=f"rep_i:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=apply_text, callback_data=f"rep_x:{mask}:{token}")
+    builder.button(text="❌ Отклонить", callback_data=f"rep_i:{token}")
 
     builder.adjust(2, 2, 2, 2, 2)
     return builder.as_markup()
@@ -28975,21 +28989,38 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
 async def on_report_toggle_option(callback: types.CallbackQuery, board_id: str | None = None):
     """
     Toggles a moderation checkbox in the inline keyboard.
-    Format: rep_t:<new_mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
+    Format: rep_t:<new_mask>:<token> (compact) OR rep_t:<new_mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id> (legacy)
     """
     parts = callback.data.split(":")
-    if len(parts) < 7:
+    if len(parts) >= 7:
+        try:
+            new_mask = int(parts[1])
+            author_id = int(parts[2])
+            post_num = int(parts[3])
+            b_id = parts[4]
+            chat_id = int(parts[5])
+            msg_id = int(parts[6])
+        except (ValueError, IndexError):
+            await callback.answer("Ошибка параметров")
+            return
+    elif len(parts) == 3:
+        try:
+            new_mask = int(parts[1])
+            token = parts[2]
+            ctx = _REPORT_CONTEXT_CACHE.get(token)
+            if not ctx:
+                await callback.answer("Сессия модерации устарела", show_alert=True)
+                return
+            author_id = ctx["author_id"]
+            post_num = ctx["post_num"]
+            b_id = ctx["board_id"]
+            chat_id = ctx["chat_id"]
+            msg_id = ctx["msg_id"]
+        except Exception:
+            await callback.answer("Ошибка параметров")
+            return
+    else:
         await callback.answer("Ошибка формата данных")
-        return
-    try:
-        new_mask = int(parts[1])
-        author_id = int(parts[2])
-        post_num = int(parts[3])
-        b_id = parts[4]
-        chat_id = int(parts[5])
-        msg_id = int(parts[6])
-    except (ValueError, IndexError):
-        await callback.answer("Ошибка параметров")
         return
 
     if not is_admin(callback.from_user.id, b_id):
@@ -29015,21 +29046,38 @@ async def on_report_toggle_option(callback: types.CallbackQuery, board_id: str |
 async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str | None = None):
     """
     Applies all selected moderation actions in a batch.
-    Format: rep_x:<mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
+    Format: rep_x:<mask >:<token> (compact) OR rep_x:<mask >:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id> (legacy)
     """
     parts = callback.data.split(":")
-    if len(parts) < 7:
+    if len(parts) >= 7:
+        try:
+            mask = int(parts[1])
+            author_id = int(parts[2])
+            post_num = int(parts[3])
+            b_id = parts[4]
+            chat_id = int(parts[5])
+            msg_id = int(parts[6])
+        except (ValueError, IndexError):
+            await callback.answer("Ошибка параметров")
+            return
+    elif len(parts) == 3:
+        try:
+            mask = int(parts[1])
+            token = parts[2]
+            ctx = _REPORT_CONTEXT_CACHE.get(token)
+            if not ctx:
+                await callback.answer("Сессия модерации устарела", show_alert=True)
+                return
+            author_id = ctx["author_id"]
+            post_num = ctx["post_num"]
+            b_id = ctx["board_id"]
+            chat_id = ctx["chat_id"]
+            msg_id = ctx["msg_id"]
+        except Exception:
+            await callback.answer("Ошибка параметров")
+            return
+    else:
         await callback.answer("Ошибка формата данных")
-        return
-    try:
-        mask = int(parts[1])
-        author_id = int(parts[2])
-        post_num = int(parts[3])
-        b_id = parts[4]
-        chat_id = int(parts[5])
-        msg_id = int(parts[6])
-    except (ValueError, IndexError):
-        await callback.answer("Ошибка параметров")
         return
 
     if not is_admin(callback.from_user.id, b_id):
@@ -29164,8 +29212,21 @@ async def on_report_dismiss(callback: types.CallbackQuery, board_id: str | None 
     Format: rep_i:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
     """
     parts = callback.data.split(":")
-    b_id = parts[3]
-    post_num = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else 0
+    if len(parts) >= 6:
+        b_id = parts[3]
+        post_num = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else 0
+    elif len(parts) == 2:
+        token = parts[1]
+        ctx = _REPORT_CONTEXT_CACHE.get(token)
+        if ctx:
+            b_id = ctx["board_id"]
+            post_num = ctx["post_num"]
+        else:
+            b_id = board_id or "b"
+            post_num = int(token.split("_")[0]) if token and token.split("_")[0].isdecimal() else 0
+    else:
+        await callback.answer("Ошибка формата данных")
+        return
 
     if not is_admin(callback.from_user.id, b_id):
         await callback.answer("У вас нет прав администратора.", show_alert=True)
