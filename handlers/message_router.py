@@ -851,8 +851,18 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                     db = await get_pool()
                     
                     if action == 'like':
-                        # Бонус за лайк: 15-30 ₪ за качественный контент
-                        reward_amount = random.randint(15, 30)
+                        # Награда за качественный пост (сопоставимо со сменами работы 150-450 ₪):
+                        # 75% случаев: 150-300 ₪
+                        # 20% случаев: 320-500 ₪ (годный контент / жирный лайк)
+                        # 5% случаев: 550-850 ₪ (святая база / джекпот)
+                        roll_like = random.random()
+                        if roll_like < 0.75:
+                            reward_amount = random.randint(150, 300)
+                        elif roll_like < 0.95:
+                            reward_amount = random.randint(320, 500)
+                        else:
+                            reward_amount = random.randint(550, 850)
+
                         await db.execute(
                             """
                             INSERT INTO Users (user_id, board_id, balance, reaction_reward_counter) 
@@ -882,15 +892,22 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 global_balance = sum_row[0] if sum_row and sum_row[0] else 0
                             
                             if random.random() < 0.5:
-                                display_reward = random.randint(75, 150)
+                                # Совокупный куш за 5 качественных реакций
+                                display_reward = random.randint(1000, 2200)
                                 notif_tpl = random.choice(EARNING_NOTIFICATIONS)
                                 notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance)).replace("RUB", "₪").replace("₽", "₪")
                                 final_bot = bot_instance if bot_instance else reaction.bot
                                 spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
                     
                     elif action == 'dislike':
-                        # Штраф за дизлайк/сажу: 8-16 ₪ (мотивирует постить годноту, а не спам)
-                        penalty_amount = random.randint(8, 16)
+                        # Штраф за дизлайк/сажу (мотивирует не шитпостить):
+                        # 80% случаев: 75-175 ₪
+                        # 20% случаев: 200-320 ₪ (закидали тухлыми помидорами)
+                        if random.random() < 0.80:
+                            penalty_amount = random.randint(75, 175)
+                        else:
+                            penalty_amount = random.randint(200, 320)
+
                         await deduct_user_global_balance(db, author_id, board_id, penalty_amount)
                         await db.execute(
                             """
@@ -920,7 +937,8 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 global_balance = sum_row[0] if sum_row and sum_row[0] else 0
                             
                             if random.random() < 0.5:
-                                penalty_display = random.randint(40, 80)
+                                # Совокупный штраф за 5 дизлайков
+                                penalty_display = random.randint(500, 1200)
                                 notif_pool = getattr(shared_state, 'PENALTY_NOTIFICATIONS', None)
                                 if not notif_pool:
                                     try:
@@ -936,8 +954,8 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
                     
                     elif action == 'neutral':
-                        # Символический бонус за активность в треде (2-5 ₪)
-                        neutral_reward = random.randint(2, 5)
+                        # Символический бонус за активность/эмодзи в треде (25-65 ₪)
+                        neutral_reward = random.randint(25, 65)
                         await db.execute(
                             """
                             INSERT INTO Users (user_id, board_id, balance) 

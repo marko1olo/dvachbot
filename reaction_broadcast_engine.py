@@ -5,8 +5,8 @@ reaction_broadcast_engine.py — Motivational Reaction Engagement Broadcast for 
 Broadcasts cynical, authentic 2ch motivational messages with banners directly
 to users (Direct Messages / PM) urging them to actively react to posts in the feed.
 Explains the economic and social mechanics:
-- Likes / Fire / Base: +15-30 ₪ shekels to author balance, 5+ likes elevates to "Best" channel.
-- Dislikes / Poop / Vomit: -8-16 ₪ penalty deducted from author balance, drowned in sewage.
+- Likes / Fire / Base: +150-350 ₪ (up to 800+ ₪ crit) shekels to author balance, 5+ likes elevates to "Best" channel.
+- Dislikes / Poop / Vomit: -80-200 ₪ (up to 300 ₪) penalty deducted from author balance, drowned in sewage.
 - Clown: marks clown posters, tears off masks.
 """
 
@@ -44,8 +44,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     (
         "👀 <b>Анон, ты опять сидишь и молча скроллишь ленту как куколд?</b>\n\n"
         "Напоминаем базовые законы борды:\n"
-        "🔥 <b>Лайк / Огонь / База</b> — ты насыпаешь автору <b>+15–30 ₪</b> шекелей в карман, а от 5 лайков пост взлетает в канал <b>«Лучшее»</b>.\n"
-        "💩 <b>Говно / Дизлайк / Рвота</b> — ты сдираешь с высерка <b>-8–16 ₪</b> и смываешь его в парашу.\n"
+        "🔥 <b>Лайк / Огонь / База</b> — ты насыпаешь автору <b>+150–350 ₪</b> шекелей в карман, а от 5 лайков пост взлетает в канал <b>«Лучшее»</b>.\n"
+        "💩 <b>Говно / Дизлайк / Рвота</b> — ты сдираешь с высерка <b>-80–200 ₪</b> и смываешь его в парашу.\n"
         "🤡 <b>Клоун</b> — вешает на дебила несмываемое клеймо.\n\n"
         "Твой палец решает, кто король треда, а кто опущенный. <b>Ставь реакции на посты — суди этот биомусор!</b>"
     ),
@@ -59,16 +59,16 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     (
         "⚖️ <b>Судилище ТГАЧА: Твой палец — твой приговор</b>\n\n"
         "Каждый раз, когда ты лениво пропускаешь пост без реакции, где-то ликует бездарь:\n"
-        "💰 <b>Лайкнул</b> — задонатил автору шекелей прямо из воздуха (+15–30 ₪).\n"
-        "🪓 <b>Обосрал (💩 / 🤮 / 👎)</b> — загнал ничтожество в долговую яму и минуса (-8–16 ₪).\n"
+        "💰 <b>Лайкнул</b> — задонатил автору шекелей прямо из воздуха (+150–350 ₪).\n"
+        "🪓 <b>Обосрал (💩 / 🤮 / 👎)</b> — загнал ничтожество в долговую яму и минуса (-80–200 ₪).\n"
         "🎪 <b>Влепил клоуна (🤡)</b> — сорвал маску с циркового уебана.\n\n"
         "<b>Жми на эмодзи под постами. Управляй балансом и судьбами аборигенов!</b>"
     ),
     (
         "💸 <b>Перераспределение шекелей на борде: Анон, рули экономикой!</b>\n\n"
         "Ты думал, реакции тут просто картинки для зумеров? Хуй там плавал!\n"
-        "• Лайк/Огонь — это <b>прямой кэш</b> автору (+15..30 ₪). Дай нормальному пацану подняться.\n"
-        "• Дизлайк/Говно — это <b>жестокий штраф</b> (-8..16 ₪) за засорение ленты твоей драгоценной борды.\n\n"
+        "• Лайк/Огонь — это <b>прямой кэш</b> автору (+150..350 ₪). Дай нормальному пацану подняться.\n"
+        "• Дизлайк/Говно — это <b>жестокий штраф</b> (-80..200 ₪) за засорение ленты твоей драгоценной борды.\n\n"
         "Видишь годноту? Поддержи шекелем. Видишь шизофазию? Накорми говном с лопаты. <b>Ставь реакции, не будь овощем!</b>"
     ),
     (
@@ -91,8 +91,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     (
         "🩸 <b>Шекелевая резня в ленте: Сделай богатым брата или раздень врага!</b>\n\n"
         "Твой клик по реакции — это финансовый перевод:\n"
-        "• Палец вверх (👍/🔥) = <b>+15..30 ₪</b> на счёт постера. Скинься на пиво автору шедевра.\n"
-        "• Палец вниз (👎/💩) = <b>-8..16 ₪</b> с баланса бездаря. Ограбь обоссанного нытика без суда и следствия.\n\n"
+        "• Палец вверх (👍/🔥) = <b>+150..350 ₪</b> на счёт постера. Скинься на пиво автору шедевра.\n"
+        "• Палец вниз (👎/💩) = <b>-80..200 ₪</b> с баланса бездаря. Ограбь обоссанного нытика без суда и следствия.\n\n"
         "<i>Зачем молчать, если можно раскулачивать или обогащать? Реагируй!</i>"
     ),
     (
@@ -114,8 +114,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
         "💡 <b>Урок финансовой грамотности от Киберчеда:</b>\n\n"
         "«Анон, который не ставит реакции — хуже опущенного куколда».\n\n"
         "Каждое нажатие на эмодзи запускает транзакцию:\n"
-        "🟢 Лайк: автор богатеет на <b>+15–30 ₪</b>.\n"
-        "🔴 Дизлайк/Говно: автор беднеет на <b>-8–16 ₪</b>.\n"
+        "🟢 Лайк: автор богатеет на <b>+150–350 ₪</b>.\n"
+        "🔴 Дизлайк/Говно: автор беднеет на <b>-80–200 ₪</b>.\n"
         "🟡 Клоун: автор обтекает при всем честном народе.\n\n"
         "<b>Открой ленту, найди свежий пост и влепи реакцию по справедливости!</b>"
     ),
@@ -161,8 +161,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     (
         "👑 <b>Сделай анона олигархом или нищим бродягой!</b>\n\n"
         "Механика реакций работает прямо сейчас:\n"
-        "Нажал <b>👍</b> — пополнил кошелёк автора на 15–30 ₪.\n"
-        "Нажал <b>💩</b> — оштрафовал на 8–16 ₪ за бездарность.\n"
+        "Нажал <b>👍</b> — пополнил кошелёк автора на 150–350 ₪.\n"
+        "Нажал <b>💩</b> — оштрафовал на 80–200 ₪ за бездарность.\n"
         "Собрал <b>5 лайков</b> — пост улетает в элитный канал «Лучшее»!\n\n"
         "<b>Кому дать денег, а у кого отобрать — решаешь ты. Кликай реакции!</b>"
     ),
@@ -198,8 +198,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     ),
     (
         "🧠 <b>Тест на IQ для обитателя борды:</b>\n\n"
-        "1. Увидел хороший пост — поставил <b>👍 / 🔥</b> (+15–30 ₪ автору).\n"
-        "2. Увидел хуйню — поставил <b>👎 / 💩</b> (-8–16 ₪ автору).\n"
+        "1. Увидел хороший пост — поставил <b>👍 / 🔥</b> (+150–350 ₪ автору).\n"
+        "2. Увидел хуйню — поставил <b>👎 / 💩</b> (-80–200 ₪ автору).\n"
         "3. Прочитал и пролистал мимо — диагноз: одноклеточное.\n\n"
         "<b>Докажи, что у тебя есть мозги и вкус. Реагируй на посты!</b>"
     ),
@@ -226,8 +226,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     ),
     (
         "⚡️ <b>Хватит экономить клики, анон! Они бесплатные!</b>\n\n"
-        "За каждый твой лайк автор получает до <b>+30 ₪</b> шекелей.\n"
-        "За каждый дизлайк — теряет до <b>-16 ₪</b>.\n"
+        "За каждый твой лайк автор получает до <b>+500 ₪</b> (а за базу до +850 ₪).\n"
+        "За каждый дизлайк — теряет до <b>-300 ₪</b>.\n"
         "Ты буквально управляешь благосостоянием всех, кто пишет в боте.\n\n"
         "<i>Зайди в ленту и раздай всем по заслугам прямо сейчас!</i>"
     ),
@@ -272,8 +272,8 @@ REACTION_MOTIVATION_TEXTS: List[str] = [
     (
         "🚀 <b>Включай турбо-судейство в ленте!</b>\n\n"
         "Быстрый гайд для тех, кто в танке:\n"
-        "1. <b>👍 / 🔥</b> = +15..30 ₪ автору (заслужил уважение пацанов).\n"
-        "2. <b>👎 / 💩</b> = -8..16 ₪ автору (оплати утилизацию твоего высера).\n"
+        "1. <b>👍 / 🔥</b> = +150..350 ₪ автору (заслужил уважение пацанов).\n"
+        "2. <b>👎 / 💩</b> = -80..200 ₪ автору (оплати утилизацию твоего высера).\n"
         "3. <b>🤡</b> = публичный позор без права на помилование.\n\n"
         "<b>Тыкай по эмодзи под постами. Управляй хаосом борды!</b>"
     ),
@@ -372,9 +372,9 @@ async def get_reaction_broadcast_recipients(limit: Optional[int] = None, exclude
                 if blocked_set:
                     before_cnt = len(recipients)
                     recipients = [uid for uid in recipients if uid not in blocked_set]
-                    logger.info(f"[reaction_broadcast] Filtered out {before_cnt - len(recipients)} previously blocked users")
+                    logger.debug(f"[reaction_broadcast] Filtered out {before_cnt - len(recipients)} previously blocked users")
                     
-            logger.info(f"[reaction_broadcast] Fetched {len(recipients)} eligible recipients from database")
+            logger.debug(f"[reaction_broadcast] Fetched {len(recipients)} eligible recipients from database")
             return recipients
     except Exception as e:
         logger.error(f"[reaction_broadcast] Failed to query recipients from DB: {e}")
@@ -468,7 +468,7 @@ async def send_reaction_motivation_broadcast(
     
     if not force and elapsed < DEFAULT_BROADCAST_INTERVAL_SECONDS:
         rem_sec = int(DEFAULT_BROADCAST_INTERVAL_SECONDS - elapsed)
-        logger.info(f"[reaction_broadcast] Skipped: cooldown active, {rem_sec}s remaining")
+        logger.debug(f"[reaction_broadcast] Skipped: cooldown active, {rem_sec}s remaining")
         return {
             "status": "cooldown",
             "message": f"Кулдаун активен. Осталось: {rem_sec // 3600}ч {(rem_sec % 3600) // 60}м.",
@@ -494,7 +494,7 @@ async def send_reaction_motivation_broadcast(
             "failed": 0
         }
         
-    logger.info(f"[reaction_broadcast] Starting broadcast of text #{text_idx+1} to {len(recipients)} users...")
+    logger.debug(f"[reaction_broadcast] Starting broadcast of text #{text_idx+1} to {len(recipients)} users...")
     
     delivered = 0
     forbidden = 0
@@ -521,7 +521,7 @@ async def send_reaction_motivation_broadcast(
             
         # Pacing between messages to prevent Telegram rate limits
         if (i + 1) % 25 == 0:
-            logger.info(f"[reaction_broadcast] Progress: {i+1}/{len(recipients)} (delivered: {delivered}, forbidden: {forbidden}, failed: {failed})")
+            logger.debug(f"[reaction_broadcast] Progress: {i+1}/{len(recipients)} (delivered: {delivered}, forbidden: {forbidden}, failed: {failed})")
             
         await asyncio.sleep(PACING_DELAY_BETWEEN_USERS)
         
@@ -536,8 +536,8 @@ async def send_reaction_motivation_broadcast(
     _save_state(state)
     
     logger.info(
-        f"[reaction_broadcast] Completed! Delivered: {delivered}, "
-        f"Forbidden/Blocked: {forbidden}, Failed: {failed} out of {len(recipients)}"
+        f"[reaction_broadcast] Completed: delivered={delivered}, "
+        f"forbidden/blocked={forbidden}, failed={failed} ({len(recipients)} total)"
     )
     
     return {
@@ -562,7 +562,7 @@ async def reaction_motivation_broadcast_loop(
     
     bot_provider can be an aiogram.Bot instance or a callable returning an aiogram.Bot.
     """
-    logger.info(f"[reaction_broadcast] Background daemon initialized (interval: {interval_seconds}s)")
+    logger.debug(f"[reaction_broadcast] Background daemon initialized (interval: {interval_seconds}s)")
     
     # Wait 60 seconds on initial startup before first check to let bot finish initialization
     await asyncio.sleep(60)
@@ -580,18 +580,18 @@ async def reaction_motivation_broadcast_loop(
             elapsed = now - last_ts
             
             if elapsed >= interval_seconds:
-                logger.info("[reaction_broadcast] Scheduled interval reached. Triggering broadcast...")
+                logger.debug("[reaction_broadcast] Scheduled interval reached. Triggering broadcast...")
                 res = await send_reaction_motivation_broadcast(bot=bot, force=False)
-                logger.info(f"[reaction_broadcast] Auto-broadcast completed: {res.get('status')}")
+                logger.debug(f"[reaction_broadcast] Auto-broadcast completed: {res.get('status')}")
                 # Sleep interval after broadcast
                 await asyncio.sleep(interval_seconds)
             else:
                 sleep_need = max(60.0, float(interval_seconds - elapsed))
-                logger.info(f"[reaction_broadcast] Next scheduled run in {int(sleep_need // 3600)}h {int((sleep_need % 3600) // 60)}m (sleeping {int(sleep_need)}s)")
+                logger.debug(f"[reaction_broadcast] Next scheduled run in {int(sleep_need // 3600)}h {int((sleep_need % 3600) // 60)}m (sleeping {int(sleep_need)}s)")
                 await asyncio.sleep(sleep_need)
                 
         except asyncio.CancelledError:
-            logger.info("[reaction_broadcast] Loop cancelled. Exiting.")
+            logger.debug("[reaction_broadcast] Loop cancelled. Exiting.")
             raise
         except Exception as e:
             logger.exception(f"[reaction_broadcast] Exception in background loop: {e}")
