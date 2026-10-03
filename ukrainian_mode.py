@@ -834,24 +834,10 @@ def _stage2_linguistic(text: str, replaced_spans: set) -> str:
 
 
 def _stage3_slogan(text: str) -> str:
-    word_count = len(text.split())
-    if word_count > 2 and random.random() < 0.30:
-        text += f"\n\n<b>{random.choice(UKRAINIAN_PHRASES)}</b>"
     return text
+
+
 def _apply_zrada_peremoga_detector(text: str) -> str:
-    # Шанс 40% вынести вердикт
-    if random.random() < 0.30:
-        # Если в тексте есть восклицательный знак или слово "гарно/краще"
-        if '!' in text or 'гарно' in text.lower():
-            verdict = " <i>(ПЕРЕМОГА! 🇺🇦)</i>"
-        # Если есть вопросы, многоточия или негатив
-        elif '?' in text or '...' in text or 'погано' in text.lower():
-            verdict = " <i>(ЗРАДА! 🐷)</i>"
-        else:
-            verdict = random.choice([" <i>(ТОТАЛЬНА ЗРАДА!)</i>", " <i>(ОСТАТОЧНА ПЕРЕМОГА!)</i>"])
-            
-        # Лепим вердикт в конец последнего предложения
-        text += verdict
     return text
 
 def ukrainian_transform(text: str, header: str | None = None) -> tuple[str, str | bytes]:

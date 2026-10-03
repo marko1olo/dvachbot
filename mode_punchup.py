@@ -5,8 +5,6 @@ from mode_punchup_data import (
     MODE_PUNCHUP_PROFILES,
     _COMMON_SOURCE_TERMS,
     _MODE_VOCAB,
-    _MODE_PHRASE_EXPANSIONS,
-    _MODE_SIGNATURES,
     _MODE_EXTRA_20260514,
     _MODE_LATE_SPICE_20260514,
     _MODE_EXTRA_20260515,
@@ -62,19 +60,7 @@ def _swap_words(text: str, profile: dict) -> str:
 
 
 def _inject(text: str, profile: dict) -> str:
-    if len(text) > profile.get("max_text_for_inject", 1100):
-        return text
-    words = text.split()
-    if len(words) < 6 or random.random() > profile.get("inject_chance", 0.34):
-        return text
-    injections = profile.get("injections", ())
-    if not injections:
-        return text
-    max_items = min(profile.get("max_injections", 2), max(1, len(words) // 20))
-    for _ in range(random.randint(1, max_items)):
-        idx = random.randrange(1, len(words))
-        words.insert(idx, random.choice(injections))
-    return " ".join(words)
+    return text
 
 
 def _add_signature(text: str, profile: dict) -> str:
@@ -96,24 +82,7 @@ def _add_signature(text: str, profile: dict) -> str:
 def _decorate(text: str, profile: dict) -> str:
     if not text or not text.strip():
         return text
-    text = _swap_words(text, profile)
-    text = _inject(text, profile)
-    
-    if random.random() <= profile.get("prefix_chance", 0.15):
-        prefixes = profile.get("prefixes")
-        if prefixes:
-            text = f"{random.choice(prefixes)} {text}"
-            
-    if random.random() <= profile.get("suffix_chance", 0.15):
-        suffixes = profile.get("suffixes")
-        if suffixes:
-            if text.endswith((".", "!", "?")):
-                text = f"{text} {random.choice(suffixes)}"
-            else:
-                text = f"{text}. {random.choice(suffixes)}"
-                
-    text = _add_signature(text, profile)
-    return text
+    return _swap_words(text, profile)
 
 
 
@@ -146,35 +115,26 @@ def _apply_cross_topic_vocabulary(profile: dict, vocab: Mapping[str, Replacement
 for _mode_name, _profile in MODE_PUNCHUP_PROFILES.items():
     _vocab = _MODE_VOCAB.get(_mode_name, {})
     _apply_vocab_expansion(_profile, _vocab)
-    _phrases = _MODE_PHRASE_EXPANSIONS.get(_mode_name, {})
-    for _field in ("prefixes", "suffixes", "injections"):
-        _extend_unique(_profile.setdefault(_field, []), _phrases.get(_field, ()))
-    _extend_unique(_profile.setdefault("signatures", []), _MODE_SIGNATURES.get(_mode_name, ()))
     _extra = _MODE_EXTRA_20260514.get(_mode_name, {})
-    for _field in ("prefixes", "suffixes", "injections"):
-        _extend_unique(_profile.setdefault(_field, []), _extra.get(_field, ()))
-    _extend_unique(_profile.setdefault("signatures", []), _extra.get("signatures", ()))
     for _key_raw, _value in _extra.get("replacements", {}).items():
         _profile.setdefault("replacements", {})[_key_raw] = _value
     _late_spice = _MODE_LATE_SPICE_20260514.get(_mode_name, {})
-    for _field in ("prefixes", "suffixes", "injections"):
-        _extend_unique(_profile.setdefault(_field, []), _late_spice.get(_field, ()))
-    _extend_unique(_profile.setdefault("signatures", []), _late_spice.get("signatures", ()))
     for _key_raw, _value in _late_spice.get("replacements", {}).items():
         _profile.setdefault("replacements", {})[_key_raw] = _value
     _extra_20260515 = _MODE_EXTRA_20260515.get(_mode_name, {})
-    for _field in ("prefixes", "suffixes", "injections"):
-        _extend_unique(_profile.setdefault(_field, []), _extra_20260515.get(_field, ()))
-    _extend_unique(_profile.setdefault("signatures", []), _extra_20260515.get("signatures", ()))
     for _key_raw, _value in _extra_20260515.get("replacements", {}).items():
         _profile.setdefault("replacements", {})[_key_raw] = _value
     _apply_cross_topic_vocabulary(_profile, _vocab)
     _profile["replace_chance"] = max(_profile.get("replace_chance", 0.0), 0.42)
-    _profile["inject_chance"] = min(_profile.get("inject_chance", 0.15), 0.15)
-    _profile["prefix_chance"] = min(_profile.get("prefix_chance", 0.15), 0.15)
-    _profile["suffix_chance"] = min(_profile.get("suffix_chance", 0.15), 0.15)
-    _profile["signature_chance"] = min(_profile.get("signature_chance", 0.10), 0.10)
-    _profile["max_injections"] = max(_profile.get("max_injections", 0), 3)
+    _profile["inject_chance"] = 0.0
+    _profile["prefix_chance"] = 0.0
+    _profile["suffix_chance"] = 0.0
+    _profile["signature_chance"] = 0.0
+    _profile["max_injections"] = 0
+    _profile["prefixes"] = []
+    _profile["suffixes"] = []
+    _profile["injections"] = []
+    _profile["signatures"] = []
 
 
 for _profile in MODE_PUNCHUP_PROFILES.values():
