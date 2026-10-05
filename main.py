@@ -24178,7 +24178,7 @@ async def _process_stacked_anime_command(
                         err_str = str(e)
                         runtime_logger.warning(f"TelegramBadRequest sending event media group: {err_str}")
                         handled_drop = False
-                        if "WEBPAGE_MEDIA_EMPTY" in err_str or "wrong type" in err_str.lower():
+                        if "WEBPAGE_MEDIA_EMPTY" in err_str or "WEBPAGE_CURL_FAILED" in err_str or "wrong type" in err_str.lower():
                             # Extract the exact failed message index (#N) reported by Telegram
                             m_idx = re.search(r'failed to send message #(\d+)', err_str)
                             if m_idx:

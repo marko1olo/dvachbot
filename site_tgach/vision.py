@@ -272,13 +272,22 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"}}\n"
                 f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
-            # Vision cascade: modern Gemini Flash models with Groq Qwen Vision fallback
-            models_cascade = [
-                ("gemini-3.1-flash-lite", "gemini"),
-                ("gemini-2.5-flash", "gemini"),
-                ("gemini-3.5-flash-lite", "gemini"),
-                ("qwen/qwen3.8-27b", "groq"),
-            ]
+            # Vision cascade: Groq Qwen Vision prioritized for TAGGER (zero safety-block waste on booru/anime),
+            # Gemini Flash prioritized for user/site inspection with Groq fallback.
+            if source == "TAGGER":
+                models_cascade = [
+                    ("qwen/qwen3.8-27b", "groq"),
+                    ("gemini-3.1-flash-lite", "gemini"),
+                    ("gemini-2.5-flash", "gemini"),
+                    ("gemini-3.5-flash-lite", "gemini"),
+                ]
+            else:
+                models_cascade = [
+                    ("gemini-3.1-flash-lite", "gemini"),
+                    ("gemini-2.5-flash", "gemini"),
+                    ("gemini-3.5-flash-lite", "gemini"),
+                    ("qwen/qwen3.8-27b", "groq"),
+                ]
             
             skip_gemini_models = False
             skip_groq_models = False

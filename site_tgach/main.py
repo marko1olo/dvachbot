@@ -6618,6 +6618,7 @@ async def export_thread_html(board_id: str, post_num: int):
     replies = _convert_and_enrich_posts(replies)
 
     import datetime
+    import html as _html_mod
 
     def format_ts(ts):
         return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
@@ -6721,8 +6722,8 @@ async def export_thread_html(board_id: str, post_num: int):
     if op_post.get("content", {}).get("files"):
         html_lines.append("<div class='post-files-container'>")
         for f in op_post["content"]["files"]:
-            orig_f = html.escape(f.get('original_url') or '', quote=True)
-            thumb_f = html.escape(f.get('thumbnail_url') or f.get('original_url') or '', quote=True)
+            orig_f = _html_mod.escape(str(f.get('original_url') or ''), quote=True)
+            thumb_f = _html_mod.escape(str(f.get('thumbnail_url') or f.get('original_url') or ''), quote=True)
             html_lines.append(f"<a href='{orig_f}' class='file-thumb' target='_blank'>")
             html_lines.append(f"<img src='{thumb_f}' alt='file'>")
             html_lines.append("</a>")
@@ -6746,8 +6747,8 @@ async def export_thread_html(board_id: str, post_num: int):
         if post.get("content", {}).get("files"):
             html_lines.append("<div class='post-files-container'>")
             for f in post["content"]["files"]:
-                orig_f = html.escape(f.get('original_url') or '', quote=True)
-                thumb_f = html.escape(f.get('thumbnail_url') or f.get('original_url') or '', quote=True)
+                orig_f = _html_mod.escape(str(f.get('original_url') or ''), quote=True)
+                thumb_f = _html_mod.escape(str(f.get('thumbnail_url') or f.get('original_url') or ''), quote=True)
                 html_lines.append(f"<a href='{orig_f}' class='file-thumb' target='_blank'>")
                 html_lines.append(f"<img src='{thumb_f}' alt='file'>")
                 html_lines.append("</a>")

@@ -9335,16 +9335,17 @@ async def clean_expired_mutes() -> int:
     """
     Удаляет все истекшие муты из таблицы Mutes и синхронизирует board_data в памяти.
     """
-    from common.db_pool import get_pool, db_transaction
+    from common.db_pool import get_pool, db_lock, db_transaction
     now_ts = time.time()
     for attempt in range(5):
         try:
             db = await get_pool()
             if not db or not getattr(db, "_running", True):
                 return 0
-            async with db_transaction(db, immediate=True):
-                async with db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,)) as cursor:
-                    deleted = cursor.rowcount
+            async with db_lock:
+                async with db_transaction(db, immediate=True):
+                    async with db.execute("DELETE FROM Mutes WHERE expires_at IS NOT NULL AND expires_at < ?", (now_ts,)) as cursor:
+                        deleted = cursor.rowcount
             if deleted > 0:
                 logging.getLogger("database").info(f"🧹 [MUTES_CLEANUP] Удалено {deleted} просроченных мутов из базы данных.")
             return deleted

@@ -277,44 +277,54 @@ async def buy_whale_safe(db: Any, user_id: int, board_id: str = "b") -> Dict[str
 # PART 2: ATOMIC AUCTION SYSTEM (F3.2)
 # =============================================================================
 
+_ENSURED_AUCTION_DBS = set()
+
+
 async def ensure_auction_schema(db: Any):
-    """Initializes auction tables and indices idempotently."""
-    await db.execute("""
-    CREATE TABLE IF NOT EXISTS Auctions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        lot_type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        start_price REAL NOT NULL,
-        min_bid_step REAL NOT NULL,
-        current_bid REAL NOT NULL,
-        current_winner_id INTEGER,
-        current_winner_name TEXT,
-        board_id TEXT NOT NULL DEFAULT 'b',
-        status TEXT NOT NULL DEFAULT 'active',
-        starts_at REAL NOT NULL,
-        ends_at REAL NOT NULL,
-        anti_snipe_sec INTEGER NOT NULL DEFAULT 300,
-        created_at REAL NOT NULL,
-        finished_at REAL
-    );
-    """)
-    await db.execute("""
-    CREATE INDEX IF NOT EXISTS idx_auctions_status_ends ON Auctions(status, ends_at);
-    """)
-    await db.execute("""
-    CREATE TABLE IF NOT EXISTS AuctionBids (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        auction_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        bid_amount REAL NOT NULL,
-        placed_at REAL NOT NULL,
-        FOREIGN KEY (auction_id) REFERENCES Auctions(id) ON DELETE CASCADE
-    );
-    """)
-    await db.execute("""
-    CREATE INDEX IF NOT EXISTS idx_auction_bids_auc_time ON AuctionBids(auction_id, placed_at DESC);
-    """)
+    """Initializes auction tables and indices idempotently (once per db instance under lock)."""
+    db_id = id(db)
+    if db_id in _ENSURED_AUCTION_DBS:
+        return
+    async with db_lock:
+        if db_id in _ENSURED_AUCTION_DBS:
+            return
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS Auctions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lot_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            start_price REAL NOT NULL,
+            min_bid_step REAL NOT NULL,
+            current_bid REAL NOT NULL,
+            current_winner_id INTEGER,
+            current_winner_name TEXT,
+            board_id TEXT NOT NULL DEFAULT 'b',
+            status TEXT NOT NULL DEFAULT 'active',
+            starts_at REAL NOT NULL,
+            ends_at REAL NOT NULL,
+            anti_snipe_sec INTEGER NOT NULL DEFAULT 300,
+            created_at REAL NOT NULL,
+            finished_at REAL
+        );
+        """)
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_auctions_status_ends ON Auctions(status, ends_at);
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS AuctionBids (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            auction_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            bid_amount REAL NOT NULL,
+            placed_at REAL NOT NULL,
+            FOREIGN KEY (auction_id) REFERENCES Auctions(id) ON DELETE CASCADE
+        );
+        """)
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_auction_bids_auc_time ON AuctionBids(auction_id, placed_at DESC);
+        """)
+        _ENSURED_AUCTION_DBS.add(db_id)
 
 
 async def create_auction(
