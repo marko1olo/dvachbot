@@ -2440,10 +2440,18 @@ async def apply_shadow_mute(
 
     info = await get_shadow_mute_info(user_id, board_id)
     
-    if info['is_muted'] and is_exponential:
+    if info['is_muted']:
+        cur_expires = info['expires_at'] or (now_ts + info['remaining_seconds'])
         # ЗАПРЕЩЕНО накручивать штраф или продлевать мут пользователю, который уже находится в активном муте!
         # Мут должен истекать в свой назначенный срок, а не становиться вечным.
-        return info['expires_at'] or (now_ts + info['remaining_seconds'])
+        if duration_seconds <= BASE_CAP_SEC:
+            return cur_expires
+        new_duration = min(BASE_CAP_SEC, duration_seconds)
+        new_expires_at = now_ts + new_duration
+        log_msg = (
+            f"⏳ [AUTOSHADOWMUTE] Эскалация мута: user {user_id} на доске {board_id}, "
+            f"длительность {new_duration:.0f}с ({new_duration/60:.1f} мин). Причина: {reason}"
+        )
     else:
         new_duration = min(BASE_CAP_SEC, duration_seconds)
         new_expires_at = now_ts + new_duration
@@ -9493,7 +9501,7 @@ async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:
 # 🏛️ CAPITAL SINKS & WEALTH CONTAINMENT (АНТИИНФЛЯЦИОННЫЕ МЕХАНИЗМЫ)
 # =============================================================================
 
-def calculate_daily_wealth_tax(total_balance: float) -> float:
+def calculate_daily_wealth_tax(total_balance: float, bank_balance: float = 0.0) -> float:
     """
     Ступенчатый прогрессивный налог на сверхнакопления (Demurrage / Дань на Яхту Абу):
     - Tier 0: 0 - 5,000 ₪ -> 0% (иммунитет нищих сычей)
@@ -9501,6 +9509,7 @@ def calculate_daily_wealth_tax(total_balance: float) -> float:
     - Tier 2: 50,001 - 500,000 ₪ -> 1.0% в сутки (~26.0% в месяц)
     - Tier 3: 500,001 - 5,000,000 ₪ -> 2.5% в сутки (~53.2% в месяц)
     - Tier 4: > 5,000,000 ₪ -> 5.0% в сутки (~78.5% в месяц)
+    Для вкладов в Банке Абу (bank_balance) действует пониженная ставка (скидка 50% на ставку налога).
     """
     if not isinstance(total_balance, (int, float)) or total_balance <= 5000:
         return 0.0
@@ -9518,6 +9527,12 @@ def calculate_daily_wealth_tax(total_balance: float) -> float:
     if total_balance > 5000000:
         chunk = total_balance - 5000000.0
         tax += chunk * 0.050
+
+    if bank_balance > 0 and total_balance > 0:
+        effective_rate = tax / total_balance
+        bank_portion = min(float(bank_balance), float(total_balance))
+        bank_discount = bank_portion * effective_rate * 0.50
+        tax = max(0.0, tax - bank_discount)
 
     return round(tax, 2)
 
@@ -9602,7 +9617,7 @@ async def apply_daily_wealth_tax(db, current_ts: Optional[float] = None) -> tupl
             market_bal = float(row[3] or 0.0)
             total_wealth = wallet_bal + bank_bal + market_bal
 
-            tax = calculate_daily_wealth_tax(total_wealth)
+            tax = calculate_daily_wealth_tax(total_wealth, bank_balance=bank_bal)
             if tax <= 0:
                 continue
 
@@ -9912,9 +9927,8 @@ async def add_to_abu_fund(db, amount: float, donor_id: int = 0, reason: str = ""
                 """,
                 (str(amount), amount)
             )
-            await safe_commit(db)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"[ABU_FUND] Error adding {amount} to fund: {e}")
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
         await _do_add()
     else:
@@ -9953,9 +9967,8 @@ async def deduct_from_abu_fund(db, amount: float, reason: str = "") -> float:
                 """,
                 (amount,)
             )
-            await safe_commit(db)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"[ABU_FUND] Error deducting {amount} from fund: {e}")
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
         await _do_deduct()
     else:

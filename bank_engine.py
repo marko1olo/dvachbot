@@ -315,15 +315,34 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
     last_accrual = float(deposit.get("last_accrual_at") or deposit.get("created_at") or now)
     elapsed_seconds = max(0.0, now - last_accrual)
 
-    rate_per_sec = daily_rate / 86400.0
-    instant_accrual = principal * rate_per_sec * elapsed_seconds
-    total_accrued = base_accrued + instant_accrual
-    total_value = principal + total_accrued
-
     created_at = float(deposit.get("created_at") or now)
     locked_until = float(deposit.get("locked_until") or created_at)
     is_locked = now < locked_until
     remaining_lock_sec = max(0.0, locked_until - now)
+
+    # Для срочного вклада «skuf»: по истечении 72ч (locked_until) ставка переводится на базовую ставку сейфа «sych» (0.5%/сутки)
+    effective_daily_rate = daily_rate
+    if tier_id == "skuf" and locked_until > created_at:
+        post_lock_rate = BANK_TIERS["sych"]["daily_rate"]
+        if now <= locked_until:
+            instant_accrual = principal * (daily_rate / 86400.0) * elapsed_seconds
+        elif last_accrual >= locked_until:
+            effective_daily_rate = post_lock_rate
+            instant_accrual = principal * (post_lock_rate / 86400.0) * elapsed_seconds
+        else:
+            effective_daily_rate = post_lock_rate
+            sec_locked = max(0.0, locked_until - last_accrual)
+            sec_post = max(0.0, now - locked_until)
+            instant_accrual = (
+                principal * (daily_rate / 86400.0) * sec_locked
+                + principal * (post_lock_rate / 86400.0) * sec_post
+            )
+    else:
+        rate_per_sec = daily_rate / 86400.0
+        instant_accrual = principal * rate_per_sec * elapsed_seconds
+
+    total_accrued = base_accrued + instant_accrual
+    total_value = principal + total_accrued
 
     return {
         "id": deposit.get("id"),
@@ -333,7 +352,7 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
         "tier_name": tier_info["name"],
         "short_name": tier_info["short_name"],
         "principal": principal,
-        "daily_rate": daily_rate,
+        "daily_rate": effective_daily_rate,
         "created_at": created_at,
         "locked_until": locked_until,
         "last_accrual_at": last_accrual,

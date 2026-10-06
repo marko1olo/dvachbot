@@ -33,9 +33,11 @@ MSK = timezone(timedelta(hours=3))
 
 # ─── Конфиг ───────────────────────────────────────────────────────────────────
 DAILY_MIN_POSTS_QUALIFY = 2          # > 2 постов за 24ч для участия в аирдропе
-DAILY_WINNER_COUNT_MIN = 3           # Минимум победителей
-DAILY_WINNER_COUNT_MAX = 10          # Максимум победителей
-DAILY_PRIZE_PER_WINNER = 5_000       # Шекелей на победителя
+DAILY_WINNER_COUNT_MIN = 8           # Минимум победителей (рандомим от 8 до 20)
+DAILY_WINNER_COUNT_MAX = 20          # Максимум победителей
+DAILY_PRIZE_MIN = 4_000              # Минимум шекелей на победителя
+DAILY_PRIZE_MAX = 15_000             # Максимум шекелей на победителя
+DAILY_PRIZE_PER_WINNER = 5_000       # Дефолтный приз (если казна ограничена)
 DAILY_INTERVAL_SECONDS = 86400       # Раз в 24ч
 DAILY_FIRST_RUN_DELAY = 900          # 15 минут до первого запуска
 
@@ -381,18 +383,22 @@ async def fetch_daily_qualified_users(db) -> list[int]:
     return [int(row[0]) for row in rows if row[0]]
 
 
-def pick_daily_winners(qualified: list[int]) -> list[int]:
+def pick_daily_winners(qualified: list[int], max_count: Optional[int] = None) -> list[int]:
     """
     Выбирает победителей с равными шансами (1 билет на юзера, без учёта числа постов).
-    Количество победителей: min(len(unique_qualified), DAILY_WINNER_COUNT_MAX), но не менее
-    DAILY_WINNER_COUNT_MIN (если квалифицированных меньше — берём всех).
+    Количество победителей: рандомно от DAILY_WINNER_COUNT_MIN (8) до DAILY_WINNER_COUNT_MAX (20).
+    Если квалифицированных меньше минимума — берём всех доступных.
     """
     if not qualified:
         return []
     unique_qualified = list(dict.fromkeys(qualified))
     if not unique_qualified:
         return []
-    n = min(len(unique_qualified), DAILY_WINNER_COUNT_MAX)
+    if max_count is not None:
+        target_n = max_count
+    else:
+        target_n = random.randint(DAILY_WINNER_COUNT_MIN, DAILY_WINNER_COUNT_MAX)
+    n = min(len(unique_qualified), target_n)
     n = max(n, min(DAILY_WINNER_COUNT_MIN, len(unique_qualified)))
     return random.sample(unique_qualified, n)
 
@@ -487,7 +493,8 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
     winners = pick_daily_winners(qualified)
     winner_count = len(winners)
     pool_size = len(qualified)
-    payout_per_winner = DAILY_PRIZE_PER_WINNER
+    # Рандомим приз каждому победителю: от 4 000 до 15 000 ₪ (с шагом 100 ₪)
+    payout_per_winner = random.randint(DAILY_PRIZE_MIN // 100, DAILY_PRIZE_MAX // 100) * 100
     total_payout = winner_count * payout_per_winner
 
     # ── 4. Проверяем казну Абу ───────────────────────────────────────────────

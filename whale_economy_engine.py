@@ -609,7 +609,7 @@ async def get_active_auctions(db: Any, board_id: Optional[str] = None) -> List[D
 # PART 3: SUPER-WEALTH TAX & CLASS WARS (F3.3)
 # =============================================================================
 
-def calculate_wealth_tax(balance: float, idle_hours: float = 0.0) -> float:
+def calculate_wealth_tax(balance: float, idle_hours: float = 0.0, deposit_balance: float = 0.0) -> float:
     """
     Progressive super-wealth tax with idle surcharge:
     - <= 5,000 ₪: 0%
@@ -618,6 +618,7 @@ def calculate_wealth_tax(balance: float, idle_hours: float = 0.0) -> float:
     - 500,001 - 5,000,000 ₪: 2.5% / day
     - > 5,000,000 ₪: 5.0% / day
     - Idle surcharge: 1.5x multiplier if balance > 500,000 and idle_hours >= 72.0.
+    - Deposit discount: bank deposits are taxed at a 50% reduced rate.
     """
     if not isinstance(balance, (int, float)) or math.isnan(balance) or math.isinf(balance) or balance <= 5000:
         return 0.0
@@ -634,14 +635,20 @@ def calculate_wealth_tax(balance: float, idle_hours: float = 0.0) -> float:
     if balance > 500000 and idle_hours >= 72.0:
         rate *= 1.5
 
-    return round(balance * rate, 2)
+    base_tax = balance * rate
+    if deposit_balance > 0 and balance > 0:
+        dep_portion = min(float(deposit_balance), float(balance))
+        dep_discount = dep_portion * rate * 0.50
+        base_tax = max(0.0, base_tax - dep_discount)
+
+    return round(base_tax, 2)
 
 
 async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
     """
-    Runs daily across all users with balance > 5,000 ₪.
-    Calculates tax with idle hours assessment, deducts from user global balance,
-    and transfers 100% of collected tax to abu_yacht_fund.
+    Runs daily across all users with total wealth (wallet + bank deposits) > 5,000 ₪.
+    Calculates tax with idle hours assessment and 50% deposit tax discount,
+    deducts from user balance and bank deposits, and transfers 100% of collected tax to abu_yacht_fund.
     """
     now = time.time()
     affected_count = 0
@@ -650,18 +657,43 @@ async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
 
     async with db_lock:
         async with db_transaction(db):
-            # Fetch users with balance > 5000
-            async with db.execute("""
-                SELECT user_id, SUM(balance) as total_bal
-                FROM Users
-                GROUP BY user_id
-                HAVING total_bal > 5000
-            """) as c:
+            has_bank = False
+            async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
+                if await tc.fetchone():
+                    has_bank = True
+
+            if has_bank:
+                query = """
+                    WITH w AS (
+                        SELECT user_id, SUM(balance) as wallet_bal FROM Users GROUP BY user_id
+                    ),
+                    b AS (
+                        SELECT user_id, SUM(principal + accrued_interest) as bank_total 
+                        FROM BankDeposits WHERE status = 'active' GROUP BY user_id
+                    )
+                    SELECT u.user_id, COALESCE(w.wallet_bal, 0.0) as wallet_bal, COALESCE(b.bank_total, 0.0) as bank_bal,
+                           (COALESCE(w.wallet_bal, 0.0) + COALESCE(b.bank_total, 0.0)) as total_bal
+                    FROM (SELECT user_id FROM Users UNION SELECT user_id FROM BankDeposits WHERE status = 'active') u
+                    LEFT JOIN w ON u.user_id = w.user_id
+                    LEFT JOIN b ON u.user_id = b.user_id
+                    WHERE (COALESCE(w.wallet_bal, 0.0) + COALESCE(b.bank_total, 0.0)) > 5000
+                """
+            else:
+                query = """
+                    SELECT user_id, SUM(balance) as wallet_bal, 0.0 as bank_bal, SUM(balance) as total_bal
+                    FROM Users
+                    GROUP BY user_id
+                    HAVING total_bal > 5000
+                """
+
+            async with db.execute(query) as c:
                 rich_users = await c.fetchall()
 
             for row in rich_users:
                 uid = row[0]
-                bal = float(row[1] or 0.0)
+                wallet_bal = float(row[1] or 0.0)
+                bank_bal = float(row[2] or 0.0)
+                total_bal = float(row[3] or 0.0)
 
                 # Check idle hours from Posts table if available
                 idle_hours = 0.0
@@ -678,19 +710,58 @@ async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
                 except Exception:
                     idle_hours = 0.0
 
-                tax = calculate_wealth_tax(bal, idle_hours=idle_hours)
+                tax = calculate_wealth_tax(total_bal, idle_hours=idle_hours, deposit_balance=bank_bal)
                 if tax <= 0:
                     continue
 
-                ok, _ = await deduct_user_global_balance(db, uid, "b", tax)
-                if ok:
+                rem_tax = tax
+                wallet_cut = 0.0
+                bank_cut = 0.0
+
+                if wallet_bal > 0:
+                    w_amt = min(wallet_bal, rem_tax)
+                    ok, _ = await deduct_user_global_balance(db, uid, "b", w_amt)
+                    if ok:
+                        wallet_cut = w_amt
+                        rem_tax -= w_amt
+
+                if rem_tax > 0.001 and bank_bal > 0 and has_bank:
+                    async with db.execute("""
+                        SELECT id, principal, accrued_interest FROM BankDeposits
+                        WHERE user_id = ? AND status = 'active'
+                        ORDER BY principal DESC, id ASC
+                    """, (uid,)) as dc:
+                        deps = await dc.fetchall()
+                    for drow in deps:
+                        if rem_tax <= 0.001:
+                            break
+                        dep_id, d_princ, d_accr = drow[0], float(drow[1] or 0.0), float(drow[2] or 0.0)
+                        d_tot = d_princ + d_accr
+                        if d_tot <= 0:
+                            continue
+                        cut = min(d_tot, rem_tax)
+                        if d_princ >= cut:
+                            new_princ = round(d_princ - cut, 2)
+                            new_accr = round(d_accr, 2)
+                        else:
+                            new_princ = 0.0
+                            rem_c = cut - d_princ
+                            new_accr = max(0.0, round(d_accr - rem_c, 2))
+                        await db.execute("""
+                            UPDATE BankDeposits SET principal = ?, accrued_interest = ? WHERE id = ?
+                        """, (new_princ, new_accr, dep_id))
+                        rem_tax -= cut
+                        bank_cut += cut
+
+                actual_tax = round(wallet_cut + bank_cut, 2)
+                if actual_tax > 0:
                     affected_count += 1
-                    total_tax_collected += tax
+                    total_tax_collected += actual_tax
                     await record_user_transaction(
-                        db, uid, -tax, 'tax',
-                        f'Налог Абу на богатство ({tax:,} ₪)'
+                        db, uid, -actual_tax, 'tax',
+                        f'Налог Абу на богатство ({actual_tax:,} ₪)'
                     )
-                    details.append({"user_id": uid, "tax": tax, "balance_before": bal})
+                    details.append({"user_id": uid, "tax": actual_tax, "balance_before": total_bal})
 
             if total_tax_collected > 0:
                 await add_to_abu_fund(db, total_tax_collected)
@@ -760,22 +831,56 @@ async def execute_oligarch_raid(
     async with db_lock:
         async with db_transaction(db):
             # 2. Identify target oligarch
+            has_bank = False
+            async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
+                if await tc.fetchone():
+                    has_bank = True
+
             if target_id is None:
-                async with db.execute("""
-                    SELECT user_id, SUM(balance) as total_bal
-                    FROM Users
-                    GROUP BY user_id
-                    ORDER BY total_bal DESC
-                    LIMIT 1
-                """) as c:
+                if has_bank:
+                    query = """
+                        WITH w AS (
+                            SELECT user_id, SUM(balance) as wallet_bal FROM Users GROUP BY user_id
+                        ),
+                        b AS (
+                            SELECT user_id, SUM(principal + accrued_interest) as bank_total 
+                            FROM BankDeposits WHERE status = 'active' GROUP BY user_id
+                        )
+                        SELECT u.user_id, (COALESCE(w.wallet_bal, 0.0) + COALESCE(b.bank_total, 0.0)) as total_wealth
+                        FROM (SELECT user_id FROM Users UNION SELECT user_id FROM BankDeposits WHERE status = 'active') u
+                        LEFT JOIN w ON u.user_id = w.user_id
+                        LEFT JOIN b ON u.user_id = b.user_id
+                        ORDER BY total_wealth DESC
+                        LIMIT 1
+                    """
+                else:
+                    query = """
+                        SELECT user_id, SUM(balance) as total_wealth
+                        FROM Users
+                        GROUP BY user_id
+                        ORDER BY total_wealth DESC
+                        LIMIT 1
+                    """
+                async with db.execute(query) as c:
                     top_row = await c.fetchone()
                     if not top_row or (top_row[1] or 0.0) <= 5000:
                         return {"ok": False, "error": "На борде нет олигархов для раскулачивания!"}
                     target_id = top_row[0]
 
-            oligarch_bal = await get_user_global_balance(db, target_id)
-            if oligarch_bal <= 5000:
-                return {"ok": False, "error": "Цель не является олигархом (баланс <= 5 000 ₪)."}
+            oligarch_wallet = await get_user_global_balance(db, target_id)
+            oligarch_bank = 0.0
+            if has_bank:
+                async with db.execute("""
+                    SELECT COALESCE(SUM(principal + accrued_interest), 0.0)
+                    FROM BankDeposits WHERE user_id = ? AND status = 'active'
+                """, (target_id,)) as bc:
+                    b_row = await bc.fetchone()
+                    if b_row and b_row[0]:
+                        oligarch_bank = float(b_row[0])
+
+            total_oligarch_wealth = round(oligarch_wallet + oligarch_bank, 2)
+            if total_oligarch_wealth <= 5000:
+                return {"ok": False, "error": "Цель не является олигархом (суммарный капитал <= 5 000 ₪)."}
 
             # 3. Check target defensive gear in active_items
             async with db.execute(
@@ -813,19 +918,73 @@ async def execute_oligarch_raid(
                 }
 
             # 4. Confiscation calculations (10% capped at 200,000 ₪)
-            confiscated = min(round(oligarch_bal * 0.10, 2), 200000.0)
+            confiscated = min(round(total_oligarch_wealth * 0.10, 2), 200000.0)
+
+            # Deduct from oligarch: wallet first, then active bank deposits
+            rem_to_deduct = confiscated
+            wallet_deducted = 0.0
+            bank_deducted = 0.0
+
+            if oligarch_wallet > 0:
+                w_cut = min(oligarch_wallet, rem_to_deduct)
+                ok, _ = await deduct_user_global_balance(db, target_id, board_id, w_cut)
+                if ok:
+                    wallet_deducted = w_cut
+                    rem_to_deduct -= w_cut
+
+            if rem_to_deduct > 0.001 and oligarch_bank > 0 and has_bank:
+                async with db.execute("""
+                    SELECT id, principal, accrued_interest FROM BankDeposits
+                    WHERE user_id = ? AND status = 'active'
+                    ORDER BY principal DESC, id ASC
+                """, (target_id,)) as dc:
+                    dep_rows = await dc.fetchall()
+
+                for drow in dep_rows:
+                    if rem_to_deduct <= 0.001:
+                        break
+                    dep_id = drow[0]
+                    d_princ = float(drow[1] or 0.0)
+                    d_accr = float(drow[2] or 0.0)
+                    d_total = d_princ + d_accr
+                    if d_total <= 0:
+                        continue
+
+                    cut = min(d_total, rem_to_deduct)
+                    if d_princ >= cut:
+                        new_princ = round(d_princ - cut, 2)
+                        new_accr = round(d_accr, 2)
+                    else:
+                        new_princ = 0.0
+                        rem_cut = cut - d_princ
+                        new_accr = max(0.0, round(d_accr - rem_cut, 2))
+
+                    await db.execute("""
+                        UPDATE BankDeposits SET principal = ?, accrued_interest = ? WHERE id = ?
+                    """, (new_princ, new_accr, dep_id))
+
+                    rem_to_deduct -= cut
+                    bank_deducted += cut
+
+            actual_confiscated = round(wallet_deducted + bank_deducted, 2)
+            if actual_confiscated <= 0:
+                return {"ok": False, "error": "Ошибка списания средств у олигарха."}
+
+            confiscated = actual_confiscated
             burn_to_abu = round(confiscated * 0.70, 2)
             distribute_total = round(confiscated * 0.30, 2)
             per_worker = round(distribute_total / 5.0, 2)
 
-            # Deduct from oligarch
-            ok, _ = await deduct_user_global_balance(db, target_id, board_id, confiscated)
-            if not ok:
-                return {"ok": False, "error": "Ошибка списания средств у олигарха."}
+            desc_parts = []
+            if wallet_deducted > 0:
+                desc_parts.append(f"{wallet_deducted:,.0f} ₪ из кошелька")
+            if bank_deducted > 0:
+                desc_parts.append(f"{bank_deducted:,.0f} ₪ из банка")
+            source_desc = f" ({', '.join(desc_parts)})" if desc_parts else ""
 
             await record_user_transaction(
                 db, target_id, -confiscated, 'confiscation',
-                f'Раскулачивание ОБЭП (/raid_oligarch) работягами'
+                f'Раскулачивание ОБЭП (/raid_oligarch) работягами{source_desc}'
             )
 
             # 70% Burn to Abu Yacht Fund

@@ -6531,11 +6531,18 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
     now_ts = time.time()
     now_dt = datetime.now(UTC)
 
+    def _fmt_rem(rem_sec: float) -> str:
+        s = max(0, int(rem_sec))
+        m = s // 60
+        sec = s % 60
+        return f"{m}м {sec}с" if m > 0 else f"{sec}с"
+
     # 1. Проверка активного мута в памяти (только публичные боевые муты 'mutes', без внутренних 'shadow_mutes')
     if board_id in board_data:
         m_end = board_data[board_id].get('mutes', {}).get(target_id)
         if m_end and m_end > now_dt:
-            return True, "уже находится в муте"
+            rem = (m_end - now_dt).total_seconds()
+            return True, f"уже находится в муте (ещё {_fmt_rem(rem)})"
 
     # 2. Проверка активного мута и проклятия в базе данных
     if db is None:
@@ -6549,7 +6556,8 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
         ) as cursor:
             row = await cursor.fetchone()
             if row:
-                return True, "в КПЗ / муте"
+                rem = row[0] - now_ts
+                return True, f"в КПЗ / муте (ещё {_fmt_rem(rem)})"
 
         # Проверка Users (cursed_until и active_items)
         async with db.execute(
@@ -6560,14 +6568,17 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
             if row:
                 cursed_until = row[0] or 0
                 if cursed_until > now_ts:
-                    return True, "под действием слабительного (/curse)"
+                    rem = cursed_until - now_ts
+                    return True, f"под действием слабительного (/curse, ещё {_fmt_rem(rem)})"
                 if row[1]:
                     try:
                         items = json.loads(row[1])
                         if items.get("cursed_until", 0) > now_ts:
-                            return True, "под действием слабительного (/curse)"
+                            rem = items.get("cursed_until", 0) - now_ts
+                            return True, f"под действием слабительного (/curse, ещё {_fmt_rem(rem)})"
                         if items.get("schizo_pill_until", 0) > now_ts:
-                            return True, "под действием шизо-таблетки (/schizopill)"
+                            rem = items.get("schizo_pill_until", 0) - now_ts
+                            return True, f"под действием шизо-таблетки (/schizopill, ещё {_fmt_rem(rem)})"
                     except Exception:
                         pass
     except Exception as e:
@@ -6664,7 +6675,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
+        await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
 
     import time
@@ -6977,7 +6988,7 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост жертвы с командой <code>/pepperspray</code>!", parse_mode="HTML")
+        await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
 
     import time, json
@@ -7136,7 +7147,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         await message.answer("⛔ <b>В муте грабить запрещено!</b> Отбывай наказание спокойно.", parse_mode="HTML")
         return
     if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, которую хочешь ограбить!", parse_mode="HTML")
+        await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
     import time
     import random
@@ -7501,7 +7512,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         await message.answer("⛔ <b>В муте обмазываться говном запрещено!</b>", parse_mode="HTML")
         return
     if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост того, кого хочешь обмазать говном!")
+        await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
 
     import time
@@ -8347,7 +8358,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
+        await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
     import time, json
     from shared_state import (
@@ -8388,7 +8399,15 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     t_items = await _get_user_active_items(db, target_id, board_id)
     # Проверка идемпотентности: цель уже проклята
     if t_items.get("cursed_until", 0) > current_time:
-        await message.answer("🚽 <b>Защита от спама:</b> У этой цели И ТАК словесный понос!\nСлабительное осталось в твоем рюкзаке.", parse_mode="HTML")
+        rem_sec = max(0, int(t_items.get("cursed_until", 0) - current_time))
+        rem_m = rem_sec // 60
+        rem_s = rem_sec % 60
+        time_str = f"{rem_m}м {rem_s}с" if rem_m > 0 else f"{rem_s}с"
+        await message.answer(
+            f"🚽 <b>Защита от спама:</b> У этой цели И ТАК словесный понос (ещё {time_str})!\n"
+            f"Слабительное осталось в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
         return
 
     cd_rem = get_combat_cooldown_remaining(user_id)
@@ -8664,7 +8683,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на донос-пост жертвы, чтобы вызвать Пативэн!", parse_mode="HTML")
+        await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
     import json, time
     from datetime import datetime, timedelta, UTC
@@ -23369,7 +23388,7 @@ async def _collect_stacked_anime_downloads(
                 continue
             slot = retry_slots[local_index]
             if isinstance(result, str) and result.startswith("http"):
-                # Отсекаем дубликаты URL в текущем батче
+                # Отсекаем дубликаты URL внутри текущего батча
                 if result in batch_seen_urls:
                     next_slots.append(slot)
                     continue
@@ -23386,10 +23405,11 @@ async def _collect_stacked_anime_downloads(
                 slot = url_slots[local_index]
                 if isinstance(res, tuple) and res[0]:
                     image_bytes = res[0]
-                    # Вычисляем хеш для точного отсечения дубликатов
-                    img_hash = hashlib.sha256(image_bytes).hexdigest()
-                    if orig_url in batch_seen_urls or img_hash in batch_seen_hashes or is_image_recent(content_hash=img_hash):
-                        print(f"[{board_id}] 🔁 Дубликат пикчи ({orig_url[-25:]}, sha={img_hash[:8]}), ищу замену для слота #{slot}...")
+                    # Вычисляем хеши (SHA256 и MD5) для точного отсечения дубликатов внутри батча
+                    img_sha = hashlib.sha256(image_bytes).hexdigest()
+                    img_md5 = hashlib.md5(image_bytes).hexdigest()
+                    if orig_url in batch_seen_urls or img_sha in batch_seen_hashes or img_md5 in batch_seen_hashes:
+                        print(f"[{board_id}] 🔁 Дубликат пикчи в батче ({orig_url[-25:]}, sha={img_sha[:8]}), ищу замену для слота #{slot}...")
                         next_slots.append(slot)
                         continue
 
@@ -23403,8 +23423,10 @@ async def _collect_stacked_anime_downloads(
                     real_type = detect_media_type(processed_bytes, orig_url)
                     successful_by_slot[slot] = (processed_bytes, real_type, ext)
                     batch_seen_urls.add(orig_url)
-                    batch_seen_hashes.add(img_hash)
-                    record_served_image(url=orig_url, content_hash=img_hash)
+                    batch_seen_hashes.add(img_sha)
+                    batch_seen_hashes.add(img_md5)
+                    record_served_image(url=orig_url, content_hash=img_sha)
+                    record_served_image(url=orig_url, content_hash=img_md5)
                 else:
                     if isinstance(res, Exception):
                         print(f"⚠️ Ошибка при скачивании изображения: {res}")

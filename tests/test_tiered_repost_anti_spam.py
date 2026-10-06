@@ -231,3 +231,36 @@ async def test_per_board_repost_isolation():
         posts_count=0
     )
     assert is_blocked
+
+
+@pytest.mark.asyncio
+async def test_sex_board_is_exempt_from_repost_limits():
+    """Board /sex/ has zero repost restrictions (users forward media/erotica content)."""
+    user_id = 999123
+    base_ts = 2000000.0
+    mock_msg = make_mock_channel_forward()
+
+    # User posts 20 reposts in 30 seconds on /sex/ -> ALL allowed
+    for i in range(20):
+        is_blocked, resp = check_repost_spam(
+            user_id=user_id,
+            message=mock_msg,
+            board_id="sex",
+            now_ts=base_ts + i * 1.5,
+            posts_count=0  # Newbie!
+        )
+        assert not is_blocked
+        assert resp == ""
+
+    # Async check also completely exempt
+    is_blocked, resp, exp = await check_repost_spam_async(
+        user_id=user_id,
+        message=mock_msg,
+        board_id="sex",
+        now_ts=base_ts + 50.0,
+        posts_count=0
+    )
+    assert not is_blocked
+    assert resp == ""
+    assert exp == 0.0
+

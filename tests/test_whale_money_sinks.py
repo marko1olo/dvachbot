@@ -536,3 +536,76 @@ class TestSuperWealthTaxAndClassWars:
             row = await c.fetchone()
             ai_after = json.loads(row[0])
             assert "extinguisher_obep" not in ai_after
+
+    def test_calculate_wealth_tax_with_deposit_discount(self):
+        """Bank deposits receive a 50% discount on the wealth tax rate."""
+        # 100,000 in wallet alone: 1% = 1,000 ₪
+        tax_wallet = calculate_wealth_tax(100000.0, deposit_balance=0.0)
+        assert tax_wallet == 1000.0
+
+        # 100,000 in bank deposit: 1% * 0.5 = 500 ₪
+        tax_deposit = calculate_wealth_tax(100000.0, deposit_balance=100000.0)
+        assert tax_deposit == 500.0
+
+        # Half wallet, half deposit (50k wallet + 50k deposit = 100k total):
+        # 50k * 1% + 50k * 0.5% = 500 + 250 = 750 ₪
+        tax_mixed = calculate_wealth_tax(100000.0, deposit_balance=50000.0)
+        assert tax_mixed == 750.0
+
+    @pytest.mark.asyncio
+    async def test_execute_oligarch_raid_deducts_from_bank_deposits(self, isolated_test_db):
+        """
+        Oligarch keeps small wallet cash (1,000 ₪) and large bank deposits (200,000 ₪).
+        Raid calculates 10% on total wealth (20,100 ₪) and drains the wallet + bank deposit!
+        """
+        db = isolated_test_db
+        oligarch_id = 60001
+        worker_ids = [60011, 60012, 60013, 60014, 60015]
+
+        # Seed oligarch wallet with 1,000 ₪
+        await common.database.add_user_global_balance(db, oligarch_id, "b", 1000.0)
+
+        # Seed BankDeposits table and insert active deposit with 200,000 ₪
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS BankDeposits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                board_id TEXT NOT NULL DEFAULT 'b',
+                tier_id TEXT NOT NULL DEFAULT 'sych',
+                principal REAL NOT NULL,
+                accrued_interest REAL NOT NULL DEFAULT 0.0,
+                daily_rate REAL NOT NULL DEFAULT 0.005,
+                created_at REAL NOT NULL,
+                locked_until REAL NOT NULL DEFAULT 0.0,
+                last_accrual_at REAL,
+                status TEXT NOT NULL DEFAULT 'active'
+            )
+        """)
+        now_ts = time.time()
+        await db.execute("""
+            INSERT INTO BankDeposits (user_id, board_id, tier_id, principal, accrued_interest, daily_rate, created_at, locked_until, last_accrual_at, status)
+            VALUES (?, 'b', 'sych', 200000.0, 0.0, 0.005, ?, 0.0, ?, 'active')
+        """, (oligarch_id, now_ts, now_ts))
+
+        # Seed workers with 100 ₪ and 30 posts each
+        for wid in worker_ids:
+            await common.database.add_user_global_balance(db, wid, "b", 100.0)
+            await db.execute("UPDATE Users SET posts_count = 30 WHERE user_id = ?", (wid,))
+        await db.commit()
+
+        # Execute raid
+        res = await execute_oligarch_raid(db, worker_ids, target_id=oligarch_id)
+        assert res["ok"] is True
+        assert res["confiscated"] == 20100.0
+        assert res["burned_to_abu"] == 14070.0
+        assert res["distributed_total"] == 6030.0
+        assert res["per_voter"] == 1206.0
+
+        # Check oligarch wallet: drained from 1,000 down to 0
+        oligarch_wallet_after = await common.database.get_user_global_balance(db, oligarch_id)
+        assert oligarch_wallet_after == 0.0
+
+        # Check bank deposit: deducted by remainder (19,100 ₪) -> 200,000 - 19,100 = 180,900 ₪
+        async with db.execute("SELECT principal FROM BankDeposits WHERE user_id = ?", (oligarch_id,)) as c:
+            dep_row = await c.fetchone()
+            assert dep_row[0] == 180900.0

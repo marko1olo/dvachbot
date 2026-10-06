@@ -789,4 +789,45 @@ async def test_abu_bank_haircut_accrued_interest_capitalization(bank_db):
     assert payout == round(expected_gross - expected_fee, 2)
 
 
+@pytest.mark.asyncio
+async def test_skuf_deposit_switches_to_sych_rate_after_lockup(bank_db):
+    """
+    Верификация закрытия инфляционной дыры:
+    Срочный вклад skuf (2.5%/день, 72ч) после созревания (locked_until)
+    должен начислять проценты по базовой ставке сейфа sych (0.5%/день),
+    а не продолжать накручивать 2.5% бесконечно.
+    """
+    be = _get_bank_module()
+    user_id = 998877
+    principal = 10000.0
+    now = time.time()
+    # Вклад создан 10 дней назад, lockup был 3 дня
+    created_at = now - (10 * 86400)
+    locked_until = created_at + (3 * 86400)
+
+    raw_dep = {
+        "id": 999,
+        "user_id": user_id,
+        "board_id": "b",
+        "tier_id": "skuf",
+        "principal": principal,
+        "daily_rate": 0.025,
+        "created_at": created_at,
+        "locked_until": locked_until,
+        "last_accrual_at": created_at,
+        "accrued_interest": 0.0,
+        "status": "active",
+    }
+
+    state = be.calculate_deposit_state(raw_dep, current_ts=now)
+
+    assert state["is_locked"] is False
+    assert state["daily_rate"] == 0.005  # Переведен на ставку сейфа 0.5%
+    # Первые 3 дня: 10000 * 2.5% * 3 = 750 ₪
+    # Следующие 7 дней: 10000 * 0.5% * 7 = 350 ₪
+    # Итого: 1100 ₪ (а не старые 10000 * 2.5% * 10 = 2500 ₪!)
+    expected_accrued = 750.0 + 350.0
+    assert abs(state["accrued_interest"] - expected_accrued) < 1.0
+
+
 

@@ -84,6 +84,9 @@ REPOST_FLOOD_RESPONSES: List[str] = [
     "Репостоблядь detected. Уйми пальцы, тут никто твой пересланный мусор читать не нанимался.",
 ]
 
+# Доски с разрешенным репост-контентом (например /sex/, куда аноны постят контент из каналов)
+REPOST_EXEMPT_BOARDS: set[str] = {"sex"}
+
 # User Tiers and Flood Limits (Послабления и скидки для ветеранов)
 USER_TIERS = {
     'newbie': {
@@ -1004,6 +1007,9 @@ def check_repost_spam(
     if not is_repost:
         return False, ""
 
+    if str(board_id).lower() in REPOST_EXEMPT_BOARDS:
+        return False, ""
+
     try:
         from bot_helpers import is_admin
         if user_id and is_admin(user_id, board_id):
@@ -1115,6 +1121,9 @@ async def check_repost_spam_async(
     If limit is exceeded and mute criteria met, applies shadowmute directly and awaits it.
     Returns: (is_blocked: bool, toxic_response: str, expires_at: float)
     """
+    if str(board_id).lower() in REPOST_EXEMPT_BOARDS:
+        return False, "", 0.0
+
     if posts_count is None and isinstance(user_id, int) and user_id > 0:
         posts_count = get_cached_user_posts(user_id)
     tier = get_user_tier(posts_count if posts_count is not None else 0)

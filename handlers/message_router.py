@@ -783,8 +783,10 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         if content_to_save:
             await update_post_content(post_num, content_to_save)
 
-        # Публикация в канал «Лучшее» при достижении порога лайков (5+)
-        if current_positive_count >= 5 and not is_already_best:
+        # Публикация в канал «Лучшее» при достижении порога лайков (3+ для /b/, 2+ для малых досок)
+        from shared_state import LIKES_THRESHOLD
+        best_threshold = 2 if board_id and board_id not in ('b',) else LIKES_THRESHOLD
+        if current_positive_count >= best_threshold and not is_already_best:
             final_bot = bot_instance if bot_instance else reaction.bot
             if final_bot:
                 try:
@@ -1161,8 +1163,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             elif mute_until:
                 b_data.setdefault('mutes', {}).pop(user_id, None)
 
-        # Check repost spam from public channels (limit 4/min -> 20m shadowmute + variative toxic response)
-        if not is_admin(user_id, board_id):
+        # Check repost spam from public channels (exempt on /sex/ where content is forwarded from channels)
+        if board_id != "sex" and not is_admin(user_id, board_id):
             from common.spam_filter import is_repost_from_public, check_repost_spam_async
             if is_repost_from_public(message, message.bot):
                 is_repost_blocked, toxic_response, mute_exp = await check_repost_spam_async(
@@ -1981,8 +1983,8 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         
     if is_leader:
         try:
-            # Проверка на репост-спам из публичных каналов (лимит 4/мин, 20м шедоумут)
-            if not is_admin(user_id, board_id):
+            # Проверка на репост-спам из публичных каналов (освобождена доска /sex/)
+            if board_id != "sex" and not is_admin(user_id, board_id):
                 from common.spam_filter import is_repost_from_public, check_repost_spam_async
                 if is_repost_from_public(message, message.bot):
                     is_repost_blocked, toxic_reply, mute_exp = await check_repost_spam_async(
