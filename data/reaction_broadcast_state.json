@@ -1,8 +1,8 @@
 {
-  "last_broadcast_timestamp": 1791271056.8161836,
-  "total_broadcasts": 17,
-  "last_text_index": 13,
-  "total_delivered": 4939,
+  "last_broadcast_timestamp": 1791314256.8279395,
+  "total_broadcasts": 18,
+  "last_text_index": 24,
+  "total_delivered": 5294,
   "total_failed": 1,
   "total_forbidden": 1611,
   "blocked_user_ids": [
