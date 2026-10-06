@@ -1,0 +1,7 @@
+1634: 'last_audios', 'spam_violations', 'spam_tracker', 'last_user_msgs',
+3306: audio_count = sum(1 for f in files_in_quote if f.get('type') == 'audio')
+3307: voice_count = sum(1 for f in files_in_quote if f.get('type') == 'voice')
+3318: if audio_count > 0: media_counts.append(f"{audio_count} audio")
+3319: if voice_count > 0: media_counts.append(f"{voice_count} voice")
+22298: b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'],
+23403: await apply_penalty(message.bot, user_id, 'animation', board_id) # Voice often treated similarly for spam
