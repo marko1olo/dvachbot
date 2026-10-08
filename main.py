@@ -30065,7 +30065,7 @@ async def main():
         await load_state()
         await load_graph_stats_async()
         global ROULETTE_EVENTS
-        ROULETTE_EVENTS = load_roulette_data("roulette_data.json")
+        ROULETTE_EVENTS = load_roulette_data("data/roulette_data.json")
         if ROULETTE_EVENTS:
             print(f"✅ Данные рулетки успешно загружены. Всего событий: {len(ROULETTE_EVENTS)}")
         else:
