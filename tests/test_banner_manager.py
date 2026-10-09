@@ -27,7 +27,7 @@ from banner_manager import (
     flush_cache,
 )
 from main import _send_banners_page, BANNERS_PER_PAGE
-from aiogram.types import FSInputFile, InputMediaPhoto
+from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendMediaGroup
 
@@ -86,7 +86,7 @@ class TestBannerManager(unittest.TestCase):
         from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
         all_banners = set(_CATEGORIZED_BANNERS["all"])
         self.assertGreaterEqual(len(all_banners), 1441)
-        self.assertEqual(len(all_banners), 2356)
+        self.assertEqual(len(all_banners), 2995)
 
         all_reached = set()
         for subsection, cats in SUBSECTION_CATEGORIES.items():
