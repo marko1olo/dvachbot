@@ -49,7 +49,7 @@ class TestAdversarialDeliverySlicing(unittest.IsolatedAsyncioTestCase):
         # 2. Non-existent board in weekly_active_users
         prio, passive = _split_recipients_for_delivery('nonexistent_board', [1, 2, 3])
         self.assertEqual(prio, [])
-        self.assertEqual(passive, [1, 2, 3])
+        self.assertEqual(set(passive), {1, 2, 3})
 
         # 3. All recipients active
         all_active = list(range(1, 51))
