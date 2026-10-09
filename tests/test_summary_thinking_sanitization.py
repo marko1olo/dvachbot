@@ -12,11 +12,10 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from common.text_utils import strip_thinking_tags, clean_ai_thinking, clean_html_for_tg
-from ai_manager import parse_music_roast_response, _extract_music_roast_from_json
+from ai_manager import parse_music_roast_response
 from summarize import (
     summarize_text_with_hf,
     _telegraph_create_page_sync,
-    _summarize_inner,
 )
 
 
@@ -210,6 +209,8 @@ class TestModelCascadeValidity:
         "gemini-3.7-flash",
         "gemini-3.5-flash",
         "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "deepseek-v4-flash",
         "qwen/qwen3.8-27b",
         "qwen/qwen3.6-27b",
     }
@@ -218,7 +219,8 @@ class TestModelCascadeValidity:
     @patch("summarize.AsyncOpenAI")
     @patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key-01"])
     @patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key-01"])
-    async def test_all_cascade_models_are_valid(self, mock_groq_pool, mock_google_pool, mock_openai_cls):
+    @patch("summarize.agentrouter_pool.get_all_active_tokens", return_value=["agentrouter-key-01"])
+    async def test_all_cascade_models_are_valid(self, mock_agentrouter_pool, mock_groq_pool, mock_google_pool, mock_openai_cls):
         """Every model name queried across all cascade preferences is in the valid approved set."""
         mock_client = AsyncMock()
         mock_openai_cls.return_value = mock_client

@@ -34,6 +34,7 @@ venv/
 .env
 .env.*
 .envgoogle
+.envagentrouter
 !.env.example
 sessions/
 *.session

@@ -9,7 +9,7 @@ import asyncio
 import time
 from html.parser import HTMLParser
 from openai import AsyncOpenAI
-from common.token_pool import groq_pool, google_pool
+from common.token_pool import groq_pool, google_pool, agentrouter_pool
 from common.text_utils import clean_ai_thinking, strip_thinking_tags
 from common.extractive_summary import generate_extractive_summary
 
@@ -102,6 +102,7 @@ MIN_PROVIDER_INTERVAL: dict[str, float] = {
     "groq": 2.5,
     "openrouter": 2.5,
     "openai": 1.0,
+    "agentrouter": 1.0,
 }
 
 def _get_provider_lock(provider: str) -> asyncio.Lock:
@@ -338,6 +339,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             [chosen_first]
             + remaining_top
             + [
+                ("deepseek-v4-flash", "agentrouter"),
                 ("gemini-3.6-flash", "gemini"),
                 ("gemini-3.7-flash", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
@@ -377,6 +379,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
+            ("deepseek-v4-flash", "agentrouter"),
             ("qwen/qwen3.8-27b", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
             ("openai/gpt-oss-120b", "groq"),
@@ -390,15 +393,32 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("openai/gpt-oss-120b", "groq"),
             ("llama-3.1-8b-instant", "groq"),
             ("openai/gpt-oss-20b", "groq"),
+            ("deepseek-v4-flash", "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-2.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
         ]
-    else:
-        # Default summarization cascade
+    elif model_preference in ("deepseek", "agentrouter"):
         models_cascade = [
+            ("deepseek-v4-flash", "agentrouter"),
+            ("gemini-3.5-flash", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
+            ("qwen/qwen3.8-27b", "groq"),
+            ("llama-3.3-70b-versatile", "groq"),
+            ("openai/gpt-oss-120b", "groq"),
+            ("llama-3.1-8b-instant", "groq"),
+            ("openai/gpt-oss-20b", "groq"),
+        ]
+    else:
+        # Default summarization cascade: DeepSeek prioritized as #1
+        models_cascade = [
+            ("deepseek-v4-flash", "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-2.5-flash-lite", "gemini"),
@@ -455,6 +475,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         if provider == "gemini":
             keys = google_pool.get_all_active_tokens()
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "agentrouter":
+            keys = agentrouter_pool.get_all_active_tokens()
+            base_url = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1")
         elif provider == "groq":
             keys = groq_pool.get_all_active_tokens()
             base_url = "https://api.groq.com/openai/v1"
@@ -483,10 +506,13 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         active_keys = active_keys[:8]
 
         # Безопасный лимит выходных токенов: для Gemini None (без урезания)
+        # Для AgentRouter (DeepSeek reasoning): 4096 токенов
         # Для Groq: для persona 1024 токена, для summary 3500 токенов
         is_persona = model_preference in ("persona", "persona_gemini")
         if provider == "gemini":
             model_max_tokens = None
+        elif provider == "agentrouter":
+            model_max_tokens = 4096
         elif is_persona:
             model_max_tokens = 1024
         else:
@@ -581,12 +607,15 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                 skip_model = True
                                 break
                 else:
-                    client = AsyncOpenAI(
-                        api_key=api_key if api_key else "dummy", 
+                    client_kwargs = dict(
+                        api_key=api_key if api_key else "dummy",
                         base_url=base_url,
                         http_client=http_client,
                         max_retries=0
                     )
+                    if provider == "agentrouter":
+                        client_kwargs["default_headers"] = {"User-Agent": "opencode/1.18.25"}
+                    client = AsyncOpenAI(**client_kwargs)
                     create_kwargs = dict(
                         model=model_name,
                         messages=messages,
@@ -633,6 +662,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")
                     break
+                if "402" in err_str or "budget pool" in err_str.lower():
+                    logger.warning(f"⚠️ {provider} model {model_name} budget pool quota exhausted (402). Placing model on 30m cooldown.")
+                    _model_cooldowns[model_name] = time.time() + 1800.0
+                    skip_model = True
+                    break
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
                     logger.warning(f"⚠️ {model_name}: request too large ({provider}). Shrinking by 40% and skipping to next model...")
                     half_len = int(len(text_dump) * 0.6)
@@ -652,6 +686,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         google_pool.penalize_token(api_key, 900.0)
                         if hasattr(google_pool, "remove_token"):
                             google_pool.remove_token(api_key)
+                    elif provider == "agentrouter":
+                        agentrouter_pool.penalize_token(api_key, 900.0)
+                        if hasattr(agentrouter_pool, "remove_token"):
+                            agentrouter_pool.remove_token(api_key)
                     else:
                         groq_pool.penalize_token(api_key, 900.0)
                         if hasattr(groq_pool, "remove_token"):
@@ -664,6 +702,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     _key_cooldowns[(provider, api_key)] = time.time() + 3600.0  # 1h cooldown for banned keys
                     if provider == "gemini":
                         google_pool.ban_token(api_key)
+                    elif provider == "agentrouter":
+                        agentrouter_pool.ban_token(api_key)
                     else:
                         groq_pool.ban_token(api_key)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} is 403 BANNED for {model_name}. Trying next key...")
@@ -680,6 +720,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     _key_cooldowns[(provider, api_key)] = time.time() + 120.0
                     if provider == "gemini":
                         google_pool.penalize_token(api_key, 120.0)
+                    elif provider == "agentrouter":
+                        agentrouter_pool.penalize_token(api_key, 120.0)
                     else:
                         groq_pool.penalize_token(api_key, 120.0)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}.")

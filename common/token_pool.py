@@ -166,12 +166,12 @@ class TokenRotator:
         """
         interval = min_interval if min_interval is not None else self.min_interval
         loop = asyncio.get_running_loop()
-        
+
         while True:
             selected_token = None
             wait_time = 0.0
             now = time.time()
-            
+
             with self._lock:
                 active = [t for t in self.tokens if t not in self._banned]
                 if not active:
@@ -183,7 +183,7 @@ class TokenRotator:
                     tok = active[idx]
                     cd = self._cooldown_until.get(tok, 0.0)
                     last_u = self._last_used.get(tok, 0.0)
-                    
+
                     if now >= cd and (now - last_u) >= interval:
                         selected_token = tok
                         self._index = (idx + 1) % len(active)
@@ -200,11 +200,11 @@ class TokenRotator:
                         tok = active[idx]
                         cd = self._cooldown_until.get(tok, 0.0)
                         last_u = self._last_used.get(tok, 0.0)
-                        
+
                         delay_cd = max(0.0, cd - now)
                         delay_rate = max(0.0, (last_u + interval) - now)
                         delay = max(delay_cd, delay_rate)
-                        
+
                         if delay < min_delay:
                             min_delay = delay
                             best_tok = tok
@@ -220,7 +220,7 @@ class TokenRotator:
 
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
-            
+
             return selected_token, wait_time
 
 
@@ -250,14 +250,14 @@ class HfPairRotator:
                     parts = item.split(':', 1)
                     token = parts[0].strip()
                     repo = parts[1].strip()
-                    
+
                     if token and repo:
                         if repo not in repo_map:
                             repo_map[repo] = []
                             repos_order.append(repo)
                         if token not in repo_map[repo]:
                             repo_map[repo].append(token)
-        
+
         self.pairs = []
         if repo_map:
             max_tokens = max(len(tokens) for tokens in repo_map.values())
@@ -266,7 +266,7 @@ class HfPairRotator:
                     tokens = repo_map[repo]
                     if i < len(tokens):
                         self.pairs.append((tokens[i], repo))
-        
+
         self._index = 0
 
     def get_pair(self) -> tuple[str, str] | tuple[None, None]:
@@ -300,6 +300,15 @@ google_pool = TokenRotator(
     ),
     min_interval=3.0,
     name="GoogleGeminiPool"
+)
+
+agentrouter_pool = TokenRotator(
+    raw=_load_env_keys(
+        ["AGENTROUTER_API_KEYS", "AGENTROUTER_KEYS", "AGENTROUTER_API_KEY", "DEEPSEEK_API_KEYS", "DEEPSEEK_API_KEY"],
+        extra_files=[".envagentrouter", ".env"]
+    ),
+    min_interval=1.0,
+    name="AgentRouterPool"
 )
 
 hf_accounts = HfPairRotator()

@@ -66,7 +66,7 @@ BOT_CONTEXTUAL_REPLY_COOLDOWN_SEC = float(os.getenv("BOT_CONTEXTUAL_REPLY_COOLDO
 BOT_CONTEXTUAL_REPLY_DAILY_LIMIT = int(os.getenv("BOT_CONTEXTUAL_REPLY_DAILY_LIMIT", "80"))
 
 # --- НАСТРОЙКИ МУЛЬТИЯЗЫЧНОСТИ (ПОТОКИ) ---
-ENABLE_MULTILANG = False 
+ENABLE_MULTILANG = False
 
 # --- НАСТРОЙКИ УВЕДОМЛЕНИЙ ОБ ОТВЕТАХ В ЛС (REPLY NOTIFICATIONS) ---
 ENABLE_REPLY_NOTIFICATIONS = os.getenv("ENABLE_REPLY_NOTIFICATIONS", "0").lower() in {"1", "true", "yes", "on"}
@@ -88,4 +88,6 @@ admin_env = os.getenv("ADMINS", "")
 ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()}
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
+AGENTROUTER_BASE_URL = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1")
+AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "deepseek-v4-flash")
 
