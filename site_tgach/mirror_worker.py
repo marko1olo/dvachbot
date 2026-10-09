@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import os
-import httpx 
+import httpx
 import tempfile
 from common.async_file_io import write_async_iter_bytes_to_file
 from common.database import (
-    get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task, 
-    add_file_mirror, get_file_owner_id, get_file_mirrors 
+    get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task,
+    add_file_mirror, get_file_owner_id, get_file_mirrors
 )
 from site_tgach.catbox import upload_url_to_catbox, upload_file_to_catbox, is_catbox_available
 from common.bot_pool import global_bot_pool
@@ -158,18 +158,18 @@ async def _try_pixhost_upload(lpath: str, file_id: str, file_info) -> str | None
 
 async def _process_single_task(task):
     file_id, mirror_type, task_id, attempt = task['file_id'], task['mirror_type'], task['id'], task['attempts']
-    
+
     try:
         if mirror_type == '0x0' and not is_0x0_available():
             await reschedule_mirror_task(task_id, attempt)
             return
 
         # 0. Защита от бесконечных циклов
-        if attempt > 10: 
+        if attempt > 10:
             logger.warning(f"🗑️ Removing stale task {task_id}: max attempts reached.")
             await remove_mirror_task(task_id)
             return
-        
+
         # 0. ПРОВЕРКА: Если зеркало уже существует
         existing_mirrors = await get_file_mirrors(file_id)
         if existing_mirrors and mirror_type in existing_mirrors:
@@ -201,17 +201,17 @@ async def _process_single_task(task):
 
         success_link = None
         file_ext = ".dat"
-        fresh_file_id = file_id 
-        download_success = False 
-        
+        fresh_file_id = file_id
+        download_success = False
+
         file_info = None
 
         try:
             logger.info(f"DEBUG: [Task {task_id}] Calling bot.get_file...")
             file_info = await bot.get_file(file_id)
             logger.info(f"DEBUG: [Task {task_id}] bot.get_file success: {getattr(file_info, 'file_path', None)}")
-            fresh_file_id = file_info.file_id 
-            
+            fresh_file_id = file_info.file_id
+
             file_path = getattr(file_info, "file_path", None)
             if file_path:
                 _, ext = os.path.splitext(file_path)
@@ -256,11 +256,11 @@ async def _process_single_task(task):
                 else:
                     logger.warning(f"⚠️ Bot API rejected photo {file_id[:10]}. Trying MTProto recovery...")
             else:
-                logger.warning(f"⚠️ Bot API error for {file_id[:10]}: {e}") 
-        
+                logger.warning(f"⚠️ Bot API error for {file_id[:10]}: {e}")
+
         fd, lpath = tempfile.mkstemp(prefix=f"dvach_mirror_{task_id}_", suffix=file_ext)
         os.close(fd)
-        
+
         try:
             if not success_link:
                 await get_msg_info_deferred()
@@ -268,7 +268,7 @@ async def _process_single_task(task):
                     c_id, m_id, _ = msg_info
                 else:
                     c_id, m_id = None, None
-                
+
                 # 1. MTProto (skip for photos without context since it always fails in pyrogram)
                 use_mtproto = not (fresh_file_id.startswith("AgAC") and not (c_id and m_id))
                 if use_mtproto and (await download_file_mtproto(bot.token, fresh_file_id, lpath, chat_id=c_id, message_id=m_id)) and os.path.exists(lpath) and os.path.getsize(lpath) > 0:
@@ -399,13 +399,13 @@ async def _process_single_task(task):
                     else:
                         logger.warning(f"⛔ All download methods failed for {file_id[:10]} (attempt {attempt}/3). Rescheduling.")
                         await reschedule_mirror_task(task_id, attempt)
-                    return 
+                    return
 
         finally:
             if os.path.exists(lpath):
                 try: os.remove(lpath)
                 except Exception: pass
-            
+
         if success_link:
             await add_file_mirror(file_id, actual_mirror_type, success_link)
             await remove_mirror_task(task_id)
@@ -419,7 +419,7 @@ async def _process_single_task(task):
         await reschedule_mirror_task(task_id, attempt)
 async def process_mirror_queue():
     logger.info("mirror_worker started (Parallel Mode)")
-    
+
     # Блок сброса таймеров УДАЛЕН для предотвращения шторма при рестарте
 
     SEM = asyncio.Semaphore(8)  # Снижен с 20 до 8 для уменьшения нагрузки

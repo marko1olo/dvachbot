@@ -5,9 +5,6 @@ new_modes.py — Ультимативные атмосферные режимы 
 
 import random
 import re
-import html
-import hashlib
-from typing import Mapping, Sequence
 
 # Импорт выделенного процедурного движка Абу
 from abu_engine import (

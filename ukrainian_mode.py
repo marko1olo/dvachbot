@@ -859,7 +859,7 @@ def ukrainian_transform(text: str, header: str | None = None) -> tuple[str, str 
         try:
             # Очищаем текст от HTML-тегов для корректной отрисовки на картинке
             clean_text_for_img = transformed_text.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '')
-            
+
             image_bytes = create_visual_post(
                 mode='ukrainian',
                 text=clean_text_for_img,

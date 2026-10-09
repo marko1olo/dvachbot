@@ -13,16 +13,12 @@ Written by Challenger 2.
 
 import asyncio
 import json
-import re
 import time
 from unittest import mock
 
 import pytest
 from aiogram import types, Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-import common.database
-import common.db_pool
 from common.text_utils import sanitize_html
 from handlers.message_router import (
     RE_ARCHIVE_LINK,
@@ -258,7 +254,7 @@ async def test_message_router_single_text_post_integration(isolated_test_db):
 
     with mock.patch("handlers.message_router.process_new_post", new_callable=mock.AsyncMock) as mock_pnp, \
          mock.patch("handlers.message_router.check_spam", new_callable=mock.AsyncMock, return_value=True):
-        
+
         shared_state.board_data.setdefault("b", {
             "users": {"active": set(), "banned": set()},
             "mutes": {},

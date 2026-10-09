@@ -6,7 +6,6 @@ instrumental handling, 20MB limit safety, cynical 2ch /b/ music critic prompt an
 """
 
 import io
-import re
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 

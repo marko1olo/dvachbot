@@ -2,7 +2,6 @@ from common.config import (
     BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
     BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
     BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC, BOT_DELIVERY_INITIAL_CHUNK_SIZE,
-    BOT_DELIVERY_MAX_CHUNK_SIZE, BOT_DELIVERY_MIN_CHUNK_SIZE,
     BOT_PRIORITY_SPLIT_MIN_PASSIVE, BOT_PASSIVE_MAX_PREEMPTIONS
 )
 
@@ -10,9 +9,9 @@ import os
 import shared_state
 from shared_state import *
 from common.database import (
-    upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies, 
+    upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies,
     create_post, update_post_content, get_stream_active_users,
-    get_and_clear_broadcast_queue, mark_broadcast_posts_sent
+    mark_broadcast_posts_sent
 )
 from common.board_config import BOARD_CONFIG
 from post_helpers import format_header
@@ -20,7 +19,7 @@ from common.thread_manager import get_threads_data
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post, is_ai_slop_content
 from archive_manager import _site_public_url, _site_file_source, _site_file_send_type
-from datetime import timezone, datetime, timedelta
+from datetime import timezone, datetime
 import __main__ as main
 UTC = timezone.utc
 
@@ -149,12 +148,10 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any, Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
 from collections import defaultdict
-import traceback
 import logging
 
 logger = logging.getLogger(__name__)
@@ -166,11 +163,9 @@ from shared_state import (
 )
 from common.html_utils import escape_html
 from common.task_manager import spawn_task
-from common.db_pool import get_pool
-from post_helpers import check_post_numerals, apply_shadow_autoreplace
 from broadcaster import (
-    _format_message_body, _order_recipients_for_delivery, send_message_to_users,
-    _build_lie_media_content, DeliveryResults, MessageBroadcaster, add_you_to_my_posts_fast
+    _format_message_body, send_message_to_users,
+    add_you_to_my_posts_fast
 )
 from moderation_config import _LIE_IMAGE_EXTS, _LIE_VIDEO_EXTS
 
@@ -532,7 +527,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
         if reply_to_post_num:
             reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
     if not board_id: return
-    
+
     final_keyboard = None
     if content_copy.get('poll_data'):
         poll_options = content_copy.get('poll_data', {}).get('options', [])
@@ -547,7 +542,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     )
                 )
             final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
+
     user_specific_texts = {}
     text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
     text_with_you_links = text_or_caption_base
@@ -564,10 +559,10 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     except ValueError:
                         continue
         text_with_you_links = add_you_to_my_posts_fast(
-            text_or_caption_base, 
-            post_data_copy.get('author_id'), 
+            text_or_caption_base,
+            post_data_copy.get('author_id'),
             mentioned_authors
-        )            
+        )
     b_data = board_data[board_id]
     users_settings = b_data.get('user_settings', {})
     for user_id in user_messages_map.keys():
@@ -615,14 +610,14 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                 else:
                     if len(full_text) > 1024: full_text = full_text[:1021] + "..."
                     await bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
-                return 
+                return
             except TelegramRetryAfter as e:
                 wait_sec = e.retry_after + 1
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(wait_sec)
                     continue
                 else:
-                    return 
+                    return
             except TelegramBadRequest as e:
                 error_message_lower = e.message.lower()
                 ignored_errors = ("message is not modified", "message to edit not found", "chat not found")
@@ -638,13 +633,13 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                         continue
                     else:
                         return
-                return 
-            except (main.TelegramNetworkError, asyncio.TimeoutError, main.aiohttp.ClientError) as e:
+                return
+            except (main.TelegramNetworkError, asyncio.TimeoutError, main.aiohttp.ClientError):
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(delay)
-                    delay = min(delay * 2, 10) 
+                    delay = min(delay * 2, 10)
                     continue
-                return 
+                return
             except main.TelegramForbiddenError:
                 return
             except Exception as e:
@@ -1212,7 +1207,7 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
         if target_location == 'main':
             last_seen_post = user_s.get('last_seen_main', 0)
             all_main_posts = sorted([
-                p_num for p_num, p_data in messages_storage.items() 
+                p_num for p_num, p_data in messages_storage.items()
                 if p_data.get('board_id') == board_id and not p_data.get('thread_id')
             ])
             missed_post_nums_full = [p_num for p_num in all_main_posts if p_num > last_seen_post]
@@ -1330,16 +1325,16 @@ async def board_help_worker(board_id: str, extended_interval: bool = False):
                         stream_users = await get_stream_active_users(board_id, stream)
                         recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
                     else:
-                        if stream != 'ru': continue 
+                        if stream != 'ru': continue
                         recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
                 message_text = ""
                 choice = random.randint(1, 6)
                 if stream == 'en':
-                    if choice == 1: message_text = random.choice(HELP_TEXT_EN_COMMANDS)
+                    if choice == 1: message_text = random.choice(main.HELP_TEXT_EN_COMMANDS)
                     elif choice == 2: message_text = main.generate_boards_list(BOARD_CONFIG, 'en')
-                    elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_EN)
+                    elif choice == 3: message_text = random.choice(main.THREAD_PROMO_TEXT_EN)
                     elif choice == 4: message_text = random.choice(main.MODE_INFO_TEXT_EN)
                     elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_EN)
                     else: message_text = random.choice(main.MECHANICS_INFO_TEXT_EN)
@@ -1358,7 +1353,7 @@ async def board_help_worker(board_id: str, extended_interval: bool = False):
                     elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_RU)
                     else: message_text = random.choice(main.MECHANICS_INFO_TEXT_RU)
                 now_dt = datetime.now(UTC)
-                from banner_manager import get_banner_file, _BANNER_CACHE, is_video_banner
+                from banner_manager import get_banner_file, is_video_banner
                 cat_map = {
                     1: "summary",
                     2: "newspaper",
@@ -1427,7 +1422,7 @@ async def validate_message_format(msg_data: dict) -> bool:
         return False
     if not isinstance(msg_data['content'], dict):
         return False
-    if (msg_data['content'].get('type') == 'media_group' and 
+    if (msg_data['content'].get('type') == 'media_group' and
         not isinstance(msg_data['content'].get('media'), list)):
         return False
     return True
@@ -1611,8 +1606,8 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     b_data = board_data[board_id]
     from common.database import is_shadow_muted as check_db_shadow_muted
     from bot_helpers import is_admin
-    is_shadow_muted = (not is_admin(user_id, board_id) and 
-                       ((user_id in b_data.get('shadow_mutes', {}) and 
+    is_shadow_muted = (not is_admin(user_id, board_id) and
+                       ((user_id in b_data.get('shadow_mutes', {}) and
                          b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
                         await check_db_shadow_muted(user_id, board_id)))
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
@@ -1653,14 +1648,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         # дублировать «БАЯН» на каждом смысла нет.
         if i == 0 and album_repost_count > 1:
             content['repost_count'] = album_repost_count
-        
+
         # --- НАЧАЛО ИЗМЕНЕНИЙ (Добавлена Быстрая цитата для альбомов) ---
         from handlers.message_router import process_shadow_reject, build_quick_quote_info
         quote_info = await build_quick_quote_info(reply_to_post)
         if quote_info:
             content['quote_info'] = quote_info
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-        
+
         if is_shadow_muted:
             await process_shadow_reject(shared_state.ShadowRejectContext(
                 bot=bot_instance,
@@ -1686,7 +1681,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             first_post_num = post_num
         if is_large_group:
             await asyncio.sleep(1)
-            
+
     if send_caption_separately and original_caption:
         text_content = {'type': 'text', 'text': original_caption}
         if is_shadow_muted:
@@ -1778,7 +1773,7 @@ async def thread_notifier():
                 b_data = board_data[board_id]
                 threads_data = get_threads_data(board_id)
                 users_on_main = {
-                    uid for uid, u_state in b_data.get('user_state', {}).items() 
+                    uid for uid, u_state in b_data.get('user_state', {}).items()
                     if u_state.get('location', 'main') == 'main'
                 }
                 for thread_id, count in threads.items():
@@ -1825,7 +1820,7 @@ async def thread_notifier():
             lang = 'en' if board_id == 'int' else 'ru'
             threads_data = get_threads_data(board_id)
             recipients_in_main = {
-                uid for uid, u_state in b_data.get('user_state', {}).items() 
+                uid for uid, u_state in b_data.get('user_state', {}).items()
                 if u_state.get('location', 'main') == 'main'
             }
             if not recipients_in_main: continue
@@ -1892,7 +1887,7 @@ async def site_posts_broadcaster():
                         board_id = post.get('board_id')
                         author_id = post.get('author_id')
                         post_stream = post.get('stream', 'ru')
-                        post_mode = post.get('post_mode') 
+                        post_mode = post.get('post_mode')
                         thread_id = post.get('thread_id')
                         is_new_thread = (
                             post_mode == 'new_thread'
@@ -2010,7 +2005,7 @@ async def site_posts_broadcaster():
                                     f"(no active worker queue) — marking sent, post is in messages_storage"
                                 )
                                 await mark_broadcast_posts_sent([post_num])
-                            
+
                             if (content.get('archive_allowed') or not content.get('archive_skip')) and not is_shadow_muted:
                                 bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
                                 if bot_to_use:
@@ -2025,7 +2020,7 @@ async def site_posts_broadcaster():
                             await mark_broadcast_posts_sent([post_num])
                     except Exception as item_err:
                         runtime_logger.error(f"[site_posts_broadcaster] Error processing broadcast item {post}: {item_err}", exc_info=True)
-            await asyncio.sleep(5) 
+            await asyncio.sleep(5)
         except asyncio.CancelledError:
             break
         except Exception as e:

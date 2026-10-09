@@ -1,13 +1,8 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
-import time
-import pytest
 
 from common.text_utils import extract_post_num_from_message_text
-import shared_state
-from shared_state import messages_storage, post_to_messages, message_to_post, storage_lock, posts_pending_deletion
-import main
+from shared_state import posts_pending_deletion
 from main import get_author_id_by_reply, get_post_num_by_reply, delete_user_posts
 
 
@@ -67,7 +62,7 @@ class TestAdminCommandsAudit(unittest.IsolatedAsyncioTestCase):
         with patch("main.get_post_info_by_copy", new_callable=AsyncMock, return_value=None), \
              patch("main.get_post_author_by_copy", new_callable=AsyncMock, return_value=None), \
              patch("main.get_post_by_num", new_callable=AsyncMock, return_value={"post_num": 542203, "author_id": 6572792624}):
-            
+
             author_id = await get_author_id_by_reply(mock_msg)
             pnum = await get_post_num_by_reply(mock_msg)
             self.assertEqual(author_id, 6572792624)
@@ -78,7 +73,7 @@ class TestAdminCommandsAudit(unittest.IsolatedAsyncioTestCase):
         # and passes time_threshold_ts = 0.0 for duration all (>= 500000)
         mock_bot = MagicMock()
         user_id = 6572792624
-        
+
         captured_threshold = []
         async def fake_delete_db(uid, threshold, board):
             captured_threshold.append(threshold)
@@ -90,7 +85,7 @@ class TestAdminCommandsAudit(unittest.IsolatedAsyncioTestCase):
              patch("main._delete_posts_from_channels", new_callable=AsyncMock), \
              patch("main._delete_posts_from_pm_api", new_callable=AsyncMock), \
              patch("main.spawn_task"):
-            
+
             posts_pending_deletion.clear()
             deleted = await delete_user_posts(mock_bot, user_id, 525600, "b")
             self.assertEqual(deleted, 2)

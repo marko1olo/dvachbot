@@ -1,7 +1,6 @@
 import unittest
 import os
 import tempfile
-import asyncio
 
 # Setup env variables before importing
 os.environ["SECRET_KEY"] = "test"

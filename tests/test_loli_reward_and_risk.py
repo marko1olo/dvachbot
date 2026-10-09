@@ -9,14 +9,12 @@ Unit and integration tests for /loli hourly risk-reward system:
 """
 
 import time
-import pytest
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from main import (
     _process_loli_reward_and_risk,
     USER_LOLI_REWARD_COOLDOWN,
-    LOLI_REWARD_COOLDOWN_SEC,
 )
 
 

@@ -165,7 +165,7 @@ class TokenRotator:
         3. Возвращает (выбранный_токен, время_ожидания_в_секундах).
         """
         interval = min_interval if min_interval is not None else self.min_interval
-        loop = asyncio.get_running_loop()
+
 
         while True:
             selected_token = None

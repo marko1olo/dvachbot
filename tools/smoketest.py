@@ -1,5 +1,4 @@
 from __future__ import annotations
-import contextlib
 #!/usr/bin/env python3
 """
 Дымовой прогон: поднимается ли бот на ЧИСТОЙ базе и корректно ли он

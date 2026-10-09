@@ -19,14 +19,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import shared_state
 import russian_roulette_pvp as rr
 import dice_duel_engine as dde
 import ttt_engine as ttt
@@ -35,7 +33,6 @@ from common.bot_helpers import send_pvp_direct_notification
 from common.database import (
     get_user_global_balance,
     add_user_global_balance,
-    get_abu_fund_total,
 )
 
 

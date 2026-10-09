@@ -12,7 +12,7 @@ for k, v in vars(text_assets).items():
         continue
     if isinstance(v, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
         continue
-    
+
     # We must handle compiled regex patterns if they exist
     def sanitize(obj):
         if isinstance(obj, dict):

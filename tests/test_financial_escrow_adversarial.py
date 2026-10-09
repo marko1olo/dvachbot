@@ -23,12 +23,10 @@ import sys
 import time
 import json
 import asyncio
-import secrets
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,15 +39,14 @@ import dice_duel_engine as dde
 import ttt_engine as ttt
 import main
 import common.bot_helpers as bh
-from common.db_pool import get_pool, db_lock
+from common.db_pool import db_lock
 from common.anon_identity import get_anon_id
-from common.bot_helpers import send_pvp_direct_notification, accept_duel_logic, decline_duel_logic, classic_duel_lock
+from common.bot_helpers import send_pvp_direct_notification, accept_duel_logic
 from common.database import (
     get_user_global_balance,
     add_user_global_balance,
     deduct_user_global_balance,
     get_abu_fund_total,
-    record_user_transaction,
 )
 
 
@@ -58,7 +55,7 @@ def clean_all_game_states():
     # Inject missing get_anon_id into common.bot_helpers if needed for classic duel
     if not hasattr(bh, 'get_anon_id'):
         bh.get_anon_id = get_anon_id
-    
+
     rr.active_rr_games.clear()
     rr.user_active_rr_game.clear()
     dde.active_dice_games.clear()

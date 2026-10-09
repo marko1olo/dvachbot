@@ -10,7 +10,6 @@ from common.spam_filter import (
     _user_request_timestamps,
     _seen_media_groups,
     _shadow_mute_applied_ts,
-    USER_TIERS,
 )
 
 
@@ -147,7 +146,7 @@ async def test_apply_shadow_mute_downgrades_exponential_during_grace_period():
     mock_db_mute = mock.AsyncMock(return_value=now + 1200.0)
     with mock.patch.object(common.spam_filter, "_orig_db_apply_shadow_mute", mock_db_mute):
         await common.spam_filter.apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, is_exponential=True)
-        
+
         # Verify is_exponential was downgraded to False
         mock_db_mute.assert_called_once()
         _, kwargs = mock_db_mute.call_args

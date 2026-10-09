@@ -1,12 +1,7 @@
-import pytest
-import re
-import shared_state
 from shared_state import board_data
-import main
 from main import ModeTransformer
 import mode_visuals
 from mode_visuals import create_visual_post
-import zaputin_mode
 from zaputin_mode import zaputin_transform
 
 def test_mode_transformer_standalone():

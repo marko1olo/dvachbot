@@ -24,7 +24,6 @@ from ai_manager import (
     handle_music_roast_batch,
     handle_music_roast,
     MUSIC_ROAST_SYSTEM_PROMPT,
-    DEFAULT_BATCH_MUSIC_ROASTS,
 )
 from delivery_manager import _roast_album_tracks_in_batches
 

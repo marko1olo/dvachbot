@@ -1,11 +1,10 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-from aiogram.types import Message, User, Chat
+from aiogram.types import Message, User
 
 import shared_state
 from handlers.message_router import build_quick_quote_info, handle_message
 from broadcaster import _format_quote_block, _format_reply_line, _format_message_body
-from post_helpers import _quote_info_from_content
 
 
 class TestQuickQuoteConfiguration(unittest.TestCase):

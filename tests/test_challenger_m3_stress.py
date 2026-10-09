@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 import time
 import json
 from unittest.mock import patch, AsyncMock
@@ -8,8 +7,8 @@ from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
 
 from common.database import get_failed_files_batch, is_file_permanently_failed
-from site_tgach.main import app, enrich_extra_data, _process_files_list
-from site_tgach.tagging_worker import get_tasks, TEMP_FAILED_FILES
+from site_tgach.main import app, enrich_extra_data
+from site_tgach.tagging_worker import get_tasks
 from common.db_pool import get_pool, db_lock
 
 try:
@@ -100,7 +99,7 @@ async def test_tag_variants_and_thumbnail_failure_batch():
     """
     db = await get_pool()
     ts = int(time.time() * 1000)
-    
+
     fid_download_failed = f"fid_dl_fail_{ts}"
     fid_error_too_large = f"fid_err_large_{ts}"
     fid_format_unsupported = f"fid_fmt_unsupp_{ts}"
@@ -288,7 +287,7 @@ async def test_large_batch_failed_files_performance():
     """
     db = await get_pool()
     ts = int(time.time())
-    
+
     test_fids = [f"bulk_fid_{ts}_{i}" for i in range(500)]
     failed_sample = test_fids[0]
     dummy_sha = f"failed_{failed_sample}"

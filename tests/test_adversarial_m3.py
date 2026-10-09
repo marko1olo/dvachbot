@@ -9,8 +9,7 @@ from fastapi_cache.backends.inmemory import InMemoryBackend
 
 from common.database import get_failed_files_batch, is_file_permanently_failed
 from common.db_pool import get_pool, db_lock
-from site_tgach.main import app, enrich_extra_data, _process_files_list
-from site_tgach.tagging_worker import get_tasks
+from site_tgach.main import app, enrich_extra_data
 
 try:
     FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache-adversarial")
@@ -33,7 +32,7 @@ async def test_adversarial_concurrency_and_locking():
     db = await get_pool()
     num_files = 25
     test_fids = [f"adv_conc_fid_{i}_{int(time.time())}" for i in range(num_files)]
-    
+
     async def worker_upsert(file_id):
         dummy_sha = f"failed_{file_id}"
         file_type = "photo"

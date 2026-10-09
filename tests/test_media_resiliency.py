@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 import time
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
@@ -93,7 +92,7 @@ async def test_enrich_extra_data_strips_broken_urls():
          patch("common.database.get_duplicate_counts", new_callable=AsyncMock) as mock_dupes, \
          patch("common.database.get_blurhashes_batch", new_callable=AsyncMock) as mock_blurs, \
          patch("common.database.get_mirrors_batch", new_callable=AsyncMock) as mock_mirrors:
-        
+
         mock_failed_batch.return_value = {failed_fid}
         mock_dupes.return_value = {}
         mock_blurs.return_value = {}

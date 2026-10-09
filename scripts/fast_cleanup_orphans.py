@@ -11,12 +11,12 @@ def clean_post_copies():
     try: conn.execute('PRAGMA wal_autocheckpoint=500')
     except: pass
     cursor = conn.cursor()
-    
+
     print("Checking for orphans in PostCopies...")
     cursor.execute("SELECT COUNT(*) FROM PostCopies WHERE NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = PostCopies.post_num)")
     orphans = cursor.fetchone()[0]
     print(f"Orphaned PostCopies: {orphans}")
-    
+
     if orphans > 0:
         print("Cleaning up orphans in PostCopies (Fast Delete)...")
         conn.execute("BEGIN IMMEDIATE")
@@ -24,7 +24,7 @@ def clean_post_copies():
         deleted = cursor.rowcount
         conn.execute("COMMIT")
         print(f"Deleted {deleted} orphans.")
-        
+
     print("Checking for orphans in ChannelCopies...")
     cursor.execute("SELECT COUNT(*) FROM ChannelCopies WHERE NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = ChannelCopies.post_num)")
     c_orphans = cursor.fetchone()[0]
@@ -37,7 +37,7 @@ def clean_post_copies():
         deleted = cursor.rowcount
         conn.execute("COMMIT")
         print(f"Deleted {deleted} orphans.")
-        
+
     try:
         conn.execute("DROP TABLE IF EXISTS _stress_table")
         print("Dropped _stress_table if present.")

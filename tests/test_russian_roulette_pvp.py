@@ -5,34 +5,26 @@ test_russian_roulette_pvp.py — Unit & Integration Tests for PvP Russian Roulet
 
 import sys
 import time
-import asyncio
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import aiosqlite
-import russian_roulette_pvp as rr
 from russian_roulette_pvp import (
     create_rr_challenge,
     accept_rr_challenge,
-    decline_or_cancel_rr_challenge,
     pull_rr_trigger,
     surrender_rr_game,
     format_drum_visual,
     get_shot_probability,
-    format_rr_game_message,
-    format_rr_challenge_message,
     active_rr_games,
     user_active_rr_game,
     rr_watchdog_step,
-    MIN_RR_BET,
-    MAX_RR_BET,
-    RR_CHAMBERS_COUNT,
-    RR_MUTE_DURATION_SEC
+    MAX_RR_BET
 )
 
 

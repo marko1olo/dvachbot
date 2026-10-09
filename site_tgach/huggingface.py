@@ -43,13 +43,13 @@ def _upload_sync(file_bytes: bytes, filename: str) -> str | None:
                 )
             clear_hf_failure(repo_id)
             return f"https://huggingface.co/datasets/{repo_id}/resolve/main/{path_in_repo}"
-        
+
         except Exception as e:
             if mark_hf_upload_failure(e, repo_id):
                 break
             logger.warning(f"HF Upload ({strategy['name']}) failed: {e}")
             continue
-            
+
     return None
 
 async def upload_to_hf(file_bytes: bytes, filename: str) -> str | None:

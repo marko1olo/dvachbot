@@ -1,19 +1,12 @@
-import asyncio
-import io
 import json
-import random
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 
 import common.database
 import common.db_pool
 from wardrobe_engine import (
-    CLOTHING_CATALOG,
-    SET_BONUSES,
-    get_equipped_gear,
     get_wardrobe_total_stats,
 )
 from combat_moderation_engine import calculate_combat_duration_and_backfire

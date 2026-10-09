@@ -26,7 +26,7 @@ import pytest
 from aiogram import Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import Chat, Message, User
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup
 from economy_extension import cmd_work_menu
 
 from tests.economy_live import dp_own_handlers, live_handler, sub_router_handlers

@@ -5,11 +5,9 @@ tests/test_cyberchad_dynamic_tuning.py — Verification of:
 2. Active user cooldown (>=10 posts or is_verified_b) dropped to 10.0s.
 3. Elimination of noisy public TTS voice bombing on rate limit hits.
 """
-import time
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
-import shared_state
 from handlers.message_router import (
     trigger_cyberchad_with_rate_limit,
     _CYBERCHAD_USER_LAST_DIRECT,

@@ -288,7 +288,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("qwen/qwen3.8-27b", "groq"),
                 ]
-            
+
             skip_gemini_models = False
             skip_groq_models = False
 
@@ -327,21 +327,21 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         continue
                     if provider == "groq" and skip_groq_models:
                         continue
-                        
+
                     pool = google_pool if provider == "gemini" else groq_pool
 
                     keys = pool.get_all_active_tokens()
                     if not keys:
                         continue
-                        
+
                     available_keys = list(keys)
                     random.shuffle(available_keys)
-                    
+
                     consecutive_429 = 0
                     while available_keys:
                         selected_key = None
                         sleep_time = 0.0
-                        
+
                         async with _KEY_RATE_LOCK:
                             global _GLOBAL_GEMINI_LAST_CALL, _GLOBAL_GROQ_LAST_CALL
                             now = time.time()
@@ -371,7 +371,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     else:
                                         _GLOBAL_GROQ_LAST_CALL = eff_now + 3.0
                                     break
-                                    
+
                             # PASS 2: Find key with the minimum wait time
                             if not selected_key:
                                 best_key = None
@@ -399,7 +399,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             logger.warning(f"⚠️ [VISION] [{source}] All keys for {model_name} are penalized. Skipping model.")
                             await asyncio.sleep(2.0)
                             break
-                            
+
                         if sleep_time > 0:
                             await asyncio.sleep(sleep_time)
 
@@ -429,7 +429,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 content_arr = [{"type": "text", "text": prompt_text}]
                                 for iu in groq_image_urls:
                                     content_arr.append({"type": "image_url", "image_url": {"url": iu}})
-                                
+
                                 kwargs = {
                                     "model": model_name,
                                     "messages": [{"role": "user", "content": content_arr}],
@@ -463,7 +463,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     skip_gemini_models = True
                                     logger.info(f"⏭️ [VISION] [{source}] Gemini safety block detected ({finish_reason}). Skipping all remaining Gemini models.")
                                 break
-                            
+
                             if content:
                                 # Quick cleanup just in case
                                 if "<think>" in content:
@@ -473,7 +473,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         parts = content.split("<think>", 1)
                                         content = parts[0].strip()
                                 content = content.replace("```json", "").replace("```", "").strip()
-                                
+
                                 try:
                                     # Extract JSON substring if the model added conversational text
                                     start_idx_c = content.find('{')
@@ -482,18 +482,18 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         json_str = content[start_idx_c:end_idx_c+1]
                                     else:
                                         json_str = content
-                                        
+
                                     parsed = json.loads(json_str)
                                     raw_t = parsed.get("tags")
                                     raw_d = parsed.get("description")
-                                    
+
                                     if raw_t is not None and raw_d is not None:
                                         if isinstance(raw_t, list):
                                             tags_str = ", ".join(str(t).strip() for t in raw_t if t)
                                         else:
                                             tags_str = str(raw_t).strip()
                                         desc_str = str(raw_d).strip()
-                                        
+
                                         logger.info(f"👁️ [VISION] [{source}] ✅ Success via {provider} ({model_name}).")
                                         return json.dumps({"tags": tags_str, "description": desc_str}, ensure_ascii=False)
                                     else:
@@ -506,15 +506,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     desc_match = re.search(r'"description"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', content, flags=re.DOTALL)
                                     if not desc_match:
                                         desc_match = re.search(r'"description"\s*:\s*(.+?)(?=\n\s*"|\n\s*}|$)', content, flags=re.DOTALL)
-                                    
+
                                     extracted_tags = tags_match.group(1) or tags_match.group(2) if tags_match else None
                                     extracted_desc = desc_match.group(1).strip('" \t\r\n') if desc_match else content.strip()
-                                    
+
                                     if extracted_tags and len(extracted_tags.strip()) > 3:
                                         cleaned_tags = extracted_tags.replace('"', '').replace('[', '').replace(']', '').strip()
                                         logger.info(f"👁️ [VISION] [{source}] ✅ Recovered JSON via regex from {provider} ({model_name}).")
                                         return json.dumps({"tags": cleaned_tags, "description": extracted_desc}, ensure_ascii=False)
-                                        
+
                                     words = [w.lower().strip(".,!?:;()[]\"'") for w in extracted_desc.split() if len(w) > 3]
                                     clean_words = [w for w in words if not w.startswith("http") and not w.startswith("data:")]
                                     synthesized_tags = ", ".join(list(dict.fromkeys(clean_words))[:10]) if clean_words else "media, image"
@@ -625,7 +625,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 pool.ban_token(selected_key)
                                 available_keys.remove(selected_key)
                                 continue
-                            
+
                             logger.warning(f"⚠️ [VISION] [{source}] {provider} key failed ({model_name}): {type(e).__name__}: {repr(e)}")
                             available_keys.remove(selected_key)
                             continue
@@ -637,7 +637,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             if permanent_model_failures >= len(models_cascade):
                 logger.error(f"\u274c [VISION] [{source}] Image rejected by all models (permanent error). Marking as invalid.")
                 return "error_file_invalid"
-                
+
             logger.error(f"\u274c [VISION] [{source}] Image analysis failed: all vision models exhausted.")
             return "error_api_exhausted"
 

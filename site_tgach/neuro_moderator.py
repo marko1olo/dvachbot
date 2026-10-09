@@ -1,6 +1,5 @@
 import os
 from site_tgach.neuro_poster import _execute_groq_post
-from common.database import set_system_setting
 
 """
 This module provides functionality for analyzing images for content safety using a neural network model.
@@ -30,9 +29,9 @@ from httpx import AsyncHTTPTransport
 from common.task_manager import spawn_task
 from common.token_pool import groq_pool, google_pool
 from common.database import apply_auto_censure, get_post_by_num, update_shadow_mute, log_global_event, add_to_mod_queue
-from common.db_pool import db_lock, get_pool
+from common.db_pool import db_lock
 from common.bot_pool import global_bot_pool
-from site_tgach.admin_config import ADMIN_IDS, IP_BAN_LIST
+from site_tgach.admin_config import ADMIN_IDS
 
 logger = logging.getLogger("neuro_mod")
 
@@ -266,17 +265,9 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
        - Добавление в ModQueue для ручного подтверждения админом.
     """
     from common.database import (
-        get_post_by_num,
-        update_shadow_mute,
-        log_global_event,
-        add_to_mod_queue,
         get_pool,
     )
-    from site_tgach.admin_config import ADMIN_IDS
-    from common.bot_pool import global_bot_pool
     from site_tgach.security import IP_BAN_LIST
-    import base64
-    import time
 
     # Telegram stickers and animated media are not subject to deep check
     if not file_id or file_id.startswith("CAAC") or file_id.startswith("sticker_"):

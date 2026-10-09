@@ -14,7 +14,7 @@ class TestAutoRoastPrompt(unittest.TestCase):
     def setUp(self):
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.ai_manager_path = os.path.join(self.project_root, 'ai_manager.py')
-        
+
         with open(self.ai_manager_path, 'r', encoding='utf-8') as f:
             self.ai_manager_code = f.read()
 
@@ -22,7 +22,7 @@ class TestAutoRoastPrompt(unittest.TestCase):
         match = re.search(r'prompt\s*=\s*\((.*?)\)\n\s*(?:from common\.token_pool|raw_roast\s*=)', self.ai_manager_code, re.DOTALL)
         self.assertTrue(match, "Could not find inline prompt definition in ai_manager.py")
         self.inline_prompt_raw = match.group(1)
-        
+
         # Construct single string representing the evaluated prompt
         lines = [line.strip().strip('"').strip("'") for line in self.inline_prompt_raw.splitlines() if line.strip()]
         self.inline_prompt = " ".join(lines).replace("{transcript}", "Тестовая аудио расшифровка")
@@ -65,7 +65,7 @@ class TestAutoRoastPrompt(unittest.TestCase):
             "отроасти",
             "отроасть"
         ]
-        
+
         inline_lower = self.inline_prompt.lower()
         for typo in forbidden_typos:
             self.assertNotIn(
@@ -86,7 +86,7 @@ class TestAutoRoastPrompt(unittest.TestCase):
     def test_covers_voice_and_video_notes(self):
         """Assert that inline prompt explicitly addresses both voice notes and video note circles."""
         inline_lower = self.inline_prompt.lower()
-        
+
         # Voice note terms: голосовуху / голосовухи / голосовое
         has_voice = any(term in inline_lower for term in ["голосовух", "голосовое", "голосовая"])
         self.assertTrue(

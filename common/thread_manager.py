@@ -1,7 +1,6 @@
 import asyncio
 import os
 import json
-import traceback
 from typing import Dict, Any
 from collections import defaultdict
 from common.config import DATA_DIR
@@ -55,11 +54,11 @@ def trim_thread_posts(board_id: str, thread_id: str, max_posts: int) -> list:
     posts = info.get('posts', [])
     if len(posts) <= max_posts or not posts:
         return []
-    
+
     op_post = posts[0]
     kept_posts = posts[-(max_posts - 1):]
     new_posts = [op_post] + kept_posts
-    
+
     trimmed = [p for p in posts if p not in new_posts]
     info['posts'] = new_posts
     return trimmed
@@ -89,6 +88,6 @@ async def save_threads_data(board_id: str, save_executor):
             if 'subscribers' in serializable_info and isinstance(serializable_info['subscribers'], set):
                 serializable_info['subscribers'] = list(serializable_info['subscribers'])
             data_to_save[thread_id] = serializable_info
-            
+
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(save_executor, _sync_save_threads_data, board_id, data_to_save)

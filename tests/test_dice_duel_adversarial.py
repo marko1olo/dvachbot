@@ -20,13 +20,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import shared_state
 import dice_duel_engine as dde
 from dice_duel_engine import (
     active_dice_games,
@@ -34,13 +32,11 @@ from dice_duel_engine import (
     dice_engine_lock,
     create_dice_challenge,
     accept_dice_challenge,
-    cancel_dice_challenge,
     execute_player_roll,
     _finish_dice_game,
     dice_watchdog_step,
     MIN_DICE_BET,
     MAX_DICE_BET,
-    DICE_RAKE_PERCENT,
     DICE_TIE_RAKE_PERCENT,
     DICE_CHALLENGE_TIMEOUT_SEC,
 )

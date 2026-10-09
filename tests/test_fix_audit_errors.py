@@ -33,7 +33,7 @@ class TestFixAuditErrors(unittest.TestCase):
         # Case A: sent_messages are ints
         sent_ints = [12345, 67890]
         messages_to_process = sent_ints
-        
+
         # Checking that getattr handles int safely
         for msg in messages_to_process:
             p_attr = getattr(msg, 'photo', None)

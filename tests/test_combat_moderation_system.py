@@ -13,22 +13,16 @@ Comprehensive test suite for the overhauled /partyvan and /shoot systems:
 """
 
 import time
-import json
-import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
 
-import combat_moderation_engine as cme
 from combat_moderation_engine import (
     calculate_combat_duration_and_backfire,
     record_combat_attack,
-    get_attacker_24h_usage_count,
     check_pair_attack_cooldown,
     create_combat_appeal_session,
-    get_combat_appeal_keyboard,
-    active_combat_appeals,
     reset_combat_moderation_state,
     callback_combat_appeal,
     callback_combat_bail,

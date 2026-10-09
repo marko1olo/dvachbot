@@ -1,7 +1,6 @@
 import sys
 import os
 import unittest
-import types
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Setup required env var
@@ -19,8 +18,6 @@ if PROJECT_ROOT not in sys.path:
 
 from fastapi import HTTPException
 
-import asyncio
-import time
 import Dubsite_tgach.main
 from Dubsite_tgach.main import check_and_punish_site_spam, site_spam_tracker
 

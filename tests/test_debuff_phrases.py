@@ -9,7 +9,6 @@ from common.debuff_phrases import (
     MUTE_WARN_REASONS,
     PARTYVAN_ANNOUNCEMENTS,
     MUTE_GUN_ANNOUNCEMENTS,
-    get_debuff_footer,
     get_mute_warn_text,
     get_partyvan_announcement,
     get_mute_gun_announcement

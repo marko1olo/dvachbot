@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-import pytest
-from post_helpers import _format_post_text, _format_media_context
+from post_helpers import _format_post_text
 
 def test_format_post_text_with_description_and_tags():
     content = {"type": "photo", "text": "Зацените пикчу"}

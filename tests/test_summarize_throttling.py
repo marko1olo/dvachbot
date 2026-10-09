@@ -1,6 +1,5 @@
 import pytest
 import time
-import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from summarize import summarize_text_with_hf, _throttle_provider, MIN_PROVIDER_INTERVAL
 
@@ -21,7 +20,6 @@ def reset_summarize_module_state():
 @pytest.mark.asyncio
 async def test_throttle_provider_enforces_cooldown():
     """Verify _throttle_provider delays requests when called under MIN_PROVIDER_INTERVAL."""
-    import summarize
     with patch.dict("os.environ", {}, clear=True):
         t0 = time.time()
         await _throttle_provider("gemini")

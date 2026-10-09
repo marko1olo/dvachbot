@@ -20,14 +20,14 @@ import json
 import logging
 import random
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Optional, Tuple, Any, Set, Union
+from typing import Dict, Optional, Tuple, Any, Union
 
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
-from common.db_pool import get_pool, db_lock, db_transaction
+from common.db_pool import get_pool, db_transaction
 from common.anon_identity import get_anon_id
 
 logger = logging.getLogger("runtime")
@@ -570,7 +570,7 @@ async def _resolve_target_from_message(message: types.Message) -> Tuple[Optional
     if message.reply_to_message:
         target_chat_id = message.reply_to_message.chat.id
         reply_mid = message.reply_to_message.message_id
-        
+
         # 1. Try memory
         try:
             import shared_state

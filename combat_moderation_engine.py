@@ -17,14 +17,12 @@ import random
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set, Tuple, Any
 
 from aiogram import Router, F, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest
 
-from common.db_pool import get_pool, db_lock, db_transaction
+from common.db_pool import get_pool
 from common.anon_identity import get_anon_id
 
 logger = logging.getLogger("runtime")

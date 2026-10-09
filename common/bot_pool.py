@@ -13,7 +13,7 @@ env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 install_logging_redaction()
@@ -25,19 +25,19 @@ class MultiStreamBotPool:
         self.bots_map: Dict[str, Dict[int, Bot]] = {
             'ru': {}, 'en': {}, 'jp': {}
         }
-        
+
         # Плоский список для закрытия сессий
         self.all_bots: List[Bot] = []
-        
+
         # Кэш уникальных ботов, чтобы дубликаты токенов в .env не создавали лишние сессии aiohttp
         self._shared_bots: Dict[int, Bot] = {}
-        
+
         # Множество загруженных потоков (защита от повторной загрузки)
         self._loaded_streams = set()
-        
+
         # Множество отключенных/неактивных bot_id
         self.disabled_bot_ids = set()
-        
+
         # Кулдауны ботов по времени (bot_id -> timestamp истечения)
         self.cooldown_bots: Dict[int, float] = {}
 
@@ -68,12 +68,12 @@ class MultiStreamBotPool:
         if stream_code in self._loaded_streams:
             return
 
-        # Сразу ставим флаг, чтобы параллельные загрузки файлов (asyncio.gather) 
+        # Сразу ставим флаг, чтобы параллельные загрузки файлов (asyncio.gather)
         # не запустили инициализацию одновременно (Race Condition)
         self._loaded_streams.add(stream_code)
 
         pool_str = self._get_stream_pool(stream_code)
-        
+
         # Fallback для старых конфигов
         if stream_code == 'ru' and not pool_str:
             pool_str = os.getenv("UPLOAD_BOT_POOL", "")
@@ -88,15 +88,15 @@ class MultiStreamBotPool:
             try:
                 if ':' not in t: continue
                 bot_id = int(t.split(':')[0])
-                
+
                 # Если бот помечен как мертвый, пропускаем
                 if bot_id in self.disabled_bot_ids:
                     continue
-                
+
                 # Если бот уже есть в ЭТОМ пуле
-                if bot_id in self.bots_map[stream_code]: 
+                if bot_id in self.bots_map[stream_code]:
                     continue
-                
+
                 # Если этот токен уже загружен другим потоком (например, EN берет из RU) - переиспользуем!
                 if bot_id in self._shared_bots:
                     bot = self._shared_bots[bot_id]
@@ -108,7 +108,7 @@ class MultiStreamBotPool:
 
                 self.bots_map[stream_code][bot_id] = bot
                 bots_list.append((bot_id, bot))
-                
+
             except Exception as e:
                 safe_token = secret_fingerprint(t)
                 logger.error(f"❌ Error loading bot token '{safe_token}' for {stream_code}: {e}", exc_info=True)
@@ -149,20 +149,20 @@ class MultiStreamBotPool:
         import time
         # Грузим только запрошенный поток
         self.init_stream(stream)
-        
+
         target_stream = stream if stream in self.iterators else 'ru'
         if target_stream not in self.iterators:
             # Если запрошенного нет, принудительно грузим RU как фоллбэк
             self.init_stream('ru')
             target_stream = 'ru'
-            
+
         if target_stream not in self.iterators:
             raise ValueError(f"No bots available for stream {stream} or ru!")
 
         now = time.time()
         bots_map = self.bots_map.get(target_stream, {})
         total_bots = len(bots_map)
-        
+
         # Проверяем ботов по кругу, пропуская находящихся на кулдауне
         best_candidate = None
         earliest_expiry = float('inf')
@@ -172,7 +172,7 @@ class MultiStreamBotPool:
             cooldown_until = self.cooldown_bots.get(bot_id, 0)
             if cooldown_until <= now:
                 return bot_id, bot
-            
+
             if cooldown_until < earliest_expiry:
                 earliest_expiry = cooldown_until
                 best_candidate = (bot_id, bot)
@@ -187,7 +187,7 @@ class MultiStreamBotPool:
         """Ищет бота по ID сперва в кэше, затем по остальным пулам."""
         if bot_id in self._shared_bots:
             return self._shared_bots[bot_id]
-            
+
         # Если не нашли, придется лениво подгрузить остальные потоки, чтобы найти владельца
         for s in ['ru', 'en', 'jp']:
             if s not in self._loaded_streams:
@@ -195,7 +195,7 @@ class MultiStreamBotPool:
                 if bot_id in self._shared_bots:
                     return self._shared_bots[bot_id]
         return None
-    
+
     def get_all_active_bots(self, prioritize_ready: bool = True) -> List[Bot]:
         """
         Все уникальные живые боты по всем потокам.
@@ -208,7 +208,7 @@ class MultiStreamBotPool:
         import time
         for stream_code in ('ru', 'en', 'jp'):
             self.init_stream(stream_code)
-        
+
         now = time.time()
         active_items = [
             (bot_id, bot) for bot_id, bot in self._shared_bots.items()
@@ -373,7 +373,7 @@ class MultiStreamBotPool:
         for bot in self.all_bots:
             try:
                 await bot.session.close()
-            except: 
+            except:
                 pass
 
 # Создаем глобальный экземпляр

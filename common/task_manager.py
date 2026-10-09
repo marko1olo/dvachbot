@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Coroutine, Set, Any
+from typing import Set, Any
 
 _background_tasks: Set[asyncio.Task] = set()
 
@@ -70,7 +70,7 @@ async def cancel_all_background_tasks():
     for task in list(_background_tasks):
         if not task.done():
             task.cancel()
-    
+
     if _background_tasks:
         await asyncio.gather(*_background_tasks, return_exceptions=True)
     logger.info("All background tasks have been cancelled and awaited.")

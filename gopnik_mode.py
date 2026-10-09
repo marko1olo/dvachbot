@@ -182,7 +182,7 @@ GOPNIK_REPLACEMENTS = {
     'стример': ['клоун перед вебкой', 'балабол с микрофоном'],
     'ньюфаг': ['малолетка в подворотах', 'школяр с вейпом', 'малолетка'],
     'ньюфаги': ['малолетки в подворотах', 'говноеды сопливые'],
-    'сыч': ['батя в трениках', 'старшак на диване', 'подпивасный ветеран', 'сычидон', 'дядя Вася', 'жиробас', 'пузатый'],
+    'сыч': ['батя в трениках', 'старшак на диване', 'подпивасный ветеран', 'сычидон', 'дядя Вася', 'жиробас', 'пузатый', 'чухан', 'омежка', 'терпила'],
     'сычи': ['мужики с пивасом', 'старшаки пузатые'],
 
     # ============================ Политика и общество (по-пацански) ============================
@@ -342,7 +342,6 @@ GOPNIK_REPLACEMENTS = {
     'кал': ['говно', 'дерьмо', 'лепехи'],
     'выпадает':['вываливается', 'выпадает бля'],
     'ерохин': ['четкий пацан', 'альфач', 'бугор'],
-    'сыч': ['чухан', 'омежка', 'терпила'],
     'пялиться':['пялиться', 'зырить', 'глаза мозолить'],
     'пялюсь': ['зырю', 'палю'],
     'попа':['жопа', 'пердак', 'бампер', 'очко'],
@@ -762,10 +761,10 @@ _COMPILED_ESH = re.compile(r'ешь\b', flags=re.IGNORECASE)
 def _gopnik_replacer(match: re.Match) -> str:
     original_word = match.group(0)
     replacement_options = GOPNIK_REPLACEMENTS.get(original_word.lower())
-    
-    if not replacement_options: 
+
+    if not replacement_options:
         return original_word # Защита от непредвиденных сбоев Regex
-        
+
     chosen = random.choice(replacement_options) if isinstance(replacement_options, list) else replacement_options
 
     if original_word.isupper() and len(original_word) > 1: # Полный капс
@@ -789,13 +788,13 @@ def _apply_gopnik_phonetics(text: str) -> str:
     # 1. Жесткая фонетическая редукция (так говорят на улице)
     for pattern, repl in _COMPILED_PHONETIC_MAP:
         text = pattern.sub(repl, text)
-    
+
     # 2. Риторические "быдло-тэги" к глаголам повелительного наклонения
     text = _COMPILED_BYDLO_TAGS.sub(r'\1-ка', text)
-    
+
     # 3. Физические действия гопника
     actions =[
-        " *сплюнул семку*", " *шмыгнул носом*", " *присел на корты*", 
+        " *сплюнул семку*", " *шмыгнул носом*", " *присел на корты*",
         " *хрустнул пальцами*", " *глотнул пиваса*"
     ]
     if random.random() < 0.25:
@@ -803,7 +802,7 @@ def _apply_gopnik_phonetics(text: str) -> str:
         if len(words) > 3:
             words.insert(random.randint(1, len(words)-1), random.choice(actions))
             text = " ".join(words)
-            
+
     return text
 def _apply_wolf_quote(text: str) -> str:
     # Шанс 25%, и только если текст длиннее 5 слов
@@ -833,7 +832,7 @@ def gopnik_transform(text: str) -> tuple:
         image_bytes = create_visual_post(mode='gopnik', text=transformed_text)
         if image_bytes:
             return ('image', image_bytes)
-            
+
     text = transformed_text
 
     # В функции gopnik_transform:
@@ -858,14 +857,14 @@ def gopnik_transform(text: str) -> tuple:
         injection_point = random.randint(1, word_count - 1)
         words.insert(injection_point, parasite_word)
         text = ' '.join(words)
-    
+
     if random.random() < 0.5:
         suffix = random.choice([", бля", ", нахуй", ", епта", ", короче", ", ты понял, да?", ", слышь", ", сука нах", ", внатуре", ", хули там", ", ясно?", ", ёпт"])
         if text.endswith(('.', '!', '?')):
             text = text[:-1] + suffix + text[-1]
         else:
             text += suffix
-            
+
     if random.random() < 0.25:
         prefix = random.choice(["Чисто ", "Слышь, я чё думаю, ", "Короче, такой расклад: ", "В натуре, ", "Такая хуйня, бля, ", "Слушай маляву, фраер нахуй, ", "Слышь, бля, ", "Блатной совет постановил: ", " Э, бля фраер, слушай, ", "Короче пацаны, ", "Так вот чё, бля, ", "Слышь, епта, ", "Пидары бля, ", "Значит так, бля, "])
         text = f"{prefix}{text}"

@@ -1,8 +1,7 @@
 import pytest
 import asyncio
 import time
-import os
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -14,7 +13,6 @@ from common.database import (
     process_mentions_and_notify,
     get_and_clear_notification_queue,
 )
-from common.db_pool import get_pool, db_lock
 
 
 @pytest.fixture(autouse=True)
@@ -221,25 +219,25 @@ async def test_get_thread_op_by_post_num():
 async def test_reply_notifier_url_and_text_formatting():
     """Verify notification text, buttons, and anchors generated for reply notifications."""
     from common.board_config import BOARD_CONFIG
-    
+
     recipient_id = 99999
     source_post_num = 500  # User's post
     reply_post_num = 505   # Reply post
     board_id = "b"
     thread_id = 500
-    
+
     webapp_url = "https://tgach.top"
     thread_url = f"{webapp_url}/{board_id}/res/{thread_id}.html#post-{reply_post_num}"
-    
+
     # Assert URL structure has #post-505 anchor
     assert thread_url == "https://tgach.top/b/res/500.html#post-505"
-    
+
     text_ru = f"📢 На ваш пост >>{source_post_num} ответили постом >>{reply_post_num}"
     assert "На ваш пост >>500 ответили постом >>505" in text_ru
 
     bot_username = BOARD_CONFIG.get(board_id, {}).get('username', '').lstrip('@')
     tg_url = f"https://t.me/{bot_username}?start=thread_{thread_id}"
-    
+
     buttons = [
         InlineKeyboardButton(text="Открыть в Telegram 💬", url=tg_url),
         InlineKeyboardButton(text="Читать на сайте 🌐", url=thread_url),

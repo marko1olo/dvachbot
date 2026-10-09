@@ -13,13 +13,10 @@ weekly_airdrop_engine.py — Еженедельный пропорциональ
 """
 
 import asyncio
-import json
 import logging
-import math
 import random
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 
 from aiogram import Bot
 

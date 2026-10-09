@@ -12,7 +12,6 @@ Written by Challenger 2 (Empirical Adversarial Verification).
 import os
 import sys
 import json
-import math
 import time
 import asyncio
 import tempfile
@@ -26,25 +25,20 @@ if str(ROOT) not in sys.path:
 
 import aiosqlite
 from aiogram import types, Bot
-from aiogram.types import FSInputFile, InputMediaPhoto, InlineKeyboardMarkup
+from aiogram.types import FSInputFile, InlineKeyboardMarkup
 from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
 from aiogram.methods import SendMediaGroup
 
 import banner_manager
 from banner_manager import (
-    get_banner_file,
-    get_all_banners_summary,
     save_cache,
     _init_banners,
-    BANNERS_DIR,
-    CACHE_FILE,
 )
 from main import (
     _send_banners_page,
     _format_ledger_view,
     cmd_wallet,
     cmd_ledger,
-    cb_prof_ledger,
     BANNERS_PER_PAGE,
 )
 import common.database
@@ -52,10 +46,7 @@ from common.database import (
     record_user_transaction,
     get_user_recent_transactions,
     get_user_transaction_summary,
-    get_user_global_balance,
-    db_lock,
 )
-from common.html_utils import escape_html
 
 
 class TestBannerMediaGroupAdversarial(unittest.IsolatedAsyncioTestCase):

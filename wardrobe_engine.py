@@ -10,7 +10,6 @@ Includes dynamic duration stacking, set bonuses, stats and dressing room UI.
 """
 
 import time
-import json
 from typing import Dict, Any, List, Optional, Tuple
 
 # -----------------------------------------------------------------------------
@@ -734,7 +733,7 @@ def equip_item(active_items: Dict[str, Any], item_id: str) -> Tuple[bool, str]:
     for s in sets:
         if item_id in s["items"]:
             set_note = f"\n✨ <b>АКТИВИРОВАН СЕТ-БОНУС:</b> {s['name']}!\n<i>{s['bonus_desc']}</i>"
-            
+
             # Unlock set achievement
             target_ach = SET_ACHIEVEMENT_MAP.get(s["id"])
             if target_ach:

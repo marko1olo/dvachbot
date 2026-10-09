@@ -103,20 +103,20 @@ def upload_folder_sync(folder, token, repo):
             err_msg = str(e).lower()
             # ПРАВКА: Если лимит или обрыв протокола — не мучаем другие стратегии
             if "429" in err_msg or "rate limit" in err_msg:
-                logger.error(f"🚨 HF Rate Limit hit (429). Activating 30m cooldown.")
+                logger.error("🚨 HF Rate Limit hit (429). Activating 30m cooldown.")
                 HF_COOLDOWN_UNTIL = time.time() + 1800
                 break # Выходим из цикла стратегий
-            
+
             if "unexpected_eof" in err_msg or "timeout" in err_msg:
                 logger.error(f"❌ HF Network Timeout/EOF on strategy {strategy['name']}. Batch too heavy?")
                 # Не выходим, пробуем следующую (прокси может быть стабильнее)
-                
+
             if mark_hf_upload_failure(e, repo):
                 break
 
-            logger.warning(f"HF Batch Upload ({strategy['name']}) failed: {e}") 
+            logger.warning(f"HF Batch Upload ({strategy['name']}) failed: {e}")
             continue
-    
+
     return False
 
 async def _download_http_safe(url, path):
@@ -158,35 +158,35 @@ async def process_queue_batch():
     if not file_ids: return
 
     file_details = await get_file_details_batch(file_ids)
-    
+
     logger.info(f"📦 Starting HF Batch for {len(file_ids)} files...")
     temp_dir = f"temp_hf_{int(time.time())}"
     media_root = os.path.join(temp_dir, "media")
     os.makedirs(media_root, exist_ok=True)
-    
+
     try:
-        successful_files = [] 
+        successful_files = []
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        
+
         async def _download_task(fid, details):
             async with semaphore:
                 try:
                     owner_id = await get_file_owner_id(fid)
                     bot = global_bot_pool.get_bot_by_id(owner_id) if owner_id else global_bot_pool.get_main_bot()
                     if not bot: return None
-                    
+
                     sub = hashlib.md5(fid.encode(), usedforsecurity=False).hexdigest()[:2]
                     fname_db = details.get("filename") if details else None
-                    
+
                     fdir = os.path.join(media_root, sub); os.makedirs(fdir, exist_ok=True)
-                    
+
                     fresh_file_id = fid
                     final_filename = fname_db
 
                     try:
                         finfo = await bot.get_file(fid)
                         fresh_file_id = finfo.file_id
-                        
+
                         file_path = getattr(finfo, "file_path", None)
                         if file_path:
                             if not final_filename:
@@ -198,7 +198,7 @@ async def process_queue_batch():
 
                             if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{file_path}", lpath):
                                 return (fid, final_filename, sub)
-                            
+
                     except Exception as e:
                         err_str = str(e).lower()
                         if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
@@ -211,12 +211,12 @@ async def process_queue_batch():
                         if any(x in err_str for x in fatal_errors):
                             logger.error(f"🗑️ File {fid[:10]} is DEAD in Telegram. Marking for removal.")
                             return (fid, "deleted", sub)
-                        
+
                         return None
 
                     if not final_filename:
                         final_filename = f"{fid}.dat"
-                        
+
                     lpath = os.path.abspath(os.path.join(fdir, final_filename))
 
                     info = await find_file_message_info(fid)
@@ -226,10 +226,10 @@ async def process_queue_batch():
                     else:
                         res = await refresh_reference_by_send(bot, fid)
                         if res: c_id, m_id = res
-                    
+
                     if c_id and await download_file_mtproto(bot.token, fresh_file_id, lpath, c_id, m_id):
                         return (fid, final_filename, sub)
-                    
+
                     logger.error(f"❌ All download methods failed for {fid[:10]}. Removal.")
                     return (fid, "deleted", sub)
                 except Exception as e:
@@ -238,10 +238,10 @@ async def process_queue_batch():
 
         tasks = [_download_task(fid, file_details.get(fid)) for fid in file_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         success_ids = set()
         failed_ids = set()
-        
+
         for i, r in enumerate(results):
             original_fid = file_ids[i]
             if isinstance(r, tuple) and r:
@@ -265,17 +265,17 @@ async def process_queue_batch():
             return
 
         logger.info(f"⬆️ Uploading batch ({len(successful_files)} files) to HF repo '{repo}'...")
-        
+
         # Передаем токен и репо, которые получили в начале функции
         if await asyncio.get_running_loop().run_in_executor(None, upload_folder_sync, temp_dir, token, repo):
             await remove_from_hf_queue(list(success_ids))
-            
+
             for fid, fname, sub in successful_files:
                 await add_file_mirror(fid, 'huggingface', f"https://huggingface.co/datasets/{repo}/resolve/main/media/{sub}/{fname}")
             logger.info("✅ HF Batch Upload Complete.")
         else:
             logger.warning("⚠️ Batch upload failed. Files remain in queue for retry.")
-    
+
     except Exception as e:
         logger.error(f"❌ Batch processing critical error: {e}", exc_info=True)
     finally:

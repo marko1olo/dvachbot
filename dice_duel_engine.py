@@ -18,7 +18,7 @@ import random
 import secrets
 import math
 from typing import Dict, Optional, Tuple, Any, List
-from aiogram import types, F, Dispatcher, Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -440,7 +440,7 @@ async def create_dice_challenge(
 
     async with db_lock:
         bal = await get_user_global_balance(db, challenger_id)
-    
+
     if bal < bet:
         return False, f"❌ Недостаточно шекелей! Ставка: <b>{bet:,} ₪</b>, на балансе: <b>{int(bal):,} ₪</b>.", None
 
@@ -761,7 +761,7 @@ async def _finish_dice_game(
             asyncio.create_task(send_pvp_direct_notification(bot, p1, draw_notify_text))
             if p2:
                 asyncio.create_task(send_pvp_direct_notification(bot, p2, draw_notify_text))
-        
+
         p1_anon_ann = get_anon_id(p1) if p1 else "???"
         p2_anon_ann = get_anon_id(p2) if p2 else "???"
         announcement = random.choice(DICE_DRAW_ANNOUNCEMENTS).format(
@@ -804,7 +804,7 @@ async def _finish_dice_game(
 
         w_vis = format_dice_visual(w_rolls) if w_rolls else "Бросок"
         l_vis = format_dice_visual(l_rolls) if l_rolls else "Фейл"
-        
+
         winner_anon = get_anon_id(winner_id) if winner_id else "???"
         loser_anon = get_anon_id(loser_id) if loser_id else "???"
 
@@ -920,7 +920,7 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
     if game.get("finished"):
         outcome = game.get("outcome")
         if outcome == "draw":
-            footer = f"🤝 <b>Игра завершена вничью!</b> Ставки возвращены."
+            footer = "🤝 <b>Игра завершена вничью!</b> Ставки возвращены."
         else:
             w = game.get("winner")
             w_anon = get_anon_id(w) if w else "???"

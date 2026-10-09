@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import pytest
 from post_helpers import _format_media_context, _format_post_text
 
 def test_format_media_context_both_desc_and_tags():

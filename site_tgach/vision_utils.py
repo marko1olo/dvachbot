@@ -2,9 +2,7 @@ import base64
 import random
 import os
 import io
-import asyncio
 from PIL import Image
-import httpx
 from openai import AsyncOpenAI
 import logging
 
@@ -19,28 +17,28 @@ async def describe_image_for_bot(img_bytes: bytes, caption: str = "") -> str:
         MAX_SIZE = 800
         if max(img.size) > MAX_SIZE:
             img.thumbnail((MAX_SIZE, MAX_SIZE), Image.Resampling.LANCZOS)
-            
+
         with io.BytesIO() as buffer:
             img.save(buffer, format="JPEG", quality=70, optimize=True)
             resized_bytes = buffer.getvalue()
-            
+
         b64_img = base64.b64encode(resized_bytes).decode("utf-8")
         image_url = f"data:image/jpeg;base64,{b64_img}"
-        
+
         system_prompt = "You are an anonymous toxic user on an imageboard. Describe what you see in the attached image in Russian. Be extremely rude, sarcastic and toxic. Use mat (profanity). Mention any text on the image. Make it 2-3 sentences. Context from author: " + str(caption)
-        
+
         keys_str = os.getenv("GROQ_API_KEYS", "")
         keys = [k.strip() for k in keys_str.split(",") if k.strip()]
         if not keys:
             return "[????????, ?? API ????? ?? ?????????]"
-            
+
         api_key = random.choice(keys)
-        
+
         client = AsyncOpenAI(
             api_key=api_key,
             base_url="https://api.groq.com/openai/v1"
         )
-        
+
         resp = await client.chat.completions.create(
             model="qwen/qwen3.8-27b",
             messages=[

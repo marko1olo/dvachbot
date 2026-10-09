@@ -2,16 +2,11 @@ import shared_state
 import asyncio
 import json
 import time
-import uuid
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from typing import Dict, List, Set, Any, Optional
-from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, LinkPreviewOptions
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest, TelegramServerError
 import aiohttp
 import re
-import ssl
 from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
 from common.database import get_post_by_num, get_post_copies, add_post_copies
@@ -19,12 +14,10 @@ def is_ai_slop_content(content: dict | None = None, text: str | None = None) -> 
     from common.bot_helpers import is_ai_slop_content as _check_slop
     return _check_slop(content, text)
 from common.config import (
-    BOT_DELIVERY_INITIAL_CHUNK_SIZE,
     BOT_DELIVERY_MAX_CHUNK_SIZE,
-    BOT_DELIVERY_MIN_CHUNK_SIZE,
 )
 from shared_state import *
-from shared_state import _drop_post_copy_maps_unlocked, _trim_post_copy_maps_unlocked, _trim_messages_storage_unlocked
+from shared_state import _trim_post_copy_maps_unlocked, _trim_messages_storage_unlocked
 from utils import split_text
 import html
 import logging
@@ -38,7 +31,7 @@ def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, in
     """Улучшенная версия: не использует замок, защищена от порчи префиксов чисел постов."""
     if not text or ">>" not in text:
         return text
-    
+
     matches = set(RE_YOU_PATTERN.findall(text))
     for post_str in matches:
         try:
@@ -108,9 +101,9 @@ def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_au
     if not reply_to_post:
         return None
     is_author_match = (
-        reply_to_post_author_id is not None 
-        and reply_to_post_author_id > 0 
-        and user_id_for_context > 0 
+        reply_to_post_author_id is not None
+        and reply_to_post_author_id > 0
+        and user_id_for_context > 0
         and user_id_for_context == reply_to_post_author_id
     )
     you_marker = " (You)" if is_author_match else ""
@@ -184,8 +177,8 @@ def _format_main_text(content: dict) -> str | None:
          return convert_site_tags_to_telegram(main_text_raw)
 
 async def _format_message_body(
-    content: dict, 
-    user_id_for_context: int, 
+    content: dict,
+    user_id_for_context: int,
     post_data: dict,
     reply_to_post_author_id: int | None,
     quote_info: dict | None = None
@@ -886,18 +879,18 @@ class MessageBroadcaster:
                     return None
                 except TelegramRetryAfter:
                     raise
-                except TelegramBadRequest as e:
+                except TelegramBadRequest:
                     self.stats['errors'] += 1
                     return None
                 except Exception as e:
                     runtime_logger.warning(f"Hide check send error for {uid}: {e}")
                     self.stats['errors'] += 1
                     return None
-                    
+
         is_direct_reply = bool(
-            self.reply_to_post_author_id is not None 
-            and self.reply_to_post_author_id > 0 
-            and uid > 0 
+            self.reply_to_post_author_id is not None
+            and self.reply_to_post_author_id > 0
+            and uid > 0
             and uid == self.reply_to_post_author_id
         )
         head = self.highlight_head_html if is_direct_reply else self.base_head_html
@@ -930,7 +923,7 @@ class MessageBroadcaster:
                 )
                 send_content = self.content_for_common
         current_content = send_content
-        
+
         if self.mentioned_authors:
             text_with_you = add_you_to_my_posts_fast(self.raw_text, uid, self.mentioned_authors)
             if text_with_you != self.raw_text:
@@ -939,7 +932,7 @@ class MessageBroadcaster:
                 current_content[target_field] = text_with_you
                 body = await _format_message_body(
                     content=current_content,
-                    user_id_for_context=uid, 
+                    user_id_for_context=uid,
                     post_data=self.post_data_copy,
                     reply_to_post_author_id=self.reply_to_post_author_id,
                     quote_info=current_content.get('quote_info')
@@ -947,18 +940,18 @@ class MessageBroadcaster:
         elif is_direct_reply:
              body = await _format_message_body(
                 content=current_content,
-                user_id_for_context=uid, 
+                user_id_for_context=uid,
                 post_data=self.post_data_copy,
                 reply_to_post_author_id=self.reply_to_post_author_id,
                 quote_info=current_content.get('quote_info')
             )
-        
+
         full_text = f"{head}\n\n{body}" if body else head
         reply_to_mid = None
         if self.reply_info:
             raw = self.reply_info.get(uid)
             if raw: reply_to_mid = raw[0] if isinstance(raw, list) else raw
-            
+
         if reply_to_mid is None and self.post_num_for_replies:
             async with storage_lock:
                 replies_map = post_to_messages.get(self.post_num_for_replies)
@@ -1277,13 +1270,13 @@ class MessageBroadcaster:
                     combined.append(media_res)
                 return combined if combined else text_result
             return await _send_plain_text_parts(reason, plain_text)
-        
+
         for attempt in range(max_attempts):
             try:
                 ct_raw = current_content["type"]
                 ct = str(ct_raw).split('.')[-1].lower()
                 common_kwargs = {
-                    'chat_id': uid, 
+                    'chat_id': uid,
                     'reply_to_message_id': reply_to_mid,
                     'reply_markup': self.final_keyboard,
                     'disable_notification': is_sage,
@@ -1309,10 +1302,10 @@ class MessageBroadcaster:
                     if current_content.get("voice_bytes"):
                         file_source = BufferedInputFile(current_content["voice_bytes"], filename="roast.ogg")
                     elif current_content.get("image_bytes"):
-                        if ct == 'photo': 
+                        if ct == 'photo':
                             filename = "file.jpg"
                         elif ct == 'animation':
-                            filename = "file.gif" 
+                            filename = "file.gif"
                         elif ct == 'voice':
                             filename = "roast.ogg"
                         elif ct == 'audio':
@@ -1392,10 +1385,10 @@ class MessageBroadcaster:
 
                     if not current_content.get('media'):
                         return await _send_text_fallback("empty_media_group")
-                    
+
                     can_fit_caption = len(full_text) <= 1024
                     caption_for_group = full_text if can_fit_caption else None
-                    
+
                     media_group_build = []
                     for idx, item in enumerate(current_content.get('media') or []):
                         if not isinstance(item, dict):
@@ -1411,9 +1404,9 @@ class MessageBroadcaster:
                             if isinstance(media_src, str) and (media_src.strip().startswith('<') or not media_src.strip()):
                                 continue
                             m_type = str(item.get('type') or '').split('.')[-1].lower() or 'photo'
-                        
+
                         cap = caption_for_group if idx == 0 else None
-                        
+
                         if m_type == 'photo':
                             media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
                         elif m_type == 'video':
@@ -1422,7 +1415,7 @@ class MessageBroadcaster:
                             media_group_build.append(InputMediaDocument(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
                         elif m_type == 'audio':
                             media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
-                    
+
                     media_group_build = media_group_build[:10]
                     if len(media_group_build) == 1:
                         single_item = media_group_build[0]
@@ -1476,7 +1469,7 @@ class MessageBroadcaster:
 
                     try:
                         res = await self.bot_instance.send_media_group(
-                            chat_id=uid, media=media_group_build, 
+                            chat_id=uid, media=media_group_build,
                             reply_to_message_id=reply_to_mid,
                             disable_notification=is_sage,
                             request_timeout=request_timeout,
@@ -1495,7 +1488,7 @@ class MessageBroadcaster:
                             self.media_group_fallback_to_text = True
                             return await _send_text_fallback("media_group_rejected_fallback")
                         raise
-                    
+
                     # Cache file_ids from Telegram response so subsequent recipients in the broadcast
                     # send pre-warmed file_id references instead of re-uploading raw bytes.
                     if isinstance(res, list) and self.content.get('media'):
@@ -1514,7 +1507,7 @@ class MessageBroadcaster:
                                     item['file_id'] = fid
                         if self.content_for_common.get('media'):
                             self.content_for_common['media'] = self.content['media']
-                    
+
                     if not can_fit_caption:
                         anchor_msg = res[0] if isinstance(res, list) else res
                         anchor_id = getattr(anchor_msg, "message_id", None)
@@ -1551,7 +1544,7 @@ class MessageBroadcaster:
                                 )
                                 return res
                             raise
-                    
+
                     self.stats['success'] += 1
                     return res
                 elif ct in ['sticker', 'video_note', 'dice']:
@@ -1616,7 +1609,7 @@ class MessageBroadcaster:
                                             size = int(resp.headers.get('Content-Length', 0))
                                             if size > 9_500_000:
                                                 print(f"   🗑 Исключена жирная ссылка: {size/1024/1024:.2f} MB")
-                                                continue 
+                                                continue
                                     except Exception as head_err:
                                         runtime_logger.debug(f"HEAD check failed for {media_obj}: {head_err}")
                                 clean_media_list.append(item)
@@ -1632,7 +1625,7 @@ class MessageBroadcaster:
                         return await _send_text_fallback("file_too_big")
                 if "message to be replied not found" in err_low:
                     reply_to_mid = None
-                    continue 
+                    continue
                 elif "chat not found" in err_low or "user not found" in err_low or "blocked" in err_low:
                     raise TelegramForbiddenError(method=e.method, message=e.message)
                 elif "flood control" in err_low or "retry after" in err_low:
@@ -1800,7 +1793,7 @@ class MessageBroadcaster:
                     runtime_logger.warning(f"⚠️ [ULTIMATE_FALLBACK] User {uid} plain media fallback failed. Sending plain text to preserve post #{self.post_num}.")
                     return await _send_plain_text_parts("bad_request_ultimate_fallback")
             except TelegramForbiddenError:
-                raise 
+                raise
             except TelegramRetryAfter:
                 raise
             except TelegramServerError as srv_err:
@@ -1810,10 +1803,10 @@ class MessageBroadcaster:
                 self.stats['errors'] += 1
                 runtime_logger.warning(f"⚠️ Telegram server error in _send_one for user {uid}: {srv_err}")
                 return None
-            except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError) as net_err:
+            except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError):
                 self.stats['timeouts'] += 1
                 return None
-            except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError) as e:
+            except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError):
                 self.stats['ghosts'] += 1
                 return None
             except asyncio.CancelledError:

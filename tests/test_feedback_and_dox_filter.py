@@ -2,7 +2,6 @@
 import pytest
 import asyncio
 import time
-from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
@@ -10,7 +9,6 @@ from fastapi_cache.backends.inmemory import InMemoryBackend
 from common.database import (
     create_feedback,
     get_all_feedback,
-    get_unread_feedback_count,
     create_post,
     get_post_details_for_admin,
 )
@@ -117,7 +115,7 @@ def test_api_feedback_endpoint_deduplication(isolated_test_db):
         "contact": "@apiuser",
         "message": "API feedback submission deduplication test",
     }
-    
+
     # 1st request
     r1 = client.post("/api/feedback", json=payload)
     assert r1.status_code == 200
@@ -154,7 +152,7 @@ def test_anti_dox_phone_number_detection(phone_sample):
     """Verify various RU/UA/KZ/BY mobile number formats are detected."""
     raw_text = f"Слив уебка звоните ему {phone_sample} деанон"
     assert contains_phone_number(raw_text) is True
-    
+
     phones = extract_phone_numbers(raw_text)
     assert len(phones) >= 1
     assert phone_sample in phones[0]
@@ -201,7 +199,7 @@ def test_anti_dox_check_dox_content_and_helpers():
 def test_anti_dox_integration_with_spam_filters():
     """Verify phone numbers are caught by is_spam_filtered and check_link_or_ad_spam."""
     dox_msg = "Сливаю номер шлюхи: +380991234567"
-    
+
     # 1. is_spam_filtered
     assert is_spam_filtered(dox_msg, "b", user_id=999) is True
 

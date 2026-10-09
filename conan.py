@@ -121,14 +121,14 @@ async def conan_roaster(state, messages_storage, post_to_messages, message_to_po
             ]
             if not available_boards:
                 continue
-            
+
             board_id = random.choice(available_boards)
             b_data = board_data[board_id]
             recipients = b_data['users']['active'] - b_data['users']['banned']
 
             post_num_to_reply = None
             new_pnum = None
-            
+
             # Сначала получаем номер нового поста и пост для ответа под блокировкой
             async with storage_lock:
                 # 1. Генерируем новый номер поста
@@ -145,10 +145,10 @@ async def conan_roaster(state, messages_storage, post_to_messages, message_to_po
             # Если не удалось найти пост для ответа, пропускаем итерацию
             if not post_num_to_reply:
                 continue
-            
+
             # 3. Генерируем заголовок уже после получения post_num, вне блокировки
             header = await format_header(board_id, new_pnum)
-            
+
             phrase = conan_phrase()
 
             content = {

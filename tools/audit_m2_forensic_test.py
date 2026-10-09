@@ -21,19 +21,12 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-import lootbox_engine
 from lootbox_engine import (
-    TRASH_ITEMS,
-    PREMIUM_JUNK,
-    NON_BUYABLE_TITLES,
-    EXCLUSIVE_RELICS,
-    WEAPON_SCRAP_PRICES,
     calculate_duplicate_cashback,
     roll_trash_lootbox,
     roll_gold_safe,
     apply_lootbox_reward,
 )
-from wardrobe_engine import CLOTHING_CATALOG, get_wardrobe_total_stats
 
 def audit_ast():
     print("=== 1. AST ANALYSIS OF LOOTBOX ENGINE ===")
@@ -60,7 +53,7 @@ def audit_ast():
 
 def audit_boundary_cases():
     print("=== 2. BOUNDARY AND EDGE CASE STRESS TEST ===")
-    
+
     # 2.1 calculate_duplicate_cashback boundaries
     assert calculate_duplicate_cashback(0, 0) == 0
     assert calculate_duplicate_cashback(0, 1000) == 0
@@ -95,7 +88,7 @@ def audit_boundary_cases():
 def audit_monte_carlo_multi_seed():
     print("=== 3. MULTI-SEED MONTE CARLO SIMULATION (20,000 ROLLS) ===")
     seeds = [42, 1337, 2026, 99999, 777]
-    
+
     # Trash Lootbox: Cost 150, Target Nominal RTP <= 85%, Target Cash RTP < 25%
     for s in seeds:
         random.seed(s)
@@ -104,7 +97,7 @@ def audit_monte_carlo_multi_seed():
         spent = N * cost
         liquid_cash = 0
         nominal_val = 0
-        
+
         # Saturated inventory
         inv = {
             "knife_gun": True, "mute_gun": True, "partyvan_gun": True,
@@ -115,7 +108,7 @@ def audit_monte_carlo_multi_seed():
             tier, title, desc, payload, base_cash = roll_trash_lootbox()
             _, final_cash, _ = apply_lootbox_reward(dict(inv), payload, base_cash, case_type="trash")
             liquid_cash += final_cash
-            
+
             if "🔥 ДЖЕКПОТ" in tier:
                 nom = 350 if base_cash == 350 else (500 if "mute_gun" in payload else 1200)
             elif "✨ РЕДКИЙ" in tier or "👗 БАЗОВЫЙ" in tier:
@@ -140,7 +133,7 @@ def audit_monte_carlo_multi_seed():
         spent = N * cost
         liquid_cash = 0
         nominal_val = 0
-        
+
         # Fully saturated inventory
         inv = {
             "knife_gun": True, "pepperspray_gun": True, "partyvan_gun": True, "pills_gun": True,
@@ -153,7 +146,7 @@ def audit_monte_carlo_multi_seed():
             tier, title, desc, payload, base_cash = roll_gold_safe()
             _, final_cash, _ = apply_lootbox_reward(dict(inv), payload, base_cash, case_type="gold")
             liquid_cash += final_cash
-            
+
             if "🌟 МИФИЧЕСКИЙ" in tier or "👑 СУПЕР-ДЖЕКПОТ" in tier:
                 if base_cash == 1500: nom = 1500
                 elif base_cash == 3000: nom = 3500
@@ -182,7 +175,7 @@ def audit_continuous_bankruptcy():
     cost = 500
     opens = 0
     inv = {"knife_gun": True, "pepperspray_gun": True, "hat_helmet_is_permanent": True}
-    
+
     balances = [balance]
     while balance >= cost and opens < 2000:
         balance -= cost

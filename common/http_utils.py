@@ -17,7 +17,7 @@ api_retry = retry(
     stop=stop_after_attempt(5),
     retry=(
         retry_if_exception_type((
-            httpx.TimeoutException, 
+            httpx.TimeoutException,
             httpx.ConnectError,
             httpx.ReadError,
             httpx.WriteError,
@@ -25,7 +25,7 @@ api_retry = retry(
             openai.APIConnectionError,
             openai.InternalServerError,
             openai.APITimeoutError
-        )) | 
+        )) |
         retry_if_exception(is_retryable_error)
     )
 )

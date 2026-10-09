@@ -7,7 +7,6 @@ tests/test_economy_security_patches.py — Comprehensive tests for economic secu
 4. Economy sanctions and database sanitization script.
 """
 
-import asyncio
 import json
 import os
 import sqlite3

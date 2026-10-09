@@ -1,13 +1,11 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import io
-import time
 
 from broadcaster import _format_main_text
 from ai_manager import (
     handle_music_roast_batch,
     MUSIC_ROAST_RATE_LIMIT,
-    MUSIC_ROAST_RATE_WINDOW_SEC,
     MUSIC_ROAST_FLOOD_RESPONSES,
     _music_roast_user_times,
     _music_roast_seen_mg

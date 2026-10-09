@@ -1,6 +1,5 @@
 import pytest
 import time
-import json
 from common.database import (
     get_post_info_by_copy,
     get_post_author_by_copy,
@@ -12,7 +11,6 @@ from common.database import (
     _IMAGE_CACHE
 )
 import common.config as config
-import shared_state
 
 
 @pytest.mark.asyncio

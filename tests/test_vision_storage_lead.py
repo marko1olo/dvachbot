@@ -1,13 +1,10 @@
 import pytest
-import asyncio
 import time
-import os
-import tempfile
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import site_tgach.catbox as catbox
 from site_tgach.catbox import is_catbox_available, CATBOX_PAUSE_COOLDOWN
-from site_tgach.mirror_worker import _process_single_task, _try_pixhost_upload, process_mirror_queue
+from site_tgach.mirror_worker import _process_single_task
 
 
 class TestCatboxAndMirrorWorker:

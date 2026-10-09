@@ -1,6 +1,5 @@
 import sqlite3
 import json
-from collections import defaultdict
 from datetime import datetime, timezone
 
 db_path = 'file:c:/Users/danat/Desktop/dvachbot/dvach_bot.db?mode=ro'

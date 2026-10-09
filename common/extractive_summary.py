@@ -8,7 +8,7 @@ import re
 import html
 import random
 from collections import Counter
-from common.text_utils import clean_html_tags, sanitize_html
+from common.text_utils import clean_html_tags
 
 WAHA_THOUGHTS = [
     "Неведение — величайшее благословение слабого разума.",
@@ -54,15 +54,15 @@ def _parse_dump_lines(text_dump: str) -> list[dict]:
     """Parse unstructured imageboard/chat dump into structured post objects."""
     posts = []
     lines = text_dump.strip().split("\n")
-    
+
     current_author = "Анон"
     current_reply = None
-    
+
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
-            
+
         # Match standard bot line: Name (Ответ на #123): text or Name: text
         m = re.match(r"^([^:(]+?)(?:\s*\((?:Ответ на|reply to|>>)\s*#?(\d+)\))?\s*:\s*(.*)$", line, re.IGNORECASE)
         if m:
@@ -72,7 +72,7 @@ def _parse_dump_lines(text_dump: str) -> list[dict]:
         else:
             # Fallback for headerless text
             content = line
-            
+
         clean_text = clean_html_tags(content).strip()
         # Filter out noisy placeholders and sticker tags
         clean_lower = clean_text.lower()
@@ -80,21 +80,21 @@ def _parse_dump_lines(text_dump: str) -> list[dict]:
             continue
         if len(clean_text) < 4:
             continue
-            
+
         posts.append({
             "author": current_author or "Анон",
             "reply_to": current_reply,
             "text": clean_text,
             "raw": line
         })
-        
+
     return posts
 
 
 def _extract_key_topics(posts: list[dict], max_topics: int = 5) -> list[dict]:
     """Cluster posts and extract top topics based on term frequency and coherence."""
     word_freq = Counter()
-    
+
     for p in posts:
         words = re.findall(r'[A-Za-zА-Яа-яЁё0-9_-]{3,}', p["text"].lower())
         for w in words:
@@ -102,13 +102,13 @@ def _extract_key_topics(posts: list[dict], max_topics: int = 5) -> list[dict]:
                 word_freq[w] += 1
 
     common_keywords = [w for w, _ in word_freq.most_common(15)]
-    
+
     topics = []
     used_posts = set()
-    
+
     for kw in common_keywords:
         matching_posts = [
-            p for i, p in enumerate(posts) 
+            p for i, p in enumerate(posts)
             if i not in used_posts and kw in p["text"].lower()
         ]
         if matching_posts:
@@ -122,7 +122,7 @@ def _extract_key_topics(posts: list[dict], max_topics: int = 5) -> list[dict]:
             })
             if len(topics) >= max_topics:
                 break
-                
+
     # If keyword clustering found few topics, take top distinct posts by substance
     if len(topics) < max_topics:
         sorted_by_len = sorted(
@@ -171,7 +171,7 @@ def generate_extractive_summary(
 
     author_counts = Counter(p["author"] for p in posts)
     top_authors = [auth for auth, _ in author_counts.most_common(5)]
-    
+
     # Best quotes
     non_trivial_posts = [p for p in posts if len(p["text"]) > 25 and not p["text"].startswith('/')]
     spicy_quotes = sorted(non_trivial_posts or posts, key=lambda p: len(p["text"]), reverse=True)
@@ -195,7 +195,7 @@ def generate_extractive_summary(
 
 def _format_warhammer_summary(board_id: str, posts: list, topics: list, quote: dict, sec_quote: dict | None, top_authors: list, paragraph_count: int) -> str:
     paragraphs = []
-    
+
     # 1. Header & Astro-vibe
     p1 = (
         f"⚙️ <b>СВЯЩЕННОЕ ВОКС-ДОСЬЕ СЕКТОРА /{board_id}/</b> ⚙️\n\n"
@@ -252,7 +252,7 @@ def _format_warhammer_summary(board_id: str, posts: list, topics: list, quote: d
 
 def _format_blat_summary(board_id: str, posts: list, topics: list, quote: dict, sec_quote: dict | None, author_counts: Counter, paragraph_count: int) -> str:
     paragraphs = []
-    
+
     # 1. Intro
     intro = random.choice(BLAT_INTRO_VARIANTS)
     p1 = f"♠️ <b>ВОРОВСКОЙ ПРОГОН ИЗ КИБЕР-ХАТЫ</b> ♠️\n\n{intro}"
@@ -287,8 +287,8 @@ def _format_blat_summary(board_id: str, posts: list, topics: list, quote: dict, 
 
     # 5. Signet
     p5 = (
-        f"♠️ <b>Вердикт Смотрящего:</b> Хата живет, общак полон, масть держится ровно.\n\n"
-        f"<i>Жизнь ворам, хуй мусорам! АУЕ!</i>"
+        "♠️ <b>Вердикт Смотрящего:</b> Хата живет, общак полон, масть держится ровно.\n\n"
+        "<i>Жизнь ворам, хуй мусорам! АУЕ!</i>"
     )
     paragraphs.append(p5)
 
@@ -297,7 +297,7 @@ def _format_blat_summary(board_id: str, posts: list, topics: list, quote: dict, 
 
 def _format_classic_summary(board_id: str, posts: list, topics: list, quote: dict, sec_quote: dict | None, author_counts: Counter, paragraph_count: int, context_name: str) -> str:
     paragraphs = []
-    
+
     # 1. Header
     title = f"/{board_id}/" if not context_name else context_name
     p1 = (
@@ -351,7 +351,7 @@ def _format_en_summary(board_id: str, posts: list, topics: list, quote: dict, pa
         f"📝 <b>BOARD DIGEST (/{board_id}/)</b>\n\n"
         f"<i>A breakdown of recent discussions, bantz, and highlights:</i>"
     )
-    
+
     p2 = "🔥 <b>Key Discussions:</b>\n"
     for i, t in enumerate(topics[:4], 1):
         clean_snippet = html.escape(re.sub(r'>>\d+', '', t["post"]["text"]).strip())
@@ -379,7 +379,7 @@ def _format_jp_summary(board_id: str, posts: list, topics: list, quote: dict, pa
         f"📝 <b>スレダイジェスト (/{board_id}/)</b>\n\n"
         f"<i>最近の話題と注目のレスまとめ:</i>"
     )
-    
+
     p2 = "🔥 <b>主な話題:</b>\n"
     for i, t in enumerate(topics[:4], 1):
         clean_snippet = html.escape(re.sub(r'>>\d+', '', t["post"]["text"]).strip())

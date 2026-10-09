@@ -7,15 +7,14 @@ with podiums, progress bars, caller highlighting, and in-memory cache.
 
 import io
 import time
-import sqlite3
 import datetime
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 from collections import OrderedDict
 from PIL import Image, ImageDraw, ImageFont
 
 from stats_generator import connect_stats_db
-from common.anon_identity import get_anon_id, generate_anon_name
+from common.anon_identity import get_anon_id
 
 MAX_LEADERBOARD_CACHE_SIZE = 30
 LEADERBOARD_CACHE: OrderedDict[str, Tuple[float, io.BytesIO, str]] = OrderedDict()

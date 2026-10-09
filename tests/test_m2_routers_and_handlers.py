@@ -8,7 +8,6 @@ tests/test_m2_routers_and_handlers.py — Comprehensive Unit & Integration Test 
 - Router mounting order in main.py & unshadowing of cmd_shop aliases
 """
 
-import asyncio
 import json
 import os
 import shutil
@@ -18,7 +17,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
-from aiogram import Bot, types
+from aiogram import Bot
 from aiogram.types import Chat, Message, User, CallbackQuery, InlineKeyboardMarkup
 
 from common.database import (
@@ -26,61 +25,35 @@ from common.database import (
     _create_indices,
     _create_tables,
     _insert_initial_data,
-    add_to_abu_fund,
-    add_user_global_balance,
-    deduct_user_global_balance,
     get_abu_fund_total,
     get_user_global_balance,
-    get_user_recent_transactions,
 )
 from market_engine import (
-    MARKET_CATEGORIES,
-    WEAPONS_CATALOG,
-    PHARMA_CATALOG,
-    LOOTBOXES_CATALOG,
     market_router,
     cmd_market,
     cmd_sell,
-    cb_market_main_hub,
     cb_market_cat,
     cb_market_lot,
     cb_market_buy,
-    cb_market_my_lots,
     cb_market_cancel,
-    cb_market_sell_menu,
     cb_market_sell_item,
     cb_market_do_sell,
-    create_market_listing,
-    buy_market_listing,
-    cancel_market_listing,
-    get_market_catalog,
     get_user_listings,
     get_market_listing,
-    notify_seller_lot_sold,
-    classify_item,
-    find_item_by_name_or_id,
-    get_user_sellable_items_list,
 )
 from bank_engine import (
-    BANK_TIERS,
     bank_router,
     cmd_bank,
     cmd_deposit,
     cmd_withdraw,
-    cb_bank_hub,
     cb_bank_refresh,
-    cb_bank_deposit_menu,
     cb_bank_deposit_tier,
     cb_bank_do_deposit,
     cb_bank_withdraw_menu,
     cb_bank_withdraw_sel,
     cb_bank_withdraw_confirm,
-    calculate_deposit_state,
     create_bank_deposit,
-    withdraw_bank_deposit,
     get_user_bank_summary,
-    normalize_tier_id,
-    get_tier_info,
 )
 
 
@@ -89,10 +62,10 @@ def make_mock_message(user_id: int = 1001, text: str = "/market", chat_id: int =
     bot = AsyncMock(spec=Bot)
     bot.send_message = AsyncMock()
     bot.send_photo = AsyncMock()
-    
+
     user = User(id=user_id, is_bot=False, first_name="Anon", username="anon2ch")
     chat = Chat(id=chat_id, type="private")
-    
+
     msg = MagicMock(spec=Message)
     msg.message_id = 999
     msg.date = int(time.time())
@@ -112,10 +85,10 @@ def make_mock_callback(user_id: int = 1001, data: str = "market_main_hub", chat_
     bot = AsyncMock(spec=Bot)
     bot.send_message = AsyncMock()
     bot.send_photo = AsyncMock()
-    
+
     user = User(id=user_id, is_bot=False, first_name="Anon", username="anon2ch")
     chat = Chat(id=chat_id, type="private")
-    
+
     orig_msg = MagicMock(spec=Message)
     orig_msg.message_id = 888
     orig_msg.date = int(time.time())
@@ -164,7 +137,7 @@ class TestM2RoutersAndHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.banner_patch_m = patch("market_engine._render_market_view")
         self.banner_patch_b = patch("bank_engine._render_bank_view")
-        
+
         # We can implement a clean transparent render wrapper
         async def _test_render_market(target, text, kb, category="shop"):
             if isinstance(target, CallbackQuery) or hasattr(target, "message"):

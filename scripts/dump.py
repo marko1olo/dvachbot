@@ -1,4 +1,3 @@
-import os
 with open('C:/Users/danat/Desktop/dvachbot/site_tgach/main.py', 'r', encoding='utf-8') as f:
     for i, line in enumerate(f):
         low = line.lower()

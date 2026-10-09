@@ -30,7 +30,7 @@ def _walk_shapes_for_exploits(shapes: list) -> Tuple[bool, str]:
     for sh in shapes:
         if not isinstance(sh, dict):
             continue
-        
+
         # Check sub-shapes (groups, etc.)
         items = sh.get("it")
         if isinstance(items, list):
@@ -39,7 +39,7 @@ def _walk_shapes_for_exploits(shapes: list) -> Tuple[bool, str]:
                 return False, reason
 
         ty = sh.get("ty")
-        
+
         # 1. Polystar Point Count Exploit ('Сдохбин' vector)
         # Normal stars have 3-20 points. An exploit specifies e.g. 1e38 to crash rlottie/skia.
         if ty == "sr":

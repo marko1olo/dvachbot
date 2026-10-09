@@ -123,7 +123,7 @@ from common.database import (
     get_activity_history,
     get_poll_results,
 )
-from collections import deque, defaultdict
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, List, Dict, Union
@@ -159,9 +159,7 @@ from fastapi import (
     WebSocketDisconnect,
     File,
     UploadFile,
-    Form,
     Depends,
-    BackgroundTasks,
     Body,
 )
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -170,7 +168,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import (
     RedirectResponse,
-    StreamingResponse,
     Response,
     FileResponse,
     HTMLResponse,
@@ -303,7 +300,6 @@ async def get_country_by_ip(ip: str) -> str:
     return "XX"
 
 limiter = Limiter(key_func=get_real_ip, config_filename=os.devnull)
-from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from aiogram import Bot
 from itsdangerous import TimestampSigner, BadSignature
@@ -402,7 +398,6 @@ from site_tgach.importer import process_import_queue
 from site_tgach.neuro_scanner import scanner_loop, SCANNER_TRIGGER
 import asyncio
 from common.db_pool import create_pool, close_pool, get_pool, wal_checkpoint_truncate
-from common.bot_pool import global_bot_pool
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.image_processing import process_and_upload_image
 from site_tgach.mirror_health import is_hf_link_allowed
@@ -410,8 +405,6 @@ from site_tgach.voice_processing import process_and_upload_voice
 from PIL import Image as PilImage
 
 PilImage.MAX_IMAGE_PIXELS = 49_000_000
-import logging
-import uuid
 
 # --- БЛОК ЗАЩИТЫ ОТ TOR И ПЛОХИХ ПОДСЕТЕЙ ---
 TOR_EXIT_NODES = set()
@@ -711,7 +704,7 @@ def _file_owner_pairs_for_upload_result(
 # Лимиты для удержания ботов в ловушках (защита слотов соединений сервера)
 ACTIVE_TROLL_CONNS = 0
 MAX_TROLL_CONNS = 128
-from common.database import get_archived_threads, get_chat_posts_for_board
+from common.database import get_archived_threads
 from common.database import restore_thread_from_archive
 from common.database import toggle_thread_pin
 from common.database import add_spam_word, remove_spam_word
@@ -1118,7 +1111,6 @@ async def _download_image_with_proxy(
     if depth > 3:
         return None
     import socket
-    import ssl
     import aiohttp
 
     current_proxy = None
@@ -2683,9 +2675,9 @@ async def sitemap_xml(request: Request):
                 bid, tid, ts, content_json = row
                 # Превращаем timestamp в 2026-01-26
                 mod_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-                
+
                 url_str = f"  <url>\n    <loc>{base_url}/{bid}/res/{tid}.html</loc>\n    <lastmod>{mod_date}</lastmod>\n    <changefreq>hourly</changefreq>"
-                
+
                 # Парсим JSON-контент для извлечения картинок
                 try:
                     content = json.loads(content_json)
@@ -2696,7 +2688,7 @@ async def sitemap_xml(request: Request):
                                 url_str += f"\n    <image:image><image:loc>{file_url}</image:loc></image:image>"
                 except Exception:
                     import traceback; traceback.print_exc()
-                
+
                 url_str += "\n  </url>"
                 xml_content.append(url_str)
     except Exception as e:
@@ -3493,7 +3485,7 @@ def _select_mirror_strategically(
     """
     base_original_url = file_info.get("original_url", "") or ""
     base_thumbnail_url = file_info.get("thumbnail_url", "") or ""
-    
+
     if "ibb.co" in base_original_url or "imgbb" in base_original_url:
         base_original_url = ""
     if "ibb.co" in base_thumbnail_url or "imgbb" in base_thumbnail_url:
@@ -5038,7 +5030,6 @@ async def api_public_pow_challenge(
                     is_trusted = True
     if is_trusted:
         return {"challenge": "", "difficulty": 0}
-    from site_tgach.security import get_pow_challenge_data
 
     return get_pow_challenge_data()
 
@@ -7322,14 +7313,14 @@ async def api_send_feedback(
     if len(data.message) > 2000:
         raise HTTPException(400, "Too long")
     uid = int(user["id"])
-    
+
     # Server-side fast dedup cache
     now = time.time()
     msg_hash = hashlib.sha256(data.message.strip().encode()).hexdigest()
     cache_key = (uid, msg_hash)
     if now - _feedback_dedup_cache.get(cache_key, 0.0) < 10.0:
         return {"status": "ok"}
-    
+
     success = await create_feedback(uid, data.category, data.contact, data.message)
     if success:
         _feedback_dedup_cache[cache_key] = now
@@ -8325,6 +8316,7 @@ async def api_create_post(
             if valid_file_attached:
                 if not is_unlocked:
                     try:
+                        from common.db_pool import get_pool, db_lock
                         db = await get_pool()
                         async with db_lock:
                             await db.execute(
@@ -9471,7 +9463,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
 
     # 2. Скачиваем аудиофайл
     audio_bytes = None
-    
+
     # Сначала проверяем зеркала
     mirrors = await get_file_mirrors(file_id)
     catbox = mirrors.get("catbox")
@@ -9505,7 +9497,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
     import base64
     import time
     from common.token_pool import google_pool
-    
+
     active_tokens = google_pool.get_all_active_tokens()
     if not active_tokens:
         raise HTTPException(status_code=500, detail="Gemini API config missing.")
@@ -9821,18 +9813,18 @@ async def api_report_post(
 async def auth_tma(data: TMAAuthRequest, request: Request):
     import json
     lang = getattr(request.state, "lang", "ru")
-    
+
     parsed = verify_telegram_webapp_data(data.initData)
     if not parsed or "user" not in parsed:
         msg = "Invalid TMA initData" if lang == "en" else "Неверные данные TMA"
         raise HTTPException(status_code=403, detail=msg)
-    
+
     try:
         user_data = json.loads(parsed["user"])
         uid = int(user_data["id"])
     except Exception:
         raise HTTPException(status_code=400, detail="Malformed user data")
-    
+
     is_admin_hard = uid in ADMIN_IDS
     role_db = await get_user_role(uid)
     request.session["user"] = {
@@ -11028,7 +11020,7 @@ async def get_telegram_file(
                         orig_fid = row[0]
         except Exception as e:
             logger.error(f"Error querying original file for thumbnail fallback: {e}", exc_info=True)
-            
+
         if orig_fid and orig_fid != file_id:
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
             return await get_telegram_file(orig_fid, request, filename, skip)

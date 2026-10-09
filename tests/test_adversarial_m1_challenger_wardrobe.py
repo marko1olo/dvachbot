@@ -10,21 +10,16 @@ Empirical challenge tests targeting:
 5. End-to-end combat command resilience: cmd_rob, cmd_shoot, cmd_partyvan with extreme and corrupted targets.
 """
 
-import asyncio
 import json
-import random
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 
 import common.database
 import common.db_pool
 import shared_state
 from wardrobe_engine import (
     CLOTHING_CATALOG,
-    SET_BONUSES,
     add_item_duration,
     get_equipped_gear,
     get_owned_wardrobe_items,

@@ -120,7 +120,7 @@ async def upload_file_to_pixhost(file_path: str) -> str | None:
                         logger.warning(f"⚠️ Pixhost: Unexpected response: {resp.text[:300]}")
                 elif resp.status_code == 429:
                     _pixhost_backoff_until = time.monotonic() + 120.0
-                    logger.warning(f"⚠️ Pixhost rate-limited (429). Global backoff 120s.")
+                    logger.warning("⚠️ Pixhost rate-limited (429). Global backoff 120s.")
                     return None
                 elif resp.status_code in (503, 502, 500):
                     _pixhost_backoff_until = time.monotonic() + 60.0

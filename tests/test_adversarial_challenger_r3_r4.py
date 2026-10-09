@@ -23,39 +23,30 @@ from russian_roulette_pvp import (
     cmd_russian_roulette,
     get_rr_lobby_keyboard,
     get_adaptive_rr_bet_presets,
-    format_rr_lobby_message,
     create_rr_challenge,
     accept_rr_challenge,
     decline_or_cancel_rr_challenge,
-    pull_rr_trigger,
-    surrender_rr_game,
     _finish_rr_game,
     active_rr_games,
     user_active_rr_game,
     MIN_RR_BET,
     MAX_RR_BET,
-    RR_RAKE_PERCENT,
 )
 from dice_duel_engine import (
     cmd_dice_duel_entry,
     get_dice_lobby_keyboard,
     get_adaptive_dice_bet_presets,
-    format_dice_bet_amount,
     create_dice_challenge,
     accept_dice_challenge,
-    cancel_dice_challenge,
     _finish_dice_game,
     active_dice_games,
     user_active_dice_game,
     MIN_DICE_BET,
     MAX_DICE_BET,
-    DICE_RAKE_PERCENT,
-    DICE_TIE_RAKE_PERCENT,
 )
 from ttt_engine import (
     get_ttt_lobby_keyboard,
     get_adaptive_bet_presets as get_adaptive_ttt_bet_presets,
-    cmd_ttt,
     MIN_TTT_BET,
     MAX_TTT_BET,
 )
@@ -68,7 +59,6 @@ from common.database import (
     add_user_global_balance,
     deduct_user_global_balance,
     get_abu_fund_total,
-    record_user_transaction,
 )
 import shared_state
 

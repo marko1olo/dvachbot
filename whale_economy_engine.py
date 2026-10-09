@@ -7,7 +7,6 @@ Milestone 3: Whale Money Sinks & Currency Dilution
 - F3.3: Super-Wealth Tax (progressive brackets + idle surcharge) and Class Wars (/raid_oligarch).
 """
 
-import asyncio
 import datetime
 import json
 import math
@@ -15,9 +14,6 @@ import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import common.config
-import common.database
-import common.db_pool
 from common.database import (
     add_to_abu_fund,
     add_user_global_balance,

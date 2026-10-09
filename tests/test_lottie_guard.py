@@ -7,10 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 from common.lottie_guard import (
     validate_lottie_dict,
     is_sticker_safe,
-    _walk_shapes_for_exploits,
-    KNOWN_CRASH_FILE_IDS,
-    _SAFE_STICKERS,
-    _MALICIOUS_STICKERS
+    KNOWN_CRASH_FILE_IDS
 )
 
 def test_validate_lottie_dict_safe_minimal():

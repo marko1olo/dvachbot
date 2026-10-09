@@ -156,7 +156,7 @@ def checkpoint_wal(con: sqlite3.Connection) -> Tuple[int, int, int]:
 
 
 def run_sanitation(db_path: str, dry_run: bool = False) -> bool:
-    print(f"=== dvachbot Database Sanitation Tool ===")
+    print("=== dvachbot Database Sanitation Tool ===")
     print(f"Target DB: {db_path}")
     print(f"Dry Run: {dry_run}\n")
 

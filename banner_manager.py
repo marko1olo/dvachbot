@@ -9,6 +9,7 @@ import os
 import re
 import json
 import time
+import asyncio
 import atexit
 import random
 import logging
@@ -160,7 +161,7 @@ def _init_banners():
     """Initializes banner lists, category pools, and shuffle bags."""
     global _BANNER_CACHE, _CATEGORIZED_BANNERS, _CATEGORY_DECKS, _CACHE_DIRTY
     _CACHE_DIRTY = False
-    
+
     # Load cache from disk
     _BANNER_CACHE.clear()
     if CACHE_FILE.exists():
@@ -175,7 +176,7 @@ def _init_banners():
     # Scan banners directory
     if not BANNERS_DIR.exists():
         os.makedirs(BANNERS_DIR, exist_ok=True)
-        
+
     all_files = [f.name for f in BANNERS_DIR.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_BANNER_EXTENSIONS]
     all_files.sort()
 
@@ -322,7 +323,7 @@ SUBSECTION_CATEGORIES: Dict[str, List[str]] = {
     "market": ["market", "shop", "cards", "retro", "wallet"],
     "wiki": ["newspaper", "summary", "retro", "cards", "stats"],
     "avatar": ["maid", "cyberpunk", "retro", "gothic", "night"],
-    
+
     # Казино, игры и дуэли
     "casino": ["games", "roulette", "cards", "retro", "cyberpunk"],
     "roulette": ["roulette", "games", "cards", "duel", "cyberpunk"],
@@ -335,7 +336,7 @@ SUBSECTION_CATEGORIES: Dict[str, List[str]] = {
     "russian_roulette": ["duel", "roulette", "games", "cyberpunk", "gothic"],
     "dice": ["games", "duel", "roulette", "cards", "retro"],
     "ttt": ["games", "cyberpunk", "matrix", "retro", "cards"],
-    
+
     # Экономика, баланс, работа, дропы
     "economy": ["wallet", "market", "chill", "retro", "stats"],
     "wallet": ["wallet", "market", "chill", "retro", "stats"],
@@ -346,14 +347,14 @@ SUBSECTION_CATEGORIES: Dict[str, List[str]] = {
     "ledger": ["stats", "summary", "matrix", "wallet", "retro"],
     "rates": ["stats", "matrix", "market", "wallet", "retro", "summary"],
     "daily": ["calm", "chill", "wallet", "maid", "retro"],
-    
+
     # Навигация, меню, старт
     "start": ["cyberpunk", "retro", "maid", "chill", "night", "calm"],
     "menu": ["cyberpunk", "retro", "maid", "chill", "night", "calm"],
     "help": ["newspaper", "retro", "summary", "maid", "calm"],
     "boards": ["newspaper", "summary", "chill", "calm", "retro"],
     "settings": ["matrix", "cyberpunk", "retro", "schizo", "stats"],
-    
+
     # Лента, треды, дайджесты, статистика
     "threads": ["chill", "calm", "retro", "maid", "night"],
     "calm": ["calm", "chill", "retro", "night", "maid"],
@@ -362,7 +363,7 @@ SUBSECTION_CATEGORIES: Dict[str, List[str]] = {
     "newspaper": ["newspaper", "digest", "retro", "summary", "stats"],
     "summary": ["summary", "digest", "newspaper", "stats", "calm"],
     "stats": ["stats", "summary", "matrix", "retro", "cyberpunk"],
-    
+
     # Атмосферные режимы
     "schizo": ["schizo", "matrix", "gothic", "cyberpunk", "night"],
     "night": ["night", "gothic", "calm", "cyberpunk", "retro"],
@@ -433,25 +434,25 @@ def get_banner_file(
         chosen_file = banner_name
     else:
         candidates = resolve_category_candidates(category, strict=strict)
-        
+
         # Shuffle candidates to balance rotation across all constituent categories
         shuffled_candidates = candidates.copy()
         random.shuffle(shuffled_candidates)
-        
+
         chosen_file = None
         for cat_cand in shuffled_candidates:
             deck = _CATEGORY_DECKS.get(cat_cand)
             pool = _CATEGORIZED_BANNERS.get(cat_cand, _CATEGORIZED_BANNERS.get("all", []))
-            
+
             if not deck or len(deck) == 0:
                 shuffled_pool = pool.copy()
                 random.shuffle(shuffled_pool)
                 deck = deque(shuffled_pool)
                 _CATEGORY_DECKS[cat_cand] = deck
-                
+
             if len(deck) == 0:
                 continue
-                
+
             candidate_file = deck.popleft()
             if user_id and user_id in _USER_RECENT_BANNERS and len(pool) > 3:
                 recent = _USER_RECENT_BANNERS[user_id]
@@ -460,7 +461,7 @@ def get_banner_file(
                     deck.append(candidate_file)
                     candidate_file = deck.popleft()
                     attempts += 1
-                    
+
             chosen_file = candidate_file
             break
 
@@ -592,7 +593,7 @@ async def send_banner_message(
         bot_id=bot_id,
         strict=strict
     )
-    
+
     # Telegram photo and video captions are limited to 1024 characters.
     # If no media available, send as text.
     if not media_payload:
@@ -690,12 +691,12 @@ async def send_banner_message(
                 reply_markup=reply_markup,
                 parse_mode=parse_mode
             )
-        
+
         fid = _extract_media_file_id(msg)
         if fid and fname and bot_id:
             _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
             save_cache()
-            
+
         return msg
     except TelegramRetryAfter:
         raise

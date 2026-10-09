@@ -166,10 +166,8 @@ async def fire_anchor_post(
 
     try:
         from datetime import datetime, timezone
-        from common.database import create_post, update_post_content
         from common.tts_engine import synthesize_cyberchad_voice_with_meta
         import os
-        import __main__ as _main
 
         voice_res = await synthesize_cyberchad_voice_with_meta(reply_text)
         voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res

@@ -8,7 +8,6 @@ Executes isolated adversarial test scenarios with detailed step-by-step logging.
 import asyncio
 import contextlib
 import io
-import json
 import os
 import random
 import sys
@@ -29,18 +28,14 @@ import aiosqlite
 import common.config
 import common.database
 import common.db_pool
-import lootbox_engine
-import whale_economy_engine
 from auction_engine import (
     create_auction,
     ensure_auction_schema,
-    finish_active_auctions,
     place_auction_bid,
 )
 from whale_economy_engine import (
     buy_whale_safe,
     calculate_whale_safe_price,
-    roll_whale_safe,
 )
 
 

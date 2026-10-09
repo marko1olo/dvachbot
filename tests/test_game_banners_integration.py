@@ -13,18 +13,15 @@ Validates:
 
 import unittest
 from unittest.mock import AsyncMock
-from pathlib import Path
 from aiogram.exceptions import TelegramBadRequest
 
 import banner_manager
 from ttt_engine import (
     TicTacToeGame,
     sync_ttt_screens,
-    active_ttt_games,
 )
 from russian_roulette_pvp import (
     sync_rr_screens,
-    active_rr_games,
 )
 
 

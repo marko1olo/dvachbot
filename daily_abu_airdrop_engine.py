@@ -644,7 +644,6 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
             # Персистентный алерт в БД
             if create_alert is not None:
                 try:
-                    db3 = await get_pool()
                     await create_alert(
                         user_id=uid,
                         content=(

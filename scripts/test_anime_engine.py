@@ -31,22 +31,22 @@ async def test_and_download(name: str, fetch_func, prefix: str) -> Optional[dict
         if not url:
             print(f"    ❌ Failed to retrieve URL in {fetch_sec:.2f}s", flush=True)
             return None
-            
+
         print(f"    ✅ URL Fetched ({fetch_sec:.2f}s): {url[:80]}...", flush=True)
-        
+
         t_dl = time.time()
         dl_res = await _download_image_with_proxy(url, timeout=15)
         dl_sec = time.time() - t_dl
-        
+
         if not dl_res or not dl_res[0]:
             print(f"    ❌ Download Failed in {dl_sec:.2f}s", flush=True)
             return None
-            
+
         raw_bytes = dl_res[0]
         ext = url.split('.')[-1].split('?')[0].lower()
         if len(ext) > 4 or ext not in ('jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4'):
             ext = 'jpg'
-            
+
         # Verify with PIL if image
         dims = "N/A"
         try:
@@ -59,7 +59,7 @@ async def test_and_download(name: str, fetch_func, prefix: str) -> Optional[dict
         filepath = os.path.join(SAMPLE_DIR, filename)
         with open(filepath, "wb") as f:
             f.write(raw_bytes)
-            
+
         size_kb = len(raw_bytes) / 1024
         print(f"    💾 Saved: {filename} ({dims}, {size_kb:.1f} KB, dl={dl_sec:.2f}s, total={fetch_sec+dl_sec:.2f}s)", flush=True)
         return {

@@ -1,6 +1,5 @@
 from shared_state import *
 import asyncio
-import time
 import json
 import math
 from datetime import datetime, timedelta, timezone
@@ -12,7 +11,6 @@ import numpy as np
 import io
 from PIL import Image, ImageDraw, ImageFont
 
-from common.html_utils import escape_html
 
 import os
 import tempfile
@@ -20,7 +18,6 @@ import shutil
 import random
 import gc
 from collections import defaultdict
-from datetime import timezone
 UTC = timezone.utc
 import pandas as pd
 from common.chart_lock import ChartLockTimeout, matplotlib_guard
@@ -32,8 +29,8 @@ from text_assets import DVACH_STATS_CAPTIONS, DVACH_STATS_CAPTIONS_EN, DVACH_STA
 from post_helpers import update_post_content, create_post, format_header
 from delivery_manager import enqueue_board_message, get_board_activity_last_hours
 
-from dataclasses import dataclass, field
-from typing import Dict, Any
+from dataclasses import dataclass
+from typing import Any
 
 GRAPH_STATS_PATH = "graph.json"
 GRAPH_STATS_BACKUP_PATH = "graph.json.bak"
@@ -189,7 +186,7 @@ def format_board_statistics(stream: str, posts_per_hour: dict, board_data: dict,
 
         hour_stat = posts_per_hour.get(b_id_inner, 0)
         total_stat = board_data[b_id_inner].get('board_post_count', 0)
-        
+
         # Убрали <b> из шаблонов, так как теги теперь в display_html
         if stream == 'en':
             tpl = "{name} - {hour} pst/hr, total: {total}"
@@ -246,7 +243,7 @@ async def board_statistics_broadcaster():
                 for post_data in reversed(messages_storage.values()):
                     post_time = post_data.get('timestamp')
                     if not post_time or post_time < hour_ago:
-                        break 
+                        break
                     posts_meta_for_analysis.append(
                         (post_time, post_data.get('board_id'))
                     )
@@ -295,7 +292,7 @@ async def board_statistics_broadcaster():
                     async with storage_lock:
                         messages_storage[post_num] = {'author_id': 0, 'timestamp': now, 'content': content, 'board_id': board_id}
                     await enqueue_board_message(board_id, {
-                        "recipients": recipients, "content": content, 
+                        "recipients": recipients, "content": content,
                         "post_num": post_num, "board_id": board_id
                     })
                     print(f"✅ [{board_id}] Статистика ({stream}) #{post_num} добавлена в очередь.")
@@ -322,7 +319,7 @@ def generate_wipe_image(text: str) -> bytes | None:
             except Exception:
                 return None
             draw.multiline_text(
-                (50, 200), "ERROR:\nFONTS NOT FOUND", 
+                (50, 200), "ERROR:\nFONTS NOT FOUND",
                 fill=(255, 50, 50), font=error_font, align="center"
             )
             buffer = io.BytesIO()
@@ -330,7 +327,7 @@ def generate_wipe_image(text: str) -> bytes | None:
             return buffer.getvalue()
         font = random.choice(FONTS_CACHE)
         temp_draw = ImageDraw.Draw(background)
-        MAX_TEXT_WIDTH = IMAGE_SIZE[0] - 40 
+        MAX_TEXT_WIDTH = IMAGE_SIZE[0] - 40
         wrapped_text = smart_wrap_text(temp_draw, text, font, MAX_TEXT_WIDTH)
         text_layer = Image.new('RGBA', IMAGE_SIZE, (255, 255, 255, 0))
         draw = ImageDraw.Draw(text_layer)
@@ -688,7 +685,7 @@ async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
                 row = await cursor.fetchone()
                 balance = row[0] if row and row[0] is not None else 0
                 is_verified = row[1] if row and row[1] is not None else 0
-            
+
             # Считаем ГЛОБАЛЬНОЕ количество постов (во всем боте)
             query_cnt = "SELECT COUNT(*) FROM Posts WHERE author_id = ?"
             async with db.execute(query_cnt, (user_id,)) as cursor:

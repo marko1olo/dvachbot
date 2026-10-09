@@ -5,10 +5,8 @@ stats_hub_router.py — Interactive Next-Gen Telegram Stats Hub Router for Dvach
 """
 
 import os
-import io
 import asyncio
 import logging
-from typing import Optional
 
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -215,7 +213,7 @@ async def cmd_memes_direct(message: types.Message, **kwargs):
 async def on_stats_v2_callback(callback: types.CallbackQuery, board_id: str | None = None, **kwargs):
     """Handles all interactive category button clicks."""
     action = callback.data.split(":")[1]
-    
+
     if action == "refresh" or action == "home":
         await callback.answer("🔄 Обновляю пульс...")
         text, _ = await asyncio.to_thread(stats_v2.generate_instant_snapshot_text, board_id=board_id)

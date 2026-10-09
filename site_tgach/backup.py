@@ -15,7 +15,7 @@ import aiosqlite
 logger = logging.getLogger("backup_daemon")
 
 # Интервал: 7 дней (раз в неделю)
-BACKUP_INTERVAL = 7 * 24 * 3600 
+BACKUP_INTERVAL = 7 * 24 * 3600
 
 def split_file_by_size(file_path: str, chunk_size: int = 25 * 1024 * 1024):
     file_size = os.path.getsize(file_path)
@@ -47,16 +47,16 @@ def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
     """
     created_files = []
     parts_to_send = []
-    
+
     # 1. Архивирование
     with zipfile.ZipFile(zip_name_base, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.write(backup_db_path, arcname="dvach_bot.db")
     created_files.append(zip_name_base)
-    
+
     # 2. Разделение
     CHUNK_SIZE = 25 * 1024 * 1024
     file_size = os.path.getsize(zip_name_base)
-    
+
     if file_size > CHUNK_SIZE:
         part_num = 1
         with open(zip_name_base, 'rb') as f:
@@ -69,7 +69,7 @@ def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
                 parts_to_send.append(part_name)
                 created_files.append(part_name)
                 part_num += 1
-        
+
         # Удаляем оригинал большого зипа, чтобы не занимал место,
         # так как мы его уже нарезали
         if os.path.exists(zip_name_base):
@@ -79,20 +79,20 @@ def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
                 logger.warning(f"⚠️ Could not remove temporary zip file {zip_name_base}: {e}")
     else:
         parts_to_send.append(zip_name_base)
-        
+
     return parts_to_send, created_files
 
 async def create_db_backup(bot) -> bool:
     if not ADMIN_IDS:
         logger.warning("⚠️ Admin IDs not set, skipping backup.")
         return False
-    
+
     backup_db_path = f"backup_{int(time.time())}.db"
     zip_name_base = f"TGACH_Backup_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.zip"
     created_files = []
 
     logger.info("📦 Starting ATOMIC DB backup (Threaded)...")
-    
+
     try:
         # 1. Создание атомарного бэкапа (IO bound, асинхронно)
         source_db = await get_pool()
@@ -102,7 +102,7 @@ async def create_db_backup(bot) -> bool:
             await backup_db.execute("PRAGMA synchronous=NORMAL;")
             await source_db.backup(backup_db)
         created_files.append(backup_db_path)
-        
+
         # 2. Сжатие и нарезка (CPU bound, в отдельном потоке)
         # Это предотвратит фриз сервера на 3-5 секунд
         parts_to_send, packed_files = await asyncio.to_thread(
@@ -154,7 +154,7 @@ async def create_db_backup(bot) -> bool:
 async def backup_loop(bot):
     """Фоновая задача"""
     logger.info("🛡️ Backup Daemon started (7d interval).")
-    
+
     last_backup_str = await get_system_setting("last_backup_time")
     try:
         last_backup_ts = float(last_backup_str) if last_backup_str else 0.0
@@ -175,7 +175,7 @@ async def backup_loop(bot):
         logger.info("⏳ No previous backup timestamp found. Running initial backup in 5 minutes.")
 
     await asyncio.sleep(initial_delay)
-    
+
     while True:
         success = await create_db_backup(bot)
         if success:

@@ -15,8 +15,7 @@ import random
 from datetime import datetime, timezone, timedelta
 from summarize import summarize_text_with_hf
 from shared_state import (
-    market_state, runtime_logger, BOARDS, GLOBAL_BOTS,
-    enqueue_board_message, post_to_messages, messages_storage, state,
+    market_state, runtime_logger, BOARDS, enqueue_board_message, post_to_messages, messages_storage, state,
     board_data, storage_lock
 )
 

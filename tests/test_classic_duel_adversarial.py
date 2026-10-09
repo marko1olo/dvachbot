@@ -14,25 +14,20 @@ import sys
 import time
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import aiosqlite
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import shared_state
 from shared_state import (
     _active_duels,
     _duel_cooldowns,
-    _DUEL_TIMEOUT,
     make_duel_token,
-    resolve_duel_token,
 )
 from common.bot_helpers import accept_duel_logic, decline_duel_logic, classic_duel_lock
-import main
 from main import (
     cb_duel_accept,
     cb_duel_decline,

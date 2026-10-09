@@ -1,6 +1,5 @@
 import json
 from collections import defaultdict
-from datetime import datetime
 
 # Load data
 with open('c:/Users/danat/Desktop/dvachbot/latest_posts.json', encoding='utf-8') as f:
@@ -8,7 +7,7 @@ with open('c:/Users/danat/Desktop/dvachbot/latest_posts.json', encoding='utf-8')
 
 with open('c:/Users/danat/Desktop/dvachbot/recent_mutes.json', encoding='utf-8') as f:
     mutes = json.load(f)
-    
+
 with open('c:/Users/danat/Desktop/dvachbot/recent_logs.json', encoding='utf-8') as f:
     logs = json.load(f)
 
@@ -31,7 +30,7 @@ for p in posts_chronological:
 
 report = []
 report.append("# ДЕТАЛЬНЫЙ АНАЛИЗ ПОСЛЕДНИХ 500 ПОСТОВ DVACHBOT (DEEP FORENSIC BREAKDOWN)\n")
-report.append(f"**Временной срез**: Последние 500 постов.")
+report.append("**Временной срез**: Последние 500 постов.")
 report.append(f"**Последний пост**: #{posts[0]['post_num']}")
 report.append("\n## СТАТИСТИКА\n")
 report.append(f"- **Всего проанализировано постов**: {len(posts)}")
@@ -47,11 +46,11 @@ keywords_games = ['роль', 'кости', 'казино', 'дуэль', 'ру�
 
 for p in posts_chronological:
     content = p['clean_content'].lower()
-    
+
     # Check complaints
     if any(k in content for k in keywords_complaints):
         complaints.append(p)
-        
+
     # Check games/roasts
     if any(k in content for k in keywords_games):
         roasts_and_games.append(p)

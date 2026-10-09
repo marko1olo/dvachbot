@@ -1,7 +1,5 @@
-import asyncio
 import json
 import pytest
-import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import common.db_pool
@@ -294,11 +292,11 @@ import aiosqlite
 async def test_database_persistence_and_reloading_normalization(tmp_path):
     """Тест сохранения и загрузки настроек скрытия слов и спам-фильтра в SQLite."""
     test_db_path = str(tmp_path / "test_filter.db")
-    
+
     # Настраиваем подключение к тестовой БД
     conn = await aiosqlite.connect(test_db_path)
     common.db_pool._db_connection = conn
-    
+
     try:
         await init_db(conn)
 
@@ -359,7 +357,7 @@ def test_spam_filter_helper_functions():
     """Тест функций set_spam_filter_words и is_spam_filtered на нормализацию и регистронезависимость."""
     b_id = "test"
     set_spam_filter_words(b_id, {"  ЗАПРЕТНОЕ_СЛОВО  ", "ХАКЕР", "КаЛл"})
-    
+
     assert _spam_filter_words[b_id] == {"запретное_слово", "хакер", "калл"}
 
     # Проверка фильтрации текста в любом регистре

@@ -6,7 +6,6 @@ tests/test_challenger_edge_cases_comprehensive.py — Comprehensive Challenger 1
 import os
 import sys
 import io
-import json
 import sqlite3
 import tempfile
 import shutil
@@ -17,7 +16,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import stats_v2
 import my_wrapped_generator
 
 

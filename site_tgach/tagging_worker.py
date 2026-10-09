@@ -1,5 +1,4 @@
 import asyncio
-from common.http_utils import api_retry
 from common.task_manager import spawn_task
 
 """
@@ -34,7 +33,6 @@ Functions:
 """
 import logging
 import re
-import base64
 import os
 import tempfile
 import time
@@ -45,19 +43,17 @@ import io
 import imagehash
 from PIL import Image
 # Импорты проекта
-from common.db_pool import get_pool, db_lock, db_sleep, db_transaction, execute_with_retry
+from common.db_pool import get_pool, db_transaction, execute_with_retry
 from common.bot_pool import global_bot_pool
 from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramRetryAfter,
     TelegramForbiddenError,
     TelegramUnauthorizedError,
-    TelegramAPIError,
-    TelegramNetworkError,
 )
 
 # Импорт логики модерации
-from site_tgach.neuro_moderator import TAGGING_PROMPT, run_deep_check
+from site_tgach.neuro_moderator import run_deep_check
 
 # === НАСТРОЙКИ ===
 logger = logging.getLogger("tagger")
@@ -281,7 +277,7 @@ def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
         )
         if res.returncode == 0 and res.stdout and len(res.stdout) > 100:
             return res.stdout
-            
+
         # Если провалилось (возможно видео короче 0.5с), пробуем 00:00:00.000
         cmd[3] = "00:00:00.000"
         res2 = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
@@ -426,7 +422,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
     tasks = []
     max_batch = limit if limit is not None else BATCH_SIZE
     exclude_list = list(exclude_fids) if exclude_fids else []
-    
+
     # 1. Из реестра (все необработанные файлы без ограничения по времени)
     if exclude_list:
         ex_slice = exclude_list[:100]
@@ -832,7 +828,7 @@ async def tagging_loop():
         try:
             now = time.time()
             if TEMP_FAILED_FILES:
-                # Clean up entries older than 2 hours to avoid memory leaks, 
+                # Clean up entries older than 2 hours to avoid memory leaks,
                 # but preserve them long enough for retries
                 TEMP_FAILED_FILES = {
                     k: v
@@ -946,7 +942,7 @@ async def tagging_loop():
                     # Если файл перманентно не найден ни одним ботом или слишком большой,
                     # не мучаем очередь повторами — сразу помечаем download_failed
                     is_permanent_fail = dl_status in ("not_found", "file_too_big") or fail_cnt >= 2
-                    
+
                     if is_permanent_fail:
                         reason_msg = f"status='{dl_status}'" if dl_status in ("not_found", "file_too_big") else f"failed {fail_cnt} times"
                         logger.warning(
@@ -1288,7 +1284,7 @@ async def tagging_loop():
                     full_text = f"{tags} {description or ''}".lower()
                     # Исключаем ложные срабатывания (например, вейп charon_baby)
                     cleaned_text = re.sub(r'\bcharon[_\s]*baby\b', '', full_text)
-                    
+
                     # Проверяем строго границы слов, чтобы не триггерить подстроки (kid в skid, baby в charon_baby и т.д.)
                     has_suspicious = any(
                         re.search(r'\b' + re.escape(w).replace(r'\ ', r'[\s_]+') + r'\b', cleaned_text)

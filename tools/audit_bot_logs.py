@@ -15,7 +15,7 @@ import re
 import json
 import argparse
 from datetime import datetime
-from collections import Counter, defaultdict
+from collections import Counter
 
 try:
     if sys.platform == "win32":
@@ -31,7 +31,7 @@ def read_tail_lines(filepath: str, n_lines: int = 10000) -> list[str]:
     """Efficiently reads the last n_lines from a large file using reverse chunk seeking."""
     if not os.path.exists(filepath):
         return []
-    
+
     chunk_size = 262144  # 256KB chunks
     lines = []
     with open(filepath, "rb") as f:
@@ -39,7 +39,7 @@ def read_tail_lines(filepath: str, n_lines: int = 10000) -> list[str]:
         file_size = f.tell()
         buffer = bytearray()
         pos = file_size
-        
+
         while pos > 0 and len(lines) <= n_lines:
             read_size = min(chunk_size, pos)
             pos -= read_size
@@ -49,7 +49,7 @@ def read_tail_lines(filepath: str, n_lines: int = 10000) -> list[str]:
             lines = buffer.split(b"\n")
             if len(lines) > n_lines:
                 break
-                
+
     decoded = []
     for raw in lines[-n_lines:]:
         try:
@@ -241,7 +241,7 @@ def print_report(fatal_data: dict, deadlock_data: dict, rt_data: dict, stdout_da
 
     # 1. Fatal Crashes
     print("\n" + "-" * 80)
-    print(f"1. FATAL CRASH WATCH (bot_fatal_crash.log)")
+    print("1. FATAL CRASH WATCH (bot_fatal_crash.log)")
     print("-" * 80)
     print(f"File: {fatal_data['path']} (Armed runs: {fatal_data['total_armed']})")
     if not fatal_data["crashes"]:
@@ -288,7 +288,7 @@ def print_report(fatal_data: dict, deadlock_data: dict, rt_data: dict, stdout_da
     print(f"Lines analyzed from tail: {stdout_data['lines_analyzed']}")
     print(f"Time span: {stdout_data['time_range']['first']} -> {stdout_data['time_range']['last']}")
     print("Event Counts:", stdout_data["counts"])
-    
+
     if stdout_data["top_errors"]:
         print("\nTop Errors in bot_stdout_utf8.log:")
         for item in stdout_data["top_errors"][:8]:

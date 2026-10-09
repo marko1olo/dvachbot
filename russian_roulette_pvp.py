@@ -13,9 +13,7 @@ Features & Mechanics:
 8. Background Watchdog: Proactively times out idle games and resolves bets/mutes automatically.
 """
 
-import os
 import re
-import io
 import time
 import json
 import random
@@ -26,10 +24,9 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from aiogram import Router, F, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
-import shared_state
 from common.db_pool import get_pool, db_lock
 from common.database import (
     get_user_global_balance,

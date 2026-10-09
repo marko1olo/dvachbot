@@ -22,8 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pytest
 from playwright.async_api import async_playwright
-from site_tgach.main import app, templates, BOARD_CONFIG
-from tests.test_browser_e2e import make_req, get_rendered_chat_html
+from tests.test_browser_e2e import get_rendered_chat_html
 
 
 VIEWPORTS = [
@@ -47,7 +46,7 @@ async def test_mascot_layering_and_interaction_across_all_viewports():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        
+
         for vp in VIEWPORTS:
             page = await browser.new_page(viewport={"width": vp["width"], "height": vp["height"]})
             await page.route("http://localhost:8000/b/chat/", lambda route: route.fulfill(status=200, body=html, content_type="text/html"))
@@ -86,7 +85,7 @@ async def test_mascot_layering_and_interaction_across_all_viewports():
             await page.close()
 
         await browser.close()
-    
+
     print("\n" + "=" * 70)
     print("   ALL 7 VIEWPORT MASCOT TESTS PASSED PERFECTLY!")
     print("=" * 70 + "\n")

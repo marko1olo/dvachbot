@@ -11,7 +11,7 @@ Includes strict duplicate cashback caps, fixed scrap recycling, bundle caps, and
 
 import random
 import time
-from typing import Tuple, Dict, Any, Optional, List
+from typing import Tuple, Dict, Any, Optional
 
 # -----------------------------------------------------------------------------
 # Rebalanced Drop Tables (F2.1)
@@ -545,7 +545,6 @@ def apply_lootbox_reward(
     return active_items, final_cash, recycle_msg
 
 
-from whale_economy_engine import calculate_whale_safe_price, roll_whale_safe
 
 
 # -----------------------------------------------------------------------------

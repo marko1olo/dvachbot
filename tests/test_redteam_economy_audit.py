@@ -11,7 +11,6 @@ Permanent RedTeam Inquisitor Audit Test Suite for DvachBot:
 """
 
 import asyncio
-import math
 import time
 import pytest
 
@@ -28,14 +27,11 @@ from bank_engine import (
     create_bank_deposit,
     withdraw_bank_deposit,
     execute_abu_bank_haircut,
-    get_user_bank_summary,
 )
 from whale_economy_engine import (
     calculate_whale_safe_price,
-    roll_whale_safe,
     buy_whale_safe,
     calculate_wealth_tax,
-    execute_oligarch_raid,
     create_auction,
     place_auction_bid,
     finish_active_auctions,
@@ -44,8 +40,6 @@ from dice_duel_engine import (
     create_dice_challenge,
     accept_dice_challenge,
     _finish_dice_game,
-    active_dice_games,
-    user_active_dice_game,
 )
 
 

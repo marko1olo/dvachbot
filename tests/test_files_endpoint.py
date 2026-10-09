@@ -51,7 +51,7 @@ def test_skip_filtering():
     }
     with patch("site_tgach.main.get_file_mirrors", new_callable=AsyncMock) as mock_mirrors:
         mock_mirrors.return_value = fake_mirrors
-        
+
         # Skip r2 -> falls back to freeimage
         resp1 = client.get("/file/test_skip_1?skip=r2", follow_redirects=False)
         assert resp1.status_code == 307
@@ -72,7 +72,7 @@ def test_skip_parameter_normalization():
     }
     with patch("site_tgach.main.get_file_mirrors", new_callable=AsyncMock) as mock_mirrors:
         mock_mirrors.return_value = fake_mirrors
-        
+
         # Test skip with whitespace and uppercase: " R2 , FreeImage "
         resp = client.get("/file/test_skip_norm?skip=%20R2%20,%20FreeImage%20", follow_redirects=False)
         assert resp.status_code == 307

@@ -66,7 +66,7 @@ def run_maintenance():
 
             try: con.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             except Exception: pass
-        
+
         print("\nОбслуживание базы данных успешно завершено!")
 
     except Exception as e:
@@ -75,7 +75,7 @@ def run_maintenance():
 if __name__ == "__main__":
     print("--- Скрипт обслуживания базы данных ---")
     print("!!! ВНИМАНИЕ: Перед запуском убедитесь, что и бот, и сайт ПОЛНОСТЬЮ ОСТАНОВЛЕНЫ. !!!")
-    
+
     if "-y" in sys.argv or "--yes" in sys.argv:
         run_maintenance()
     else:

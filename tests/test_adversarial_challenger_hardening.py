@@ -22,8 +22,6 @@ across all 11 acceptance criteria:
 import asyncio
 import hashlib
 import hmac
-import html
-import io
 import json
 import os
 import time
@@ -53,22 +51,19 @@ from site_tgach.main import (
     get_real_ip,
     get_telegram_file,
     format_post_text,
-    sanitize_header_filename,
 )
 from site_tgach.security import verify_telegram_webapp_data
 from common.text_chunker import (
     count_tg_utf16_units,
     chunk_html_message,
-    safe_html_truncate,
 )
-from common.text_utils import strip_cot_and_drafts, clean_ai_thinking, strip_thinking_tags
+from common.text_utils import strip_cot_and_drafts
 import ai_manager
 import handlers.message_router as mr
-from common.bot_helpers import accept_duel_logic, decline_duel_logic
+from common.bot_helpers import accept_duel_logic
 from common.database import (
     get_user_global_balance,
     add_user_global_balance,
-    deduct_user_global_balance,
     get_abu_fund_total,
 )
 import combat_moderation_engine as cme

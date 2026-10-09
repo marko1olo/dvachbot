@@ -19,11 +19,8 @@ Adversarial verification suite for challenger_m3_gen3_2:
    - show_alert=True and exactly 0 shekels deducted.
 """
 
-import asyncio
 import json
-import math
 import time
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

@@ -15,7 +15,6 @@ Addresses findings from Explorer R3 audit:
 """
 
 import sys
-import os
 import time
 import json
 import sqlite3

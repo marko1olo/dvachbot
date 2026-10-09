@@ -2,7 +2,6 @@ import os
 import sys
 import unittest
 import asyncio
-from unittest.mock import MagicMock
 
 # Ensure PROJECT_ROOT is in path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

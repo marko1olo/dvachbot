@@ -62,7 +62,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
             with gzip.open(dump_filepath, "wt", encoding="utf-8") as f:
                 for line in con.iterdump():
                     f.write(f'{line}\n')
-        
+
         _safe_print(f"Дамп базы данных успешно создан: {dump_filepath}")
 
         # --- НАЧАЛО ИЗМЕНЕНИЙ: Улучшенная логика ротации бэкапов ---
@@ -71,7 +71,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
             # включая старые файлы без временной метки (например, 'db_backup.sql.gz').
             backup_pattern = os.path.join(output_dir, "db_backup*.sql.gz")
             existing_backups = glob.glob(backup_pattern)
-            
+
             # Сортируем файлы по времени их модификации, от старых к новым.
             # Это более надежный способ, чем сортировка по имени.
             existing_backups.sort(key=os.path.getmtime)
@@ -109,7 +109,7 @@ if __name__ == "__main__":  # pragma: no cover
         print(f"Файл '{DB_NAME}' не найден. Для теста создайте сначала пустую базу данных.")
         import sys
         sys.exit(1)
-        
+
     result_path = create_gzipped_dump(DB_NAME, BACKUP_DIR)
 
     if result_path:
@@ -117,6 +117,6 @@ if __name__ == "__main__":  # pragma: no cover
         import sys
         sys.exit(0)
     else:
-        print(f"\nНе удалось создать бэкап.")
+        print("\nНе удалось создать бэкап.")
         import sys
         sys.exit(1)

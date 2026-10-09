@@ -1,6 +1,5 @@
 import json
 from collections import defaultdict
-from datetime import datetime
 
 # Load data
 with open('c:/Users/danat/Desktop/dvachbot/latest_posts_clean.json', encoding='utf-8') as f:
@@ -8,7 +7,7 @@ with open('c:/Users/danat/Desktop/dvachbot/latest_posts_clean.json', encoding='u
 
 with open('c:/Users/danat/Desktop/dvachbot/recent_mutes.json', encoding='utf-8') as f:
     mutes = json.load(f)
-    
+
 with open('c:/Users/danat/Desktop/dvachbot/recent_logs.json', encoding='utf-8') as f:
     logs = json.load(f)
 
@@ -24,11 +23,11 @@ for p in posts_chronological:
     if not text:
         text = "[ТОЛЬКО МЕДИА]"
     p['text'] = text
-    
+
     authors[p['author_id']].append(p)
     if p['thread_id']:
         threads[p['thread_id']].append(p)
-    
+
     # Check if there is reply_to_post in content json
     try:
         content_json = json.loads(p['content'])
@@ -40,13 +39,13 @@ for p in posts_chronological:
 
 report = []
 report.append("# ДЕТАЛЬНЫЙ АНАЛИЗ ПОСЛЕДНИХ 500 ПОСТОВ DVACHBOT (DEEP FORENSIC BREAKDOWN)\n")
-report.append(f"**Временной срез**: Последние 500 постов.")
+report.append("**Временной срез**: Последние 500 постов.")
 report.append(f"**Последний пост**: #{posts[0]['post_num']}")
 report.append("\n## СТАТИСТИКА ПО АКТИВНОСТИ\n")
-report.append(f"- **За сегодня**: 724")
-report.append(f"- **За последние 12 часов**: 954")
-report.append(f"- **За последние 6 часов**: 129")
-report.append(f"- **Проанализировано постов**: 500")
+report.append("- **За сегодня**: 724")
+report.append("- **За последние 12 часов**: 954")
+report.append("- **За последние 6 часов**: 129")
+report.append("- **Проанализировано постов**: 500")
 report.append(f"- **Уникальных авторов в выборке**: {len(authors)}")
 
 # Find complaints and bot interactions
@@ -59,10 +58,10 @@ keywords_games = ['роль', 'кости', 'казино', 'дуэль', 'ру�
 
 for p in posts_chronological:
     content = p['text'].lower()
-    
+
     if any(k in content for k in keywords_complaints):
         complaints.append(p)
-        
+
     if any(k in content for k in keywords_games):
         roasts_and_games.append(p)
 

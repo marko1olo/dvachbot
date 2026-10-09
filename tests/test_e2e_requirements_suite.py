@@ -16,7 +16,6 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.datastructures import Headers
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from fastapi_cache import FastAPICache
@@ -29,7 +28,6 @@ from site_tgach.main import (
     get_telegram_file,
     _resolve_known_file_bot_token,
     _iter_known_file_bot_tokens,
-    get_current_user_or_guest,
     SITE_ACCESS_MODE
 )
 
@@ -153,7 +151,7 @@ class TestR1BVideoThumbnails:
         with patch("site_tgach.main.get_db_connection") as mock_db, \
              patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_cached:
             mock_cached.return_value = ("photos/file_0.jpg", "123456:ABC-DEF")
-            
+
             # Simulate DB returning original file ID
             mock_cursor = AsyncMock()
             mock_cursor.fetchone.return_value = ("BAAC_original_video",)
@@ -211,7 +209,7 @@ class TestR1CBotTokenProbing:
             mock_bot.id = 111
             mock_bot.token = "111:TOKEN_SECRET"
             mock_pool.get_bot_by_id.return_value = mock_bot
-            
+
             tok = _resolve_known_file_bot_token(111, allow_protected_tokens=True)
             assert tok == "111:TOKEN_SECRET" or tok is not None
 

@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import zaputin_mode
-from zaputin_mode import zaputin_transform, IDEOLOGICAL_REPLACEMENTS, PATRIOTIC_PHRASES
+from zaputin_mode import zaputin_transform
 
 class TestZaputinMode(unittest.TestCase):
     def test_empty_input(self):

@@ -112,7 +112,7 @@ WORD_REPLACEMENTS = {
 
     # ============================ Интернет-архетипы и новый сленг ============================
     'шкура': ['декадентствующая барышня', 'особа съ экзотическими взглядами', 'нигилистка'],
-    'сыч': ['потѣрявшій былую форму господинъ', 'мѣщанинъ во плоти', 'добродушный толстякъ'],
+    'сыч': ['потѣрявшій былую форму господинъ', 'мѣщанинъ во плоти', 'добродушный толстякъ', 'бирюкъ', 'нелюдимъ', 'домоседъ'],
     'думер': ['юноша, объятый меланхоліей', 'страдалецъ новаго вѣка', 'пессимистъ'],
     'инцел': ['отвергнутый кавалеръ', 'бобыль', 'женоненавистникъ', 'евнухъ'],
     'масик': ['обожатель', 'сердечный другъ', 'воздыхатель'],
@@ -591,7 +591,6 @@ WORD_REPLACEMENTS = {
     'прошу':['покорнѣйше прошу', 'милости просимъ'],
     'чушпан':['простолюдинъ', 'деревенщина', 'хамъ'],
     'еотова': ['дама сердца', 'институтка', 'барышня'],
-    'сыч': ['бирюкъ', 'нелюдимъ', 'домоседъ'],
     'ерохин':['бретеръ', 'франтъ', 'фатъ', 'гусаръ'],
     'алко':['горячительные напитки', 'хмѣльное'],
     'комбикорм':['фуражъ', 'овесъ'],
@@ -777,7 +776,7 @@ INSULT_NOUNS = [
 
 CONSONANTS_FOR_YER = "бвгджзклмнпрстфхцчшщ"
 
-# ОПТИМИЗАЦИЯ ЗАМЕНЫ СЛОВ 
+# ОПТИМИЗАЦИЯ ЗАМЕНЫ СЛОВ
 # 1. Создаем единое регулярное выражение для всех слов, которые нужно заменить.
 # Сортируем ключи по длине в обратном порядке, чтобы избежать частичных совпадений.
 _sorted_keys = sorted(WORD_REPLACEMENTS.keys(), key=len, reverse=True)
@@ -833,9 +832,9 @@ def _apply_slovoers_and_french(text: str) -> str:
         if len(word) > 3 and word[-1].lower() not in 'ъьй' and random.random() < 0.35:
             return f"{word}-съ{punct}"
         return m.group(0)
-    
+
     text = re.sub(r'([а-яА-ЯёЁa-zA-Z]+)([\.!?;,])', _add_s, text)
-    
+
     # 2. Дворянские французские вкрапления (с сохранением контекста)
     french_replacements =[
         (r'\bочень\b', ['très', 'infiniment']),
@@ -847,7 +846,7 @@ def _apply_slovoers_and_french(text: str) -> str:
         (r'\bсогласен\b',['d’accord', 'absolument']),
         (r'\bжизнь\b',['c’est la vie', 'la vie']),
     ]
-    
+
     for pattern, replacements in french_replacements:
         if random.random() < 0.25:
             text = re.sub(pattern, lambda m: random.choice(replacements), text, flags=re.IGNORECASE)
@@ -855,7 +854,7 @@ def _apply_slovoers_and_french(text: str) -> str:
     # 3. Визуальная дореформенная буква "і" перед гласными
     text = re.sub(r'и([аеёоуыэюя])', r'i\1', text, flags=re.IGNORECASE)
     text = re.sub(r'И([аеёоуыэюя])', r'I\1', text)
-    
+
     return text
 
 def imperial_transform(text: str, header: str | None = None) -> tuple:
@@ -873,24 +872,24 @@ def imperial_transform(text: str, header: str | None = None) -> tuple:
     # ИСПРАВЛЕНИЕ: Бьем текст так, чтобы отделить слова от пробелов и знаков препинания
     tokens = re.split(r'([^\wА-Яа-яЁё]+)', text)
     result_tokens =[]
-    
+
     for token in tokens:
         # Если это пробелы, знаки препинания или пустая строка — просто добавляем
         if not token or not re.match(r'[А-Яа-яЁё]', token):
             result_tokens.append(token)
             continue
-            
+
         processed_word = yatify_word(fitafy_word(token))
         processed_word = re.sub(r'и([аеёоуыэюя])', r'i\1', processed_word, flags=re.IGNORECASE)
         processed_word = re.sub(r'И([аеёоуыэюя])', r'I\1', processed_word)
-        
+
         # Теперь точно смотрим на последнюю БУКВУ слова
         if processed_word and processed_word[-1].lower() in CONSONANTS_FOR_YER:
             # Сохраняем регистр твердого знака (если юзер капсит)
             processed_word += 'ъ' if processed_word[-1].islower() else 'Ъ'
-            
+
         result_tokens.append(processed_word)
-        
+
     text = ''.join(result_tokens)
 
     # ИСПРАВЛЕНИЕ ВСТАВОК: Делаем вставку безопаснее (чтобы не сломать HTML-теги)
@@ -903,16 +902,16 @@ def imperial_transform(text: str, header: str | None = None) -> tuple:
                 words.insert(random.randint(0, len(words)), injection)
             else:
                 injection = random.choice(IMPERIAL_PHRASE_INJECTIONS)
-                if injection.endswith(('.', '?', '!')): 
+                if injection.endswith(('.', '?', '!')):
                     words.append(injection)
-                elif injection.endswith(','): 
+                elif injection.endswith(','):
                     words.insert(0, injection)
-                else: 
+                else:
                     words.insert(random.randint(1, len(words)), f"<i>{injection}</i>")
             text = ' '.join(words)
-    
+
     if random.random() < 0.15:
         text += f"\n\n<i>{generate_imperial_insult()}</i>"
     text = _apply_slovoers_and_french(text)
-    
+
     return ('text', text)

@@ -2,13 +2,13 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram.types import (
     Message, User, Chat,
-    MessageOriginUser, MessageOriginHiddenUser, MessageOriginChat, MessageOriginChannel
+    MessageOriginUser, MessageOriginChannel
 )
 from common.forward_utils import (
     is_forward_message, is_forwarded_from_bot, contains_board_post_header,
-    extract_board_post_number, format_forwarded_quote, RE_BOARD_POST_HEADER
+    extract_board_post_number, format_forwarded_quote
 )
-from common.text_utils import sanitize_html, clean_html_for_tg
+from common.text_utils import clean_html_for_tg
 
 
 class TestForwardedQuotesDetector(unittest.TestCase):

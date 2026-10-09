@@ -1,6 +1,5 @@
 import os
 import sys
-import re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -26,13 +25,13 @@ def test_generate_anon_name_format():
     user_id = 987654321
     name_ru = generate_anon_name(user_id, stream="ru")
     name_en = generate_anon_name(user_id, stream="en")
-    
+
     assert name_ru.startswith("Анон [") and name_ru.endswith("]")
     assert name_en.startswith("Anon [") and name_en.endswith("]")
 
     anon_id_ru = get_anon_id(user_id, stream="ru")
     anon_id_en = get_anon_id(user_id, stream="en")
-    
+
     # 6 letters + 1 digit = 7 chars
     assert len(anon_id_ru) == 7, f"Expected 7 chars, got {anon_id_ru}"
     assert len(anon_id_en) == 7, f"Expected 7 chars, got {anon_id_en}"

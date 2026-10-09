@@ -26,34 +26,34 @@ async def witching_hour_scheduler():
     while True:
         now_utc = datetime.now(timezone.utc)
         now_msk = now_utc.astimezone(MSK_OFFSET)
-        
+
         # If it's already past 4 AM MSK, schedule for tomorrow
         if now_msk.hour >= 4:
             target_date = now_msk + timedelta(days=1)
         else:
             target_date = now_msk
-            
+
         # Target time is between 02:00 and 03:00 MSK (so it ends by 04:00)
         random_minute = random.randint(0, 59)
         start_time_msk = target_date.replace(hour=2, minute=random_minute, second=0, microsecond=0)
         end_time_msk = start_time_msk + timedelta(hours=1)
-        
+
         witching_hour_start_ts = start_time_msk.timestamp()
         witching_hour_end_ts = end_time_msk.timestamp()
-        
+
         print(f"💀 [WITCHING HOUR] Scheduled for tonight: {start_time_msk.strftime('%H:%M')} - {end_time_msk.strftime('%H:%M')} MSK")
-        
+
         # Sleep until 4:05 AM MSK to schedule the next one
         next_schedule_time = target_date.replace(hour=4, minute=5, second=0, microsecond=0)
         sleep_seconds = (next_schedule_time - now_msk).total_seconds()
-        
+
         await asyncio.sleep(max(10, sleep_seconds))
 
 def apply_zalgo(text: str) -> str:
     """Applies Zalgo corruption to the given text."""
     if not text:
         return text
-        
+
     # Zalgo combining characters
     up = ['\u030d', '\u030e', '\u0304', '\u0305', '\u033f', '\u0311', '\u0306', '\u0310', '\u0352', '\u0357', '\u0351', '\u0301', '\u0340', '\u0300', '\u0341', '\u032a']
     down = ['\u0316', '\u0317', '\u0318', '\u0319', '\u031c', '\u031d', '\u0320', '\u0324', '\u0325', '\u0326', '\u0329', '\u032a', '\u032b', '\u032c', '\u032d', '\u032e']
@@ -64,7 +64,7 @@ def apply_zalgo(text: str) -> str:
         if char.isspace():
             result.append(char)
             continue
-            
+
         zalgo_char = char
         # Add up
         for _ in range(random.randint(0, 2)):
@@ -75,9 +75,9 @@ def apply_zalgo(text: str) -> str:
         # Add down
         for _ in range(random.randint(0, 2)):
             zalgo_char += random.choice(down)
-            
+
         result.append(zalgo_char)
-        
+
     return ''.join(result)
 
 WITCHING_HOUR_CREEPY_PASTAS = [
@@ -114,10 +114,10 @@ async def witching_hour_ghost_worker(bot_instance):
     in active boards.
     """
     import __main__ as _main
-    
+
     while True:
         await asyncio.sleep(60) # Check every minute
-        
+
         if is_witching_hour_active():
             # Random chance to spawn a ghost message every minute during the witching hour
             if random.random() < 0.1:  # ~6 posts per hour
@@ -126,9 +126,9 @@ async def witching_hour_ghost_worker(bot_instance):
                     active_boards = [bid for bid in _main.board_data.keys() if _main.board_data[bid].get('recipients')]
                     if not active_boards:
                         continue
-                    
+
                     target_board = random.choice(active_boards)
-                    
+
                     # Get recent context from the board to make the ghost sound relevant
                     ghost_text = None
                     try:
@@ -146,24 +146,24 @@ async def witching_hour_ghost_worker(bot_instance):
 
                     if not ghost_text or "Нейронка сдохла" in ghost_text:
                         ghost_text = random.choice(WITCHING_HOUR_CREEPY_PASTAS)
-                        
+
                     # Apply light zalgo to the ghost
                     ghost_text = apply_zalgo(ghost_text)
-                    
+
                     # Prepare fake post
                     ghost_id = random.randint(666000, 666999) # Spooky ID
                     current_floor = _main.state['post_counter'] + random.randint(1, 3)
                     ghost_post_num = current_floor
-                    
+
                     header_text = await _main.format_header(target_board, ghost_post_num, ghost_id, stream='ru')
-                    
+
                     content = {
                         'type': 'text',
                         'text': ghost_text,
                         'post_num': ghost_post_num,
                         'header': header_text
                     }
-                    
+
                     # Broadcast ghost message to all board users
                     recipients = _main.board_data[target_board].get('recipients', set()).copy()
                     if recipients:
@@ -175,6 +175,6 @@ async def witching_hour_ghost_worker(bot_instance):
                             reply_info=None
                         ))
                         print(f"💀 [WITCHING HOUR] Призрак {ghost_id} высрал пасту на {target_board}")
-                        
+
                 except Exception as e:
                     print(f"💀 [WITCHING HOUR] Ghost Error: {e}")

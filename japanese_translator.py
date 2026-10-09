@@ -51,7 +51,7 @@ PROXY_STATE = {'is_working': True}
 PROXY_STATE_LAST_FAILURE = 0
 PROXY_STATE_COOLDOWN = 60  # 60 секунд
 PROXY_STATE_LOCK = asyncio.Lock()
-PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:2334" 
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:2334"
 
 
 async def _get_proxy_usage_strategy() -> bool:
@@ -82,7 +82,7 @@ def get_dynamic_proxy_url():
     """
     # 2334/12334 - Hiddify/Nekobox, 2080/1080 - V2Ray/Socks, 7890 - Clash
     PORTS = [2334, 12334, 2080, 1080, 7890]
-    
+
     for port in PORTS:
         try:
             # Быстрый пинг порта (0.1с)
@@ -90,7 +90,7 @@ def get_dynamic_proxy_url():
                 return f"http://127.0.0.1:{port}"
         except OSError:
             continue
-            
+
     return None
 
 # --- НОВЫЙ СУЩЕСТВЕННО РАСШИРЕННЫЙ СЛОВАРЬ ПЕРЕВОДОВ ---
@@ -106,7 +106,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "оно": ["それ"],
     "мы": ["私達", "我々"],
     "они": ["彼ら", "あいつら"],
-    
+
     # Указательные местоимения
     "это": ["これ", "それ"],
     "то": ["あれ"],
@@ -124,19 +124,19 @@ JAPANESE_WORD_REPLACEMENTS = {
     "наш": ["私達の", "我々の"],
     "ваш": ["あなたの", "あなたがたの"],
     "их": ["彼らの", "あいつらの"],
-    
+
     # Женский род
     "моя": ["私の", "俺の", "僕の"],
     "твоя": ["君の", "お前の"],
     "её": ["彼女の", "あの子の"],
-    
+
     # Множественное число
     "мои": ["私の", "俺の", "僕の"],
     "твои": ["君の", "お前の"],
     "наши": ["私達の", "我々の"],
     "ваши": ["あなたの", "あなたがたの"],
     # "их" уже определен выше, дубликат убран
-    
+
     # Возвратные
     "свой": ["自分の"],
     "своя": ["自分の"],
@@ -188,8 +188,8 @@ JAPANESE_WORD_REPLACEMENTS = {
     "бог": "神様", "жизнь": "人生", "смерть": "死", "любовь": '愛', "ненависть": "憎しみ", "пидорусия": "ロシア国は", "пидорасия": "ロシア国は",
     "день": "日", "ночь": "夜", "утро": "朝", "вечер": "夕方", "росия": "ロシア国は", "пидорашка": "ロシア国は", "раха": "ロシア国は", "хуйлостан": "ロシア国は",
     "сегодня": "今日", "вчера": "昨日", "завтра": "明日", "рашка": ['ロシア国は', 'ルーシの泥沼', 'おそロシア', '北の帝国'], "рф": "ロシア国は", "россия": "ロシア国は", "сша": "アメリカ国は", "америка": "アメリカ国は",
-    "дом": "家", "школа": "学校は", "работа": "仕事は", "страна": ['国は', '国'], "город": "町は", "мир": "世界は", "работу": "仕事で", "планета": ['世界は', '惑星'], "земля": "世界は", 
-    "ад": "地獄", "рай": "天国", "небо": ['空は', '空', 'スカイ'], "адский": "地獄の", "райский": "天国の", "небесный": "空の", "адски": "地獄のように", "райски": "天国のように", 
+    "дом": "家", "школа": "学校は", "работа": "仕事は", "страна": ['国は', '国'], "город": "町は", "мир": "世界は", "работу": "仕事で", "планета": ['世界は', '惑星'], "земля": "世界は",
+    "ад": "地獄", "рай": "天国", "небо": ['空は', '空', 'スカイ'], "адский": "地獄の", "райский": "天国の", "небесный": "空の", "адски": "地獄のように", "райски": "天国のように",
     "лол": ["笑", "(笑)", "www", "草"], "кек": "草", "рофл": "冗談", "рофлить": "冗談を言う",
     "пост": ["投稿", "ポスト", "スレ"], "тред": 'スレ', "коммент": 'コメント', "ответ": "返信", "реплай": "リプライ",
     "админ": ["管理人", "管理者", "アドミン"], "одмин": ["管理人", "管理者", "アドミン"], "одмен": ["管理人", "管理者", "アドミン"], "модер": 'モデレーター', "моча": "モデレーター", "бан": ['バン', '垢BAN', 'BAN'], "забанить": "バンする",
@@ -201,7 +201,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "хейтер": 'アンチ', "хейтить": "アンチする", "стрим": '配信', "стример": "配信者", "донат": ['投銭', '寄付'],
     "скилл": "スキル", "скилловый": "上手い", "нуб": ["初心者", "雑魚", "ヘタクソ"], "про": "プロ", "топ": ['トップ', '最高'], "имба": 'ぶっ壊れ', "топчик": "トップ",
     "игра": "ゲーム", "игрок": "プレイヤー", "тима": "チーム", "сквад": "チーム", "рейд": 'レイド',
-    "аниме": "アニメ", "аниму": "アニメ", "ониме": "アニメ", "онеме": "アニメ", "манга": "漫画", "тян": "ちゃん", "тянка": "ちゃん", "тня": "ちゃん", "кун": "くん", "вайфу": "嫁", "сыч": ['スクーフ', 'スクーフタチ', 'キモオタ', 'おっさん', 'ネトウヨ', '加齢臭おじさん', 'おじさん'], "сычи": "スクーフタチ",
+    "аниме": "アニメ", "аниму": "アニメ", "ониме": "アニメ", "онеме": "アニメ", "манга": "漫画", "тян": "ちゃん", "тянка": "ちゃん", "тня": "ちゃん", "кун": "くん", "вайфу": "嫁", "сыч": ['スクーフ', 'スクーフタチ', 'キモオタ', 'おっさん', 'ネトウヨ', '加齢臭おじさん', 'おじさん', '陰キャ', '引きこもり'], "сычи": "スクーフタチ",
     "дегенерат": ['デジェネラット', '池沼', '変質者'], "шиз": "統合失調症", "русня": ['ロシア人', 'オークども', 'ロシアの豚', '北方蛮族'], "чушпан": "チュシパン",
     "сигма": "シグマ",
     "рак": ['一般人', 'リア充', 'パンピー', '陽キャ'],
@@ -266,7 +266,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "учишься": "勉強してる",
     "учится": "勉強してる",
     "помоги": "助けて",
-    
+
     # --- Существительные (с формами, новое и уникальное) ---
     "анимешник": "アニオタ",
     "анимешники": "アニオタたち",
@@ -639,7 +639,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "квартира": "アパート", "сглазил": "呪った", "чердак": "屋根裏", "возгорание": "火災", "авианосец": "空母",
     "линкольн": "リンカーン", "кузнецов": "クズネツォフ", "порт": "港", "измором": "兵糧攻め", "вагину": "マンコを",
     "масква": "モスクワ", "сгорела": "燃えた", "босота": "不良", "понос": "下痢", "диарея": "下痢", "кал": ['糞', 'うんこ', 'クソ'],
-    "выпадает": "落ちる", "ерохин": "リア充", "сыч": ['陰キャ', '引きこもり'], "попа": 'お尻', "подушка": ['枕', 'クッション'],
+    "выпадает": "落ちる", "ерохин": "リア充", "попа": 'お尻', "подушка": ['枕', 'クッション'],
     "понитач": "ポニ板", "хуев": "チンの", "напостят": "投稿する", "православный": "正教徒", "ислам": "イスラム",
     "фашизм": "ファシズム", "сатанизм": "悪魔崇拝", "урок": '授業', "череп": "頭蓋骨", "эскапизм": "現実逃避",
     "нищета": "貧困", "звезды": "星", "пелевин": "ペレーヴィン", "выблядок": "クソガキ", "выблядки": "クソガキ共",
@@ -697,7 +697,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "кровать": ["ベッド", "寝台"], "кровати": ["ベッド", "寝台"],
 "подушки": ["枕", "クッション"],
     "одеяло": ["布団", "毛布"], "одеяла": ["布団", "毛布"],
-    
+
     # --- Еда и напитки (Food & Drinks) ---
     "еда": ["食べ物", "食品", "フード"], "еду": ["食べ物", "食品", "フード"],
     "вода": ["水", "ウォーター"], "воду": ["水", "ウォーター"], "воды": ["水", "ウォーター"], "водой": ["水で", "ウォーターで"],
@@ -711,7 +711,7 @@ JAPANESE_WORD_REPLACEMENTS = {
 "сока": ["ジュース", "果汁"], "водяра": ["お酒", "アルコール"], "водки": ["お酒", "アルコール"],
     "алкоголь": ["お酒", "アルコール"], "алкоголя": ["お酒", "アルコール"], "бухло": ["お酒", "アルコール"], "бухла": ["お酒", "アルコール"], "водка": ["お酒", "アルコール"], "водку": ["お酒", "アルコール"],
 "пива": ["ビール", "麦酒"],
-    
+
     # --- Природа (Nature) ---
     "дерево": ["木", "ツリー"], "деревья": ["木", "ツリー"],
     "цветок": ["花", "フラワー"], "цветы": ["花", "フラワー"],
@@ -724,7 +724,7 @@ JAPANESE_WORD_REPLACEMENTS = {
 "солнца": ["太陽", "サン"],
 "луны": ["月", "ムーン"],
     "звезда": ['星', 'スター'], "звёзды": ["星", "スター"],
-    
+
     # --- Тело человека (Human Body) ---
 "головы": ["頭", "ヘッド"],
     "рука": ["腕", "アーム"],     "нога": ["足", "レッグ"],     "ухо": ["耳", "イヤー"], "носа": ["鼻", "ノーズ"],
@@ -732,14 +732,14 @@ JAPANESE_WORD_REPLACEMENTS = {
     "зуб": ["歯", "トゥース"], "зубы": ["歯", "トゥース"], "зуба": ["歯", "トゥース"], "зубов": ["歯", "トゥース"],
     "волосы": ["髪", "ヘアー"], "волос": ["髪", "ヘアー"],
     "сердце": ['心臓', 'ハート', '心'], "сердца": ["心臓", "ハート"],
-    
+
     # --- Технологии (Technology) ---
     "интернет": ["インターネット", "ネット"], "интернета": ["インターネット", "ネット"],
     "программа": ["プログラム", "ソフト"], "программы": ["プログラム", "ソフト"],
     "приложение": ["アプリ", "アプリケーション"], "приложения": ["アプリ", "アプリケーション"],
     "фильм": ['映画', 'ムービー'], "фильмы": ["映画", "ムービー"],
     "музыка": ['音楽', 'ミュージック'], "фотографии": ["写真", "フォト"],
-    
+
     # --- Город и транспорт (City & Transport) ---
     "улица": ["道", "ストリート"], "улицы": ["道", "ストリート"],
     "здание": ["建物", "ビル"], "здания": ["建物", "ビル"],
@@ -750,7 +750,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "поезд": ["電車", "列車"], "поезда": ["電車", "列車"],
     "самолёт": ["飛行機", "エアプレーン"], "самолёты": ["飛行機", "エアプレーン"],
     "велосипед": ["自転車", "バイク"], "велосипеды": ["自転車", "バイク"],
-    
+
     # --- Время и даты (Time & Dates) ---
     "времени": ["時間", "タイム"],
     "часа": ["時間", "アワー"], "часов": ["時計", "ウォッチ"],
@@ -760,7 +760,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "месяца": ["月", "マンス"],
     "года": ["年", "イヤー"],
     "века": ["世紀", "センチュリー"],
-    
+
     # --- Семья (Family) ---
     "семья": ["家族", "ファミリー"], "семьи": ["家族", "ファミリー"],
     "отец": ["父", "父親"], "отца": ["父", "父親"],
@@ -769,7 +769,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "дочь": ['娘', 'ドーター'], "дочери": ["娘", "ドーター"],
     "брат": ["兄", "弟", "ブラザー"], "брата": ["兄", "弟", "ブラザー"],
     "сестра": ["姉", "妹", "シスター"], "сестры": ["姉", "妹", "シスター"],
-    
+
     # --- Эмоции и состояния (Emotions & States) ---
     "любви": ["愛", "ラブ"],
     "ненависти": ["憎しみ", "ヘイト"],
@@ -779,7 +779,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "злость": ["怒り", "アンガー"], "злости": ["怒り", "アンガー"],
     "усталость": ["疲れ", "疲労"], "усталости": ["疲れ", "疲労"],
     "болезнь": ["病気", "イルネス"], "болезни": ["病気", "イルネス"],
-    
+
     # --- Действия (Actions) ---
     "бег": ["走ること", "ランニング"], "бега": ["走ること", "ランニング"],
     "прыжок": ["ジャンプ", "跳躍"], "прыжка": ["ジャンプ", "跳躍"],
@@ -787,7 +787,7 @@ JAPANESE_WORD_REPLACEMENTS = {
 "пения": ["歌", "シンギング"],
     "чтение": ["読書", "リーディング"], "чтения": ["読書", "リーディング"],
     "письмо": ["書き物", "ライティング"], "письма": ["書き物", "ライティング"],
-    
+
     # --- Абстрактные понятия (Abstract Concepts) ---
     "мысль": ['考え', '思考'], "мысли": ["考え", "思考"],
     "идея": ["アイデア", "考え"], "идеи": ["アイデア", "考え"],
@@ -795,7 +795,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "решение": ["解決", "ソリューション"], "решения": ["解決", "ソリューション"],
     "цель": ["目標", "ゴール"], "цели": ["目標", "ゴール"],
     "мечта": ["夢", "ドリーム"], "мечты": ["夢", "ドリーム"],
-    
+
     # --- Животные (Animals) ---
     "собака": ["犬", "ドッグ"], "собаки": ["犬", "ドッグ"],
     "кошка": ["猫", "キャット"], "кошки": ["猫", "キャット"],
@@ -803,7 +803,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "рыбы": ["魚", "フィッシュ"],
     "лошадь": ["馬", "ホース"], "лошади": ["馬", "ホース"],
     "корова": ["牛", "カウ"], "коровы": ["牛", "カウ"],
-    
+
     # --- Дополнительные бытовые предметы ---
     "ложка": ["スプーン", "匙"], "ложки": ["スプーン", "匙"],
     "вилка": ["フォーク", "叉"], "вилки": ["フォーク", "叉"],
@@ -811,7 +811,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "тарелка": ["皿", "プレート"], "тарелки": ["皿", "プレート"],
     "чашка": ["カップ", "茶碗"], "чашки": ["カップ", "茶碗"],
     "бутылка": ["瓶", "ボトル"], "бутылки": ["瓶", "ボトル"],
-    
+
     # --- Погода (Weather) ---
 "дождя": ["雨", "レイン"],
     "снег": ["雪", "スノー"], "снега": ["雪", "スノー"],
@@ -819,7 +819,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "туман": ["霧", "フォッグ"], "тумана": ["霧", "フォッグ"],
     "жара": ["暑さ", "ヒート"], "жары": ["暑さ", "ヒート"],
     "холод": ["寒さ", "コールド"], "холода": ["寒さ", "コールド"],
-    
+
     # --- Профессии (Professions) ---
     "учитель": ["先生", "ティーチャー"], "учителя": ["先生", "ティーチャー"],
     "инженер": ["エンジニア", "技師"], "инженера": ["エンジニア", "技師"],
@@ -840,7 +840,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "высокий": ['背が高い', '高い'], "низкий": ['背が低い', '低い'],
     "толстый": ["太い", "デブ"], "худой": "痩せた", "стройный": "スリムな",
     "мускулистый": "筋肉質", "слабый": "ひ弱な",
-    "одежда": "服",     "штаны": "ズボン",     "обувь": "靴", 
+    "одежда": "服",     "штаны": "ズボン",     "обувь": "靴",
     # --- Экономика и финансы ---
 "бизнес": "ビジネス", "компания": '会社',
 "валюта": "通貨", "цена": "値段",
@@ -973,7 +973,7 @@ JAPANESE_WORD_REPLACEMENTS = {
 
     # --- Интернет-глаголы (все формы) ---
     "присылать": ['送る', '送信する'], "присылаю": ['送っている', '送信している'], "присылаешь": ['送っている', '送信している'],
-    "присылает": ['送っている', '送信している'], "присылаем": ['送っている', '送信している'], "присылаете": ['送っている', '送信している'], 
+    "присылает": ['送っている', '送信している'], "присылаем": ['送っている', '送信している'], "присылаете": ['送っている', '送信している'],
     "присылают": ['送っている', '送信している'], "присылал": ['送っていた', '送信していた'], "присылала": ['送っていた', '送信していた'],
     "присылали": ['送っていた', '送信していた'], "присылай": ['送って', '送信して'], "присылайте": ['送って', '送信して'],
     "отослать": ['送る', '送信する'], "отошлю": ['送る', '送信する'], "отошлёшь": ['送る', '送信する'], "отошлёт": ['送る', '送信する'],
@@ -983,31 +983,31 @@ JAPANESE_WORD_REPLACEMENTS = {
     "загружает": ['アップロードしている', '読み込んでいる'], "загружаем": ['アップロードしている', '読み込んでいる'], "загружаете": ['アップロードしている', '読み込んでいる'],
     "загружают": ['アップロードしている', '読み込んでいる'], "загружал": ['アップロードしていた', '読み込んでいた'], "загружала": ['アップロードしていた', '読み込んでいた'],
     "загружали": ['アップロードしていた', '読み込んでいた'], "загружай": ['アップロードして', '読み込んで'], "загружайте": ['アップロードして', '読み込んで'],
-    "загрузить": ['アップロードする', '読み込む'], "загружу": ['アップロードする', '読み込む'], "загрузишь": ['アップロードする', '読み込む'], 
-    "загрузит": ['アップロードする', '読み込む'], "загрузим": ['アップロードする', '読み込む'], "загрузите": ['アップロードする', '読み込む', 'アップロードして', '読み込んで'], 
+    "загрузить": ['アップロードする', '読み込む'], "загружу": ['アップロードする', '読み込む'], "загрузишь": ['アップロードする', '読み込む'],
+    "загрузит": ['アップロードする', '読み込む'], "загрузим": ['アップロードする', '読み込む'], "загрузите": ['アップロードする', '読み込む', 'アップロードして', '読み込んで'],
     "загрузят": ['アップロードする', '読み込む'], "загрузил": ['アップロードした', '読み込んだ'], "загрузила": ['アップロードした', '読み込んだ'],
     "загрузили": ['アップロードした', '読み込んだ'], "загрузи": ['アップロードして', '読み込んで'],
-    "скачивать": 'ダウンロードする', "скачиваю": 'ダウンロードしている', "скачиваешь": 'ダウンロードしている', "скачивает": 'ダウンロードしている', 
+    "скачивать": 'ダウンロードする', "скачиваю": 'ダウンロードしている', "скачиваешь": 'ダウンロードしている', "скачивает": 'ダウンロードしている',
     "скачиваем": 'ダウンロードしている', "скачиваете": 'ダウンロードしている', "скачивают": 'ダウンロードしている', "скачивал": 'ダウンロードしていた',
     "скачивала": 'ダウンロードしていた', "скачивали": 'ダウンロードしていた', "скачивай": 'ダウンロードして', "скачивайте": 'ダウンロードして',
     "скачать": 'ダウンロードする', "скачаю": 'ダウンロードする', "скачаешь": 'ダウンロードする', "скачает": 'ダウンロードする',
-    "скачаем": 'ダウンロードする', "скачаете": 'ダウンロードする', "скачают": 'ダウンロードする', "скачал": 'ダウンロードした', 
+    "скачаем": 'ダウンロードする', "скачаете": 'ダウンロードする', "скачают": 'ダウンロードする', "скачал": 'ダウンロードした',
     "скачала": 'ダウンロードした', "скачали": 'ダウンロードした', "скачай": 'ダウンロードして', "скачайте": 'ダウンロードして',
-    "постить": ['投稿する', 'ポストする'], "пощу": ['投稿している', 'ポストしている'], "постишь": ['投稿している', 'ポストしている'], 
+    "постить": ['投稿する', 'ポストする'], "пощу": ['投稿している', 'ポストしている'], "постишь": ['投稿している', 'ポストしている'],
     "постит": ['投稿している', 'ポストしている'], "постим": ['投稿している', 'ポストしている'], "постите": ['投稿している', 'ポストしている', '投稿して', 'ポストして'],
     "постят": ['投稿している', 'ポストしている'], "постил": ['投稿していた', 'ポストしていた'], "постила": ['投稿していた', 'ポストしていた'],
-    "постили": ['投稿していた', 'ポストしていた'], "пость": ['投稿して', 'ポストして'], 
-    "запостить": ['投稿する', 'ポストする'], "запощу": ['投稿する', 'ポストする'], "запостишь": ['投稿する', 'ポストする'], 
+    "постили": ['投稿していた', 'ポストしていた'], "пость": ['投稿して', 'ポストして'],
+    "запостить": ['投稿する', 'ポストする'], "запощу": ['投稿する', 'ポストする'], "запостишь": ['投稿する', 'ポストする'],
     "запостит": ['投稿する', 'ポストする'], "запостим": ['投稿する', 'ポストする'], "запостите": ['投稿する', 'ポストする', '投稿して', 'ポストして'],
-    "запостят": ['投稿する', 'ポストする'], "запостил": ['投稿した', 'ポストした'], "запостила": ['投稿した', 'ポストした'], 
+    "запостят": ['投稿する', 'ポストする'], "запостил": ['投稿した', 'ポストした'], "запостила": ['投稿した', 'ポストした'],
     "запостили": ['投稿した', 'ポストした'], "запость": ['投稿して', 'ポストして'],
-    "удалять": ['削除する', '消す'], "удаляю": ['削除している', '消している'], "удаляешь": ['削除している', '消している'], 
-    "удаляет": ['削除している', '消している'], "удаляем": ['削除している', '消している'], "удаляете": ['削除している', '消している'], 
+    "удалять": ['削除する', '消す'], "удаляю": ['削除している', '消している'], "удаляешь": ['削除している', '消している'],
+    "удаляет": ['削除している', '消している'], "удаляем": ['削除している', '消している'], "удаляете": ['削除している', '消している'],
     "удаляют": ['削除している', '消している'], "удалял": ['削除していた', '消していた'], "удаляла": ['削除していた', '消していた'],
     "удаляли": ['削除していた', '消していた'], "удаляй": ['削除して', '消して'], "удаляйте": ['削除して', '消して'],
-    "удалить": ['削除する', '消す'], "удалю": ['削除する', '消す'], "удалишь": ['削除する', '消す'], "удалит": ['削除する', '消す'], 
+    "удалить": ['削除する', '消す'], "удалю": ['削除する', '消す'], "удалишь": ['削除する', '消す'], "удалит": ['削除する', '消す'],
     "удалим": ['削除する', '消す'], "удалите": ['削除する', '消す', '削除して', '消して'], "удалят": ['削除する', '消す'], "удалил": ['削除した', '消した'],
-    "удалила": ['削除した', '消した'], "удалили": ['削除した', '消した'], "удали": ['削除して', '消して'], 
+    "удалила": ['削除した', '消した'], "удалили": ['削除した', '消した'], "удали": ['削除して', '消して'],
 
     # --- Еда, вкусы и состояния ---
     "вкусный": "美味しい", "вкусная": "美味しい", "вкусное": "美味しい", "вкусные": "美味しい",
@@ -1056,7 +1056,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "крякнул": "ガーガー鳴いた", "крякнула": "ガーガー鳴いた", "крякнули": "ガーガー鳴いた",     # --- Уничижительные обращения ---
     "слабак": "雑魚", "нытик": "泣き虫", "зануда": "理屈っぽい人",
     "тупица": "馬鹿", "истеричка": "ヒステリック", "трус": "臆病者",
-    "кацап": ["ロシアのカス", "ロシア野郎"], "кацапы": ["ロシアのカス", "ロシア野郎"], 
+    "кацап": ["ロシアのカス", "ロシア野郎"], "кацапы": ["ロシアのカス", "ロシア野郎"],
     "в": ["で", "に", "の中に"], "во": ["で", "に"], "на": ["で", "に", "の上に"], "под": "の下に", "над": "の上に", "за": ["の後ろに", "のために"], "перед": "の前に", "с": ["と", "で"], "из": "から", "из-под": "の下から",
     "у": ["のところに", "で"], "к": ["に", "へ"], "по": ["で", "に沿って"],
     "о": "について", "об": "について", "от": "から", "до": "まで", "без": "なしで", "для": "のために", "через": ["を越えて", "後で"],
@@ -1155,7 +1155,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "жопа": ['ケツ', 'けつ'], "попец": "お尻", "срака": "お尻", "мудак": ["ろくでなし", "くそったれ"], "жопе": ["ケツ", "けつ"], "жопу": ["ケツ", "けつ"],     "идиот": ["馬鹿", "アホ", "馬鹿野郎", "トンチキ"], "хуец": "ちんこ", "попка": 'お尻', "попочка": "お尻", "идиоты": ["馬鹿共", "アホども", "馬鹿野郎ども", "トンチキども"], "идиотам": ["馬鹿共", "アホども", "馬鹿野郎ども", "トンチキども"],
     "дебил": "低能",  "дебилу": "低能", "дебилы": "低能ども", "дебилам": "低能ども", "урод": "ブス", "уродам": "ブスども", "уроды": "ブスども", "мрази": "クズども", "мразям": "クズども", "хуйло": "バカ野郎", "отъебись": ['ほっといて', 'ほっとけ', '消えろ', '邪魔すんな'], "гандон": "低能", "гандону": "低能", "гандонам": "低能ども",
 "отвали": "ほっといて", "умри": ["死ね", "埋もれよ", "消えろ！", "くたばれ！"], "сдохни": ["死ね", "埋もれよ", "消えろ！", "くたばれ！"], "завались": ["うるさい", "黙れ", "だまれクソ", "くたばれ！"],     "господин": "ご主人様", "господа": "ご主人様", "господину": "ご主人様", "госпоже": "ご主人様", "господам": "ご主人様",
-    
+
 # --- Междометия и сленг (Exclamations & Slang) ---
     "вау": ["うわー", "すげー"], "ого": "おお", "воу": ["うわー", "すげー"], "ничего себе": ["マジか", "すごい"],
     "упс": "おっと", "черт": "ちぇっ", "блин": ["もう", "しまった"], "бля": ['くそ', 'ちくしょう'], "бляя": ["くそ", "ちくしょう"], "бляяя": ["くそ", "ちくしょう"],
@@ -1383,7 +1383,7 @@ JAPANESE_WORD_REPLACEMENTS = {
     "доброе утро": "おはよう",
     "добрый вечер": "こんばんは",
     "спокойной ночи": "おやすみ",
-    
+
     # --- Слова с ошибками и сленг (дополнение) ---
     "прівет": ["こんにちは", "やあ"],
     "чо": ["何", "何が"],
@@ -1663,7 +1663,7 @@ AIBOORU_NEGATIVE_TAGS = [
     "-shota", "-cub", "-guro", "-gore", "-vore", "-scat", "-feces", "-diaper", "-baby", "-sagging breasts", "-gigantic_breasts",
     "-femdom", "-inflation", "-huge_breasts", "-pee", "-peeing", "-pregnant",
     "-large_penis", "-huge_penis", "-monster_cock", "-amputation", "-amputee", "-injury", "-2boys", "-1boy", "-gay", "-yaoi", "-furry", "-bara", "-bdsm", "-impaled",
-] 
+]
 
 ANIME_HARD_BLOCKED_TAGS = {
     "shota", "shotacon", "cub",
@@ -1885,12 +1885,12 @@ BOORU_API_CONFIGS = {
         'key': None,
     },
     'yande.re': {
-        'url': "https://yande.re/post.json", 
+        'url': "https://yande.re/post.json",
         'params': {'limit': 2},
-        'user_param': None, 
-        'key_param': None, 
+        'user_param': None,
+        'key_param': None,
         'negative_tags': [],
-        'user': None, 
+        'user': None,
         'key': None,
     },
 
@@ -1932,14 +1932,14 @@ def convert_number(num_str):
 def transliterate_word(word, kana_map):
     word = re.sub(r'ться$', 'тсу', word)
     word = re.sub(r'тся$', 'тса', word)
-    
+
     #  Корректная обработка сдвоенных согласных ---
     # Палатализация (смягчение)
     word = re.sub(r'([бвгджзйклмнпрстфхцчшщ])ь([ауоыэеёюяи])', lambda m: m.group(1) + {'а': 'я', 'у': 'ю', 'о': 'ё', 'э': 'е', 'е': 'е', 'ы': 'и', 'ё': 'ё', 'ю': 'ю', 'я': 'я', 'и': 'и'}[m.group(2)], word)
 
     sokuon = 'っ' if kana_map is HIRAGANA_MAP else 'ッ'
     hatsuon = 'ん' if kana_map is HIRAGANA_MAP else 'ン'
-    
+
     # Сначала обрабатываем 'нн' и 'мм' (хацуон)
     word = re.sub(r'(н|м)\1', lambda m: hatsuon + m.group(1), word)
     # Затем все остальные сдвоенные согласные (сокуон)
@@ -1976,10 +1976,10 @@ def _apply_anime_quirks(text: str) -> str:
 
     # Регулярка ловит границу слова, не-гласную букву, и остаток слова
     text = re.sub(r'\b([^аеёиоуыэюяАЕЁИОУЫЭЮЯ\s\W\d])([а-яёА-ЯЁa-zA-Z]+)\b', _stutter, text)
-    
+
     # 2. RP-действия анимешников (без русских вставок в скобках/звездочках)
     # По требованию: русские вставки в текст типа (краснеет) полностью удалены.
-            
+
     # 3. Добавление desu
     if random.random() < 0.15 and not text.endswith('desu~'):
         text = re.sub(r'([.!?])\s*$', r' desu~\1', text)
@@ -2004,7 +2004,7 @@ def anime_transform(text: str) -> str:
 
     # Используем один вызов re.split для токенизации всего текста.
     tokens = TOKENIZER_REGEX.split(text)
-    
+
     transformed_tokens = []
     kana_map = random.choice([HIRAGANA_MAP, KATAKANA_MAP])
 
@@ -2015,18 +2015,18 @@ def anime_transform(text: str) -> str:
         if TOKENIZER_REGEX.match(token):
             transformed_tokens.append(token)
             continue
-        
+
         base_word = token.lower()
-        
+
         # Сначала ищем точное совпадение в словаре замен.
         if base_word in JAPANESE_WORD_REPLACEMENTS:
             translation = JAPANESE_WORD_REPLACEMENTS[base_word]
             translated_word = random.choice(translation) if isinstance(translation, list) else translation
-            
+
             if base_word in PRONOUNS:
                 if random.random() < 0.7: translated_word += 'は'
                 else: translated_word += 'が'
-            
+
             transformed_tokens.append(translated_word)
         # Если нет, транслитерируем.
         else:
@@ -2037,19 +2037,19 @@ def anime_transform(text: str) -> str:
     result_text = ''.join(transformed_tokens)
     result_text = _apply_anime_quirks(result_text)
     words_for_embellishment = result_text.split()
-    
+
     final_words = []
     for word in words_for_embellishment:
         final_words.append(word)
         if random.random() < 0.15: final_words[-1] += random.choice(PARTICLES)
         if random.random() < 0.10: final_words[-1] += random.choice(NYA_INTERJECTIONS)
         if random.random() < 0.08: final_words.append(random.choice(KAWAII_EMOJIS).strip())
-    
+
     result = ' '.join(final_words)
-    
+
     if random.random() < 0.35: result += random.choice(END_PHRASES)
     if random.random() < 0.5: result += random.choice(KAWAII_EMOJIS)
-        
+
     return result.strip()
 
 def to_kana(text: str, kana_map: dict) -> str:
@@ -2080,10 +2080,10 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
         async with aiohttp.ClientSession(
             timeout=ClientTimeout(total=timeout, connect=5, sock_connect=5, sock_read=timeout),
             connector=connector,
-            trust_env=False 
+            trust_env=False
         ) as session:
             shuffled_apis = random.sample(api_definitions, len(api_definitions))
-            
+
             batch_size = min(4, len(shuffled_apis))
             primary_batch = shuffled_apis[:batch_size]
             remaining_batch = shuffled_apis[batch_size:]
@@ -2254,7 +2254,7 @@ async def get_random_anime_image() -> Optional[str]:
         {"tag": "swimsuit", "rating": "rating:q", "max_page": 150},
     ]
     selected_kona = random.choice(konachan_options)
-    
+
     # Опции для Yande.re (NSFW)
     yandere_nsfw_options = [
         {"tag": "sex", "max_page": 50},
@@ -2275,31 +2275,31 @@ async def get_random_anime_image() -> Optional[str]:
         {"tag": "oppai", "max_page": 50},
     ]
     selected_nsfw_option = random.choice(yandere_nsfw_options)
-    
+
     is_nsfw = random.random() < 0.25
     apis = []
-    
+
     if is_nsfw:
         apis.extend([
             # Yande.re (NSFW)
             {
-                "source": "yande.re", 
-                "fetch_func": _fetch_from_yandere_paginated, 
+                "source": "yande.re",
+                "fetch_func": _fetch_from_yandere_paginated,
                 "params": {
-                    "base_tags": selected_nsfw_option["tag"], 
-                    "rating_tag": "rating:e", 
+                    "base_tags": selected_nsfw_option["tag"],
+                    "rating_tag": "rating:e",
                     "max_page": selected_nsfw_option["max_page"],
                     "site_url": "https://yande.re/post.json"
                 }
             },
             # Konachan (NSFW Explicit)
             {
-                "source": "konachan", 
-                "fetch_func": _fetch_from_yandere_paginated, 
+                "source": "konachan",
+                "fetch_func": _fetch_from_yandere_paginated,
                 "params": {
-                    "base_tags": "sex", 
-                    "rating_tag": "rating:e", 
-                    "max_page": 20, 
+                    "base_tags": "sex",
+                    "rating_tag": "rating:e",
+                    "max_page": 20,
                     "site_url": "https://konachan.com/post.json"
                 }
             },
@@ -2330,22 +2330,22 @@ async def get_random_anime_image() -> Optional[str]:
             {"source": "waifu.im", "fetch_func": fetch_waifu_im, "params": {"tags": WAIFUIM_SFW_TAGS, "is_nsfw": False}},
             # Yande.re (SFW/Questionable)
             {
-                "source": "yande.re", 
-                "fetch_func": _fetch_from_yandere_paginated, 
+                "source": "yande.re",
+                "fetch_func": _fetch_from_yandere_paginated,
                 "params": {
-                    "base_tags": selected_yandere["tag"], 
-                    "rating_tag": selected_yandere["rating"], 
+                    "base_tags": selected_yandere["tag"],
+                    "rating_tag": selected_yandere["rating"],
                     "max_page": selected_yandere["max_page"],
                     "site_url": "https://yande.re/post.json"
                 }
             },
             # Konachan (Questionable/Safe)
             {
-                "source": "konachan", 
-                "fetch_func": _fetch_from_yandere_paginated, 
+                "source": "konachan",
+                "fetch_func": _fetch_from_yandere_paginated,
                 "params": {
-                    "base_tags": selected_kona["tag"], 
-                    "rating_tag": selected_kona["rating"], 
+                    "base_tags": selected_kona["tag"],
+                    "rating_tag": selected_kona["rating"],
                     "max_page": selected_kona["max_page"],
                     "site_url": "https://konachan.com/post.json"
                 }
@@ -2526,49 +2526,49 @@ async def get_monogatari_image() -> Optional[str]:
         {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
         {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:explicit"})}},
         {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:safe"})}},
-        
+
         # Yande.re (Questionable)
         {
-            "source": "yande.re", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "yande.re",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": "monogatari_(series)", 
-                "rating_tag": "rating:q", 
+                "base_tags": "monogatari_(series)",
+                "rating_tag": "rating:q",
                 "max_page": 6,
                 "site_url": "https://yande.re/post.json"
             }
         },
         # Yande.re (Safe)
         {
-            "source": "yande.re", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "yande.re",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": "monogatari_(series)", 
-                "rating_tag": "rating:s", 
+                "base_tags": "monogatari_(series)",
+                "rating_tag": "rating:s",
                 "max_page": 9,
                 "site_url": "https://yande.re/post.json"
             }
         },
-        
+
         # Konachan (Questionable)
         {
-            "source": "konachan", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "konachan",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": "monogatari_(series)", 
-                "rating_tag": "rating:q", 
-                "max_page": 25, 
+                "base_tags": "monogatari_(series)",
+                "rating_tag": "rating:q",
+                "max_page": 25,
                 "site_url": "https://konachan.com/post.json"
             }
         },
         # Konachan (Safe)
         {
-            "source": "konachan", 
-            "fetch_func": _fetch_from_yandere_paginated, 
+            "source": "konachan",
+            "fetch_func": _fetch_from_yandere_paginated,
             "params": {
-                "base_tags": "monogatari_(series)", 
-                "rating_tag": "rating:s", 
-                "max_page": 25, 
+                "base_tags": "monogatari_(series)",
+                "rating_tag": "rating:s",
+                "max_page": 25,
                 "site_url": "https://konachan.com/post.json"
             }
         },
@@ -2700,16 +2700,16 @@ async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) 
 
             query_hash = hashlib.sha256(tags.encode("utf-8", "ignore")).hexdigest()[:10]
             print(f"    🔎 [{site_name}] p.{page} rating={rating_tag} qhash={query_hash}")
-            
+
             posts = await request_with_fallback(site_url, params)
-            
+
             if not posts or not isinstance(posts, list):
                 continue
 
             # Фильтруем пустые URL, заблокированные теги, старые публикации (<2012) и недавние дубликаты
             valid_posts = [
-                p for p in posts 
-                if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')) 
+                p for p in posts
+                if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url'))
                 and not _post_has_blocked_tags(p)
                 and not _post_is_too_old(p, 'yande.re')
                 and not is_image_recent(
@@ -2720,8 +2720,8 @@ async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) 
             if not valid_posts:
                 # Если все уже отдавались недавно, берём не заблокированные и не старые
                 valid_posts = [
-                    p for p in posts 
-                    if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')) 
+                    p for p in posts
+                    if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url'))
                     and not _post_has_blocked_tags(p)
                     and not _post_is_too_old(p, 'yande.re')
                 ]
@@ -2736,7 +2736,7 @@ async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) 
 
         except Exception:
             continue
-            
+
     return None
 
 async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, proxy=None) -> Optional[str]:
@@ -2767,10 +2767,10 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         tags_query = f'{base_tags} {rating_tag}'
         if "score:>" not in tags_query:
              tags_query += " score:>5"
-             
+
         neg = " ".join(_merge_negative_tags(config.get('negative_tags', []))) if apply_negative_tags else ""
         final_tags = f'{tags_query} {neg}'.strip()
-        
+
         if api_type == 'gelbooru':
             main_params.update({'tags': f'{final_tags} sort:random'.strip(), 'api_key': config.get('key'), 'user_id': config.get('user')})
         elif api_type == 'danbooru':
@@ -2791,16 +2791,16 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
             # Fallback to page 0 if deep page is empty
             main_params['pid'] = 0
             body = await safe_get(config['url'], main_params)
-            
+
         if not body: return None
 
         data = json.loads(body)
-        
+
         # Разбор ответа
         posts = []
         if api_type == 'gelbooru': posts = data.get('post', [])
         elif isinstance(data, list): posts = data
-        
+
         if not posts and api_type == 'safebooru' and main_params.get('pid', 0) > 0:
             # Fallback to page 0 if deep page list is empty
             main_params['pid'] = 0
@@ -2811,10 +2811,10 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
                     posts = data_fallback
 
         if not posts: return None
-        
+
         # Фильтруем заблокированные теги, старые публикации (<2012) и недавние дубликаты
         valid_posts = [
-            post for post in posts 
+            post for post in posts
             if not _post_has_blocked_tags(post)
             and not _post_is_too_old(post, api_type)
             and not is_image_recent(
@@ -2825,7 +2825,7 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         if not valid_posts:
             # Если все на странице уже отдавались недавно, берём не заблокированные и не старые
             valid_posts = [
-                post for post in posts 
+                post for post in posts
                 if not _post_has_blocked_tags(post)
                 and not _post_is_too_old(post, api_type)
             ]
@@ -2839,7 +2839,7 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
 
     except Exception:
         import traceback; traceback.print_exc()
-        
+
     return None
 
 async def _process_fallback_api_response(api_source: str, response: Any) -> Optional[str]:

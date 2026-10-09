@@ -19,7 +19,6 @@ Verifies all 3 Acceptance Criteria from ORIGINAL_REQUEST.md:
 
 import os
 import sys
-import html
 import re
 import asyncio
 import time
@@ -43,7 +42,6 @@ from site_tgach.main import (
 )
 from Dubsite_tgach.main import format_post_text as format_post_text_dubsite
 from common.text_utils import sanitize_html
-from common.database import get_failed_files_batch, is_file_permanently_failed
 
 # Initialize FastAPI test client
 try:
@@ -116,10 +114,10 @@ class TestE2EUnifiedSuite(unittest.TestCase):
     def test_e2e_html_anchor_corrupted_link_backend(self):
         """Verify post text '>>1234 https://domain.com/b/res/343717.html\'>ТГАЧ' produces clean href in both backend engines."""
         raw_text = ">>1234 https://domain.com/b/res/343717.html'>ТГАЧ"
-        
+
         for engine_name, format_fn in [("site_tgach", format_post_text_site), ("Dubsite_tgach", format_post_text_dubsite)]:
             result = format_fn(raw_text)
-            
+
             # 1. Href must contain strictly clean URL
             url_href_match = re.search(r'<a href="([^"]+)" [^>]*rel="noopener noreferrer"', result)
             self.assertIsNotNone(url_href_match, f"[{engine_name}] No auto-link href found in: {result}")
@@ -142,7 +140,7 @@ class TestE2EUnifiedSuite(unittest.TestCase):
             "Watch https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s",
             ">>1234 https://example.com/search?q=foo&category=all'>Текст"
         ]
-        
+
         for raw in test_cases:
             for engine_name, format_fn in [("site_tgach", format_post_text_site), ("Dubsite_tgach", format_post_text_dubsite)]:
                 res = format_fn(raw)
@@ -174,12 +172,12 @@ class TestE2EUnifiedSuite(unittest.TestCase):
         self.assertTrue(os.path.exists(fe_test_path), f"Frontend E2E test file missing: {fe_test_path}")
 
         res = subprocess.run(["node", fe_test_path], capture_output=True, text=True, cwd=PROJECT_ROOT)
-        
+
         print("\n--- FRONTEND E2E TEST OUTPUT ---")
         print(res.stdout)
         if res.stderr:
             print("STDERR:", res.stderr)
-            
+
         self.assertEqual(res.returncode, 0, f"Frontend JS E2E suite failed with Exit Code {res.returncode}")
         self.assertIn("ALL UNIFIED E2E FRONTEND TESTS PASSED WITH EXIT CODE 0", res.stdout)
 
@@ -261,7 +259,7 @@ class TestE2EUnifiedSuite(unittest.TestCase):
              patch("common.database.get_duplicate_counts", new_callable=AsyncMock) as mock_dupes, \
              patch("common.database.get_blurhashes_batch", new_callable=AsyncMock) as mock_blurs, \
              patch("common.database.get_mirrors_batch", new_callable=AsyncMock) as mock_mirrors:
-            
+
             mock_failed_batch.return_value = {failed_fid}
             mock_dupes.return_value = {}
             mock_blurs.return_value = {}

@@ -4,8 +4,6 @@ Unit tests for solo casino session watchdogs (roulette & blackjack session expir
 """
 
 import time
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 import casino_engine
 

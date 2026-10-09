@@ -136,7 +136,7 @@ def _check_posts_orphaned_thread(cur):
     posts_orphaned_thread = cur.fetchone()[0]
     if posts_orphaned_thread > 0:
         print(f"{Colors.WARNING}⚠️  Посты, привязанные к удаленным тредам: {posts_orphaned_thread}{Colors.ENDC}")
-        print(f"   (Это может быть нормально, если удаляли тред, но посты остались как 'призраки'. Лучше почистить)")
+        print("   (Это может быть нормально, если удаляли тред, но посты остались как 'призраки'. Лучше почистить)")
         return posts_orphaned_thread, True
     else:
         print(f"{Colors.OKGREEN}✓ Посты корректно привязаны к тредам{Colors.ENDC}")
@@ -329,7 +329,7 @@ def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orph
         print("Рекомендуемые действия:")
 
         if dead_threads > 0:
-            print(f"1. Выполнить очистку мертвых тредов:")
+            print("1. Выполнить очистку мертвых тредов:")
             # nosec B608
             print(
                 f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")

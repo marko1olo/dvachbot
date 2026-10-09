@@ -2,7 +2,7 @@
 import asyncio
 import time
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 from common.database import register_media_repost, create_post
 
 @pytest.mark.asyncio

@@ -1,4 +1,3 @@
-import pytest
 from main import clean_html_for_tg
 
 def test_clean_html_for_tg_basic():

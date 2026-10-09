@@ -11,7 +11,6 @@ Comprehensive Test Suite for DvachBot:
      full shifts, wardrobe, set bonuses, and achievements.
 """
 
-import asyncio
 import json
 from pathlib import Path
 import sys
@@ -27,16 +26,13 @@ import aiosqlite
 from aiogram import types
 
 import achievements_engine
-import avatar_generator
 import dice_duel_engine
-import drop_engine
 import economy_extension
 import main
 import russian_roulette_pvp
 import stats_hub_router
 import ttt_engine
 import votemute_engine
-import wardrobe_engine
 from common.bot_helpers import _get_user_active_items
 
 

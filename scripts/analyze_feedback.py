@@ -27,15 +27,15 @@ for post in posts:
     author_id = post['author_id'] if 'author_id' in post.keys() else post.get('user_id', '')
     post_num = post['post_num'] if 'post_num' in post.keys() else post.get('id', '')
     timestamp = post['timestamp'] if 'timestamp' in post.keys() else post.get('created_at', 0)
-    
+
     if not comment: continue
     comment_lower = comment.lower()
-    
+
     matched_categories = []
     for cat, patterns in keywords.items():
         if any(re.search(p, comment_lower) for p in patterns):
             matched_categories.append(cat)
-            
+
     for cat in matched_categories:
         findings[cat].append({
             'post_num': post_num,
@@ -48,7 +48,7 @@ for post in posts:
 for cat in findings:
     for item in findings[cat]:
         author_id = item['author_id']
-        
+
         # Get recent transactions
         try:
             cursor.execute("SELECT amount, reason, timestamp FROM UserTransactions WHERE user_id = ? AND timestamp >= 1788329880", (author_id,))
@@ -56,7 +56,7 @@ for cat in findings:
         except:
             txs = []
         item['transactions'] = txs
-        
+
         # Get recent mutes
         try:
             cursor.execute("SELECT reason, expires_at FROM Mutes WHERE user_id = ?", (author_id,))

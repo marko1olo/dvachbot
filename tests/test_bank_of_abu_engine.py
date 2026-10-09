@@ -28,10 +28,9 @@ Coverage Matrix:
     * Safe wealth accumulation: user deposits earnings, gets street-attacked with empty wallet, bank funds stay 100% safe and mature for payout.
 """
 
-import asyncio
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 import aiosqlite

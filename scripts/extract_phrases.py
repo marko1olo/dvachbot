@@ -4,7 +4,7 @@ import json
 def extract_strings(filename):
     with open(filename, 'r', encoding='utf-8') as f:
         content = f.read()
-    
+
     tree = ast.parse(content)
     phrases = []
 
@@ -17,7 +17,7 @@ def extract_strings(filename):
                 for kw in node.keywords:
                     if kw.arg == 'text' and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                         phrases.append({'line': node.lineno, 'text': kw.value.value})
-            
+
     return phrases
 
 if __name__ == '__main__':

@@ -14,12 +14,11 @@ import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
-from aiogram import F, Router, types, Bot
+from aiogram import F, Router, types
 from aiogram.filters import Command, BaseFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from common.db_pool import db_lock, db_transaction, get_pool
+from common.db_pool import db_transaction, get_pool
 from common.database import (
     add_to_abu_fund,
     add_user_global_balance,
@@ -989,7 +988,7 @@ async def _render_bank_view(
                         if "not modified" in str(edit_err).lower():
                             return
                         logger.warning(f"[_render_bank_view] edit_caption failed: {edit_err}")
-                
+
                 # Если edit_caption не удался или длина > 1024:
                 try:
                     await target.message.delete()

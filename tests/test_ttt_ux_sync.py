@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from ttt_engine import (
@@ -7,9 +6,6 @@ from ttt_engine import (
     active_ttt_games,
     user_active_ttt_session,
     cmd_ttt,
-    render_game_text,
-    get_ttt_game_keyboard,
-    TURN_TIMEOUT_SECONDS,
 )
 
 @pytest.mark.asyncio

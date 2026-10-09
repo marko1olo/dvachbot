@@ -8,8 +8,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from site_tgach.main import format_post_text as format_post_text_site, _clean_url_and_suffix as clean_site
-from Dubsite_tgach.main import format_post_text as format_post_text_dubsite, _clean_url_and_suffix as clean_dub
+from site_tgach.main import format_post_text as format_post_text_site
+from Dubsite_tgach.main import format_post_text as format_post_text_dubsite
 
 class TestChallengerM1DeepStress(unittest.TestCase):
 
@@ -27,7 +27,7 @@ class TestChallengerM1DeepStress(unittest.TestCase):
 
             # HTML escaped expected URL
             escaped_url = html.escape(url)
-            
+
             # Check site_tgach
             self.assertIn(f'href="{escaped_url}"', res_site, f"Site href mismatch for {url}: {res_site}")
             # Check Dubsite_tgach
@@ -69,7 +69,7 @@ class TestChallengerM1DeepStress(unittest.TestCase):
         sentence_url = "https://example.com/test"
         res_sent = format_post_text_site(f"(Check {sentence_url})")
         self.assertIn(f'href="{sentence_url}"', res_sent)
-        self.assertIn(f'</a>)', res_sent)
+        self.assertIn('</a>)', res_sent)
 
     def test_04_trailing_sentence_punctuation(self):
         """Test URL ending with period, comma, exclamation, question mark"""

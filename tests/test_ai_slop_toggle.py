@@ -1,12 +1,8 @@
 import pytest
-import asyncio
-import sqlite3
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from common.bot_helpers import is_ai_slop_content
 from common.database import init_db, update_user_settings_db, load_state_from_db
-import shared_state
 from shared_state import board_data, BroadcastConfig
 
 
@@ -34,7 +30,7 @@ def test_is_ai_slop_content_detection():
 @pytest.mark.asyncio
 async def test_database_persistence_and_load_state(tmp_path):
     db_file = str(tmp_path / "test_tgach.db")
-    
+
     import common.db_pool
     if common.db_pool._db_connection:
         try:
@@ -84,7 +80,7 @@ async def test_database_persistence_and_load_state(tmp_path):
 @pytest.mark.asyncio
 async def test_broadcaster_filtering():
     from broadcaster import MessageBroadcaster
-    
+
     mock_bot = AsyncMock()
     mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=123))
 
@@ -135,7 +131,7 @@ async def test_broadcaster_filtering():
     broadcaster_ai = MessageBroadcaster(cfg_ai)
     assert broadcaster_ai.is_ai_content is True
     res_ai = await broadcaster_ai.broadcast()
-    
+
     called_uids = {call.kwargs.get('chat_id') or (call.args[0] if call.args else None) for call in mock_bot.send_message.call_args_list}
     assert 102 not in called_uids
     assert 101 in called_uids
@@ -172,7 +168,7 @@ async def test_broadcaster_filtering():
 @pytest.mark.asyncio
 async def test_delivery_manager_recipient_resolution():
     from delivery_manager import MessageDeliveryTask
-    
+
     b_id = 'test_deliv_ai'
     board_data[b_id] = {
         'users': {'active': {201, 202}, 'banned': set()},

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from site_tgach.main import format_content_disposition, sanitize_header_filename, export_thread_html
+from site_tgach.main import format_content_disposition, export_thread_html
 
 def test_format_content_disposition_ascii():
     header = format_content_disposition("inline", "sample_image.png")

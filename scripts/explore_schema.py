@@ -1,5 +1,4 @@
 import sqlite3
-import json
 
 db_path = 'file:c:/Users/danat/Desktop/dvachbot/dvach_bot.db?mode=ro'
 
@@ -11,7 +10,7 @@ try:
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [row['name'] for row in cursor.fetchall()]
     print("Tables:", tables)
-    
+
     for table in tables:
         cursor.execute(f"PRAGMA table_info({table});")
         columns = [row['name'] for row in cursor.fetchall()]

@@ -1,18 +1,17 @@
 import asyncio
 import sqlite3
 import json
-import os
 import sys
 import logging
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
-from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, r'C:\Users\danat\Desktop\dvachbot')
 
 from common.board_config import BOARD_CONFIG
-from shared_state import MIRROR_CHANNELS, AUTHORIZED_ARCHIVE_BOTS, ARCHIVE_POSTING_BOT_ID
+from shared_state import MIRROR_CHANNELS
 import archive_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def run_archive_backfill(start_post_num: int = 492000, max_posts: int = 1000):
     print(f"=== Starting Archive Backfill (from #{start_post_num}, max={max_posts}) ===")
-    
+
     # 1. Initialize bots
     bots = {}
     default_props = DefaultBotProperties(parse_mode="HTML")
@@ -28,11 +27,11 @@ async def run_archive_backfill(start_post_num: int = 492000, max_posts: int = 10
         tok = conf.get("token")
         if tok:
             bots[bid] = Bot(token=tok, default=default_props)
-    
+
     # Setup archive_manager.GLOBAL_BOTS
     archive_manager.GLOBAL_BOTS = bots
     bot_b = bots.get('b')
-    
+
     conn = sqlite3.connect(r'C:\Users\danat\Desktop\dvachbot\dvach_bot.db')
     c = conn.cursor()
 
@@ -106,9 +105,9 @@ async def run_archive_backfill(start_post_num: int = 492000, max_posts: int = 10
                     )
                 except Exception:
                     sent_msg = None
-            except Exception as e:
+            except Exception:
                 sent_msg = None
-            
+
             # Fallback to main board bot 'b' if needed
             if not sent_msg and bot_b and bot_b != sender_bot:
                 try:
@@ -140,7 +139,7 @@ async def run_archive_backfill(start_post_num: int = 492000, max_posts: int = 10
         # Pacing
         await asyncio.sleep(0.15)
 
-    print(f"\n=== BACKFILL COMPLETE ===")
+    print("\n=== BACKFILL COMPLETE ===")
     print(f"Total processed: {total} | Successfully archived: {success_count} | Failed/Skipped: {fail_count}")
 
     for b in bots.values():

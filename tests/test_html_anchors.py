@@ -1,7 +1,6 @@
 import os
 import sys
 import unittest
-import html
 import re
 
 # Ensure project root is in sys.path

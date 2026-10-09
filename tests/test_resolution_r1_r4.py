@@ -25,12 +25,11 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 from aiogram import Bot
 from aiogram.types import Message, PhotoSize, InlineKeyboardMarkup
 
 import shared_state
-from shared_state import storage_lock, messages_storage, post_to_messages, board_data, NewPostParams
+from shared_state import board_data, NewPostParams
 import archive_manager
 from archive_manager import (
     _forward_post_to_realtime_archive,
@@ -38,27 +37,18 @@ from archive_manager import (
     _BOT_INACCESSIBLE_CHANNELS,
     _INACCESSIBLE_CHANNELS,
 )
-import delivery_manager
 from delivery_manager import MessageDeliveryTask
-import post_processor
 from post_processor import process_new_post
-import drop_engine
 from drop_engine import (
-    DropRecord,
     active_drops,
-    drop_lock,
     create_money_drop,
     claim_money_drop,
     cancel_money_drop,
     expire_unclaimed_drops_step,
-    init_drop_engine,
     register_drop_message,
     get_drop_messages,
-    clear_drop_messages,
     reset_drop_cooldowns,
     set_min_reaction_delay,
-    MIN_DROP_AMOUNT,
-    MAX_DROP_AMOUNT,
 )
 import site_tgach.tagging_worker as tagging_worker
 from site_tgach.tagging_worker import get_tasks

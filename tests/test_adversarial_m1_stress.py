@@ -20,12 +20,9 @@ Covers 3 critical challenge areas:
 """
 
 import time
-import math
-import html
 import random
-import re
 from xml.etree import ElementTree as ET
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -33,7 +30,6 @@ import wardrobe_engine
 import combat_moderation_engine
 from common import work_engine
 from common.html_utils import escape_html
-import post_helpers
 import stats_generator
 
 

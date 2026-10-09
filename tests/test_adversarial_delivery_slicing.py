@@ -9,33 +9,21 @@ from collections import defaultdict
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import common.config as config
 from shared_state import (
-    DELIVERY_INITIAL_CHUNK_SIZE,
-    DELIVERY_MAX_CHUNK_SIZE,
-    DELIVERY_MIN_CHUNK_SIZE,
     weekly_active_users,
     message_queues,
     board_data,
     BroadcastConfig
 )
-from broadcaster import MessageBroadcaster, DeliveryResults
+from broadcaster import MessageBroadcaster
 from delivery_manager import (
     MessageDeliveryTask,
     _passive_slice_size_for_content,
     _split_recipients_for_delivery,
     _remove_already_delivered_recipients,
-    _delete_durable_delivery_item,
-    _persist_durable_delivery_item,
     cumulative_post_metrics,
-    CHUNK_SIZE,
-    PRIORITY_SPLIT_MIN_PASSIVE,
-    PRIORITY_PASSIVE_SLICE_SIZE,
-    PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
-    PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
-    PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
 )
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError
+from aiogram.exceptions import TelegramRetryAfter
 
 
 class TestAdversarialDeliverySlicing(unittest.IsolatedAsyncioTestCase):

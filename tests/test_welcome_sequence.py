@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from help_text import generate_secondary_welcome_message
 from common.board_config import BOARD_CONFIG
 import main

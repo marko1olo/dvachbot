@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
-import asyncio
 import json
 import time
-from datetime import datetime, UTC, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite

@@ -6,7 +6,6 @@ Unit and integration tests for Bank of Abu direct chat message deposit amount in
 """
 
 import time
-import pytest
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +18,6 @@ from bank_engine import (
     PendingBankDepositFilter,
     handle_chat_deposit_amount,
     USER_PENDING_BANK_DEPOSIT,
-    BANK_TIERS,
 )
 
 

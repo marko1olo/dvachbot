@@ -1,6 +1,5 @@
 import asyncio
 import time
-import math
 from aiogram.filters import Command
 from bot_helpers import *
 from post_helpers import *
@@ -18,8 +17,7 @@ from common.database import (
     get_pool, get_post_author_by_copy, get_post_by_num, get_post_copies,
     get_post_info_by_copy, add_or_activate_user, update_user_status,
     set_system_setting, add_reaction_ban, remove_reaction_ban,
-    add_spam_word, remove_spam_word, get_or_create_api_token, archive_thread_in_db,
-    log_global_event
+    add_spam_word, remove_spam_word, get_or_create_api_token, log_global_event
 )
 
 router = Router()
@@ -80,9 +78,9 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
         await update_post_content(pnum, content)
         async with storage_lock:
             messages_storage[pnum] = {
-                'author_id': 0, 
-                'timestamp': now_dt, 
-                'content': content, 
+                'author_id': 0,
+                'timestamp': now_dt,
+                'content': content,
                 'board_id': board_id
             }
         b_data = board_data[board_id]
@@ -105,7 +103,7 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    
+
     parts = (message.text or message.caption or "").split()
     if not target_id and len(parts) > 1:
         try:
@@ -119,14 +117,14 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
     b_data = board_data[board_id]
     if 'troll_targets' not in b_data:
         b_data['troll_targets'] = set()
-    
+
     if target_id in b_data['troll_targets']:
         b_data['troll_targets'].remove(target_id)
         await message.answer(f"Shadow-Troll OFF for {target_id}")
     else:
         b_data['troll_targets'].add(target_id)
         await message.answer(f"Shadow-Troll ON for {target_id}")
-        
+
     # Also log global event
     await log_global_event('bot', f"🤡 TROLL: Admin {message.from_user.id} toggled troll for {target_id} on {board_id}")
 
@@ -149,7 +147,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
         try:
             await message.answer(response_text, reply_markup=keyboard)
             await message.delete()
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -222,7 +220,6 @@ async def cmd_bot_lockdown(message: Message, board_id: str | None):
         await message.answer("Использование: `/lockdown on` или `/lockdown off`", parse_mode="Markdown")
         return
     enabled = args[1].lower() == "on"
-    from common.database import set_system_setting
     await set_system_setting('lockdown_enabled', "true" if enabled else "false")
     status_text = "ВКЛЮЧИЛ" if enabled else "ВЫКЛЮЧИЛ"
     await log_global_event('bot', f"🚨 LOCKDOWN: Админ {message.from_user.id} {status_text} режим бункера")
@@ -484,7 +481,7 @@ async def admin_save_all(callback: types.CallbackQuery):
     is_any_admin = any(is_admin(callback.from_user.id, b_id) for b_id in BOARDS)
     if not is_any_admin:
         try: await callback.answer("Access denied", show_alert=True)
-        except Exception as e: pass
+        except Exception: pass
         return
     user_lang = callback.from_user.language_code or 'en'
     is_ru = 'ru' in user_lang or 'uk' in user_lang or 'be' in user_lang
@@ -518,11 +515,11 @@ async def admin_stats_board(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Access denied", show_alert=True)
-        except Exception as e: pass
+        except Exception: pass
         return
     if not isinstance(callback.message, types.Message):
         try: await callback.answer()
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -652,7 +649,7 @@ async def admin_filter_list(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Access denied", show_alert=True)
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     spam_words = b_data.get('spam_filter_words', set())
@@ -689,7 +686,7 @@ async def admin_filter_list(callback: types.CallbackQuery):
     ])
     try:
         await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
-    except (TelegramBadRequest, TelegramForbiddenError): 
+    except (TelegramBadRequest, TelegramForbiddenError):
         pass
     try: await callback.answer()
     except TelegramBadRequest: pass
@@ -702,7 +699,7 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Access denied", show_alert=True)
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -730,7 +727,7 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
     ])
     try:
         await callback.message.edit_text(response_text, parse_mode="HTML", reply_markup=keyboard)
-    except (TelegramBadRequest, TelegramForbiddenError): 
+    except (TelegramBadRequest, TelegramForbiddenError):
         pass
     try: await callback.answer()
     except TelegramBadRequest: pass
@@ -743,7 +740,7 @@ async def admin_back_to_main(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Нет прав", show_alert=True)
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -895,10 +892,10 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
         else:
             info += f"\nℹ️ {status_lbl}: Inactive"
         await message.answer(info, parse_mode="HTML")
-    except (TelegramBadRequest, TelegramForbiddenError) as e:
+    except (TelegramBadRequest, TelegramForbiddenError):
         msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
         await message.answer(msg, parse_mode="HTML")
-    except Exception as e:
+    except Exception:
         msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
         await message.answer(msg, parse_mode="HTML")
     try:
@@ -929,7 +926,7 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     ])
     await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (ID: <code>{target_id}</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
-    except Exception as e: pass
+    except Exception: pass
 
 async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int):
     deleted_posts = await delete_user_posts(bot, target_id, 5, board_id)
@@ -964,8 +961,8 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     if not board_id or not is_admin(message.from_user.id, board_id): return
     command_args = (message.text or message.caption or "").split()[1:]
     target_id = None
-    duration_str = "1h" 
-    
+    duration_str = "1h"
+
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
         if not target_id:
@@ -1011,7 +1008,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
             msg = "Использование: <code>/wipe [время]</code> (в ответ на пост) или <code>/wipe &lt;post_num|user_id&gt; [время]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
         await message.answer(msg, parse_mode="HTML")
         return
-        
+
     duration_str = duration_str.lower().replace(" ", "")
     if duration_str in ["all", "все", "всё", "весь"]:
         minutes = 525600  # 1 year
@@ -1044,12 +1041,12 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     ])
     await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?\n<i>(Автору уже выдан теневой мут на 1ч)</i>", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
-    except Exception as e: pass
+    except Exception: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
-    except Exception as e: pass
-    
+    except Exception: pass
+
     # Ensure 1-hour shadowmute in DB
     smute_seconds = max(3600, minutes * 60)
     try:
@@ -1057,7 +1054,7 @@ async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: in
         await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
     except Exception as e:
         print(f"⚠️ Error ensuring shadowmute in execute_wipe: {e}")
-        
+
     deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
     await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м, шедоумут {smute_seconds}с)")
     anon_name = generate_anon_name(target_id)
@@ -1076,25 +1073,25 @@ async def on_admin_action(callback: types.CallbackQuery):
         await callback.answer("Ошибка данных")
         return
     action = parts[1]
-    
+
     if action == "cancel":
         await callback.message.delete()
         try: await callback.answer("Отменено")
-        except Exception as e: pass
+        except Exception: pass
         return
-        
+
     if len(parts) < 4:
         await callback.answer("Ошибка формата данных")
         return
-        
+
     target_id = int(parts[2])
     board_id = parts[3]
     admin_id = callback.from_user.id
-    
+
     if not is_admin(admin_id, board_id):
         await callback.answer("Нет прав", show_alert=True)
         return
-        
+
     if action == "ban":
         await callback.answer("Баним...")
         await execute_ban(callback.bot, callback.message, target_id, board_id, admin_id)
@@ -1162,7 +1159,7 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
         return
     args = (message.text or message.caption or "").split()[1:]
     target_id = None
-    duration_str = "10m" 
+    duration_str = "10m"
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
         if args: duration_str = args[0]
@@ -1198,7 +1195,7 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
         thread_info.setdefault('local_shadow_mutes', {})[target_id] = expires_ts
     phrases = thread_messages.get(lang, {}).get('shadowmute_threads_success', ["Shadowmuted in threads."])
     response_text = random.choice(phrases).format(
-        user_id=target_id, 
+        user_id=target_id,
         duration=str(int(total_seconds / 60))
     )
     await message.answer(response_text)
@@ -1339,7 +1336,7 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
     else:
         report = f"👻 Пост #{post_num} был 'теневым' образом удален.\nУдалено копий: {deleted_count} из {len(all_copies) - 1}."
     try: await wait_msg.delete()
-    except Exception as e: pass
+    except Exception: pass
     await message.answer(report)
     try:
         await message.delete()
@@ -1354,23 +1351,23 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    
+
     args = (message.text or message.caption or "").split()
     if len(args) >= 2:
         try:
             target_id = int(args[1])
         except ValueError:
             import traceback; traceback.print_exc()
-            
+
     if target_id is None:
         if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code> or reply to user message."
         elif lang == 'jp': usage = "使用法: <code>/unban &lt;user_id&gt;</code> またはユーザーメッセージに返信します。"
         else: usage = "Использование: <code>/unban &lt;user_id&gt;</code> или ответ на сообщение пользователя."
         await message.answer(usage, parse_mode="HTML")
         try: await message.delete()
-        except Exception as e: pass
+        except Exception: pass
         return
-        
+
     unbanned = False
     async with storage_lock:
         b_data = board_data[board_id]
@@ -1378,10 +1375,10 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
             b_data['users']['banned'].discard(target_id)
             b_data['users']['active'].add(target_id)
             unbanned = True
-            
+
     board_name = BOARD_CONFIG[board_id]['name']
     if unbanned:
-        await add_or_activate_user(target_id, board_id) 
+        await add_or_activate_user(target_id, board_id)
         if lang == 'en': msg = f"User {target_id} unbanned on {board_name}."
         elif lang == 'jp': msg = f"ユーザー {target_id} のBANを解除しました ({board_name})。"
         else: msg = f"Пользователь {target_id} разбанен на доске {board_name}."
@@ -1392,7 +1389,7 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
         else: msg = f"Пользователь {target_id} не был забанен на этой доске."
         await message.answer(msg)
     try: await message.delete()
-    except Exception as e: pass
+    except Exception: pass
 
 @router.message(Command("del"))
 async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1462,7 +1459,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
             resp += f" 🧹 Удалено как Дворник (по Билету). Осталось: {janitor_deletes_left} удалений."
     await message.answer(resp)
     try: await message.delete()
-    except Exception as e: pass
+    except Exception: pass
 
 @router.message(Command("token"))
 async def cmd_token(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1474,7 +1471,7 @@ async def cmd_token(message: types.Message, board_id: str | None, stream: str = 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     try:
         token = await get_or_create_api_token(user_id, generate_unique_token)
-        WEBAPP_URL_DISPLAY = "https://tgach.top" 
+        WEBAPP_URL_DISPLAY = "https://tgach.top"
         if lang == 'en':
             response_text = (
                 "🔑 **Your personal token for website access:**\n\n"
@@ -1512,10 +1509,10 @@ async def process_admin_menu(callback: types.CallbackQuery, board_id: str | None
     if not board_id or not is_admin(callback.from_user.id, board_id):
         await callback.answer("У вас нет прав.", show_alert=True)
         return
-        
+
     action = callback.data.split(":")[1]
     b_data = board_data[board_id]
-    
+
     if action == "lockdown":
         from common.database import set_system_setting
         is_lockdown = b_data.get('lockdown', False)
@@ -1523,7 +1520,7 @@ async def process_admin_menu(callback: types.CallbackQuery, board_id: str | None
         new_val = not is_lockdown
         b_data['lockdown'] = new_val
         await set_system_setting('lockdown_enabled', "true" if new_val else "false")
-        
+
         # update keyboard
         # we can just answer it for now
         status = "ВКЛЮЧЕН" if new_val else "ВЫКЛЮЧЕН"

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import unittest
-import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,10 +7,7 @@ import shared_state
 from shared_state import (
     get_target_grief_protection_remaining,
     register_target_attack,
-    calculate_escalating_combat_cooldown,
-    set_combat_cooldown,
-    get_combat_cooldown_remaining,
-    check_attack_abuse_limit
+    calculate_escalating_combat_cooldown
 )
 from post_helpers import check_post_numerals
 
@@ -55,11 +51,11 @@ class TestAntiGriefingAndNews(unittest.IsolatedAsyncioTestCase):
     def test_numerals_quad_and_milestones(self):
         # Normal post
         self.assertIsNone(check_post_numerals(12345))
-        
+
         # Quads
         self.assertEqual(check_post_numerals(44444), 5)
         self.assertEqual(check_post_numerals(107777), 4)
-        
+
         # Milestones
         self.assertEqual(check_post_numerals(1000000), 8) # Миллионник
         self.assertEqual(check_post_numerals(500000), 7)  # Полумиллионник
@@ -68,7 +64,7 @@ class TestAntiGriefingAndNews(unittest.IsolatedAsyncioTestCase):
 
     async def test_publish_to_best_channel_deduplication(self):
         from news_channel_publisher import publish_to_best_channel
-        
+
         mock_bot = AsyncMock()
         mock_bot.get_me = AsyncMock(return_value=MagicMock(username="dvach_test_bot"))
         mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=12345))
@@ -81,7 +77,7 @@ class TestAntiGriefingAndNews(unittest.IsolatedAsyncioTestCase):
         with patch('news_channel_publisher.get_target_channels', return_value=(-100200, -100300)), \
              patch('news_channel_publisher.add_channel_copy', new_callable=AsyncMock), \
              patch('news_channel_publisher.update_post_content', new_callable=AsyncMock):
-            
+
             # 1st call -> should succeed
             res1 = await publish_to_best_channel(mock_bot, 'b', 55555, post_data, 5)
             self.assertTrue(res1)
@@ -93,7 +89,7 @@ class TestAntiGriefingAndNews(unittest.IsolatedAsyncioTestCase):
 
     async def test_publish_casino_jackpot_news(self):
         from news_channel_publisher import publish_casino_jackpot_news
-        
+
         mock_bot = AsyncMock()
         mock_bot.get_me = AsyncMock(return_value=MagicMock(username="dvach_test_bot"))
         mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=54321))

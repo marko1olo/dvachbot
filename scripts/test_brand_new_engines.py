@@ -4,7 +4,6 @@ import sys
 import time
 import io
 import aiohttp
-from typing import Optional
 from PIL import Image
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')

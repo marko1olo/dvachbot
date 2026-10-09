@@ -1,8 +1,5 @@
 import re
-import html
-from typing import Any, Optional
-from common.html_utils import escape_html
-from common.text_utils import sanitize_html, clean_html_tags
+from typing import Any
 
 # Regex matching board post headers across all board modes and styles:
 # e.g.:

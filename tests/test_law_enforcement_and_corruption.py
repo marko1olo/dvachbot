@@ -1,8 +1,6 @@
 import pytest
 import time
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
-import main
 from main import (
     BASE_SHOP_PRICES,
     _build_pharma_shop_content,

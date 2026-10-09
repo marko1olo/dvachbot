@@ -7,7 +7,6 @@ and fallback resilience.
 """
 
 import io
-import math
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 import httpx
@@ -19,10 +18,8 @@ from ai_manager import (
     format_music_duration,
     handle_music_roast,
     parse_music_roast_response,
-    MUSIC_ROAST_SYSTEM_PROMPT,
     DEFAULT_MUSIC_ROASTS,
 )
-from common.html_utils import escape_html
 
 
 # ============================================================================

@@ -320,7 +320,7 @@ def build_achievements_content(user_id: int, active_items: Dict[str, Any]) -> Tu
     total_reward = sum(a["reward_cash"] for a in unlocked)
 
     lines = [
-        f"🏆 <b>ДОСТИЖЕНИЯ И ТРОФЕИ АНОНА</b>",
+        "🏆 <b>ДОСТИЖЕНИЯ И ТРОФЕИ АНОНА</b>",
         f"📊 Прогресс: <b>{unlocked_count}/{total_count} ({pct}%)</b> | Заработано: <b>+{total_reward:,} ₪</b>\n",
     ]
 

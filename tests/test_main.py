@@ -2,7 +2,6 @@ import sys
 import os
 import unittest
 sys.path.insert(0, os.path.abspath('.'))
-import types
 from unittest.mock import MagicMock
 
 # Setup required env var
@@ -18,7 +17,7 @@ from Dubsite_tgach.main import (
     get_user_id_from_session
 )
 
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, patch
 import io
 
 class StubClient:
@@ -214,7 +213,6 @@ class TestCleanTitleText(unittest.TestCase):
 
 
 from Dubsite_tgach.main import format_bayan_label
-from unittest.mock import patch
 
 class TestFormatBayanLabel(unittest.TestCase):
     @patch('Dubsite_tgach.main.random.choice')

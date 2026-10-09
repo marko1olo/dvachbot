@@ -11,11 +11,8 @@ Milestone 3 Comprehensive Test Suite:
 
 import asyncio
 import json
-import math
 import random
 import time
-from typing import Any, Dict, List
-from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,11 +20,8 @@ import pytest
 import common.config
 import common.database
 import common.db_pool
-import lootbox_engine
 import main
-import whale_economy_engine
 from auction_engine import (
-    auction_router,
     create_auction,
     ensure_auction_schema,
     finish_active_auctions,

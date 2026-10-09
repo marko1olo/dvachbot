@@ -1,18 +1,17 @@
 import shared_state
 from aiogram.types import Message
 from aiogram import Router, types
-from aiogram.filters import Command
 
 message_router = Router()
 
 import asyncio
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 import logging
 import random
 import re
 import time
 from typing import Optional
-from aiogram import Bot, F, types
+from aiogram import Bot, F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 logger = logging.getLogger(__name__)
@@ -24,14 +23,11 @@ from common.html_utils import escape_html
 from common.text_utils import clean_html_tags, sanitize_html
 from common.database import (
     get_post_by_num, update_post_content, get_pool, get_max_post_num,
-    add_or_activate_user, update_shadow_mute, deduct_user_global_balance, add_user_global_balance,
-    find_post_by_file_id
+    add_or_activate_user, deduct_user_global_balance, find_post_by_file_id
 )
 from common.db_pool import db_lock
-from common.spam_filter import _check_cross_board_spam, check_rate_limit as _check_rate_limit
-from common.forward_utils import is_forward_message, is_forwarded_from_bot, contains_board_post_header, format_forwarded_quote, extract_board_post_number
+from common.forward_utils import is_forward_message, is_forwarded_from_bot, contains_board_post_header, format_forwarded_quote
 from post_helpers import _quote_info_from_content
-from media_utils import extract_msg_media_file_id
 from shared_state import *
 from shared_state import _media_group_state_key, _active_duels, _DUEL_TIMEOUT
 
@@ -65,17 +61,17 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
     """
     if not text or not isinstance(text, str):
         return None, text
-    
+
     match = RE_ARCHIVE_LINK.search(text)
     if not match:
         return None, text
-    
+
     raw_id_str = match.group(1) or match.group(2) or match.group(3) or match.group(4)
     if not raw_id_str:
         return None, text
     raw_id = int(raw_id_str)
     resolved_post_num = None
-    
+
     try:
         # 1. Direct post_num check
         post = await get_post_by_num(raw_id)
@@ -95,7 +91,7 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
                     row = await cursor.fetchone()
                     if row:
                         resolved_post_num = row[0]
-            
+
             # 3. Check PostCopies
             if not resolved_post_num:
                 async with db.execute("SELECT post_num FROM PostCopies WHERE message_id = ? LIMIT 1", (raw_id,)) as cursor:
@@ -105,14 +101,14 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
     except Exception as e:
         logger.warning(f"⚠️ Ошибка при разрешении archive link: {e}")
         return None, text
-                    
+
     if resolved_post_num:
         prefix_part = text[:match.start()].strip()
         suffix_part = text[match.end():].strip()
         rest_text = f"{prefix_part} {suffix_part}".strip()
         cleaned_text = rest_text if rest_text else f">>{resolved_post_num}"
         return resolved_post_num, cleaned_text
-        
+
     return None, text
 
 async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = None) -> int | None:
@@ -239,9 +235,9 @@ async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = N
     return reply_to_post
 
 from bot_helpers import is_admin, _get_msg_content_and_type
-from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level, SPAM_RULES, _check_repeats
+from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, SPAM_RULES, _check_repeats
 from text_assets import (
-    EARNING_NOTIFICATIONS, PENALTY_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
+    EARNING_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES,
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
 )
 from ai_manager import (
@@ -251,7 +247,7 @@ from ai_manager import (
 )
 import __main__ as main
 
-# Some functions like `spawn_task` and `execute_delayed_edit` are in main.py, 
+# Some functions like `spawn_task` and `execute_delayed_edit` are in main.py,
 # but they might cause cyclic imports if imported directly. We will try importing them.
 
 
@@ -701,10 +697,10 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         message_id = reaction.message_id
         if not board_id: return
         b_data = board_data[board_id]
-        
+
         if not is_admin(user_id, board_id):
             from common.database import is_shadow_muted as check_db_shadow_muted
-            is_shadow_muted = ((user_id in b_data.get('shadow_mutes', {}) and 
+            is_shadow_muted = ((user_id in b_data.get('shadow_mutes', {}) and
                                 b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
                                await check_db_shadow_muted(user_id, board_id))
             if is_shadow_muted or user_id in b_data.get('reaction_banned_users', set()):
@@ -737,17 +733,17 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         author_message_id_for_reply = None
         current_positive_count = 0
         is_already_best = False
-        
+
         async with storage_lock:
             post_data = messages_storage.get(post_num)
             if not post_data:
                 return
-            
+
             author_id = post_data.get('author_id')
             if author_id:
                 raw_reply = post_to_messages.get(post_num, {}).get(author_id)
                 author_message_id_for_reply = raw_reply[0] if isinstance(raw_reply, list) else raw_reply
-            
+
             if 'reactions' not in post_data or not isinstance(post_data.get('reactions'), dict) or 'users' not in post_data['reactions']:
                 if isinstance(post_data.get('content'), dict) and 'reactions' in post_data['content']:
                     post_data['reactions'] = post_data['content']['reactions']
@@ -755,27 +751,27 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                     post_data['reactions'] = {'users': {}}
             if 'users' not in post_data['reactions'] or not isinstance(post_data['reactions']['users'], dict):
                 post_data['reactions']['users'] = {}
-            
+
             reactions_storage = post_data['reactions']['users']
             old_emojis = set(reactions_storage.get(user_id, []) or reactions_storage.get(str(user_id), []))
             new_emojis = [r.emoji for r in reaction.new_reaction if r.type == 'emoji']
-            
+
             if not new_emojis:
                 reactions_storage.pop(user_id, None)
                 reactions_storage.pop(str(user_id), None)
             else:
                 reactions_storage[user_id] = new_emojis[:2]
                 reactions_storage.pop(str(user_id), None)
-            
+
             # Синхронизируем реакции в content для сохранения в БД
             if isinstance(post_data.get('content'), dict):
                 post_data['content']['reactions'] = post_data['reactions']
-            
+
             for u_emojis in reactions_storage.values():
                 for em in u_emojis:
                     if em in POSITIVE_REACTIONS or em in LAUGHING_REACTIONS:
                         current_positive_count += 1
-            
+
             is_already_best = post_data.get('forwarded_to_best', False)
             content_to_save = post_data.get('content', {}).copy()
 
@@ -822,14 +818,14 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                     if 'paid_reactors' not in post_data or not isinstance(post_data['paid_reactors'], dict):
                         old_paid = post_data.get('paid_reactors', set())
                         post_data['paid_reactors'] = {uid: 'like' for uid in old_paid} if isinstance(old_paid, set) else {}
-                    
+
                     paid_reactors = post_data['paid_reactors']
-                    
+
                     # Определяем тип новой реакции
                     is_new_positive = any(em in POSITIVE_REACTIONS or em in LAUGHING_REACTIONS for em in new_emojis)
                     is_new_negative = any(em in NEGATIVE_REACTIONS or em in INSULT_REACTIONS or em in CLOWN_REACTION for em in new_emojis)
                     is_new_neutral = bool(new_emojis) and not is_new_positive and not is_new_negative
-                    
+
                     new_type = None
                     if is_new_positive:
                         new_type = 'like'
@@ -837,9 +833,9 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                         new_type = 'dislike'
                     elif is_new_neutral:
                         new_type = 'neutral'
-                    
+
                     prev_type = paid_reactors.get(user_id)
-                    
+
                     if new_type is None:
                         # Реакция снята полностью
                         paid_reactors.pop(user_id, None)
@@ -851,7 +847,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
             if action is not None:
                 async with db_lock:
                     db = await get_pool()
-                    
+
                     if action == 'like':
                         # Награда за качественный пост (сопоставимо со сменами работы 150-450 ₪):
                         # 75% случаев: 150-300 ₪
@@ -875,24 +871,24 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                             """,
                             (author_id, board_id, reward_amount, reward_amount)
                         )
-                        
+
                         # Проверяем счетчик наград для отправки уведомления (каждые 5 лайков)
                         async with db.execute(
                             "SELECT reaction_reward_counter FROM Users WHERE user_id = ? AND board_id = ?",
                             (author_id, board_id)
                         ) as c:
                             row = await c.fetchone()
-                        
+
                         if row and row[0] and row[0] >= 5:
                             await db.execute(
-                                "UPDATE Users SET reaction_reward_counter = 0 WHERE user_id = ? AND board_id = ?", 
+                                "UPDATE Users SET reaction_reward_counter = 0 WHERE user_id = ? AND board_id = ?",
                                 (author_id, board_id)
                             )
-                            
+
                             async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (author_id,)) as c_sum:
                                 sum_row = await c_sum.fetchone()
                                 global_balance = sum_row[0] if sum_row and sum_row[0] else 0
-                            
+
                             if random.random() < 0.5:
                                 # Совокупный куш за 5 качественных реакций
                                 display_reward = random.randint(1000, 2200)
@@ -900,7 +896,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance)).replace("RUB", "₪").replace("₽", "₪")
                                 final_bot = bot_instance if bot_instance else reaction.bot
                                 spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
-                    
+
                     elif action == 'dislike':
                         # Штраф за дизлайк/сажу (мотивирует не шитпостить):
                         # 80% случаев: 75-175 ₪
@@ -920,24 +916,24 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                             """,
                             (author_id, board_id)
                         )
-                        
+
                         # Проверяем счетчик штрафов для отправки уведомления (каждые 5 дизлайков)
                         async with db.execute(
                             "SELECT reaction_penalty_counter FROM Users WHERE user_id = ? AND board_id = ?",
                             (author_id, board_id)
                         ) as c:
                             row = await c.fetchone()
-                        
+
                         if row and row[0] and row[0] >= 5:
                             await db.execute(
-                                "UPDATE Users SET reaction_penalty_counter = 0 WHERE user_id = ? AND board_id = ?", 
+                                "UPDATE Users SET reaction_penalty_counter = 0 WHERE user_id = ? AND board_id = ?",
                                 (author_id, board_id)
                             )
-                            
+
                             async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (author_id,)) as c_sum:
                                 sum_row = await c_sum.fetchone()
                                 global_balance = sum_row[0] if sum_row and sum_row[0] else 0
-                            
+
                             if random.random() < 0.5:
                                 # Совокупный штраф за 5 дизлайков
                                 penalty_display = random.randint(500, 1200)
@@ -954,7 +950,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 notif_text = notif_tpl.format(amount=penalty_display, balance=int(global_balance)).replace("RUB", "₪").replace("₽", "₪")
                                 final_bot = bot_instance if bot_instance else reaction.bot
                                 spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
-                    
+
                     elif action == 'neutral':
                         # Символический бонус за активность/эмодзи в треде (25-65 ₪)
                         neutral_reward = random.randint(25, 65)
@@ -1036,7 +1032,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             except TelegramBadRequest: pass
             return
     b_data = board_data[board_id]
-    
+
     is_reply_to_bot = False
     if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == message.bot.id:
         is_reply_to_bot = True
@@ -1087,10 +1083,10 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     sent_msg = await message.answer(fuck_off_text)
                     spawn_task(delete_message_after_delay(sent_msg, 7))
                     b_data.setdefault('last_roll_time', {})[user_id] = now
-                except Exception: 
+                except Exception:
                     pass
             return
-        supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'] 
+        supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note']
         if message.content_type not in supported_types:
             logger.warning(f"🚫 [MSG DROPPED: UNSUPPORTED_TYPE] user={user_id} board={board_id} type={message.content_type}")
             await message.delete()
@@ -1215,10 +1211,10 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     f1 = random.choice(farts)
                     f2 = random.choice(farts)
                     rewritten = f"{f1} {original_text} ... {f2}" if original_text else f"{f1} {f2}"
-                
+
                 try: await message.delete()
                 except Exception: pass
-                
+
                 cursed_text_override = f"🚽 [ПРОКЛЯТЫЙ ПОНОСОМ]\n{rewritten}"
 
             if c_items.get("schizo_pill_until", 0) > now_curr and not cursed_text_override:
@@ -1240,13 +1236,13 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     s1 = random.choice(schizo_tags)
                     s2 = random.choice(schizo_tags)
                     rewritten = f"{s1} {original_text} {s2}" if original_text else f"{s1} {s2}"
-                
+
                 try: await message.delete()
                 except Exception: pass
-                
+
                 cursed_text_override = f"👽 [ШИЗО-ТАБЛЕТКА]\n{rewritten}"
 
-                
+
         b_data.setdefault('last_activity', {})[user_id] = datetime.now(UTC)
         users_map = b_data.setdefault('users', {'active': set(), 'banned': set()})
         if user_id not in users_map.setdefault('active', set()):
@@ -1263,7 +1259,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 if msg_type in ['photo', 'video', 'document'] and message.caption:
                     msg_type = 'text'
                 await apply_penalty(message.bot, user_id, msg_type, board_id)
-            
+
         import troll_phrases
         if random.random() < 0.0075:
             phrase = troll_phrases.get_random_troll_phrase()
@@ -1271,8 +1267,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 spawn_task(message.answer(phrase))
             except Exception:
                 pass
-                
-        is_sage = False 
+
+        is_sage = False
         h_val = getattr(message, 'html_text', None)
         c_val = getattr(message, 'caption_html_text', None)
         html_text_content = (h_val if isinstance(h_val, str) else None) or (c_val if isinstance(c_val, str) else None) or message.text or message.caption or ""
@@ -1290,16 +1286,16 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     # Собираем текст для поиска мульти-ответов из текста или подписи к медиа (с сохранением HTML-сущностей)
     input_text = cursed_text_override if cursed_text_override else (html_text_content if html_text_content else (message.text or message.caption or ""))
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
-    
+
     from common.database import is_shadow_muted as check_db_shadow_muted
     db_sm = await check_db_shadow_muted(user_id, board_id)
     ram_sm = bool(user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
     is_shadow_muted = (not is_admin(user_id, board_id) and (ram_sm or db_sm))
-                       
+
     if multi_reply_blocks:
         try: await message.delete()
         except TelegramBadRequest: pass
-        
+
         # Предварительно извлекаем данные о медиа, если они есть
         media_type = message.content_type if message.content_type != 'text' else None
         media_file_id = None
@@ -1322,12 +1318,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if not post_exists:
                 if await get_post_by_num(post_num_to_reply):
                     post_exists = True
-            
+
             if not post_exists:
                 continue
-            
+
             formatted_chunk = RE_REPLY_QUOTE_FORMAT.sub(replacer, sanitize_html(text_chunk))
-            
+
             # Прикрепляем медиа к первому посту в цепочке ответов, остальные — текст
             if i == 0 and media_type:
                 content = {'type': media_type, 'file_id': media_file_id, 'caption': formatted_chunk}
@@ -1337,17 +1333,17 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             quote_info = await build_quick_quote_info(post_num_to_reply)
             if quote_info:
                 content['quote_info'] = quote_info
-                
+
             if is_sage: content['is_sage'] = True
-            
+
             if not is_shadow_muted and text_chunk and not is_admin(user_id, board_id):
                 if is_spam_filtered(text_chunk, board_id, user_id):
-                    is_shadow_muted = True 
+                    is_shadow_muted = True
                 else:
                     spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
             elif not is_shadow_muted and text_chunk:
                 spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
-            
+
             if is_shadow_muted:
                 logger.info(f"👻 [MULTI_REPLY: SHADOW_MUTE] user={user_id} board={board_id} reply_to={post_num_to_reply}")
                 await process_shadow_reject(shared_state.ShadowRejectContext(
@@ -1398,13 +1394,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if anchor_tick(board_id):
                         spawn_task(trigger_anchor_post(message.bot, board_id, stream))
             await asyncio.sleep(0.33)
-            
+
         if limit_hit:
             try:
                 await message.bot.send_message(user_id, "Replies limit reached (3 max).", disable_notification=True)
             except TelegramForbiddenError:
                 try:
-                    import __main__ as main
                     if hasattr(main, 'purge_users_from_board_ram'):
                         await main.purge_users_from_board_ram(board_id, [user_id])
                 except Exception:
@@ -1432,7 +1427,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 except Exception: pass
                 await accept_duel_logic(message, found_ch, board_id)
                 return
-                
+
         elif text_clean in ("decl", "отклонить", "no", "нет", "-"):
             reply_msg_id = message.reply_to_message.message_id
             now = time.time()
@@ -1616,7 +1611,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             photo_id = extract_msg_media_file_id(message) or extract_msg_media_file_id(message.reply_to_message)
             if not is_reply_to_bot:
                 if user_id in b_data.get('persona_favorites', {}):
-                    text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
+                    text_clean = message.text or message.caption or ("[фотография]" if photo_id else None)
                     now_t_fav = time.time()
                     # Уменьшено в 10 раз: шанс 0.8%, кулдаун 600 секунд
                     if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 600.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.008:
@@ -1641,13 +1636,9 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         return True
     content, msg_type = _get_msg_content_and_type(msg)
     raw_content_type = msg.content_type
-    
+
     from common.spam_filter import (
         evaluate_message_for_autoshadowmute,
-        analyze_message_for_spam,
-        SpamResult,
-        SPAM_RULES,
-        _check_repeats,
         handle_shadow_mute_continuation
     )
     from common.database import is_shadow_muted
@@ -1692,7 +1683,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     media_group_id = getattr(msg, 'media_group_id', None)
     is_media = raw_content_type in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'video_note')
 
-    from common.spam_filter import get_user_total_posts, is_in_mute_grace_period
+    from common.spam_filter import get_user_total_posts
     posts_count = await get_user_total_posts(user_id)
 
     # If user is already shadow-muted:
@@ -1767,14 +1758,14 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
         return
     async with acquire_spam_lock(user_id):
         from common.database import apply_shadow_mute
-        
+
         if not reason:
             violation_type = {
                 'text': 'текстовый спам / флуд', 'sticker': 'спам стикерами', 'animation': 'спам гифками',
                 'audio': 'спам аудио', 'photo': 'спам фото', 'video': 'спам видео', 'media': 'спам медиа'
             }.get(msg_type, 'спам / частый постинг')
             reason = f"Автошедоумут за {violation_type}"
-            
+
         await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=reason, is_exponential=False)
 
 async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
@@ -1848,7 +1839,6 @@ async def ensure_user_in_valid_thread(bot: Bot, board_id: str, user_id: int) -> 
                 await bot.send_message(user_id, notify_text)
             except TelegramForbiddenError:
                 try:
-                    import __main__ as main
                     if hasattr(main, 'purge_users_from_board_ram'):
                         await main.purge_users_from_board_ram(board_id, [user_id])
                 except Exception:
@@ -1943,7 +1933,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         await message.delete()
     except TelegramBadRequest:
         pass  # Race condition: another message in the media group already deleted it
-        
+
     if media_group_key in sent_media_groups:
         return
     b_data = board_data[board_id]
@@ -1964,7 +1954,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
            (mutes.get(user_id) and mutes[user_id] > datetime.now(UTC)):
             return
     b_data.setdefault('last_activity', {})[user_id] = datetime.now(UTC)
-    
+
     is_leader = False
     async with media_group_creation_lock:
         if media_group_key not in current_media_groups:
@@ -1976,11 +1966,11 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                 'media_group_key': media_group_key,
                 'chat_id': message.chat.id,
             }
-            
+
     group = current_media_groups.get(media_group_key)
     if not group:
         return
-        
+
     if is_leader:
         try:
             # Проверка на репост-спам из публичных каналов (освобождена доска /sex/)
@@ -2081,12 +2071,12 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         group = current_media_groups.get(media_group_key)
         if not group or group.get('is_initializing'):
             return
-            
+
     group.get('source_message_ids', set()).add(message.message_id)
     if message.message_id not in group.get('processed_messages', set()):
         group.get('raw_messages',[]).append(message)
         group.get('processed_messages', set()).add(message.message_id)
-        
+
     if media_group_key in media_group_timers:
         media_group_timers[media_group_key].cancel()
     media_group_timers[media_group_key] = spawn_task(

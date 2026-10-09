@@ -1,7 +1,7 @@
 import unittest
 import asyncio
-from unittest.mock import patch, AsyncMock, MagicMock
-from common.db_pool import get_pool, create_pool, close_pool, LazyLock, db_sleep
+from unittest.mock import patch, AsyncMock
+from common.db_pool import get_pool, close_pool, LazyLock, db_sleep
 import common.db_pool as db_pool_module
 
 class TestDbPool(unittest.IsolatedAsyncioTestCase):
@@ -253,7 +253,6 @@ class TestDbPool(unittest.IsolatedAsyncioTestCase):
 
     async def test_close_pool_triggers_wal_checkpoint(self):
         """Проверка, что close_pool выполняет PRAGMA wal_checkpoint(TRUNCATE) перед закрытием."""
-        from common.db_pool import close_pool
         mock_conn = AsyncMock()
         db_pool_module._db_connection = mock_conn
 

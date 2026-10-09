@@ -3,7 +3,7 @@ import pytest
 import aiosqlite
 import time
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from weekly_airdrop_engine import (
     calculate_weekly_pool,
@@ -14,8 +14,7 @@ from weekly_airdrop_engine import (
     MIN_WEEKLY_POOL,
     MAX_WEEKLY_POOL,
     ABU_FUND_SHARE_RATE,
-    POST_BONUS_RATE,
-    MAX_USER_SHARE
+    POST_BONUS_RATE
 )
 from market_event import seconds_until_next_midnight_msk
 

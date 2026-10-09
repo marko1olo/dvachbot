@@ -111,7 +111,7 @@ def get_help_hub_page(category: str, lang: str = 'ru') -> str:
         pages = HELP_HUB_PAGES_EN
     elif lang == 'jp':
         pages = HELP_HUB_PAGES_JP
-    
+
     return pages.get(category, pages.get("main", "⚡ Справка ТГАЧ"))
 
 HELP_TEXT_COMMANDS = [

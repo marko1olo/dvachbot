@@ -1,6 +1,5 @@
 import unittest
 import re
-import html
 from abu_engine import (
     transform_abu_mode,
     generate_bugurt,

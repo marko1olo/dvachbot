@@ -2,7 +2,7 @@ import asyncio
 from typing import Optional
 from shared_state import *
 from aiogram import types
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup
 from aiogram.exceptions import TelegramBadRequest
 from common.task_manager import spawn_task
 
@@ -14,7 +14,7 @@ from common.database import delete_post_by_num
 
 from common.database import update_board_settings
 from post_helpers import update_post_content
-from common.anon_identity import get_anon_id, generate_anon_name as _anon_identity_generate_anon_name
+from common.anon_identity import generate_anon_name as _anon_identity_generate_anon_name
 
 async def _activate_mode(board_id: str, mode_to_enable: str):
     """
@@ -73,7 +73,7 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
         try:
             await message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()     
+            import traceback; traceback.print_exc()
         return False
     return True
 
@@ -94,12 +94,12 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     now_dt = datetime.now(UTC)
     content = {"type": "text", "text": end_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
-        board_id=board_id, 
-        author_id=0, 
-        content=content, 
-        timestamp=now_dt.timestamp(), 
-        is_from_site=False, 
-        stream=stream 
+        board_id=board_id,
+        author_id=0,
+        content=content,
+        timestamp=now_dt.timestamp(),
+        is_from_site=False,
+        stream=stream
     )
     if not pnum: return
     recipients = None
@@ -154,51 +154,51 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     if action == "ban":
         if lang == 'en':
             ban_phrases = [
-                f"🚨 A faggot has been banned for spam. RIP.",
-                f"☠️ Another spammer bites the dust. Good riddance.",
-                f"🔨 The ban hammer has spoken. A degenerate was removed.",
-                f"✈️ Sent a spammer on a one-way trip to hell."
+                "🚨 A faggot has been banned for spam. RIP.",
+                "☠️ Another spammer bites the dust. Good riddance.",
+                "🔨 The ban hammer has spoken. A degenerate was removed.",
+                "✈️ Sent a spammer on a one-way trip to hell."
             ]
         elif lang == 'jp':
             ban_phrases = [
-                f"🚨 ホモ野郎がスパムでBANされたぞ。ナムアミダブツ。",
-                f"☠️ またスパム野郎が塵になった。せいせいするぜ。",
-                f"🔨 BANハンマーが下された。変質者が一人消えたな。",
-                f"✈️ スパム野郎を地獄への片道旅行に送り出したぞ。"
+                "🚨 ホモ野郎がスパムでBANされたぞ。ナムアミダブツ。",
+                "☠️ またスパム野郎が塵になった。せいせいするぜ。",
+                "🔨 BANハンマーが下された。変質者が一人消えたな。",
+                "✈️ スパム野郎を地獄への片道旅行に送り出したぞ。"
             ]
         else:
             ban_phrases = [
-                f"🚨 Хуесос был забанен за спам. Помянем.",
-                f"☠️ Мир стал чище, еще один спамер отлетел в бан.",
-                f"🔨 Банхаммер опустился на голову очередного дегенерата.",
-                f"✈️ Отправили спамера в увлекательное путешествие нахуй!",
+                "🚨 Хуесос был забанен за спам. Помянем.",
+                "☠️ Мир стал чище, еще один спамер отлетел в бан.",
+                "🔨 Банхаммер опустился на голову очередного дегенерата.",
+                "✈️ Отправили спамера в увлекательное путешествие нахуй!",
             ]
         text = random.choice(ban_phrases)
         #spawn_task(log_global_event('bot', f"🔨 {board_id.upper()}: {text} (User: {user_id})"))
     elif action == "mute":
         if lang == 'en':
             mute_phrases = [
-                f"🔇 A loudmouth has been muted for a while.",
-                f"🤫 Someone's got a timeout. Let's enjoy the silence.",
-                f"🤐 Put a sock in it! A user has been temporarily silenced.",
-                f"⌛️ A faggot is in the penalty box for a bit."
+                "🔇 A loudmouth has been muted for a while.",
+                "🤫 Someone's got a timeout. Let's enjoy the silence.",
+                "🤐 Put a sock in it! A user has been temporarily silenced.",
+                "⌛️ A faggot is in the penalty box for a bit."
             ]
         elif lang == 'jp':
             mute_phrases = [
-                f"🔇 クソうるさい奴をしばらく黙らせたぞ。",
-                f"🤫 タイムアウトだ。静寂を楽しもうぜ。",
-                f"🤐 靴下でも詰めとけ！ユーザーが一時的にミュートされた。",
-                f"⌛️ ホモ野郎はお仕置き部屋行きだ。"
+                "🔇 クソうるさい奴をしばらく黙らせたぞ。",
+                "🤫 タイムアウトだ。静寂を楽しもうぜ。",
+                "🤐 靴下でも詰めとけ！ユーザーが一時的にミュートされた。",
+                "⌛️ ホモ野郎はお仕置き部屋行きだ。"
             ]
         else:
             mute_phrases = [
-                f"🔇 Пидораса замутили ненадолго.",
-                f"🤫 Наслаждаемся тишиной, хуеглот временно не может писать.",
-                f"Молчание - золото. Пидор будет тихим.",
-                f"🤐 Анон отправлен в угол подумать о своем поведении.",
-                f"⌛️ Пидору выписали временный запрет на открытие рта.",
-                f"🕒 Пидор будет молчать до лучших времен.",
-                f"На время он будет тихим, как мышь. Ожидаем его возвращения."
+                "🔇 Пидораса замутили ненадолго.",
+                "🤫 Наслаждаемся тишиной, хуеглот временно не может писать.",
+                "Молчание - золото. Пидор будет тихим.",
+                "🤐 Анон отправлен в угол подумать о своем поведении.",
+                "⌛️ Пидору выписали временный запрет на открытие рта.",
+                "🕒 Пидор будет молчать до лучших времен.",
+                "На время он будет тихим, как мышь. Ожидаем его возвращения."
             ]
         text = random.choice(mute_phrases)
     else:
@@ -337,51 +337,51 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     if action == "ban":
         if lang == 'en':
             ban_phrases = [
-                f"🚨 A faggot has been banned for spam. RIP.",
-                f"☠️ Another spammer bites the dust. Good riddance.",
-                f"🔨 The ban hammer has spoken. A degenerate was removed.",
-                f"✈️ Sent a spammer on a one-way trip to hell."
+                "🚨 A faggot has been banned for spam. RIP.",
+                "☠️ Another spammer bites the dust. Good riddance.",
+                "🔨 The ban hammer has spoken. A degenerate was removed.",
+                "✈️ Sent a spammer on a one-way trip to hell."
             ]
         elif lang == 'jp':
             ban_phrases = [
-                f"🚨 ホモ野郎がスパムでBANされたぞ。ナムアミダブツ。",
-                f"☠️ またスパム野郎が塵になった。せいせいするぜ。",
-                f"🔨 BANハンマーが下された。変質者が一人消えたな。",
-                f"✈️ スパム野郎を地獄への片道旅行に送り出したぞ。"
+                "🚨 ホモ野郎がスパムでBANされたぞ。ナムアミダブツ。",
+                "☠️ またスパム野郎が塵になった。せいせいするぜ。",
+                "🔨 BANハンマーが下された。変質者が一人消えたな。",
+                "✈️ スパム野郎を地獄への片道旅行に送り出したぞ。"
             ]
         else:
             ban_phrases = [
-                f"🚨 Хуесос был забанен за спам. Помянем.",
-                f"☠️ Мир стал чище, еще один спамер отлетел в бан.",
-                f"🔨 Банхаммер опустился на голову очередного дегенерата.",
-                f"✈️ Отправили спамера в увлекательное путешествие нахуй!",
+                "🚨 Хуесос был забанен за спам. Помянем.",
+                "☠️ Мир стал чище, еще один спамер отлетел в бан.",
+                "🔨 Банхаммер опустился на голову очередного дегенерата.",
+                "✈️ Отправили спамера в увлекательное путешествие нахуй!",
             ]
         text = random.choice(ban_phrases)
         spawn_task(log_global_event('bot', f"🔨 {board_id.upper()}: {text} (User: {user_id})"))
     elif action == "mute":
         if lang == 'en':
             mute_phrases = [
-                f"🔇 A loudmouth has been muted for a while.",
-                f"🤫 Someone's got a timeout. Let's enjoy the silence.",
-                f"🤐 Put a sock in it! A user has been temporarily silenced.",
-                f"⌛️ A faggot is in the penalty box for a bit."
+                "🔇 A loudmouth has been muted for a while.",
+                "🤫 Someone's got a timeout. Let's enjoy the silence.",
+                "🤐 Put a sock in it! A user has been temporarily silenced.",
+                "⌛️ A faggot is in the penalty box for a bit."
             ]
         elif lang == 'jp':
             mute_phrases = [
-                f"🔇 クソうるさい奴をしばらく黙らせたぞ。",
-                f"🤫 タイムアウトだ。静寂を楽しもうぜ。",
-                f"🤐 靴下でも詰めとけ！ユーザーが一時的にミュートされた。",
-                f"⌛️ ホモ野郎はお仕置き部屋行きだ。"
+                "🔇 クソうるさい奴をしばらく黙らせたぞ。",
+                "🤫 タイムアウトだ。静寂を楽しもうぜ。",
+                "🤐 靴下でも詰めとけ！ユーザーが一時的にミュートされた。",
+                "⌛️ ホモ野郎はお仕置き部屋行きだ。"
             ]
         else:
             mute_phrases = [
-                f"🔇 Пидораса замутили ненадолго.",
-                f"🤫 Наслаждаемся тишиной, хуеглот временно не может писать.",
-                f"Молчание - золото. Пидор будет тихим.",
-                f"🤐 Анон отправлен в угол подумать о своем поведении.",
-                f"⌛️ Пидору выписали временный запрет на открытие рта.",
-                f"🕒 Пидор будет молчать до лучших времен.",
-                f"На время он будет тихим, как мышь. Ожидаем его возвращения."
+                "🔇 Пидораса замутили ненадолго.",
+                "🤫 Наслаждаемся тишиной, хуеглот временно не может писать.",
+                "Молчание - золото. Пидор будет тихим.",
+                "🤐 Анон отправлен в угол подумать о своем поведении.",
+                "⌛️ Пидору выписали временный запрет на открытие рта.",
+                "🕒 Пидор будет молчать до лучших времен.",
+                "На время он будет тихим, как мышь. Ожидаем его возвращения."
             ]
         text = random.choice(mute_phrases)
     else:
@@ -527,9 +527,9 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
 def get_help_keyboard(category: str, board_id: str, stream: str = 'ru') -> InlineKeyboardMarkup:
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
-    
+
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    
+
     if category == "main":
         if lang == 'en':
             builder.button(text="💬 Chat & Post", callback_data="help:chat")

@@ -15,10 +15,8 @@ Renders a complete RPG character sheet with visual paperdoll layering for:
 import os
 import io
 import time
-import json
-import random
 from typing import Dict, Any, Optional, Tuple
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(_BASE_DIR, "fonts")

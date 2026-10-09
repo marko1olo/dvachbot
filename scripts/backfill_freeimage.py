@@ -9,7 +9,6 @@ import os
 import sys
 import sqlite3
 import tempfile
-import time
 import httpx
 import platform
 
@@ -19,7 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from common.bot_pool import global_bot_pool
 from common.database import add_file_mirror, get_file_owner_id
 from site_tgach.freeimage import upload_file_to_freeimage
-from site_tgach.mirror_worker import _resolve_file_bot, _find_msg_info, _bot_id_from_token
+from site_tgach.mirror_worker import _resolve_file_bot, _find_msg_info
 from site_tgach.mtproto_client import download_file_mtproto
 
 PROXY_URL = os.getenv("PROXY_URL")
@@ -57,10 +56,9 @@ async def download_file_http(token, file_path_tg, dest_path):
 async def main():
     flush_print("[RUN] Starting FreeImage Backfill Script (Persistent Loop Edition)...")
 
-    from common.bot_pool import global_bot_pool
     from common.config import BOT_TOKENS
     await global_bot_pool.init_pool(BOT_TOKENS)
-    
+
     try:
         from common.db_pool import create_pool
         await create_pool()
@@ -114,7 +112,7 @@ async def main():
 
                     file_path_tg = getattr(file_info, 'file_path', None)
                     file_size = getattr(file_info, 'file_size', 0) or 0
-                    
+
                     if file_size > MAX_FILE_MB * 1024 * 1024:
                         flush_print(f"[SKIP] File too large ({file_size/1024/1024:.1f} MB). Skipping.")
                         skipped_count += 1
@@ -137,37 +135,37 @@ async def main():
                         msg_info = await _find_msg_info(file_id)
                         if msg_info:
                             c_id, m_id, _ = msg_info
-                            flush_print(f"[INFO] Downloading via MTProto...")
+                            flush_print("[INFO] Downloading via MTProto...")
                             try:
                                 if await asyncio.wait_for(
                                     download_file_mtproto(bot.token, file_info.file_id, lpath, c_id, m_id),
                                     timeout=120.0
                                 ):
-                                    flush_print(f"[SUCCESS] MTProto download success!")
+                                    flush_print("[SUCCESS] MTProto download success!")
                                     downloaded = True
                             except asyncio.TimeoutError:
-                                flush_print(f"[WARN] MTProto download timeout.")
+                                flush_print("[WARN] MTProto download timeout.")
 
                         # HTTP fallback
                         if not downloaded and file_path_tg:
-                            flush_print(f"[WARN] MTProto failed/timeout. Trying HTTP Fallback...")
+                            flush_print("[WARN] MTProto failed/timeout. Trying HTTP Fallback...")
                             try:
                                 if await asyncio.wait_for(
                                     download_file_http(bot.token, file_path_tg, lpath),
                                     timeout=120.0
                                 ):
-                                    flush_print(f"[SUCCESS] HTTP download success!")
+                                    flush_print("[SUCCESS] HTTP download success!")
                                     downloaded = True
                             except asyncio.TimeoutError:
-                                flush_print(f"[WARN] HTTP download timeout.")
+                                flush_print("[WARN] HTTP download timeout.")
 
                         if not downloaded:
-                            flush_print(f"[ERROR] All download attempts failed.")
+                            flush_print("[ERROR] All download attempts failed.")
                             failed_count += 1
                             continue
 
                         if os.path.getsize(lpath) == 0:
-                            flush_print(f"[ERROR] Downloaded file is empty (0 bytes). Skipping.")
+                            flush_print("[ERROR] Downloaded file is empty (0 bytes). Skipping.")
                             failed_count += 1
                             continue
 
@@ -179,7 +177,7 @@ async def main():
                             flush_print(f"[SUCCESS] Mirrored to FreeImage: {link}")
                             success_count += 1
                         else:
-                            flush_print(f"[ERROR] FreeImage upload failed.")
+                            flush_print("[ERROR] FreeImage upload failed.")
                             failed_count += 1
 
                         await asyncio.sleep(SLEEP_BETWEEN_FILES)

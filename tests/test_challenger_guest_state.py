@@ -20,15 +20,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
-from site_tgach.main import app, templates, BOARD_CONFIG
+from site_tgach.main import templates, BOARD_CONFIG
 from tests.test_browser_e2e import make_req
 
 
 def render_chat_with_session(session_dict):
     template = templates.get_template("chat.jinja2")
     req = make_req("/b/chat/")
-    
+
     return template.render(
         request=req,
         board_id="b",
@@ -80,11 +79,11 @@ def test_guest_chat_permutations():
         # 5. File input and picrandom disabled
         assert 'class="file-input-label" style="pointer-events: none; opacity: 0.5;"' in html
         assert 'class="picrandom-container" title="Прикрепить случайную картинку из архива" style="pointer-events: none; opacity: 0.5;"' in html
-        
+
         # 6. Header login link vs logout link
         assert '<a href="/login" class="header-btn" title="Войти">🔑</a>' in html
         assert 'class="logout-link"' not in html
-        print(f"  ✓ Verified: Guest restrictions correctly enforced")
+        print("  ✓ Verified: Guest restrictions correctly enforced")
 
     member_sessions = [
         {"user": {"id": 12345, "is_guest": False, "is_admin": False}},
@@ -112,7 +111,7 @@ def test_guest_chat_permutations():
 
         # 5. Header logout link
         assert 'class="logout-link"' in html
-        print(f"  ✓ Verified: Member form fully active")
+        print("  ✓ Verified: Member form fully active")
 
     print("\n" + "=" * 70)
     print("   ALL GUEST PERMUTATION TESTS PASSED PERFECTLY!")

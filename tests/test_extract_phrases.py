@@ -8,7 +8,6 @@ if _scripts_dir not in sys.path:
 import unittest
 import os
 import tempfile
-import ast
 
 from extract_phrases import extract_strings
 

@@ -15,9 +15,6 @@ Coverage Matrix:
     * Full python -m py_compile across all modified and core files.
 """
 
-import ast
-import glob
-import os
 import py_compile
 import sys
 from pathlib import Path
@@ -35,7 +32,7 @@ def _get_main_module():
     try:
         import main
         return main
-    except Exception as e:
+    except Exception:
         return None
 
 

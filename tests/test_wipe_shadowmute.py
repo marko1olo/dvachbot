@@ -1,12 +1,11 @@
-import asyncio
 import pytest
 import time
-from datetime import datetime, timezone, timedelta, UTC
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, UTC
+from unittest.mock import AsyncMock, patch
 
 from common.database import update_shadow_mute, get_pool
 from post_helpers import delete_user_posts
-from admin_manager import cmd_wipe, execute_wipe
+from admin_manager import cmd_wipe
 
 
 @pytest.mark.asyncio
@@ -47,7 +46,7 @@ async def test_delete_user_posts_with_broadcast_queue(isolated_test_db):
     bot_mock.delete_message = AsyncMock(return_value=True)
 
     db = await get_pool()
-    
+
     # Insert test post
     now_ts = datetime.now(UTC).timestamp()
     await db.execute(
@@ -95,10 +94,10 @@ async def test_cmd_wipe_resolution_and_apriori_shadowmute(isolated_test_db):
     test_author_id = 777666555
     test_board = "b"
     admin_id = 7716348189
-    
+
     db = await get_pool()
     now_ts = datetime.now(UTC).timestamp()
-    
+
     # Create test post
     await db.execute(
         """

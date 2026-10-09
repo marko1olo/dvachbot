@@ -16,32 +16,26 @@ from aiogram.exceptions import TelegramBadRequest
 import httpx
 
 from common.html_utils import escape_html
-from common.text_utils import clean_html_for_tg
 
 import json
-from datetime import timedelta
-from common.database import get_post_by_num, get_pool, delete_post_by_num
-from common.text_utils import clean_html_tags, clean_ai_thinking, strip_thinking_tags, strip_cot_and_drafts
+from common.database import get_post_by_num, get_pool
+from common.text_utils import clean_html_tags, clean_ai_thinking, strip_cot_and_drafts
 from bot_helpers import delete_message_after_delay, check_cooldown, _activate_mode, disable_mode_after_delay
 from common.task_manager import spawn_task
 import operator
 from post_helpers import (
     create_post, _format_post_text, _format_media_context, _MEDIA_DESC_CACHE,
-    _get_author_name, _get_reply_suffix, _get_cached_anon_name, RE_MULTI_NEWLINES,
-    _MEDIA_ERROR_TAGS, update_post_content, format_header
+    _get_cached_anon_name, RE_MULTI_NEWLINES,
+    update_post_content, format_header
 )
 from delivery_manager import enqueue_board_message
 
 import re
 import asyncio
-from summarize import summarize_text_with_hf, create_telegraph_page_async
+from summarize import summarize_text_with_hf
 from post_processor import NewPostProcessor, NewPostContext
 from text_assets import (
-    CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP,
-    ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,
-    SUMMARIZE_PROMPTS_BOARD, SUMMARIZE_PROMPTS_BOARD_EN, SUMMARIZE_PROMPTS_BOARD_JP,
-    SUMMARIZE_PROMPTS_BOARD_SHORT, SUMMARIZE_PROMPTS_BOARD_LONG,
-    SUMMARIZE_PROMPTS_BOARD_SHORT_EN, SUMMARIZE_PROMPTS_BOARD_LONG_EN
+    CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP
 )
 from shizo_mode import SCHIZO_PHRASES_START
 from warhammer_mode import WH40K_PHRASES_START
@@ -49,7 +43,7 @@ from warhammer_mode import WH40K_PHRASES_START
 import __main__ as main
 ROAST_COOLDOWN = getattr(main, 'ROAST_COOLDOWN', 300)
 SUMMARIZE_COOLDOWN = getattr(main, 'SUMMARIZE_COOLDOWN', 600)
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramForbiddenError
 from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
@@ -721,7 +715,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                                                     _m_t = re.search(r'(?:\*{1,2}|#{1,4}|\d+\.|\-)?[\s]*(?:ТРАНСКРИПЦИЯ|TRANSCRIPT)\s*[:\*\#\s\-]+(.*?)(?=(?:\*{1,2}|#{1,4}|\d+\.|\-)?[\s]*(?:ВЕРДИКТ|РОАСТ|ROAST)|$)', raw_voice_res, re.IGNORECASE | re.DOTALL)
                                                     if _m_t:
                                                         t_part = _m_t.group(1).strip()
-                                            
+
                                             transcript = t_part.strip() or raw_voice_res
                                             if not transcript or SILENCE_TRANSCRIPT_PATTERNS.match(transcript.strip()):
                                                 logger.info(f"🔇 [Voice 1-Step] Транскрипция определена как тишина («{transcript}») — отмена роаста")
@@ -742,7 +736,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
 
                                             tr_clean = transcript.strip().lower()
                                             if any(r.lower() in tr_clean for r in CYBERCHAD_RATE_LIMIT_REJECTIONS) or any(marker in tr_clean for marker in RATE_LIMIT_REJECTION_MARKERS):
-                                                logger.info(f"🛑 [Voice 1-Step] Транскрипция распознана как отлуп по лимиту — отмена роаста")
+                                                logger.info("🛑 [Voice 1-Step] Транскрипция распознана как отлуп по лимиту — отмена роаста")
                                                 return
 
                                             if r_part.strip():
@@ -781,7 +775,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                             "response_format": "json",
                             "prompt": "Разговорная речь на русском языке, без субтитров и титров."
                         }
-                        
+
                         async with httpx.AsyncClient(timeout=stt_timeout) as client:
                             resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
                             if resp.status_code == 200:
@@ -811,7 +805,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
 
                                     cand_clean = candidate_text.strip().lower()
                                     if any(r.lower() in cand_clean for r in CYBERCHAD_RATE_LIMIT_REJECTIONS) or any(marker in cand_clean for marker in RATE_LIMIT_REJECTION_MARKERS):
-                                        logger.info(f"🛑 [STT Fallback] Транскрипция распознана как отлуп по лимиту — отмена роаста")
+                                        logger.info("🛑 [STT Fallback] Транскрипция распознана как отлуп по лимиту — отмена роаста")
                                         return
                                     transcript = candidate_text
                                     logger.info(f"✅ [STT Fallback] Успешная расшифровка через Groq Whisper ({duration}с, {len(transcript)} симв.)")
@@ -855,7 +849,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 return
             tr_clean = transcript.strip().lower()
             if any(r.lower() in tr_clean for r in CYBERCHAD_RATE_LIMIT_REJECTIONS) or any(marker in tr_clean for marker in RATE_LIMIT_REJECTION_MARKERS):
-                logger.info(f"🛑 [STT] Транскрипция совпадает с оффлайн-отлупом — отмена текстового роаста")
+                logger.info("🛑 [STT] Транскрипция совпадает с оффлайн-отлупом — отмена текстового роаста")
                 return
             transcript_for_roast = transcript[:2000]
             try:
@@ -3538,7 +3532,7 @@ async def build_cyberchad_context(
     - [БЛОК 5: ТВОИ ПРОШЛЫЕ ОТВЕТЫ (ЗАПРЕТ САМОПОВТОРОВ)] (6 прошлых реплик Киберчеда)
     - [БЛОК 6: СЕРВЕРНОЕ ВРЕМЯ (МСК)] (день недели, часы для укола за режим)
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime
     from common.anon_identity import get_anon_id
     from common.database import get_pool, get_post_by_num
 
@@ -4111,10 +4105,10 @@ async def build_cyberchad_context(
         if chad_past_posts:
             cp_lines = [f"• #{cp[0]}: {cp[1][:800]}" for cp in chad_past_posts[:limit_chad]]
             block5 = (
-                f"=== [БЛОК 5: ТВОИ ПРОШЛЫЕ ОТВЕТЫ (ЗАПРЕТ САМОПОВТОРОВ)] ===\n"
-                f"(СТРОЖАЙШИЙ ЗАПРЕТ: КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО копировать структуру, речевые шаблоны, приемы и концовки этих сообщений! "
-                f"Каждый твой ответ обязан быть грамматически, синтаксически и лексически непохож на предыдущие! "
-                f"Используй свежие образы, меняй длину и ритм фраз, полностью исключи заезженные речевые формулы!)\n"
+                "=== [БЛОК 5: ТВОИ ПРОШЛЫЕ ОТВЕТЫ (ЗАПРЕТ САМОПОВТОРОВ)] ===\n"
+                "(СТРОЖАЙШИЙ ЗАПРЕТ: КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО копировать структуру, речевые шаблоны, приемы и концовки этих сообщений! "
+                "Каждый твой ответ обязан быть грамматически, синтаксически и лексически непохож на предыдущие! "
+                "Используй свежие образы, меняй длину и ритм фраз, полностью исключи заезженные речевые формулы!)\n"
                 + "\n".join(cp_lines) + "\n\n"
             )
 
@@ -4334,19 +4328,18 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
     ):
         logger.debug(f"[CyberchadIntervention] Skipping silent/placeholder post text='{text}'")
         return
-        
+
     now = time.time()
     if board_id not in _BOARD_FIGHT_TRACKER:
         _BOARD_FIGHT_TRACKER[board_id] = []
-        
+
     # Очищаем историю старше 180 секунд
     tracker = _BOARD_FIGHT_TRACKER[board_id]
     _BOARD_FIGHT_TRACKER[board_id] = [entry for entry in tracker if now - entry[0] <= 180]
     _BOARD_FIGHT_TRACKER[board_id].append((now, user_id, str(text), post_num or 0))
-    
+
     recent_entries = _BOARD_FIGHT_TRACKER[board_id]
 
-    from common.anon_identity import get_anon_id
     from common.bot_helpers import process_new_post
     from common.tts_engine import synthesize_cyberchad_voice_with_meta
     from common.database import get_post_by_num
@@ -4377,7 +4370,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     import json
                     try: c_dict = json.loads(c_dict)
                     except Exception: c_dict = {'text': c_dict}
-                
+
                 is_chad_target = False
                 if isinstance(c_dict, dict):
                     if (
@@ -4832,11 +4825,11 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
     """
     if not target_post_num:
         return ""
-        
+
     raw_chain = []
     current_num = target_post_num
     visited = set()
-    
+
     while current_num and current_num not in visited and len(raw_chain) < max_depth:
         visited.add(current_num)
         post_data = None
@@ -4844,10 +4837,10 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
             post_data = messages_storage.get(current_num)
         if not post_data:
             post_data = await get_post_by_num(current_num)
-            
+
         if not post_data:
             break
-            
+
         content = post_data.get('content', {})
         if isinstance(content, str):
             try:
@@ -4856,12 +4849,12 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
                 content = {'text': content}
         elif not isinstance(content, dict):
             content = {'text': str(content)}
-                
+
         author_id = post_data.get('author_id', -1)
         is_bot = (author_id == 0 or author_id == 1488148800)
-        
+
         reply_to = post_data.get('reply_to_post_num') or post_data.get('reply_to') or content.get('reply_to_post')
-        
+
         raw_chain.append({
             'post_num': current_num,
             'is_bot': is_bot,
@@ -4869,14 +4862,14 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
             'content': content,
             'reply_to': reply_to
         })
-        
+
         current_num = reply_to
 
     if not raw_chain:
         return ""
 
     raw_chain.reverse()
-    
+
     file_ids = set()
     for item in raw_chain:
         c = item.get('content', {})
@@ -4931,7 +4924,7 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
         if not formatted_text:
             formatted_text = f"[{msg_type}]" if msg_type else ""
         clean_text = clean_html_tags(formatted_text).replace('\n', ' ').strip()
-        
+
         if item['is_bot']:
             sender = "ТЫ (Персона)"
         else:
@@ -4939,7 +4932,7 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
             sender = f"Анон #{anon_hash}"
         reply_prefix = f" (в ответ на #{item['reply_to']})" if item['reply_to'] else ""
         lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {clean_text[:300]}")
-        
+
     return "\n".join(lines)
 
 async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
@@ -5270,7 +5263,7 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
     now_ts = time.time()
     time_threshold_ts = now_ts - (hours * 3600)
     stream_lang = lang or ('en' if board_id == 'int' else 'ru')
-    
+
     async with storage_lock:
         if thread_id:
             b_data = board_data.get(board_id, {})
@@ -5290,7 +5283,7 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                 if p.get('board_id') == board_id and p.get('author_id') != 0:
                     board_posts.append((_fast_storage_ts(p.get('timestamp')), p))
             board_posts.sort(key=operator.itemgetter(0))
-            
+
             posts_in_window = [p for ts, p in board_posts if ts >= time_threshold_ts]
             if len(posts_in_window) > 200:
                 post_iterator = posts_in_window[-200:]
@@ -5349,14 +5342,14 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             content = post.get('content')
             if not isinstance(content, dict):
                 continue
-            
+
             fid = content.get('file_id')
             if not fid and content.get('media'):
                 for m in content.get('media', []):
                     if isinstance(m, dict) and m.get('file_id'):
                         fid = m.get('file_id')
                         break
-            
+
             media_meta = _MEDIA_DESC_CACHE.get(fid) if fid else None
             msg_type = content.get('type', 'text')
 
@@ -5413,10 +5406,10 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             break
         limited_lines.append(line_clean)
         total_len += line_len + 1
-    
+
     limited_lines.reverse()
     cleaned_chunk = "\n".join(limited_lines)
-    
+
     context_name = f"thread {thread_id}" if thread_id else f"board {board_id}"
     logger.debug(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
     return cleaned_chunk
@@ -5436,7 +5429,7 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
                 recent_posts.append((pnum, post_data))
             if len(recent_posts) >= limit:
                 break
-                
+
     if len(recent_posts) < limit:
         db = await get_pool()
         needed = limit - len(recent_posts)
@@ -5465,7 +5458,7 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
             logger.warning(f"[atmosphere] Error fetching atmosphere posts: {e}")
 
     recent_posts.sort(key=lambda x: x[0])
-    
+
     file_ids = set()
     for pnum, pdata in recent_posts:
         c = pdata.get('content', {})
@@ -5526,7 +5519,7 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
             continue
         sender = "БОТ (Персона)" if pdata.get('author_id') in (0, 1488148800) else "ЮЗЕР (Анон)"
         lines.append(f"• #{pnum} [{sender}]: {clean_text[:250]}")
-        
+
     return "\n".join(lines)
 
 def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
@@ -5541,26 +5534,26 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         else:
             p_word = "абзацев"
             p_word_adj = "крупных абзацев"
-        
+
         prompt = re.sub(r'объемом ровно в 1-2 абзаца', f'объемом ровно в {count} {p_word}', prompt)
         prompt = re.sub(r'ровно 3-4 абзаца', f'ровно {count} {p_word}', prompt)
         prompt = re.sub(r'строго 6-8 крупных абзацев', f'строго {count} {p_word_adj}', prompt)
         prompt = re.sub(r'не менее 6-8 крупных, содержательных абзацев с подробностями', f'ровно {count} {p_word_adj} с подробностями', prompt)
         prompt = re.sub(r'1-2 предложения', f'ровно {count} {p_word}', prompt)
-        prompt = re.sub(r'ультра-короткую, циничную прожарку', f'циничную прожарку', prompt)
-        
+        prompt = re.sub(r'ультра-короткую, циничную прожарку', 'циничную прожарку', prompt)
+
         prompt += f"\n\nВАЖНО: Твой отчет должен быть структурированным и состоять СТРОГО из {count} абзацев (не больше и не меньше!). Каждый абзац должен быть содержательным, плотным и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>)."
     elif lang == 'en':
         p_word = "paragraphs" if count > 1 else "paragraph"
         prompt = re.sub(r'1-2 sentences', f'{count} {p_word}', prompt)
         prompt = re.sub(r'at least 6-8 heavy, informative paragraphs', f'exactly {count} heavy, informative {p_word}', prompt)
         prompt = re.sub(r'3-4 paragraphs', f'exactly {count} {p_word}', prompt)
-        
+
         prompt += f"\n\nIMPORTANT: Your report must be structured and consist of EXACTLY {count} paragraphs (no more, no less!). Each paragraph must be informative, dense, separated by a blank line, and use only HTML formatting (no Markdown)."
     elif lang == 'jp':
         prompt = re.sub(r'3行で', f'{count}段落で', prompt)
         prompt += f"\n\n重要：要約は必ず正確に{count}段落で構成してください（多くても少なくてもいけません！）。各段落は空白行で区切られている必要があります。Markdownは使用せず、HTMLタグのみを使用してください。"
-        
+
     return prompt
 
 async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -> str | None:
@@ -5578,7 +5571,7 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
         with tempfile.NamedTemporaryFile(suffix=ext or ".jpg", delete=False) as tmp:
             tmp_path = tmp.name
         await bot.download_file(file_info.file_path, tmp_path)
-        
+
         logger.info(f"🖼 [TG_BOT] Downloading Telegram photo file_id='{photo_file_id[:15]}...' for Persona analysis")
         description = await describe_image(tmp_path, caption=caption, is_passive=False, source="TG_BOT")
         try:

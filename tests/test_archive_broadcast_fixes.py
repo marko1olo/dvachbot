@@ -3,28 +3,22 @@ import asyncio
 import json
 import time
 import pytest
-import aiosqlite
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram import Bot
-from aiogram.types import Message, PhotoSize, FSInputFile
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.types import Message, PhotoSize
+from aiogram.exceptions import TelegramForbiddenError
 
 import shared_state
-from shared_state import storage_lock, messages_storage, post_to_messages, state
 import archive_manager
 from archive_manager import (
     _forward_post_to_realtime_archive,
-    _send_archive_media,
-    _send_archive_single_media,
-    _send_archive_media_group,
     post_archive_to_channel,
     post_special_num_to_channel,
     _BOT_INACCESSIBLE_CHANNELS,
     _INACCESSIBLE_CHANNELS,
 )
 import post_processor
-from post_processor import post_thread_notification_to_channel, process_new_post
-import delivery_manager
+from post_processor import post_thread_notification_to_channel
 from delivery_manager import MessageDeliveryTask
 
 

@@ -4,7 +4,6 @@ Utility script to safely checkpoint and truncate SQLite WAL file (dvach_bot.db-w
 and optionally optimize the database storage.
 """
 
-import os
 import sys
 import sqlite3
 import logging
@@ -50,7 +49,7 @@ def checkpoint_and_truncate(vacuum: bool = False):
     conn = sqlite3.connect(str(DB_PATH), timeout=60.0)
     try:
         cur = conn.cursor()
-        
+
         # Verify journal mode
         cur.execute("PRAGMA journal_mode;")
         jmode = cur.fetchone()[0]

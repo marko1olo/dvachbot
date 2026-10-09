@@ -8,7 +8,6 @@ Tests for Tiered Repost Anti-Spam:
 - Per-board isolation (reposts on board 'b' do not affect board 'po')
 - Media group / album deduplication
 """
-import time
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -16,9 +15,7 @@ from common.spam_filter import (
     check_repost_spam,
     check_repost_spam_async,
     reset_repost_tracker,
-    is_repost_from_public,
     REPOST_FLOOD_RESPONSES,
-    REPOST_FLOOD_MUTE_SEC,
 )
 
 

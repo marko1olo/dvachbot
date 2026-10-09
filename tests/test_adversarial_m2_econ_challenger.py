@@ -17,13 +17,10 @@ Verification Scope:
 import copy
 import random
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any
 import pytest
 
-import lootbox_engine
 from lootbox_engine import (
-    TRASH_ITEMS,
-    PREMIUM_JUNK,
     NON_BUYABLE_TITLES,
     EXCLUSIVE_RELICS,
     WEAPON_SCRAP_PRICES,
@@ -32,7 +29,7 @@ from lootbox_engine import (
     roll_gold_safe,
     apply_lootbox_reward,
 )
-from wardrobe_engine import CLOTHING_CATALOG, get_wardrobe_total_stats
+from wardrobe_engine import CLOTHING_CATALOG
 
 
 # =============================================================================

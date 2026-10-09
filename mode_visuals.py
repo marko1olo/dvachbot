@@ -177,22 +177,22 @@ def create_visual_post(mode, text, header=None):
             img_path = os.path.join(_BASE_DIR, "templates", config['filename'])
         elif mode in DYNAMIC_MODES:
             folder = DYNAMIC_MODES[mode]
-            files = (glob.glob(os.path.join(folder, "*.png")) + 
-                     glob.glob(os.path.join(folder, "*.webp")) + 
-                     glob.glob(os.path.join(folder, "*.jpg")) + 
+            files = (glob.glob(os.path.join(folder, "*.png")) +
+                     glob.glob(os.path.join(folder, "*.webp")) +
+                     glob.glob(os.path.join(folder, "*.jpg")) +
                      glob.glob(os.path.join(folder, "*.jpeg")))
             if not files:
                 # Fallback to ukrainian or templates pool if specific folder is empty
                 folder = os.path.join(_BASE_DIR, "templates", "ukrainian")
-                files = (glob.glob(os.path.join(folder, "*.png")) + 
-                         glob.glob(os.path.join(folder, "*.webp")) + 
-                         glob.glob(os.path.join(folder, "*.jpg")) + 
+                files = (glob.glob(os.path.join(folder, "*.png")) +
+                         glob.glob(os.path.join(folder, "*.webp")) +
+                         glob.glob(os.path.join(folder, "*.jpg")) +
                          glob.glob(os.path.join(folder, "*.jpeg")))
             if not files: return None
             img_path = random.choice(files)
-            
+
             layout_type = 'bottom' if not header else random.choice(['bottom', 'split'])
-            
+
             config = {
                 'font_path': random.choice(FONTS_POOL),
                 'text_color': (255, 255, 255),
@@ -208,7 +208,7 @@ def create_visual_post(mode, text, header=None):
                 config['max_font_size'] = 50
 
         if not img_path or not os.path.exists(img_path): return None
-        
+
         img = Image.open(img_path).convert("RGBA")
         if img.size != (1024, 1024):
             # Guarantee 1024x1024 1:1 square
@@ -221,12 +221,12 @@ def create_visual_post(mode, text, header=None):
                 img = img.resize((1024, 1024), Image.Resampling.LANCZOS)
 
         draw = ImageDraw.Draw(img)
-        
+
         if mode in DYNAMIC_MODES:
             def get_font_by_size(size: int, bold: bool = True):
-                for p in ["fonts/Impact.ttf", 
-                          "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf", 
-                          "C:/Windows/Fonts/impact.ttf", 
+                for p in ["fonts/Impact.ttf",
+                          "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+                          "C:/Windows/Fonts/impact.ttf",
                           "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf"]:
                     if os.path.exists(p):
                         try: return ImageFont.truetype(p, size)
@@ -277,7 +277,7 @@ def create_visual_post(mode, text, header=None):
                 odraw = ImageDraw.Draw(overlay)
                 f_ticker = get_font_by_size(24)
                 f_text = get_font_by_size(36)
-                
+
                 if mode == 'ukrainian':
                     banner_title = "ТЕРМІНОВА БАВОВНА | ТГАЧ NEWS 24/7"
                     bg_col = (20, 40, 70, 240)
@@ -294,7 +294,7 @@ def create_visual_post(mode, text, header=None):
                 odraw.rectangle([0, 560, 1024, 760], fill=bg_col)
                 odraw.rectangle([0, 560, 1024, 606], fill=top_bar)
                 odraw.text((32, 572), banner_title, font=f_ticker, fill=(255, 255, 255, 255))
-                
+
                 wrapped = wrap_text_str(odraw, text, f_text, 960)
                 img = Image.alpha_composite(img, overlay)
                 draw = ImageDraw.Draw(img)
@@ -306,11 +306,11 @@ def create_visual_post(mode, text, header=None):
                 odraw = ImageDraw.Draw(overlay)
                 f_text = get_font_by_size(34)
                 wrapped = wrap_text_str(odraw, text, f_text, 760)
-                
+
                 bbox = odraw.multiline_textbbox((0, 0), wrapped, font=f_text, align="center")
                 tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 bx, by, bw, bh = 100, 480, 824, min(240, th + 50)
-                
+
                 if mode == 'ukrainian':
                     border_c = (0, 140, 255, 255)
                 elif mode == 'zaputin':
@@ -320,7 +320,7 @@ def create_visual_post(mode, text, header=None):
 
                 odraw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=22, fill=(255, 255, 255, 245), outline=border_c, width=3)
                 odraw.polygon([(bx + 80, by), (bx + 110, by - 30), (bx + 140, by)], fill=(255, 255, 255, 245), outline=border_c)
-                
+
                 img = Image.alpha_composite(img, overlay)
                 draw = ImageDraw.Draw(img)
                 tx = bx + (bw - tw)/2
@@ -335,10 +335,10 @@ def create_visual_post(mode, text, header=None):
                 canvas.paste(inner_img, (82, 60))
                 draw = ImageDraw.Draw(canvas)
                 draw.rectangle([78, 56, 78 + inner_w + 8, 56 + inner_h + 8], outline=(255, 255, 255, 255), width=2)
-                
+
                 f_dem_head = get_font_by_size(42)
                 f_dem_sub = get_font_by_size(24, bold=False)
-                
+
                 if mode == 'ukrainian':
                     def_head = "СЛАВА УКРАЇНІ!"
                 elif mode == 'zaputin':
@@ -361,7 +361,7 @@ def create_visual_post(mode, text, header=None):
                     f_dem_head = get_font_by_size(32)
                     hw = draw.textlength(head_txt, font=f_dem_head)
                 draw.text(((1024 - hw)/2, 680), head_txt, font=f_dem_head, fill=(255, 215, 40, 255))
-                
+
                 wrapped = wrap_text_str(draw, text, f_dem_sub, 860)
                 tb = draw.multiline_textbbox((0, 0), wrapped, font=f_dem_sub, align="center")
                 tw = tb[2] - tb[0]
@@ -380,13 +380,13 @@ def create_visual_post(mode, text, header=None):
                 else:
                     top_txt = clean_h if clean_h else ("СЛАВА УКРАЇНІ!" if mode == 'ukrainian' else "БАЗИРОВАННЫЙ ПОСТ")
                     bot_txt = text
-                
+
                 tw1 = draw.textlength(top_txt, font=f_impact)
                 tx1, ty1 = (1024 - tw1)/2, 60
                 for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 4)]:
                     draw.text((tx1+ox, ty1+oy), top_txt, font=f_impact, fill=(0, 0, 0, 255))
                 draw.text((tx1, ty1), top_txt, font=f_impact, fill=(255, 255, 255, 255))
-                
+
                 tw2 = draw.textlength(bot_txt, font=f_impact)
                 tx2, ty2 = (1024 - tw2)/2, 680
                 for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 4)]:
@@ -405,7 +405,7 @@ def create_visual_post(mode, text, header=None):
                 odraw.line([(32, by1 - 8), (32, by1 + 16)], fill=(255, 0, 120, 255), width=3)
                 odraw.line([(992, by2 + 8), (968, by2 + 8)], fill=(0, 240, 255, 255), width=3)
                 odraw.line([(992, by2 + 8), (992, by2 - 16)], fill=(0, 240, 255, 255), width=3)
-                
+
                 f_tag = get_font_by_size(14, bold=True)
                 odraw.text((54, by1 + 10), "[ SYSTEM_OVERRIDE // V2.077 ]", font=f_tag, fill=(0, 255, 200, 255))
 
@@ -429,7 +429,7 @@ def create_visual_post(mode, text, header=None):
                 odraw.rectangle([wx, wy, wx + ww, wy + wh], fill=(195, 199, 203, 250), outline=(255, 255, 255, 255), width=2)
                 odraw.line([(wx + ww, wy), (wx + ww, wy + wh)], fill=(0, 0, 0, 255), width=2)
                 odraw.line([(wx, wy + wh), (wx + ww, wy + wh)], fill=(0, 0, 0, 255), width=2)
-                
+
                 title_bar_col = (0, 0, 128, 255) if mode != 'zaputin' else (140, 0, 0, 255)
                 odraw.rectangle([wx + 4, wy + 4, wx + ww - 4, wy + 38], fill=title_bar_col)
                 f_wtitle = get_font_by_size(18, bold=True)
@@ -457,14 +457,14 @@ def create_visual_post(mode, text, header=None):
                 for y in range(480, 1024):
                     alpha = int(((y - 480) / (1024 - 480)) ** 1.3 * 235)
                     odraw.line([(0, y), (1024, y)], fill=(8, 10, 14, alpha), width=1)
-                    
+
                 f_quote = get_font_by_size(36, bold=True)
                 wrapped = wrap_text_str(odraw, f"«{text}»", f_quote, 880)
                 tb = odraw.multiline_textbbox((0, 0), wrapped, font=f_quote, align="center")
                 tw, th = tb[2] - tb[0], tb[3] - tb[1]
                 tx = (1024 - tw) / 2
                 ty = 600
-                
+
                 for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
                     odraw.multiline_text((tx + ox, ty + oy), wrapped, font=f_quote, fill=(0, 0, 0, 255), align="center")
                 odraw.multiline_text((tx, ty), wrapped, font=f_quote, fill=(255, 225, 75, 255), align="center")
@@ -502,16 +502,16 @@ def create_visual_post(mode, text, header=None):
                 f_hud = get_font_by_size(18, bold=True)
                 odraw.text((40, 36), "CAM_07 [LIVE] • 24 FPS", font=f_hud, fill=(0, 255, 120, 240))
                 odraw.text((1024 - 310, 36), "2026-08-15 01:24:19 UTC", font=f_hud, fill=(0, 255, 120, 240))
-                
+
                 odraw.line([(512 - 20, 512), (512 + 20, 512)], fill=(0, 255, 120, 160), width=2)
                 odraw.line([(512, 512 - 20), (512, 512 + 20)], fill=(0, 255, 120, 160), width=2)
-                
+
                 for gy in range(0, 1024, 6):
                     odraw.line([(0, gy), (1024, gy)], fill=(0, 0, 0, 45), width=1)
 
                 odraw.rectangle([40, 590, 984, 760], fill=(10, 18, 12, 230), outline=(0, 255, 120, 220), width=2)
                 odraw.text((56, 604), "[ОБНАРУЖЕНА АКТИВНОСТЬ НА КАМЕРЕ]:", font=get_font_by_size(16, bold=True), fill=(0, 255, 120, 255))
-                
+
                 f_msg = get_font_by_size(32, bold=True)
                 wrapped = wrap_text_str(odraw, text, f_msg, 900)
                 odraw.multiline_text((56, 640), wrapped, font=f_msg, fill=(240, 255, 240, 255))
@@ -521,38 +521,38 @@ def create_visual_post(mode, text, header=None):
             else:
                 overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
                 odraw = ImageDraw.Draw(overlay)
-                
+
                 f_size = 42 if len(text) < 60 else (34 if len(text) < 120 else 26)
                 f_text = get_font_by_size(f_size)
                 f_head = get_font_by_size(24)
-                
+
                 wrapped_text = wrap_text_str(odraw, text, f_text, 860)
                 bbox = odraw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
                 text_h = bbox[3] - bbox[1]
-                
+
                 banner_pad = 22
                 head_h = 40 if clean_h else 0
                 total_content_h = head_h + text_h
-                
+
                 banner_bottom = min(770, max(620, 520 + total_content_h // 2))
                 banner_top = max(380, banner_bottom - total_content_h - banner_pad * 2)
-                
+
                 border_color = (0, 180, 255, 140) if mode == 'ukrainian' else (255, 100, 100, 140)
                 odraw.rounded_rectangle([40, banner_top, 984, banner_bottom], radius=18, fill=(10, 14, 20, 205), outline=border_color, width=2)
-                
+
                 img = Image.alpha_composite(img, overlay)
                 draw = ImageDraw.Draw(img)
-                
+
                 curr_y = banner_top + banner_pad
                 if clean_h:
                     h_w = draw.textlength(clean_h, font=f_head)
                     draw.text(((1024 - h_w)/2, curr_y), clean_h, font=f_head, fill=(255, 220, 40, 255))
                     curr_y += head_h
-                    
+
                 t_bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
                 t_w = t_bbox[2] - t_bbox[0]
                 t_x = (1024 - t_w) / 2
-                
+
                 draw.multiline_text((t_x, curr_y), wrapped_text, font=f_text, fill=(255, 255, 255, 255), align="center")
 
         else:
@@ -607,7 +607,7 @@ def create_visual_post(mode, text, header=None):
 
             pos_x = x1 if config['text_align'] == 'left' else x2 if config['text_align'] == 'right' else x1 + (x2 - x1) / 2
             anchor = {"left": "la", "center": "ma", "right": "ra"}[config['text_align']]
-            draw.multiline_text((pos_x, vert_y), w_text, font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor, 
+            draw.multiline_text((pos_x, vert_y), w_text, font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor,
                                 stroke_width=config.get('text_stroke', {}).get('width', 0) if config.get('text_stroke') else 0,
                                 stroke_fill=config.get('text_stroke', {}).get('fill') if config.get('text_stroke') else None)
 
@@ -624,5 +624,5 @@ def create_visual_post(mode, text, header=None):
                 pass
         return buf.getvalue()
 
-    except Exception as e:
+    except Exception:
         return None

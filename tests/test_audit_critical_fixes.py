@@ -1,8 +1,4 @@
-import pytest
-import os
-import sys
-import logging
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 def test_site_safe_rotating_file_handler(tmp_path):
@@ -85,14 +81,11 @@ def test_media_utils_cv2_optional():
 
 def test_shared_state_drop_and_trim_copy_maps():
     """Bug 4: _drop_post_copy_maps_unlocked and _trim_post_copy_maps_unlocked work and are exported."""
-    import shared_state
     from shared_state import (
         _drop_post_copy_maps_unlocked,
         _trim_post_copy_maps_unlocked,
-        _trim_messages_storage_unlocked,
         post_to_messages,
         message_to_post,
-        messages_storage,
     )
     import broadcaster
 

@@ -58,17 +58,17 @@ def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str
     raw_header = content.get('header', f"Пост №{post_num}")
     header_text = ""
     match = re.search(r'(.*?)(Пост №\d+.*|Post No\.\d+.*|レス番 \d+.*)', raw_header, re.DOTALL | re.IGNORECASE)
-    
+
     if match:
         prefix = match.group(1).strip()
         post_part = match.group(2).strip()
-        
+
         has_letters = bool(re.search(r'[a-zA-Zа-яА-ЯёЁ]', prefix))
         reply_to_num = content.get('reply_to_post')
         reply_suffix = ""
         if reply_to_num:
             reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
-            
+
         if prefix and has_letters:
             if prefix.endswith('-'):
                 prefix = prefix[:-1].strip()
@@ -112,7 +112,6 @@ def prepare_telegram_text(text: str, max_len: int = 4096) -> str:
         plain = plain[:max_len - 3] + "..."
     return plain
 
-import io
 from aiogram.types import BufferedInputFile, URLInputFile
 from common.database import get_file_mirrors, get_file_owner_id, add_file_mirror
 
@@ -272,7 +271,7 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
                 continue
             m_type = str(media_item.get('type') or '').split('.')[-1].lower()
             caption = full_caption if i == 0 else None
-            
+
             if force_download:
                 file_bytes, downloaded_fn = await _download_media_bytes(orig_fid)
                 if file_bytes:
@@ -427,7 +426,7 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     caption = prepare_telegram_text(raw_full_cap, max_len=1024)
     ct_str = str(content_type).split('.')[-1].lower()
     common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML", "request_timeout": 60}
-    
+
     media_source = await _resolve_media_source(sender_bot, orig_fid, content)
     if not media_source:
         if content.get('voice_bytes'):
@@ -563,9 +562,9 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
             new_files_data = []
             ct_str = str(content_type).split('.')[-1].lower()
             has_media = bool(
-                content.get('file_id') 
-                or content.get('media') 
-                or content.get('files') 
+                content.get('file_id')
+                or content.get('media')
+                or content.get('files')
                 or ct_str in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note', 'media_group')
             )
             if ct_str == 'media_group':
@@ -716,7 +715,7 @@ async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id
                 candidate_bots.append(b)
 
     if not candidate_bots:
-        print(f"⛔ Ошибка: бот для постинга архивов не найден в списке активных ботов.")
+        print("⛔ Ошибка: бот для постинга архивов не найден в списке активных ботов.")
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)

@@ -9,8 +9,7 @@ import pytest
 from common.spam_filter import (
     check_bayan, _bayan_tracker, _bayan_mute_count, _bayan_mute_last_ts,
     _content_fingerprint, get_bayan_escalation_level,
-    BAYAN_THRESHOLD, BAYAN_BASE_MUTE_SEC, BAYAN_WINDOW_SEC,
-    SpamResult, analyze_message_for_spam,
+    BAYAN_BASE_MUTE_SEC, SpamResult,
 )
 
 
@@ -106,7 +105,7 @@ class TestBayanDetection:
         # Manually set high escalation count
         _bayan_mute_count[997] = 20
         _bayan_mute_last_ts[997] = time.time()  # Recent, so no reset
-        
+
         check_bayan(997, "spam_cap", "photo")
         check_bayan(997, "spam_cap", "photo")
         is_bayan, mute_sec = check_bayan(997, "spam_cap", "photo")
@@ -156,17 +155,17 @@ class TestSpamResultEnum:
 async def test_analyze_message_bayan_integration():
     """Integration test: analyze_message_for_spam returns BAYAN_MUTE for duplicate content."""
     _reset_bayan_state(777)
-    
+
     # Mock is_admin to always return False
     import common.spam_filter as sf
-    
+
     # Send 3 identical photos
     r1, _ = await sf.analyze_message_for_spam(777, 'test_board', 'AgACAgIPhoto123', 'photo', 'photo')
     assert r1 == SpamResult.CLEAN
-    
+
     r2, _ = await sf.analyze_message_for_spam(777, 'test_board', 'AgACAgIPhoto123', 'photo', 'photo')
     assert r2 == SpamResult.CLEAN
-    
+
     r3, level = await sf.analyze_message_for_spam(777, 'test_board', 'AgACAgIPhoto123', 'photo', 'photo')
     assert r3 == SpamResult.BAYAN_MUTE
     assert level == BAYAN_BASE_MUTE_SEC  # 1200

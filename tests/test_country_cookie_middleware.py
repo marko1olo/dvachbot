@@ -4,7 +4,6 @@ import sys
 
 sys.modules['bjoern'] = MagicMock()
 
-import fastapi
 from starlette.requests import Request
 from starlette.responses import Response
 

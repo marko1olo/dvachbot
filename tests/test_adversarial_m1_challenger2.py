@@ -13,29 +13,23 @@ Empirically tests:
 """
 
 import asyncio
-import json
 import random
 import time
 from unittest import mock
 
 import pytest
 from aiogram import types, Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramAPIError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 import main
-import common.database
-import common.db_pool
-import banner_manager
 import shared_state
-from tests.economy_live import live_economy, LiveEconomy, BOARD, REPLY_CHAT_ID, REPLY_MESSAGE_ID, REPLY_POST_NUM
+from tests.economy_live import live_economy, BOARD, REPLY_CHAT_ID, REPLY_MESSAGE_ID, REPLY_POST_NUM
 
 import ttt_engine
 import dice_duel_engine
 import russian_roulette_pvp
 import votemute_engine
 import stats_hub_router
-import casino_engine
-import lootbox_engine
 
 
 def make_mock_message(
@@ -83,7 +77,7 @@ def make_mock_message(
     msg.reply = mock.AsyncMock()
     msg.answer_photo = mock.AsyncMock()
     msg.delete = mock.AsyncMock()
-    
+
     mock_bot = mock.MagicMock(spec=Bot)
     mock_bot.send_message = mock.AsyncMock()
     mock_bot.edit_message_text = mock.AsyncMock()
@@ -126,7 +120,7 @@ async def test_cmd_mega_parameter_bindings():
     """Verify cmd_mega handles missing board_id, None objects, and unusual streams gracefully."""
     async with live_economy() as econ:
         msg = make_mock_message(user_id=101, text="/mega")
-        
+
         # 1. Missing / None board_id
         await main.cmd_mega(msg, board_id=None)
         assert msg.answer.call_count == 0
@@ -204,7 +198,7 @@ async def test_work_engine_and_hub_parameter_bindings():
     """Verify cmd_work from main.py and cmd_work_menu from economy_extension."""
     async with live_economy() as econ:
         await econ.seed_user(101, balance=1000)
-        
+
         # main.cmd_work with None board_id
         msg = make_mock_message(user_id=101, text="/work")
         await main.cmd_work(msg, board_id=None)
@@ -258,7 +252,7 @@ async def test_safe_message_proxy_boundary():
     assert proxy.from_user.id == 101
     assert proxy.text == "/command"
     assert proxy.message_id == 999
-    
+
     # Method proxies
     await proxy.answer("test")
     await proxy.reply("test")
@@ -395,7 +389,7 @@ async def test_votemute_engine_adversarial_inputs():
 async def test_stats_hub_router_adversarial_inputs():
     """Test stats_hub_router with None objects, unusual streams, error simulation."""
     msg = make_mock_message(user_id=101, text="/stats_hub")
-    
+
     with mock.patch("stats_v2.generate_instant_snapshot_text", return_value=("📊 Pulse Snapshot Text", {})):
         await stats_hub_router.cmd_stats_hub(msg, board_id=None, stream="en")
         assert msg.reply.call_count >= 1
@@ -415,7 +409,7 @@ async def test_stats_hub_router_adversarial_inputs():
 async def test_cmd_mega_database_failure_boundary():
     """Verify cmd_mega catches database exceptions and logs structured error without crashing."""
     msg = make_mock_message(user_id=101, text="/mega", with_reply=True)
-    
+
     with mock.patch("main.get_pool", side_effect=RuntimeError("DB Lock Timeout")):
         with mock.patch.object(main.runtime_logger, "error") as mock_log:
             await main.cmd_mega(msg, board_id=BOARD)
@@ -427,7 +421,7 @@ async def test_cmd_mega_database_failure_boundary():
 async def test_cmd_work_database_failure_boundary():
     """Verify cmd_work handles internal exceptions with user feedback and error logs."""
     msg = make_mock_message(user_id=101, text="/work")
-    
+
     with mock.patch("main._build_work_card", side_effect=ValueError("Corrupted work data")):
         await main.cmd_work(msg, board_id=BOARD)
         assert msg.answer.call_count >= 1

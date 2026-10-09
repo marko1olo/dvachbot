@@ -7,7 +7,7 @@ import os
 import io
 import random
 from PIL import Image, ImageDraw, ImageFont
-from common.anon_identity import get_anon_id, generate_anon_name
+from common.anon_identity import get_anon_id
 
 
 def _get_combat_font(size: int, bold: bool = True):

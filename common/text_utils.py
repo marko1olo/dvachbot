@@ -75,7 +75,7 @@ def sanitize_html(text: str) -> str:
         start, end = match.span()
         tag_text = match.group(0)
         tag_lower = tag_text.lower()
-        
+
         valid_a_tag = None
         if tag_lower.startswith('<a'):
             for attr_m in RE_ATTRS.finditer(tag_text):
@@ -91,7 +91,7 @@ def sanitize_html(text: str) -> str:
             chunk = text[last_idx:start]
             chunk_escaped = chunk.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             parts.append(chunk_escaped)
-        
+
         if tag_lower.startswith('<a'):
             if valid_a_tag:
                 open_a_count += 1
@@ -107,7 +107,7 @@ def sanitize_html(text: str) -> str:
         else:
             parts.append(strip_unsafe_attributes(tag_text))
         last_idx = end
-        
+
     if last_idx < len(text):
         chunk = text[last_idx:]
         chunk_escaped = chunk.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')

@@ -1,7 +1,5 @@
 import pytest
 import time
-import re
-import html
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # 1. Test get_real_ip IP spoofing protection
@@ -60,11 +58,11 @@ def test_tma_replay_prevention(monkeypatch):
     from site_tgach.security import verify_telegram_webapp_data
 
     monkeypatch.setenv("TEST_BOT_TOKEN", "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11")
-    
+
     # Old timestamp (e.g. 2 days ago)
     old_ts = int(time.time()) - 172800
     init_data = f"auth_date={old_ts}&query_id=test&user=%7B%22id%22%3A100%7D&hash=dummyhash"
-    
+
     res = verify_telegram_webapp_data(init_data)
     # Must be rejected (either hash mismatch or expired)
     assert res is None
@@ -134,7 +132,7 @@ async def test_combat_appeal_bail_fails_when_deduction_fails():
     with patch("combat_moderation_engine.get_pool", return_value=mock_db), \
          patch("main.deduct_user_global_balance", new_callable=AsyncMock, return_value=(False, 0.0)) as mock_deduct, \
          patch("main.remove_regular_mute", new_callable=AsyncMock) as mock_unmute:
-        
+
         await callback_combat_bail(mock_callback)
 
         assert mock_deduct.called

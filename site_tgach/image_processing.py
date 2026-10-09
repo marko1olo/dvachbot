@@ -54,13 +54,13 @@ from site_tgach.mirror_health import has_available_hf_repo
 from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_bytes_to_0x0
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
-from PIL import Image, ImageOps  
+from PIL import Image, ImageOps
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from common.board_config import SHADOW_CHANNEL_ID
 from aiogram.exceptions import (
-    TelegramRetryAfter, 
-    TelegramNetworkError, 
+    TelegramRetryAfter,
+    TelegramNetworkError,
     TelegramBadRequest
 )
 from concurrent.futures import ThreadPoolExecutor
@@ -130,7 +130,6 @@ def encode_blurhash_internal(image: Image.Image, components_x: int, components_y
     hash_list.append(encode_dc(dc))
     for factor in ac: hash_list.append(encode_ac(factor, max_val))
     return "".join(hash_list)
-from concurrent.futures import ThreadPoolExecutor
 
 _process_pool = None
 
@@ -158,11 +157,11 @@ def _grimdark_worker(image_bytes: bytes) -> bytes:
             img = enhancer.enhance(1.2)
             enhancer = ImageEnhance.Color(img)
             img = enhancer.enhance(0.6)
-            
+
             noise = Image.effect_noise((width, height), 15).convert('RGB')
             img = Image.blend(img, noise, 0.15)
-            
-            overlay_color = random.choice([(40, 10, 0), (10, 20, 10), (30, 0, 0)]) 
+
+            overlay_color = random.choice([(40, 10, 0), (10, 20, 10), (30, 0, 0)])
             overlay = Image.new('RGB', img.size, overlay_color)
             img = Image.blend(img, overlay, 0.2)
             img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
@@ -179,30 +178,30 @@ async def apply_grimdark_filter_async(image_bytes: bytes) -> bytes:
     global _process_pool
     if _process_pool is None:
         _process_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="grimdark")
-        
+
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_process_pool, _grimdark_worker, image_bytes)
 async def process_and_upload_image(
-    file: UploadFile, 
-    max_size_bytes: int, 
-    bot: Bot, 
+    file: UploadFile,
+    max_size_bytes: int,
+    bot: Bot,
     channel_id: int
 ) -> dict:
     import os
     import hashlib
-    
+
     content_type = file.content_type
     original_filename = file.filename or "file"
-    
+
     ALLOWED_EXTS = {
-        '.jpg', '.jpeg', '.png', '.webp', '.gif', 
-        '.mp4', '.webm', '.mov', '.mkv', 
+        '.jpg', '.jpeg', '.png', '.webp', '.gif',
+        '.mp4', '.webm', '.mov', '.mkv',
         '.ogg', '.mp3', '.wav', '.opus'
     }
     ext = os.path.splitext(original_filename)[1].lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported or disallowed file extension")
-    
+
     ALLOWED_MIME_TYPES = {
         'image/jpeg', 'image/png', 'image/webp', 'image/gif',
         'video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska',
@@ -214,29 +213,29 @@ async def process_and_upload_image(
         raise HTTPException(status_code=400, detail="Disallowed MIME type")
     if any(bad in ct_clean for bad in ("svg", "html", "javascript", "script", "xml", "application/x-")):
         raise HTTPException(status_code=400, detail="Disallowed MIME type")
-    
+
     if hasattr(file, 'size') and isinstance(file.size, int) and file.size > max_size_bytes:
          raise HTTPException(status_code=413, detail="File too large")
-    
+
     try:
         await file.seek(0)
         contents = await file.read()
     except Exception:
         raise HTTPException(400, "Client disconnected during upload")
-    
+
     if len(contents) > max_size_bytes:
         raise HTTPException(status_code=413, detail="File too large")
-    
+
     HASH_LIMIT = 50 * 1024 * 1024
     is_image_mime = content_type.startswith("image/")
     sha256_hash = None
     dedup_result = None
-    
+
     if is_image_mime or len(contents) <= HASH_LIMIT:
         loop = asyncio.get_running_loop()
         sha256_hash = await loop.run_in_executor(None, lambda: hashlib.sha256(contents).hexdigest())
         dedup_result = await check_file_deduplication(sha256_hash)
-    
+
     if dedup_result:
         if dedup_result.get("banned"):
             return {"banned": True, "reason": "Banned by SHA256"}
@@ -300,7 +299,7 @@ async def process_and_upload_image(
 
             if phash_str and await check_phash_ban(phash_str):
                 return {"banned": True, "reason": "Banned by pHash"}
-                
+
             if thumbnail_bytes:
                 try:
                     def _calc_blur():
@@ -319,11 +318,11 @@ async def process_and_upload_image(
     for attempt_bot_idx in range(1): # Оптимизация: используем одного бота, чтобы сократить ожидание
         current_bot = bot
         current_bot_id = getattr(current_bot, 'id', 'unknown')
-        
+
         async def _send_with_retry(method_name, input_file_obj, **kwargs):
             # Для тяжелых файлов (>20MB) сокращаем попытки Bot API, чтобы быстрее уйти в MTProto
             max_attempts = 2 if len(contents) < 20 * 1024 * 1024 else 1
-            for attempt in range(1, max_attempts + 1): 
+            for attempt in range(1, max_attempts + 1):
                 try:
                     method = getattr(current_bot, method_name)
                     # Сокращаем таймаут до 35с (стандарт для веб-запроса)
@@ -334,7 +333,7 @@ async def process_and_upload_image(
                 except TelegramBadRequest as e:
                     if "DIMENSIONS" in str(e).upper() and method_name == "send_photo":
                         raise ValueError("FALLBACK_TO_DOC")
-                    raise e 
+                    raise e
                 except (TelegramNetworkError, asyncio.TimeoutError, Exception):
                     if attempt == max_attempts: raise
                     await asyncio.sleep(1)
@@ -350,53 +349,53 @@ async def process_and_upload_image(
             photo = getattr(obj, 'photo', None)
             if photo and isinstance(photo, list) and len(photo) > 0:
                 return photo[-1].file_id
-                
+
             return None
 
         try:
             input_file = BufferedInputFile(contents, filename=filename)
             result_file_id = None
             thumb_id = None
-            final_type = file_type 
+            final_type = file_type
 
             if file_type == "image":
                 try:
-                    is_too_heavy_for_photo = len(contents) > 9 * 1024 * 1024 
-                    
+                    is_too_heavy_for_photo = len(contents) > 9 * 1024 * 1024
+
                     if not is_too_heavy_for_photo:
                         try:
                             sent_original = await _send_with_retry("send_photo", input_file, chat_id=channel_id, photo=input_file)
                             if sent_original and sent_original.photo:
                                 result_file_id = get_fid(sent_original.photo[-1])
                                 thumb_id = get_fid(sent_original.photo[0])
-                        except ValueError: 
+                        except ValueError:
                             is_too_heavy_for_photo = True
-                    
+
                     if is_too_heavy_for_photo or not result_file_id:
                         sent_original = await _send_with_retry("send_document", input_file, chat_id=channel_id, document=input_file)
                         if sent_original and sent_original.document:
                             result_file_id = get_fid(sent_original.document)
                             if sent_original.document.thumbnail:
                                 thumb_id = get_fid(sent_original.document.thumbnail)
-                        
+
                 except Exception as e:
                     logger.error(f"Image sub-upload failed: {e}", exc_info=True)
                     raise e
-            
+
             elif file_type == "video":
                 sent_msg = await _send_with_retry("send_video", input_file, chat_id=channel_id, video=input_file)
                 result_file_id = get_fid(sent_msg)
                 media_obj = getattr(sent_msg, 'video', None) or getattr(sent_msg, 'document', None) or getattr(sent_msg, 'animation', None)
-                if media_obj and getattr(media_obj, 'thumbnail', None): 
+                if media_obj and getattr(media_obj, 'thumbnail', None):
                     thumb_id = get_fid(media_obj.thumbnail)
                 final_type = "video"
-            
+
             elif file_type == "gif":
                 sent_msg = await _send_with_retry("send_animation", input_file, chat_id=channel_id, animation=input_file)
                 result_file_id = get_fid(sent_msg)
-                
+
                 media_obj = getattr(sent_msg, 'animation', None) or getattr(sent_msg, 'document', None)
-                if media_obj and getattr(media_obj, 'thumbnail', None): 
+                if media_obj and getattr(media_obj, 'thumbnail', None):
                     thumb_id = get_fid(media_obj.thumbnail)
                 final_type = "animation"
 
@@ -404,14 +403,14 @@ async def process_and_upload_image(
                 kw = "voice" if ("ogg" in content_type or "opus" in content_type) else "audio"
                 method = "send_voice" if kw == "voice" else "send_audio"
                 sent_msg = await _send_with_retry(method, input_file, chat_id=channel_id, **{kw: input_file})
-                
+
                 if kw == "voice":
                     voice_obj = getattr(sent_msg, 'voice', None)
                     result_file_id = get_fid(voice_obj)
                 else:
                     audio_obj = getattr(sent_msg, 'audio', None)
                     result_file_id = get_fid(audio_obj)
-                    if audio_obj and audio_obj.thumbnail: 
+                    if audio_obj and audio_obj.thumbnail:
                         thumb_id = get_fid(audio_obj.thumbnail)
                 final_type = kw
 
@@ -421,7 +420,7 @@ async def process_and_upload_image(
                 if sent_msg.sticker.thumbnail: thumb_id = get_fid(sent_msg.sticker.thumbnail)
                 final_type = "sticker"
 
-            else: 
+            else:
                 sent_msg = await _send_with_retry("send_document", input_file, chat_id=channel_id, document=input_file)
                 result_file_id = get_fid(sent_msg.document)
                 if sent_msg.document.thumbnail: thumb_id = get_fid(sent_msg.document.thumbnail)
@@ -465,11 +464,11 @@ async def process_and_upload_image(
 
     try:
         await register_new_file(
-            sha256_hash, 
-            phash_str, 
-            result_data['original_file_id'], 
-            result_data['thumbnail_file_id'], 
-            result_data['type'], 
+            sha256_hash,
+            phash_str,
+            result_data['original_file_id'],
+            result_data['thumbnail_file_id'],
+            result_data['type'],
             blurhash_str
         )
         if current_bot_id and str(current_bot_id) not in ('unknown', 'None'):
@@ -481,8 +480,8 @@ async def process_and_upload_image(
         logger.error(f"DB Register error: {e}", exc_info=True)
 
     spawn_task(_upload_mirrors_task(
-        current_bot, 
-        result_data['original_file_id'], 
+        current_bot,
+        result_data['original_file_id'],
         file_bytes=contents,
         filename=filename,
         related_id=result_data['thumbnail_file_id'],
@@ -504,7 +503,7 @@ async def create_thumbnail_in_memory(image_bytes: bytes) -> bytes | None:
     global _thumb_process_pool
     if _thumb_process_pool is None:
         _thumb_process_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="thumb")
-    
+
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_thumb_process_pool, _create_thumbnail_sync_in_memory, image_bytes)
 
@@ -512,11 +511,11 @@ def _create_thumbnail_sync_in_memory(image_bytes: bytes) -> bytes | None:
     try:
         with Image.open(BytesIO(image_bytes)) as img:
             img = ImageOps.exif_transpose(img)
-            
+
             img.thumbnail(THUMBNAIL_SIZE)
             buffer = BytesIO()
             if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-            
+
             img.save(buffer, format="JPEG", optimize=True, quality=85)
             buffer.seek(0)
             return buffer.getvalue()
@@ -551,15 +550,15 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
 
                 if msg:
                     # Извлекаем ID из результата
-                    if msg.video: 
+                    if msg.video:
                         shadow_fid = msg.video.file_id
                         if msg.video.thumbnail: shadow_thumb_fid = msg.video.thumbnail.file_id
-                    elif msg.document: 
+                    elif msg.document:
                         shadow_fid = msg.document.file_id
                         if msg.document.thumbnail: shadow_thumb_fid = msg.document.thumbnail.file_id
-                    elif msg.photo: 
+                    elif msg.photo:
                         shadow_fid = msg.photo[-1].file_id
-                    elif msg.animation: 
+                    elif msg.animation:
                         shadow_fid = msg.animation.file_id
                         if msg.animation.thumbnail: shadow_thumb_fid = msg.animation.thumbnail.file_id
             except Exception:
@@ -577,7 +576,7 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
     if related_id:
         if hf_available:
             await add_to_hf_queue(related_id)
-        
+
         # Зеркалируем превью (миниатюру) на Catbox
         catbox_thumb_link = None
         if thumb_bytes:
@@ -587,7 +586,7 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                     await add_file_mirror(related_id, 'catbox', catbox_thumb_link)
             except Exception as ex:
                 logger.error(f"Error direct uploading thumb to catbox: {ex}")
-        
+
         if not catbox_thumb_link:
             from common.database import add_to_mirror_queue
             await add_to_mirror_queue(related_id, 'catbox')
@@ -602,21 +601,21 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                         await add_file_mirror(related_id, '0x0', zeroxzero_thumb_link)
                 except Exception as ex:
                     logger.error(f"Error direct uploading thumb to 0x0: {ex}")
-            
+
             if not zeroxzero_thumb_link:
                 from common.database import add_to_mirror_queue
                 await add_to_mirror_queue(related_id, '0x0')
 
     # Если файл > 19MB, Telegram не отдаст ссылку. Грузим байты напрямую.
     SIZE_LIMIT = 19 * 1024 * 1024
-    
+
     if len(file_bytes) > SIZE_LIMIT:
         logger.info(f"🐘 Large file ({len(file_bytes)//1024//1024}MB) detected. Using Direct Bytes Upload strategy.")
-        
+
         async def _catbox_direct():
             link = await upload_bytes_to_catbox(file_bytes, filename)
             if link: await add_file_mirror(file_id, 'catbox', link)
-            
+
         async def _hf_direct():
             if not hf_available:
                 return
@@ -630,16 +629,16 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
             if link: await add_file_mirror(file_id, '0x0', link)
 
         await asyncio.gather(_catbox_direct(), _hf_direct(), _zeroxzero_direct())
-    
+
     else:
         # Файл маленький, идем по стандартному пути (очереди и ссылки)
         if hf_available:
             await add_to_hf_queue(file_id)
-        
+
         try:
             file_info = await bot.get_file(file_id)
             file_path = getattr(file_info, "file_path", None)
-            
+
             if file_path:
                 tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
                 catbox_link = await upload_url_to_catbox(tg_url)
@@ -659,7 +658,7 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                 elif is_0x0_available():
                     from common.database import add_to_mirror_queue
                     await add_to_mirror_queue(file_id, '0x0')
-                
+
         except Exception:
             from common.database import add_to_mirror_queue
             await add_to_mirror_queue(file_id, 'catbox')

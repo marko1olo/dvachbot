@@ -10,7 +10,7 @@ import time
 from html.parser import HTMLParser
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool, google_pool, agentrouter_pool
-from common.text_utils import clean_ai_thinking, strip_thinking_tags
+from common.text_utils import clean_ai_thinking
 from common.extractive_summary import generate_extractive_summary
 
 logger = logging.getLogger("summarize")
@@ -77,6 +77,7 @@ def _load_google_keys() -> list[str]:
     if raw_env:
         return [k.strip() for k in raw_env.split(",") if k.strip()]
     return []
+
 
 _key_cooldowns: dict[tuple[str, str], float] = {}
 _provider_cooldowns: dict[str, float] = {}
@@ -886,7 +887,8 @@ def get_telegraph_token() -> str:
                     _telegraph_token_cache = token
                     return token
         except Exception:
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
     try:
         token = _telegraph_create_account_sync()
         if token:
@@ -1067,4 +1069,3 @@ async def create_telegraph_page_async(title: str, html_content: str, author: str
     except Exception as e:
         logger.error(f"Failed to create Telegraph page: {e}", exc_info=True)
         return None
-

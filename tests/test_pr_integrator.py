@@ -1,8 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
 import pr_integrator
-import subprocess
-import sys
 import sys
 from pathlib import Path
 # scripts/ moved here after refactor

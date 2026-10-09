@@ -1,9 +1,7 @@
 import asyncio
-import os
 import pytest
 import aiosqlite
-import json
-from common.db_pool import db_transaction, safe_begin_immediate, safe_commit, safe_rollback, LazyLock
+from common.db_pool import db_transaction, LazyLock
 from common.database import deduct_user_global_balance, add_user_global_balance
 
 async def _init_test_db(db_path: str):
@@ -63,7 +61,7 @@ async def test_db_transaction_basic_commit(tmp_path):
     try:
         async with db_transaction(db):
             await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (1, 'b', 100.0)")
-        
+
         async with db.execute("SELECT balance FROM Users WHERE user_id = 1") as cursor:
             row = await cursor.fetchone()
             assert row is not None
@@ -83,7 +81,7 @@ async def test_db_transaction_rollback_on_error(tmp_path):
                 raise RuntimeError("Simulated crash")
         except RuntimeError:
             pass
-            
+
         async with db.execute("SELECT balance FROM Users WHERE user_id = 2") as cursor:
             row = await cursor.fetchone()
             assert row is None
@@ -98,11 +96,11 @@ async def test_db_transaction_nested_savepoints(tmp_path):
     try:
         async with db_transaction(db):
             await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (3, 'b', 100.0)")
-            
+
             # Nested transaction level 1
             async with db_transaction(db):
                 await db.execute("UPDATE Users SET balance = 200.0 WHERE user_id = 3")
-                
+
                 # Nested transaction level 2 (which fails and rolls back only its level)
                 try:
                     async with db_transaction(db):
@@ -110,7 +108,7 @@ async def test_db_transaction_nested_savepoints(tmp_path):
                         raise ValueError("Nested failure")
                 except ValueError:
                     pass
-                    
+
         async with db.execute("SELECT balance FROM Users WHERE user_id = 3") as cursor:
             row = await cursor.fetchone()
             assert row is not None
@@ -126,11 +124,11 @@ async def test_balance_deduct_and_add_atomicity(tmp_path):
     try:
         # Setup initial balance
         await add_user_global_balance(db, 10, 'b', 500.0)
-        
+
         ok, new_bal = await deduct_user_global_balance(db, 10, 'b', 200.0)
         assert ok is True
         assert new_bal == 300.0
-        
+
         # Overdraw test
         ok, new_bal = await deduct_user_global_balance(db, 10, 'b', 1000.0)
         assert ok is False
@@ -147,21 +145,21 @@ async def test_concurrent_transactions_stress(tmp_path):
         # Initialize 10 users with 100 balance
         for i in range(1, 11):
             await add_user_global_balance(db, i, 'b', 100.0)
-            
+
         async def worker_transfer(from_u, to_u, amount):
             async with db_transaction(db):
                 ok, _ = await deduct_user_global_balance(db, from_u, 'b', amount)
                 if ok:
                     await add_user_global_balance(db, to_u, 'b', amount)
-                    
+
         tasks = []
         for _ in range(30):
             tasks.append(worker_transfer(1, 2, 2.0))
             tasks.append(worker_transfer(2, 3, 1.0))
             tasks.append(worker_transfer(3, 1, 1.0))
-            
+
         await asyncio.gather(*tasks)
-        
+
         # Total money in system must remain constant (1000.0)
         async with db.execute("SELECT SUM(balance) FROM Users") as cursor:
             row = await cursor.fetchone()

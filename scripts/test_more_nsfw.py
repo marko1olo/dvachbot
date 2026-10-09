@@ -1,7 +1,6 @@
 import asyncio
 import aiohttp
 import time
-import json
 import xml.etree.ElementTree as ET
 import sys
 

@@ -7,14 +7,13 @@ tests/test_m1_econ_engines.py — Unit & Integration Test Suite for Milestone 1:
 - Robbery Safe Insulation
 """
 
-import asyncio
 import json
 import os
 import shutil
 import tempfile
 import time
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import aiosqlite
 
@@ -23,31 +22,21 @@ from common.database import (
     _create_indices,
     _create_tables,
     _insert_initial_data,
-    add_to_abu_fund,
-    add_user_global_balance,
-    deduct_user_global_balance,
     get_abu_fund_total,
     get_user_global_balance,
     get_user_recent_transactions,
 )
 from market_engine import (
-    MARKET_CATEGORIES,
-    WEAPONS_CATALOG,
-    PHARMA_CATALOG,
-    LOOTBOXES_CATALOG,
     buy_market_listing,
     cancel_market_listing,
     classify_item,
     create_market_listing,
-    extract_item_for_escrow,
     get_market_catalog,
     get_market_listing,
     get_user_listings,
     notify_seller_lot_sold,
-    restore_item_to_active_items,
 )
 from bank_engine import (
-    BANK_TIERS,
     calculate_deposit_state,
     create_bank_deposit,
     get_tier_info,
@@ -245,7 +234,7 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
             (seller_id, json.dumps({"mute_gun": True}))
         )
         ok, lot, _ = await create_market_listing(self.db, seller_id=seller_id, seller_board_id="b", item_id="mute", price=450.0)
-        
+
         cancel_ok, _, err = await cancel_market_listing(self.db, lot_id=lot["id"], user_id=intruder_id)
         self.assertFalse(cancel_ok)
         self.assertIn("не являетесь владельцем", err)
@@ -320,7 +309,7 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
             (user_id, json.dumps({"shit_gun": True}))
         )
         ok, lot, _ = await create_market_listing(self.db, seller_id=user_id, seller_board_id="b", item_id="shit", price=100.0)
-        
+
         buy_ok, _, _, _, _, _, err = await buy_market_listing(self.db, lot_id=lot["id"], buyer_id=user_id)
         self.assertFalse(buy_ok)
         self.assertIn("Нельзя покупать свой собственный лот", err)
@@ -338,7 +327,7 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
             (buyer_id,)
         )
         ok, lot, _ = await create_market_listing(self.db, seller_id=seller_id, seller_board_id="b", item_id="vomit", price=200.0)
-        
+
         buy_ok, _, _, _, _, _, err = await buy_market_listing(self.db, lot_id=lot["id"], buyer_id=buyer_id)
         self.assertFalse(buy_ok)
         self.assertIn("Недостаточно шекелей", err)
@@ -505,10 +494,10 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
         """Sych tier applies 1.0% bank fee credited to Abu Fund on withdrawal."""
         user_id = 5001
         await self.db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (?, 'b', 1000)", (user_id,))
-        
+
         ok, dep, _ = await create_bank_deposit(self.db, user_id=user_id, board_id="b", tier_id="sych", amount=1000.0)
         dep_id = dep["id"]
-        
+
         abu_before = await get_abu_fund_total(self.db)
 
         # Immediate withdrawal (total_value = 1000, 1% fee = 10.0, payout = 990.0)
@@ -532,7 +521,7 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
         """Skuf deposit withdrawn early forfeits all interest and incurs 3% principal penalty."""
         user_id = 5002
         await self.db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (?, 'b', 5000)", (user_id,))
-        
+
         ok, dep, _ = await create_bank_deposit(self.db, user_id=user_id, board_id="b", tier_id="skuf", amount=2000.0)
         dep_id = dep["id"]
 
@@ -580,7 +569,7 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
         """MMM Abu pyramid triggers 50% default on 3% roll, and clean payout otherwise."""
         user_id = 5004
         await self.db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (?, 'b', 10000)", (user_id,))
-        
+
         # Test Case A: Default / Audit Triggered (roll = 0.01 < 0.03)
         ok, dep1, _ = await create_bank_deposit(self.db, user_id=user_id, board_id="b", tier_id="mmm_abu", amount=1000.0)
         dep_id1 = dep1["id"]

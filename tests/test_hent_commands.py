@@ -1,14 +1,11 @@
-import re
 import pytest
 from unittest.mock import MagicMock
 from aiogram import F
 
 from main import (
-    ANIME_COMMAND_MAP,
     _ANIME_KEYS_SORTED,
     _ANIME_CMDS_PATTERN,
     RE_ANIME_STACK,
-    RE_ANIME_CMD,
 )
 import site_tgach.main as site_main
 

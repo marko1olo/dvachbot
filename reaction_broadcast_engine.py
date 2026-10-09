@@ -10,7 +10,6 @@ Explains the economic and social mechanics:
 - Clown: marks clown posters, tears off masks.
 """
 
-import os
 import json
 import time
 import random
@@ -27,7 +26,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
 )
 
-from banner_manager import get_banner_file, is_video_banner, send_banner_message
+from banner_manager import send_banner_message
 from common.database import get_pool
 
 logger = logging.getLogger("reaction_broadcast")
@@ -335,10 +334,10 @@ def get_next_motivation_text() -> Tuple[int, str]:
     state = _load_state()
     last_idx = state.get("last_text_index", -1)
     total_texts = len(REACTION_MOTIVATION_TEXTS)
-    
+
     candidates = [i for i in range(total_texts) if i != last_idx]
     chosen_idx = random.choice(candidates) if candidates else 0
-    
+
     return chosen_idx, REACTION_MOTIVATION_TEXTS[chosen_idx]
 
 
@@ -361,11 +360,11 @@ async def get_reaction_broadcast_recipients(limit: Optional[int] = None, exclude
         """
         if limit and limit > 0:
             query += f" LIMIT {int(limit)}"
-            
+
         async with db.execute(query) as cursor:
             rows = await cursor.fetchall()
             recipients = [int(row[0]) for row in rows if row and row[0] and int(row[0]) > 0]
-            
+
             if exclude_blocked:
                 state = _load_state()
                 blocked_set = set(state.get("blocked_user_ids", []))
@@ -373,7 +372,7 @@ async def get_reaction_broadcast_recipients(limit: Optional[int] = None, exclude
                     before_cnt = len(recipients)
                     recipients = [uid for uid in recipients if uid not in blocked_set]
                     logger.debug(f"[reaction_broadcast] Filtered out {before_cnt - len(recipients)} previously blocked users")
-                    
+
             logger.debug(f"[reaction_broadcast] Fetched {len(recipients)} eligible recipients from database")
             return recipients
     except Exception as e:
@@ -437,7 +436,7 @@ async def send_single_reaction_motivation(
         except Exception as e:
             logger.warning(f"[reaction_broadcast] Unexpected error delivering to {user_id}: {e}")
             return "error"
-            
+
     return "failed"
 
 
@@ -465,7 +464,7 @@ async def send_reaction_motivation_broadcast(
     state = _load_state()
     last_ts = state.get("last_broadcast_timestamp", 0.0)
     elapsed = now - last_ts
-    
+
     if not force and elapsed < DEFAULT_BROADCAST_INTERVAL_SECONDS:
         rem_sec = int(DEFAULT_BROADCAST_INTERVAL_SECONDS - elapsed)
         logger.debug(f"[reaction_broadcast] Skipped: cooldown active, {rem_sec}s remaining")
@@ -475,16 +474,16 @@ async def send_reaction_motivation_broadcast(
             "elapsed_seconds": int(elapsed),
             "remaining_seconds": rem_sec
         }
-        
+
     # Pick next motivational text
     text_idx, broadcast_text = get_next_motivation_text()
-    
+
     # Resolve recipients
     if specific_user_ids is not None:
         recipients = [uid for uid in specific_user_ids if uid > 0]
     else:
         recipients = await get_reaction_broadcast_recipients(limit=max_recipients)
-        
+
     if not recipients:
         logger.warning("[reaction_broadcast] No recipients found for broadcast")
         return {
@@ -493,14 +492,14 @@ async def send_reaction_motivation_broadcast(
             "delivered": 0,
             "failed": 0
         }
-        
+
     logger.debug(f"[reaction_broadcast] Starting broadcast of text #{text_idx+1} to {len(recipients)} users...")
-    
+
     delivered = 0
     forbidden = 0
     failed = 0
     blocked_ids_set = set(state.get("blocked_user_ids", []))
-    
+
     for i, user_id in enumerate(recipients):
         res = await send_single_reaction_motivation(
             bot=bot,
@@ -508,7 +507,7 @@ async def send_reaction_motivation_broadcast(
             text=broadcast_text,
             category=category
         )
-        
+
         if res == "delivered":
             delivered += 1
             if user_id in blocked_ids_set:
@@ -518,13 +517,13 @@ async def send_reaction_motivation_broadcast(
             blocked_ids_set.add(user_id)
         else:
             failed += 1
-            
+
         # Pacing between messages to prevent Telegram rate limits
         if (i + 1) % 25 == 0:
             logger.debug(f"[reaction_broadcast] Progress: {i+1}/{len(recipients)} (delivered: {delivered}, forbidden: {forbidden}, failed: {failed})")
-            
+
         await asyncio.sleep(PACING_DELAY_BETWEEN_USERS)
-        
+
     # Update and persist state
     state["last_broadcast_timestamp"] = now
     state["total_broadcasts"] = state.get("total_broadcasts", 0) + 1
@@ -534,12 +533,12 @@ async def send_reaction_motivation_broadcast(
     state["total_forbidden"] = state.get("total_forbidden", 0) + forbidden
     state["blocked_user_ids"] = sorted(list(blocked_ids_set))
     _save_state(state)
-    
+
     logger.info(
         f"[reaction_broadcast] Completed: delivered={delivered}, "
         f"forbidden/blocked={forbidden}, failed={failed} ({len(recipients)} total)"
     )
-    
+
     return {
         "status": "success",
         "delivered": delivered,
@@ -563,22 +562,22 @@ async def reaction_motivation_broadcast_loop(
     bot_provider can be an aiogram.Bot instance or a callable returning an aiogram.Bot.
     """
     logger.debug(f"[reaction_broadcast] Background daemon initialized (interval: {interval_seconds}s)")
-    
+
     # Wait 60 seconds on initial startup before first check to let bot finish initialization
     await asyncio.sleep(60)
-    
+
     while True:
         try:
             bot = bot_provider() if callable(bot_provider) else bot_provider
             if not bot:
                 await asyncio.sleep(60)
                 continue
-                
+
             now = time.time()
             state = _load_state()
             last_ts = state.get("last_broadcast_timestamp", 0.0)
             elapsed = now - last_ts
-            
+
             if elapsed >= interval_seconds:
                 logger.debug("[reaction_broadcast] Scheduled interval reached. Triggering broadcast...")
                 res = await send_reaction_motivation_broadcast(bot=bot, force=False)
@@ -589,7 +588,7 @@ async def reaction_motivation_broadcast_loop(
                 sleep_need = max(60.0, float(interval_seconds - elapsed))
                 logger.debug(f"[reaction_broadcast] Next scheduled run in {int(sleep_need // 3600)}h {int((sleep_need % 3600) // 60)}m (sleeping {int(sleep_need)}s)")
                 await asyncio.sleep(sleep_need)
-                
+
         except asyncio.CancelledError:
             logger.debug("[reaction_broadcast] Loop cancelled. Exiting.")
             raise
@@ -612,7 +611,7 @@ async def handle_broadcast_reactions_command(
     uid = message.from_user.id if message.from_user else 0
     if not uid:
         return
-        
+
     # Admin verification
     is_adm = False
     if is_admin_check_func:
@@ -623,14 +622,14 @@ async def handle_broadcast_reactions_command(
             is_adm = uid in ADMIN_IDS
         except Exception:
             pass
-            
+
     if not is_adm:
         await message.reply("❌ <b>Доступ запрещен.</b> Команда только для администрации ТГАЧА.", parse_mode="HTML")
         return
-        
+
     cmd_args = (message.text or "").strip().split()
     subcmd = cmd_args[1].lower() if len(cmd_args) > 1 else ""
-    
+
     if subcmd == "test":
         await message.reply("⏳ <b>Тестовая отправка в ваш ЛС...</b>", parse_mode="HTML")
         res = await send_reaction_motivation_broadcast(
@@ -645,20 +644,20 @@ async def handle_broadcast_reactions_command(
             parse_mode="HTML"
         )
         return
-        
+
     force_run = (subcmd == "force") or True  # Admin command defaults to force=True
-    
+
     await message.reply(
         "🚀 <b>Запуск мотивационной рассылки реакций по всем пользователям бота (ЛС)...</b>\n"
         "<i>Пожалуйста, подождите, идёт отправка баннеров с контролем флуда...</i>",
         parse_mode="HTML"
     )
-    
+
     res = await send_reaction_motivation_broadcast(
         bot=message.bot,
         force=force_run
     )
-    
+
     if res.get("status") == "cooldown":
         await message.reply(
             f"⚠️ <b>Рассылка отклонена по кулдауну:</b>\n{res.get('message')}\n\n"
@@ -666,7 +665,7 @@ async def handle_broadcast_reactions_command(
             parse_mode="HTML"
         )
         return
-        
+
     report = (
         f"🏁 <b>Мотивационная рассылка реакций завершена!</b>\n\n"
         f"📊 <b>Результаты доставки:</b>\n"

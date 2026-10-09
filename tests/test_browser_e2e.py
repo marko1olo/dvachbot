@@ -9,8 +9,6 @@ Execution:
 """
 
 import asyncio
-import os
-import re
 import sys
 from pathlib import Path
 
@@ -48,7 +46,7 @@ def get_rendered_chat_html(session_user=None):
     """Render chat.jinja2 with embedded inline CSS and JS for self-contained browser testing."""
     template = templates.get_template("chat.jinja2")
     req = make_req("/b/chat/")
-    
+
     # Mock post list with video and image attachments
     mock_posts = [
         {
@@ -117,7 +115,7 @@ def get_rendered_search_html():
     """Render search_results.jinja2 with mock gallery attachments."""
     template = templates.get_template("search_results.jinja2")
     req = make_req("/tags/anime")
-    
+
     mock_search_images = [
         {
             "type": "image",
@@ -259,7 +257,7 @@ async def test_e2e_video_posters_and_thumbnails():
         # 1. Video tag poster attribute check
         videos = await page.query_selector_all("video.post-image")
         assert len(videos) > 0, "Video attachments must be rendered"
-        
+
         for vid in videos:
             poster = await vid.get_attribute("poster")
             assert poster is not None and len(poster) > 0, "Video must have valid poster attribute"

@@ -12,12 +12,11 @@ Verifies:
 """
 
 import asyncio
-import re
 import sys
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:

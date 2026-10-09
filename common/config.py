@@ -90,4 +90,3 @@ ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 AGENTROUTER_BASE_URL = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1")
 AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "deepseek-v4-flash")
-

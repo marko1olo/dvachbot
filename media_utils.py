@@ -6,7 +6,6 @@ import ssl
 import socket
 import aiohttp
 from PIL import Image
-from typing import Optional, Tuple
 from japanese_translator import get_dynamic_proxy_url
 
 try:
@@ -27,10 +26,6 @@ _NO_VERIFY_SSL.verify_mode = ssl.CERT_NONE
 async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) -> tuple[bytes, int] | None:
     if depth > 3:
         return None
-    import socket
-    import ssl
-    import aiohttp
-    import asyncio
     import hashlib
     from urllib.parse import urlparse
     current_proxy = get_dynamic_proxy_url()
@@ -95,7 +90,7 @@ async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) ->
                             if response.status == 200:
                                 data = await response.read()
                                 if len(data) > 0 and (not (data.strip().startswith(b'<') and b'<html' in data[:200].lower())):
-                                    logger.debug(f'✅ [DEBUG_DL] Успех через DIRECT.')
+                                    logger.debug('✅ [DEBUG_DL] Успех через DIRECT.')
                                     return (data, len(data))
                     raise e
         except asyncio.TimeoutError:
@@ -103,7 +98,7 @@ async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) ->
                 await asyncio.sleep(1)
                 continue
             else:
-                logger.debug(f'⛔ [DEBUG_DL] Таймаут соединения.')
+                logger.debug('⛔ [DEBUG_DL] Таймаут соединения.')
         except Exception as e:
             logger.debug(f'⛔ [DEBUG_DL] Исключение: {type(e).__name__}: {e}')
             break
@@ -151,9 +146,9 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
             if getattr(img, 'is_animated', False):
                 return image_bytes
             needs_resize_dims = (
-                width + height > MAX_DIMENSION_SUM 
+                width + height > MAX_DIMENSION_SUM
                 or max(width, height) > MAX_SINGLE_SIDE
-                or width / height > MAX_ASPECT_RATIO 
+                or width / height > MAX_ASPECT_RATIO
                 or height / width > MAX_ASPECT_RATIO
             )
             if not needs_resize_dims and input_size <= MAX_FILE_SIZE_BYTES:
@@ -199,5 +194,5 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
                 img.save(output_buffer, format='JPEG', quality=quality)
                 current_size = output_buffer.tell()
             return output_buffer.getvalue()
-    except Exception as e:
+    except Exception:
         return image_bytes

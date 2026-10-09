@@ -3,7 +3,7 @@ import time
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -23,12 +23,9 @@ from delivery_manager import (
     MessageDeliveryTask,
     _passive_slice_size_for_content,
     _split_recipients_for_delivery,
-    _delete_durable_delivery_item,
-    cumulative_post_metrics,
-    CHUNK_SIZE,
-    PRIORITY_SPLIT_MIN_PASSIVE
+    cumulative_post_metrics
 )
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+from aiogram.exceptions import TelegramRetryAfter
 
 
 class TestDeliveryOptimization(unittest.IsolatedAsyncioTestCase):

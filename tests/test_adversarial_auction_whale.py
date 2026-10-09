@@ -19,30 +19,23 @@ Adversarial verification suite for Milestone 3 (Auctions & Whale Safes):
 """
 
 import asyncio
-import json
-import math
 import random
 import time
-from typing import Any, Dict, List
 
 import pytest
 
 import common.config
 import common.database
 import common.db_pool
-import lootbox_engine
-import whale_economy_engine
 from auction_engine import (
     create_auction,
     ensure_auction_schema,
     finish_active_auctions,
-    get_active_auctions,
     place_auction_bid,
 )
 from whale_economy_engine import (
     buy_whale_safe,
     calculate_whale_safe_price,
-    roll_whale_safe,
 )
 
 

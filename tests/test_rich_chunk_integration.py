@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import pytest
 import unittest
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timezone

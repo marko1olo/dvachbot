@@ -4,16 +4,14 @@ import time
 import re
 from functools import lru_cache
 from aiogram import Bot
-from typing import Any, Optional
+from typing import Any
 from shared_state import *
 try:
     from moderation_config import *
 except ImportError:
     import traceback; traceback.print_exc()
-from broadcaster import MessageBroadcaster, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
-from utils import split_text
 from common.text_chunker import safe_html_truncate, count_tg_utf16_units
-from common.text_utils import clean_html_for_tg, balance_html_tags
+from common.text_utils import balance_html_tags
 
 def safe_truncate_post(text: str, max_chars: int = 4096) -> str:
     """
@@ -34,11 +32,7 @@ def safe_truncate_post(text: str, max_chars: int = 4096) -> str:
 from summarize import summarize_text_with_hf
 from common.database import create_post, update_post_content, get_all_channel_copies, get_post_copies, delete_post_by_num
 from common.db_pool import get_pool
-import itertools
 from common.task_manager import spawn_task
-import faulthandler
-import gc
-import psutil
 try:
     import ujson as json
 except ImportError:
@@ -91,24 +85,10 @@ def _quote_info_from_content(replied_content: dict | None) -> dict | None:
         'quote_text': quote_text,
         'files': files
     }
-import logging
 import os
-import shutil
-import tempfile
-import tracemalloc
-import uuid
-import math
 import random
-import re
-import secrets
-import html
-import signal
 
 
-import re
-import html
-import random
-import math
 from datetime import datetime, timedelta, timezone
 UTC = timezone.utc
 
@@ -320,28 +300,28 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                     if "[👑 Золотой Анон]" in p_val or "Золотой Анон" in p_val:
                         p_val = "👑👑"
                     prefix_str = f"{p_val} "
-        
+
         debuff_icons = ("💩 " if has_poop else "") + ("🤮 " if has_vomit else "") + ("🇺🇦 " if has_flag_ua else "") + ("🇷🇺 " if has_flag_ru else "")
         custom_prefix = badge_emoji + debuff_icons + prefix_str
-                    
+
     res = await _format_header_inner(board_id, post_num, stream)
     return encode_post_num_zw(post_num) + custom_prefix + res
 
 def apply_shadow_autoreplace(content: dict) -> dict:
     if not content:
         return content
-        
+
     modified = content.copy()
-    
+
     def replacer(match):
         return random.choice(SHADOW_REPLACEMENTS)
-        
+
     def die_replacer(match):
         matched_text = match.group(1).lower().replace(" ", "")
         if "те" in matched_text:
             return "обоссыте меня"
         return "обоссы меня"
-        
+
     for key in ('text', 'caption'):
         text_val = modified.get(key)
         if text_val:
@@ -352,7 +332,7 @@ def apply_shadow_autoreplace(content: dict) -> dict:
             for pattern, replacements in POLITICAL_REPLACEMENTS:
                 text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
             modified[key] = text_val
-                
+
     return modified
 
 def check_post_numerals(post_num: int) -> int | None:
@@ -393,7 +373,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
     b_data = board_data.get(board_id)
     if not b_data: return
     now_ts = time.time()
-    
+
     async with storage_lock:
         last_usage = b_data.get('last_auto_roast_time', 0)
         if now_ts - last_usage < ROAST_COOLDOWN:
@@ -473,7 +453,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             'is_ai': True,
             'is_cyberchad': True
         }
-        
+
         pnum = await create_post(
             board_id=board_id,
             author_id=0,
@@ -488,12 +468,12 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             await update_post_content(pnum, content_payload)
             async with storage_lock:
                 messages_storage[pnum] = {'author_id': 0, 'timestamp': datetime.now(UTC), 'content': content_payload, 'board_id': board_id}
-                
+
             base_recipients = b_data['users']['active'] - b_data['users']['banned']
             if ENABLE_MULTILANG and board_id != 'int':
                 stream_users = await get_stream_active_users(board_id, stream)
                 base_recipients = base_recipients.intersection(stream_users)
-                
+
             await enqueue_board_message(board_id, {
                 'recipients': base_recipients,
                 'content': content_payload,
@@ -745,7 +725,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                 import traceback; traceback.print_exc()
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
-        
+
     tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in messages_to_delete_info]
     results = await asyncio.gather(*tasks)
     deleted_count = sum(1 for res in results if res is True)
@@ -791,7 +771,7 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str = None) -> tuple[list[int], list, list]:
-    from common.db_pool import get_pool, db_lock, db_transaction
+    from common.db_pool import get_pool, db_transaction
     import json
     for attempt in range(10):
         try:
@@ -803,14 +783,14 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 else:
                     query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND timestamp >= ?"
                     params = (user_id, time_threshold_ts)
-                    
+
                 async with db.execute(query_posts, params) as cursor:
                     rows = await cursor.fetchall()
                 user_posts = [row[0] for row in rows]
 
                 if not user_posts:
                     return [], [], []
-                    
+
                 posts_to_delete_set = set(user_posts)
                 threads_to_delete = []
 
@@ -855,7 +835,7 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 """
                 async with db.execute(query_copies, (posts_json,)) as cursor:
                     messages_to_delete_from_api = await cursor.fetchall()
-                    
+
                 query_channels = """
                     SELECT cc.channel_id, cc.message_id, p.board_id
                     FROM ChannelCopies cc
@@ -938,7 +918,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
             b_id = None
         else:
             continue
-            
+
         bot_candidates = []
         if archive_bot:
             bot_candidates.append(archive_bot)
@@ -949,7 +929,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
         for b in GLOBAL_BOTS.values():
             if b and b not in bot_candidates:
                 bot_candidates.append(b)
-                
+
         for b in bot_candidates:
             try:
                 await b.delete_message(chat_id=chan_id, message_id=msg_id)
@@ -958,7 +938,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
                 continue
 
 async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
-    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
     import aiohttp
     deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
     if not deleter:
@@ -1021,7 +1001,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         _clean_posts_from_caches(posts_to_delete_nums)
         await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
         spawn_task(_delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance))
-        
+
         return len(posts_to_delete_nums)
     except Exception as e:
         import traceback
@@ -1036,7 +1016,7 @@ async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_m
     """
     try:
         time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
-        
+
         from common.db_pool import get_pool, db_lock, db_transaction
         async with db_lock:
             db = await get_pool()
@@ -1045,17 +1025,17 @@ async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_m
                 async with db.execute(query, (user_id, board_id, time_threshold_ts)) as cursor:
                     rows = await cursor.fetchall()
                 user_posts = [r[0] for r in rows]
-                
+
                 if not user_posts:
                     return 0
-                    
+
                 posts_json = json.dumps(user_posts)
-                
+
                 await db.execute(
                     "UPDATE Posts SET is_shadow = 1 WHERE post_num IN (SELECT value FROM json_each(?))",
                     (posts_json,)
                 )
-                
+
                 query_copies = """
                     SELECT pc.recipient_id, pc.message_id, p.board_id
                     FROM PostCopies pc
@@ -1065,7 +1045,7 @@ async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_m
                 """
                 async with db.execute(query_copies, (posts_json, user_id)) as cursor:
                     messages_to_delete_from_api = await cursor.fetchall()
-                    
+
                 query_channels = """
                     SELECT cc.channel_id, cc.message_id, p.board_id
                     FROM ChannelCopies cc
@@ -1074,7 +1054,7 @@ async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_m
                 """
                 async with db.execute(query_channels, (posts_json,)) as cursor:
                     channel_messages_to_delete = await cursor.fetchall()
-                    
+
                 await db.execute(
                     "DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?)) AND recipient_id != ?",
                     (posts_json, user_id)
@@ -1086,7 +1066,7 @@ async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_m
 
         await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
         spawn_task(_delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance))
-        
+
         async with storage_lock:
             for p_num in user_posts:
                 if p_num in messages_storage:
@@ -1099,7 +1079,7 @@ async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_m
                         else:
                             message_to_post.pop((uid, mid), None)
                         copies.pop(uid, None)
-                        
+
         return len(user_posts)
     except Exception as e:
         import traceback

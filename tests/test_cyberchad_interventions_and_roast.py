@@ -10,9 +10,8 @@ Validates:
 6. Root cyberchad_tts module re-exports engine components correctly.
 """
 
-import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import shared_state
 from common.tts_engine import CYBERCHAD_PRESETS
@@ -22,7 +21,6 @@ from ai_manager import (
     _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION,
     _LAST_CYBERCHAD_INTERVENTION,
     _LAST_DIRECT_ROAST_USER_TS,
-    CYBERCHAD_FIGHT_INTERVENTION_PROMPT,
     CYBERCHAD_DIRECT_ROAST_PROMPT,
     CYBERCHAD_RATE_LIMIT_REJECTIONS,
 )

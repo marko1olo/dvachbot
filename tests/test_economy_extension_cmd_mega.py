@@ -2,7 +2,6 @@ import unittest
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 
-import pytest
 
 # We patch the database calls and get_reply_target before importing
 with patch("economy_extension.get_pool", new_callable=AsyncMock), \

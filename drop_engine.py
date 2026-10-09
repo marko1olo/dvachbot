@@ -8,9 +8,8 @@ import secrets
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # -----------------------------------------------------------------------------
@@ -564,7 +563,7 @@ async def init_drop_engine(db_conn) -> int:
         """)
         async with db_conn.execute("SELECT drop_id, donor_id, board_id, amount, created_at FROM MoneyDrops WHERE status = 'active'") as c:
             rows = await c.fetchall()
-        
+
         async with drop_lock:
             for r in rows:
                 d_id, donor, board, amt, c_at = r
@@ -681,7 +680,7 @@ async def create_money_drop(
             if not ok:
                 current_bal = await get_user_global_balance(db_conn, donor_id)
                 return False, f"❌ Недостаточно средств! Твой баланс: {int(current_bal)} ₪, а попытка дропнуть: {amount} ₪.", None
-            
+
             await db_conn.execute(
                 "INSERT INTO MoneyDrops (drop_id, donor_id, board_id, amount, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)",
                 (drop_id, donor_id, board_id, float(effective_amount), now),
@@ -706,7 +705,7 @@ async def create_money_drop(
         expires_at=now + timeout_sec,
         status="active",
     )
-    
+
     async with drop_lock:
         active_drops[drop_id] = record
         # Set cooldown for the donor based on amount dropped (min 60s)
@@ -876,7 +875,7 @@ async def cancel_money_drop(
             return False, "❌ Ты не являешься создателем этого дропа."
         if record.status != "active":
             return False, f"❌ Нельзя отменить дроп со статусом '{record.status}'."
-        
+
         record.status = "cancelled"
 
     from common.database import add_user_global_balance

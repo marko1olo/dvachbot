@@ -16,8 +16,8 @@ cursor.execute(query)
 posts = cursor.fetchall()
 
 keywords = [
-    'киберчед', 'бот', 'хуета', 'заебал', 'рулетка', 'дуэль', 'мут', 
-    'одни и те же', 'пидор', 'хуй', 'пизд', 'ебат', 'бля', 'сука', 
+    'киберчед', 'бот', 'хуета', 'заебал', 'рулетка', 'дуэль', 'мут',
+    'одни и те же', 'пидор', 'хуй', 'пизд', 'ебат', 'бля', 'сука',
     'тупой', 'несправедлив', 'говн', 'мраз', 'уебан', 'пидорас', 'параша', 'кал', 'бесит'
 ]
 
@@ -30,14 +30,14 @@ for p in posts:
         text = str(c_json.get('text', c_json.get('caption', '')))
     except:
         continue
-        
+
     text_lower = text.lower()
-    
+
     # Filter out bot's own standard messages to only get user outbursts
     # if it's the bot itself, author_id is usually 0
     if p['author_id'] == 0:
         continue
-        
+
     if any(k in text_lower for k in keywords):
         negativity.append({
             'post_num': p['post_num'],

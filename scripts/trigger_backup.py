@@ -23,7 +23,7 @@ async def main():
     if not token:
         print("Error: FILE_UPLOADER_BOT_TOKEN is not defined in environment variables.")
         return
-    
+
     print("Initializing bot...")
     bot = Bot(token=token)
     try:

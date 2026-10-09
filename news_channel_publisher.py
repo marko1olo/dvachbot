@@ -11,29 +11,22 @@
 """
 
 import os
-import time
-import json
 import random
 import logging
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Optional
 
 from aiogram import Bot
-from aiogram.types import (
-    BufferedInputFile, URLInputFile,
-    InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument
-)
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.exceptions import (
-    TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramNetworkError
+    TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 )
 
 from common.config import *
 from common.board_config import BOARD_CONFIG
-from common.html_utils import escape_html
 from common.text_utils import clean_html_tags, sanitize_html
 from common.database import (
-    get_post_by_num, update_post_content, add_channel_copy, get_pool
+    update_post_content, add_channel_copy
 )
 from common.anon_identity import get_anon_id
 import shared_state
@@ -117,7 +110,7 @@ async def send_channel_content(
                         builder.add_document(media=src)
                     else:
                         builder.add_photo(media=src)
-                
+
                 group_items = builder.build()
                 if group_items:
                     res = await bot.send_media_group(chat_id=channel_id, media=group_items)
@@ -320,7 +313,7 @@ async def publish_casino_jackpot_news(
     bot_uname = bot_info.username or "tgach_bot"
     anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
 
-    header_text = f"🎰🔥 <b>МЕГА-ЗАНОС В КАЗИНО ТГАЧА!</b> 🔥🎰"
+    header_text = "🎰🔥 <b>МЕГА-ЗАНОС В КАЗИНО ТГАЧА!</b> 🔥🎰"
 
     game_names = {
         "slots": "Слоты 777 (Однорукий бандит)",
@@ -372,7 +365,7 @@ async def publish_abu_fund_tier_upgrade(
         return False
 
     try:
-        from abu_fund_lore import YACHT_TIERS, GLOBAL_EVENTS
+        from abu_fund_lore import YACHT_TIERS
         tier_info = YACHT_TIERS.get(new_tier, {})
         tier_title = tier_info.get("title", f"Тир {new_tier}")
         tier_headline = tier_info.get("headline", "Казна Абу бьет рекорды!")
@@ -391,12 +384,12 @@ async def publish_abu_fund_tier_upgrade(
     filled_blocks = int(pct / 10)
     bar = "█" * min(filled_blocks, 10) + "░" * max(0, 10 - filled_blocks)
 
-    header_text = f"🛥️🎉 <b>КАЗНА АБУ ПОВЫСИЛА УРОВЕНЬ! НОВЫЙ РАНГ ЯХТЫ!</b> 🎉🛥️"
+    header_text = "🛥️🎉 <b>КАЗНА АБУ ПОВЫСИЛА УРОВЕНЬ! НОВЫЙ РАНГ ЯХТЫ!</b> 🎉🛥️"
 
     lines = [
         f"🏷️ <b>Ранг судна:</b> <u>{tier_title}</u> (Тир {new_tier})",
         f"📝 <i>«{tier_headline}»</i>\n",
-        f"🛠️ <b>Установленное оборудование:</b>"
+        "🛠️ <b>Установленное оборудование:</b>"
     ]
     for p in perks[:4]:
         lines.append(f"  • {p}")
@@ -438,14 +431,14 @@ async def publish_oligarch_raid_news(
     bot_uname = bot_info.username or "tgach_bot"
     anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
 
-    header_text = f"🚨⚖️ <b>СПЕЦОПЕРАЦИЯ ОБЭП: РАСКУЛАЧИВАНИЕ ОЛИГАРХА!</b> ⚖️🚨"
+    header_text = "🚨⚖️ <b>СПЕЦОПЕРАЦИЯ ОБЭП: РАСКУЛАЧИВАНИЕ ОЛИГАРХА!</b> ⚖️🚨"
 
     lines = [
         f"👤 <b>Фигурант дела:</b> {anon_tag}",
         f"💸 <b>Изъято в казну Абу:</b> <code>-{tax_amount:,} ₪</code>",
         f"💳 <b>Остаток на счетах:</b> <code>{new_balance:,} ₪</code>",
         f"📋 <b>Основание:</b> {reason}\n",
-        f"💬 <i>«Средства направлены на полировку вертолетной площадки на яхте Падишаха.»</i>"
+        "💬 <i>«Средства направлены на полировку вертолетной площадки на яхте Падишаха.»</i>"
     ]
     body_text = "\n".join(lines)
     footer_text = f"👉 <a href=\"https://t.me/{bot_uname}?start=abu_fund\">Казна Абу</a>"

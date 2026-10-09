@@ -26,14 +26,11 @@ if str(ROOT) not in sys.path:
 
 import aiosqlite
 import shared_state
-import russian_roulette_pvp as rr
 from common.database import get_abu_fund_total
 from russian_roulette_pvp import (
     create_rr_challenge,
     accept_rr_challenge,
-    decline_or_cancel_rr_challenge,
     pull_rr_trigger,
-    surrender_rr_game,
     rr_watchdog_step,
     cb_rr_accept,
     cb_rr_shoot,
@@ -41,10 +38,6 @@ from russian_roulette_pvp import (
     cb_rr_decline,
     active_rr_games,
     user_active_rr_game,
-    MIN_RR_BET,
-    MAX_RR_BET,
-    RR_CHAMBERS_COUNT,
-    RR_MUTE_DURATION_SEC,
     RR_RAKE_PERCENT
 )
 

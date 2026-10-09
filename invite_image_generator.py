@@ -7,13 +7,10 @@ Generates stylized, high-impact invitation cards with random media, vector Tgach
 
 import os
 import io
-import sys
-import json
 import math
 import random
 import re
 import asyncio
-import sqlite3
 import aiohttp
 from typing import Optional, Tuple, Dict, List, Union, Any
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
@@ -443,11 +440,11 @@ def draw_tgach_logo(size: int = 56, bg_color: Tuple[int, int, int, int] = (0, 13
     s = size * scale
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    
+
     r = int(s * 0.22)
     draw.rounded_rectangle([0, 0, s, s], radius=r, fill=bg_color)
     draw.rounded_rectangle([scale, scale, s - scale, s - scale], radius=r - scale, outline=(255, 255, 255, 220), width=int(2 * scale))
-    
+
     poly_norm = [
         (0.56, 0.15),
         (0.28, 0.50),
@@ -458,10 +455,10 @@ def draw_tgach_logo(size: int = 56, bg_color: Tuple[int, int, int, int] = (0, 13
     ]
     poly = [(int(x * s), int(y * s)) for x, y in poly_norm]
     shadow_poly = [(x + int(2.5 * scale), y + int(2.5 * scale)) for x, y in poly]
-    
+
     draw.polygon(shadow_poly, fill=(0, 45, 80, 180))
     draw.polygon(poly, fill=(255, 255, 255, 255))
-    
+
     return img.resize((size, size), Image.Resampling.LANCZOS)
 
 def draw_wax_seal(size: int = 64) -> Image.Image:
@@ -470,13 +467,13 @@ def draw_wax_seal(size: int = 64) -> Image.Image:
     s = size * scale
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    
+
     cx, cy = s // 2, s // 2
     r = s // 2 - 4 * scale
     draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(145, 18, 26, 255), outline=(100, 10, 16, 255), width=3 * scale)
     inner_r = r - 7 * scale
     draw.ellipse([cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r], outline=(190, 45, 55, 220), width=2 * scale)
-    
+
     poly_norm = [
         (0.56, 0.16),
         (0.30, 0.50),
@@ -489,14 +486,14 @@ def draw_wax_seal(size: int = 64) -> Image.Image:
     shadow_poly = [(x + 2*scale, y + 2*scale) for x, y in poly]
     draw.polygon(shadow_poly, fill=(60, 5, 8, 200))
     draw.polygon(poly, fill=(245, 195, 50, 255))
-    
+
     return img.resize((size, size), Image.Resampling.LANCZOS)
 
 def create_procedural_background(width: int = 800, height: int = 800, style: int = 0) -> Image.Image:
     """Generates an atmospheric procedural Dvach image with noise, grid and crisp watermark."""
     img = Image.new("RGB", (width, height), (14, 14, 20))
     draw = ImageDraw.Draw(img)
-    
+
     for y in range(height):
         ratio = y / height
         if style == 1:
@@ -508,13 +505,13 @@ def create_procedural_background(width: int = 800, height: int = 800, style: int
             g = int(18 + (1.0 - ratio) * 16)
             b = int(28 + ratio * 32)
         draw.line([(0, y), (width, y)], fill=(r, g, b))
-        
+
     grid_step = 40
     for x in range(0, width, grid_step):
         draw.line([(x, 0), (x, height)], fill=(36, 40, 54), width=1)
     for y in range(0, height, grid_step):
         draw.line([(0, y), (width, y)], fill=(36, 40, 54), width=1)
-        
+
     # Layer 1: Atmospheric glow (blurred)
     glow_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow_overlay)
@@ -522,7 +519,7 @@ def create_procedural_background(width: int = 800, height: int = 800, style: int
     glow_draw.ellipse([width//4, height//4, 3*width//4, 3*height//4], fill=glow_color)
     glow_overlay = glow_overlay.filter(ImageFilter.GaussianBlur(radius=32))
     img = Image.alpha_composite(img.convert("RGBA"), glow_overlay)
-    
+
     # Layer 2: Sharp semi-transparent "2ch" watermark text
     wm_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     wm_draw = ImageDraw.Draw(wm_overlay)
@@ -534,7 +531,7 @@ def create_procedural_background(width: int = 800, height: int = 800, style: int
     wm_x = (width - wm_w) // 2
     wm_y = (height - wm_h) // 2 - 20
     wm_draw.text((wm_x, wm_y), wm_text, font=wm_font, fill=(255, 140, 0, 32))
-    
+
     img = Image.alpha_composite(img, wm_overlay).convert("RGB")
     return img
 
@@ -704,36 +701,36 @@ def _render_layout_cyber_board(
     """Layout 0: Classic Cyber Imageboard Noir with Top Logo + Orange Badges + Bottom QR."""
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     for y in range(130):
         alpha = int(230 * (1.0 - y / 130))
         ov_draw.line([(0, y), (target_width, y)], fill=(8, 8, 14, alpha))
-        
+
     for y in range(target_height - 360, target_height):
         ratio = (y - (target_height - 360)) / 360
         alpha = int(248 * (ratio ** 1.2))
         ov_draw.line([(0, y), (target_width, y)], fill=(6, 6, 12, alpha))
-        
+
     logo_size = 48
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (22, 18), logo_resized)
-    
+
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     header_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 28)
-    
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "ДВАЧ • ТГАЧ"))
     badge_bbox = ov_draw.textbbox((0, 0), badge_clean, font=badge_font)
     badge_w = (badge_bbox[2] - badge_bbox[0]) + 20
-    
+
     ov_draw.rounded_rectangle([78, 20, 78 + badge_w, 56], radius=6, fill=(255, 136, 0, 240))
     ov_draw.text((88, 25), badge_clean, font=badge_font, fill=(0, 0, 0, 255))
-    
+
     b_label = f"/{board_id}/" if board_id else "/b/"
     ov_draw.text((88 + badge_w + 12, 23), f"{b_label} {bot_username}", font=header_font, fill=(255, 255, 255, 255))
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАХОДИ В ТГАЧ!"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Анонимный чат прямо в телеграме."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 36
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -742,7 +739,7 @@ def _render_layout_cyber_board(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font_size = 22
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
@@ -750,37 +747,37 @@ def _render_layout_cyber_board(
         sub_font_size -= 2
         sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
         sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-        
+
     total_block_h = (len(hl_lines) * (hl_font_size + 6)) + 12 + (len(sub_lines) * (sub_font_size + 6))
     start_y = target_height - 50 - total_block_h - 20
-    
+
     curr_y = start_y
     for line in hl_lines:
         for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 4), (0, -3)]:
             ov_draw.text((35 + ox, curr_y + oy), line, font=hl_font, fill=(0, 0, 0, 255))
         ov_draw.text((35, curr_y), line, font=hl_font, fill=(255, 185, 45, 255))
         curr_y += hl_font_size + 6
-        
+
     curr_y += 10
     for line in sub_lines:
         for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
             ov_draw.text((35 + ox, curr_y + oy), line, font=sub_font, fill=(0, 0, 0, 255))
         ov_draw.text((35, curr_y), line, font=sub_font, fill=(240, 240, 245, 255))
         curr_y += sub_font_size + 6
-        
+
     footer_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 15)
     ov_draw.text((35, target_height - 35), ">> Сканируй QR-код или ищи в поиске: " + bot_username, font=footer_font, fill=(255, 160, 40, 255))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1)
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 30
     qr_box_y = target_height - qr_h - 45
-    
+
     ov_draw.rounded_rectangle([qr_box_x - 8, qr_box_y - 8, qr_box_x + qr_w + 8, qr_box_y + qr_h + 8], radius=8, fill=(14, 14, 20, 255), outline=(255, 140, 0, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     ov_draw.text((qr_box_x + 6, qr_box_y + qr_h + 10), "|| SCAN ME ||", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 14), fill=(255, 160, 0, 255))
-    
+
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_demotivator(
@@ -797,20 +794,20 @@ def _render_layout_demotivator(
     pad_x, pad_top = 40, 36
     inner_w = target_width - (pad_x * 2)
     inner_h = int(target_height * 0.62)
-    
+
     cropped_base = fit_and_crop(base, inner_w, inner_h)
     frame_img.paste(cropped_base, (pad_x, pad_top))
-    
+
     draw = ImageDraw.Draw(frame_img)
     draw.rectangle([pad_x - 4, pad_top - 4, pad_x + inner_w + 4, pad_top + inner_h + 4], outline=(255, 255, 255, 220), width=2)
-    
+
     logo_size = 42
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     frame_img.paste(logo_resized, (pad_x + 12, pad_top + 12), logo_resized)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАХОДИ В ТГАЧ!"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Анонимный чат прямо в телеграме."))
-    
+
     hl_font_size = 36
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
     max_w = target_width - 240
@@ -819,34 +816,34 @@ def _render_layout_demotivator(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_w, draw)
-        
+
     sub_font_size = 20
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_w, draw)
-    
+
     start_y = pad_top + inner_h + 20
     curr_y = start_y
     for line in hl_lines:
         draw.text((45, curr_y), line, font=hl_font, fill=(255, 255, 255))
         curr_y += hl_font_size + 4
-        
+
     curr_y += 6
     for line in sub_lines:
         draw.text((45, curr_y), line, font=sub_font, fill=(255, 180, 50))
         curr_y += sub_font_size + 4
-        
+
     draw.text((45, target_height - 35), f">> /{board_id}/ • {bot_username}", font=ImageFont.truetype(MAIN_FONT, 15), fill=(0, 150, 255))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1)
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 36
     qr_box_y = target_height - qr_h - 40
-    
+
     draw.rounded_rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], radius=6, fill=(14, 14, 20), outline=(0, 136, 204), width=2)
     frame_img.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     draw.text((qr_box_x + 8, qr_box_y + qr_h + 8), "|| SCAN ||", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 12), fill=(0, 180, 255))
-    
+
     return frame_img
 
 def _render_layout_cyber_plaque(
@@ -861,28 +858,28 @@ def _render_layout_cyber_plaque(
     """Layout 2: Cyber Plaque with Glassmorphic bottom card, glowing electric blue line and QR."""
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     logo_size = 52
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (25, 22), logo_resized)
-    
+
     ov_draw.text((88, 28), f"ТГАЧ /{board_id}/ • {bot_username}", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 28), fill=(255, 255, 255, 255))
-    
+
     card_y = target_height - 290
     ov_draw.rounded_rectangle([20, card_y, target_width - 20, target_height - 20], radius=16, fill=(12, 14, 22, 235), outline=(0, 136, 204, 240), width=2)
     ov_draw.line([(28, card_y + 4), (target_width - 28, card_y + 4)], fill=(255, 140, 0, 220), width=2)
-    
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "ТОПОВЫЙ ВБРОС"))
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАХОДИ В ТГАЧ!"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Анонимный чат прямо в телеграме."))
-    
+
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 18)
     badge_bbox = ov_draw.textbbox((0, 0), badge_clean, font=badge_font)
     badge_w = (badge_bbox[2] - badge_bbox[0]) + 20
-    
+
     ov_draw.rounded_rectangle([40, card_y + 18, 40 + badge_w, card_y + 46], radius=4, fill=(0, 136, 204, 240))
     ov_draw.text((50, card_y + 22), badge_clean, font=badge_font, fill=(255, 255, 255, 255))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 32
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -891,32 +888,32 @@ def _render_layout_cyber_plaque(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 20)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     curr_y = card_y + 56
     for line in hl_lines:
         ov_draw.text((40, curr_y), line, font=hl_font, fill=(255, 185, 45, 255))
         curr_y += hl_font_size + 4
-        
+
     curr_y += 4
     for line in sub_lines:
         ov_draw.text((40, curr_y), line, font=sub_font, fill=(240, 240, 245, 255))
         curr_y += 24
-        
+
     ov_draw.text((40, target_height - 48), ">> Сканируй QR для входа на борду", font=ImageFont.truetype(MAIN_FONT, 15), fill=(0, 180, 255, 255))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1)
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 45
     qr_box_y = card_y + 35
-    
+
     ov_draw.rounded_rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], radius=6, fill=(10, 10, 16, 255), outline=(255, 140, 0, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     ov_draw.text((qr_box_x + 6, qr_box_y + qr_h + 8), "|| SCAN ME ||", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 12), fill=(255, 160, 0, 255))
-    
+
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_vapor_neon(
@@ -931,24 +928,24 @@ def _render_layout_vapor_neon(
     """Layout 3: Vaporwave / Cyber-Neon with Magenta & Cyan Glow, Glitch ribbons and high contrast."""
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     ov_draw.rectangle([0, 0, target_width, 68], fill=(16, 12, 28, 240))
     ov_draw.line([(0, 68), (target_width, 68)], fill=(255, 0, 128, 255), width=3)
-    
+
     logo_size = 46
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (20, 11), logo_resized)
-    
+
     ov_draw.text((78, 16), f"// TGACH /{board_id}/ • CYBER-BOARD //", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 26), fill=(0, 240, 255, 255))
-    
+
     for y in range(target_height - 340, target_height):
         ratio = (y - (target_height - 340)) / 340
         alpha = int(245 * (ratio ** 1.1))
         ov_draw.line([(0, y), (target_width, y)], fill=(12, 8, 24, alpha))
-        
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАХОДИ В ТГАЧ!"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Анонимный чат прямо в телеграме."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 36
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -957,11 +954,11 @@ def _render_layout_vapor_neon(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font_size = 22
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     start_y = target_height - 40 - (len(hl_lines)*(hl_font_size+6)) - (len(sub_lines)*(sub_font_size+6)) - 35
     curr_y = start_y
     for line in hl_lines:
@@ -969,26 +966,26 @@ def _render_layout_vapor_neon(
         ov_draw.text((38, curr_y - 2), line, font=hl_font, fill=(0, 240, 255, 220))
         ov_draw.text((35, curr_y), line, font=hl_font, fill=(255, 255, 255, 255))
         curr_y += hl_font_size + 6
-        
+
     curr_y += 8
     for line in sub_lines:
         for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
             ov_draw.text((35 + ox, curr_y + oy), line, font=sub_font, fill=(0, 0, 0, 255))
         ov_draw.text((35, curr_y), line, font=sub_font, fill=(0, 240, 255, 255))
         curr_y += sub_font_size + 6
-        
+
     ov_draw.text((35, target_height - 35), ">> СКАНИРУЙ QR-КОД << " + bot_username, font=ImageFont.truetype(MAIN_FONT, 15), fill=(255, 0, 128, 255))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#00f0ff", back_color="#0a0614")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 30
     qr_box_y = target_height - qr_h - 45
-    
+
     ov_draw.rounded_rectangle([qr_box_x - 8, qr_box_y - 8, qr_box_x + qr_w + 8, qr_box_y + qr_h + 8], radius=8, fill=(10, 6, 18, 255), outline=(255, 0, 128, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     ov_draw.text((qr_box_x + 8, qr_box_y + qr_h + 10), ">> NEON QR <<", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 12), fill=(0, 240, 255, 255))
-    
+
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_breaking_news(
@@ -1003,25 +1000,25 @@ def _render_layout_breaking_news(
     """Layout 4: Breaking News Alert Style with Red/Yellow Ticker Banner & Radar Frame."""
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     ov_draw.rectangle([0, 0, target_width, 60], fill=(204, 0, 0, 245))
     logo_size = 44
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (16, 8), logo_resized)
-    
+
     ov_draw.text((70, 14), "[!] ЭКСТРЕННЫЙ ВЫПУСК /B/ • ТГАЧ NEWS", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 26), fill=(255, 255, 255, 255))
-    
+
     ov_draw.rectangle([0, 60, target_width, 90], fill=(255, 204, 0, 245))
     ov_draw.text((20, 66), f"МАССОВЫЙ ВБРОС НА ДОСКЕ /{board_id}/ >> {bot_username} >> АНОНЫ В АХУЕ >>", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 18), fill=(0, 0, 0, 255))
-    
+
     for y in range(target_height - 300, target_height):
         ratio = (y - (target_height - 300)) / 300
         alpha = int(250 * (ratio ** 1.15))
         ov_draw.line([(0, y), (target_width, y)], fill=(8, 8, 12, alpha))
-        
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "СРОЧНО В НОМЕР!"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Главные события анонимного рунета."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 34
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1030,10 +1027,10 @@ def _render_layout_breaking_news(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 21)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     start_y = target_height - 40 - (len(hl_lines)*38) - (len(sub_lines)*26) - 25
     curr_y = start_y
     for line in hl_lines:
@@ -1041,24 +1038,24 @@ def _render_layout_breaking_news(
             ov_draw.text((35 + ox, curr_y + oy), line, font=hl_font, fill=(0, 0, 0, 255))
         ov_draw.text((35, curr_y), line, font=hl_font, fill=(255, 235, 60, 255))
         curr_y += 38
-        
+
     curr_y += 6
     for line in sub_lines:
         ov_draw.text((35, curr_y), line, font=sub_font, fill=(255, 255, 255, 255))
         curr_y += 26
-        
+
     ov_draw.text((35, target_height - 35), ">> ПРЯМОЙ ЭФИР ИЗ БЕЗДНЫ: " + bot_username, font=ImageFont.truetype(MAIN_FONT, 15), fill=(255, 80, 80, 255))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#ffcc00", back_color="#121218")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 30
     qr_box_y = target_height - qr_h - 45
-    
+
     ov_draw.rounded_rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], radius=6, fill=(12, 12, 18, 255), outline=(204, 0, 0, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     ov_draw.text((qr_box_x + 12, qr_box_y + qr_h + 8), "|| LIVE QR ||", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 12), fill=(255, 204, 0, 255))
-    
+
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_anime_japan(
@@ -1073,36 +1070,36 @@ def _render_layout_anime_japan(
     """Layout 5: Japanese Anime Aesthetic with gold/cherry frame, dynamic badge & sakura pink QR."""
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     # Outer gold/sakura decorative thin frame
     ov_draw.rectangle([16, 16, target_width - 16, target_height - 16], outline=(255, 182, 193, 200), width=2)
     ov_draw.rectangle([22, 22, target_width - 22, target_height - 22], outline=(255, 215, 0, 140), width=1)
-    
+
     # Top Left: Japanese Seal / Stamp + Tgach Logo
     logo_size = 46
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (32, 28), logo_resized)
-    
+
     # Red Stamp Badge with measured bounds (no text overflow!)
     badge_text = clean_text_for_font(slogan_dict.get("badge", "СЕКРЕТНО • /b/"))
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     b_bbox = ov_draw.textbbox((0, 0), badge_text, font=badge_font)
     bw = (b_bbox[2] - b_bbox[0]) + 20
-    
+
     ov_draw.rounded_rectangle([88, 30, 88 + bw, 66], radius=4, fill=(190, 24, 38, 240), outline=(255, 215, 0, 220), width=1)
     ov_draw.text((98, 36), badge_text, font=badge_font, fill=(255, 255, 255, 255))
-    
+
     ov_draw.text((88 + bw + 14, 36), f"ТГАЧ • {bot_username}", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 24), fill=(255, 240, 245, 255))
-    
+
     # Dark bottom card with soft pink/purple gradient
     for y in range(target_height - 320, target_height - 24):
         ratio = (y - (target_height - 320)) / 296
         alpha = int(246 * (ratio ** 1.1))
         ov_draw.line([(24, y), (target_width - 24, y)], fill=(18, 10, 26, alpha))
-        
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "АНОНИМНЫЙ ТГАЧ"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Уютные ночные треды и общение без правил."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 34
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1111,10 +1108,10 @@ def _render_layout_anime_japan(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 21)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     start_y = target_height - 45 - (len(hl_lines)*38) - (len(sub_lines)*26) - 20
     curr_y = start_y
     for line in hl_lines:
@@ -1122,27 +1119,27 @@ def _render_layout_anime_japan(
             ov_draw.text((42 + ox, curr_y + oy), line, font=hl_font, fill=(0, 0, 0, 255))
         ov_draw.text((42, curr_y), line, font=hl_font, fill=(255, 140, 180, 255))
         curr_y += 38
-        
+
     curr_y += 6
     for line in sub_lines:
         for ox, oy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
             ov_draw.text((42 + ox, curr_y + oy), line, font=sub_font, fill=(0, 0, 0, 255))
         ov_draw.text((42, curr_y), line, font=sub_font, fill=(255, 250, 252, 255))
         curr_y += 26
-        
+
     ov_draw.text((42, target_height - 46), ">> СКАНИРУЙ QR ДЛЯ ВХОДА: " + bot_username, font=ImageFont.truetype(MAIN_FONT, 15), fill=(255, 215, 0, 255))
-    
+
     # Sakura Pink QR Code
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#ff5599", back_color="#120818")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 38
     qr_box_y = target_height - qr_h - 48
-    
+
     ov_draw.rounded_rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], radius=6, fill=(18, 8, 24, 255), outline=(255, 85, 153, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     ov_draw.text((qr_box_x + 14, qr_box_y + qr_h + 8), "|| SAKURA QR ||", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11), fill=(255, 215, 0, 255))
-    
+
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_terminal_matrix(
@@ -1157,26 +1154,26 @@ def _render_layout_terminal_matrix(
     """Layout 6: Terminal / Matrix Hacker Aesthetic with Green Phosphor Glow & Monospace HUD."""
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     # Top Green HUD Bar
     ov_draw.rectangle([0, 0, target_width, 64], fill=(6, 16, 8, 245))
     ov_draw.line([(0, 64), (target_width, 64)], fill=(0, 255, 102, 255), width=2)
-    
+
     logo_size = 44
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (18, 10), logo_resized)
-    
+
     ov_draw.text((74, 16), f"[SYS_ALERT: TGACH /{board_id}/ INFILTRATION]", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 24), fill=(0, 255, 102, 255))
-    
+
     # Bottom CRT Terminal Container
     for y in range(target_height - 310, target_height):
         ratio = (y - (target_height - 310)) / 310
         alpha = int(248 * (ratio ** 1.15))
         ov_draw.line([(0, y), (target_width, y)], fill=(4, 12, 6, alpha))
-        
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ПРОТОКОЛ АНОНИМНОСТИ"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Полный доступ к зашифрованным тредам борды."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 34
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1185,10 +1182,10 @@ def _render_layout_terminal_matrix(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 20)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     start_y = target_height - 40 - (len(hl_lines)*38) - (len(sub_lines)*26) - 25
     curr_y = start_y
     for line in hl_lines:
@@ -1196,27 +1193,27 @@ def _render_layout_terminal_matrix(
             ov_draw.text((35 + ox, curr_y + oy), line, font=hl_font, fill=(0, 30, 10, 255))
         ov_draw.text((35, curr_y), line, font=hl_font, fill=(0, 255, 128, 255))
         curr_y += 38
-        
+
     curr_y += 6
     for line in sub_lines:
         for ox, oy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
             ov_draw.text((35 + ox, curr_y + oy), line, font=sub_font, fill=(0, 0, 0, 255))
         ov_draw.text((35, curr_y), line, font=sub_font, fill=(200, 255, 220, 255))
         curr_y += 26
-        
+
     ov_draw.text((35, target_height - 35), "root@tgach:~# connect " + bot_username, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 15), fill=(0, 255, 102, 255))
-    
+
     # Terminal Green Matrix QR Code
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#00ff66", back_color="#041006")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 30
     qr_box_y = target_height - qr_h - 45
-    
+
     ov_draw.rounded_rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], radius=6, fill=(4, 14, 6, 255), outline=(0, 255, 102, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
     ov_draw.text((qr_box_x + 8, qr_box_y + qr_h + 8), "[ACCESS_KEY]", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 11), fill=(0, 255, 102, 255))
-    
+
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_soviet_propaganda(
@@ -1230,39 +1227,39 @@ def _render_layout_soviet_propaganda(
 ) -> Image.Image:
     """Layout 7: Constructivist Agitprop Poster with dynamic diagonals, red/cream/black palette, bold agit-typography."""
     canvas = Image.new("RGBA", (target_width, target_height), (244, 237, 224, 255))
-    
+
     # High-contrast desaturated base image with red constructivist tint
     base_conv = base.convert("L").convert("RGBA")
     enhancer = ImageEnhance.Contrast(base_conv)
     base_conv = enhancer.enhance(1.30)
-    
+
     red_tint = Image.new("RGBA", (target_width, target_height), (196, 24, 24, 80))
     base_conv = Image.alpha_composite(base_conv, red_tint)
-    
+
     # Angled clipping wedge covering base area cleanly
     wedge_mask = Image.new("L", (target_width, target_height), 0)
     w_draw = ImageDraw.Draw(wedge_mask)
     w_draw.polygon([(0, 40), (target_width, 0), (target_width, target_height), (0, target_height)], fill=255)
     canvas.paste(base_conv, (0, 0), wedge_mask)
-    
+
     draw = ImageDraw.Draw(canvas)
-    
+
     # Top dynamic diagonal red wedge
     draw.polygon([(0, 0), (target_width, 0), (target_width, 70), (0, 110)], fill=(215, 25, 32, 255))
     draw.line([(0, 112), (target_width, 72)], fill=(245, 184, 0, 255), width=4)
-    
+
     # Top agit banner
     top_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 28)
     draw.text((25, 20), "ТОВАРИЩ! ВСЯ ВЛАСТЬ АНОНАМ!", font=top_font, fill=(244, 237, 224, 255))
-    
+
     b_label = f"/{board_id}/" if board_id else "/b/"
     board_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 24)
     draw.text((target_width - 200, 22), f"ТГАЧ {b_label}", font=board_font, fill=(245, 184, 0, 255))
-    
+
     # Red-gold constructivist logo
     sov_logo = draw_tgach_logo(52, bg_color=(215, 25, 32, 255))
     canvas.paste(sov_logo, (24, 126), sov_logo)
-    
+
     # Agitprop Badge
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "АГИТПРОП /b/")).upper()
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
@@ -1270,7 +1267,7 @@ def _render_layout_soviet_propaganda(
     badge_w = (badge_bbox[2] - badge_bbox[0]) + 24
     draw.rectangle([86, 132, 86 + badge_w, 170], fill=(22, 20, 20, 255))
     draw.text((98, 138), badge_clean, font=badge_font, fill=(245, 184, 0, 255))
-    
+
     # Bottom Heavy Constructivist Card
     bottom_y = target_height - 280
     draw.polygon([
@@ -1279,13 +1276,13 @@ def _render_layout_soviet_propaganda(
         (target_width, target_height),
         (0, target_height)
     ], fill=(22, 20, 20, 252))
-    
+
     draw.line([(0, bottom_y), (target_width, bottom_y - 45)], fill=(215, 25, 32, 255), width=6)
     draw.line([(0, bottom_y + 8), (target_width, bottom_y - 37)], fill=(245, 184, 0, 255), width=3)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ТЫ ЗАПИСАЛСЯ В ТГАЧ?!")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Вступай в ряды анонимного сопротивления."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 36
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1294,39 +1291,39 @@ def _render_layout_soviet_propaganda(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, draw)
-        
+
     sub_font_size = 20
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, draw)
-    
+
     curr_y = bottom_y + 24
     for line in hl_lines:
         draw.text((34, curr_y), line, font=hl_font, fill=(245, 184, 0, 255))
         curr_y += hl_font_size + 6
-        
+
     curr_y += 6
     for line in sub_lines:
         draw.text((34, curr_y), line, font=sub_font, fill=(244, 237, 224, 255))
         curr_y += sub_font_size + 5
-        
+
     foot_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 16)
     draw.text((34, target_height - 36), f">> ПРИКАЗ №227: ВСТУПАЙ В {bot_username}", font=foot_font, fill=(215, 25, 32, 255))
-    
+
     # Constructivist QR Code (Red on Cream)
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#c41818", back_color="#f4ede0")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 32
     qr_box_y = target_height - qr_h - 44
-    
+
     draw.rectangle([qr_box_x - 8, qr_box_y - 8, qr_box_x + qr_w + 8, qr_box_y + qr_h + 8], fill=(244, 237, 224, 255), outline=(215, 25, 32, 255), width=3)
     canvas.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
-    
+
     tag_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 12)
     tag_text = "|| СКАНИРУЙ ||"
     tw = draw.textlength(tag_text, font=tag_font)
     draw.text((qr_box_x + (qr_w - tw)//2, qr_box_y + qr_h + 10), tag_text, font=tag_font, fill=(245, 184, 0, 255))
-    
+
     return canvas.convert("RGB")
 
 def _render_layout_vhs_analog_horror(
@@ -1341,34 +1338,34 @@ def _render_layout_vhs_analog_horror(
     """Layout 8: Analog Horror / VHS 1999 with interlaced scanlines, RGB chromatic split, OSD HUD and sinister tracking."""
     base_rgb = base.convert("RGB")
     r, g, b = base_rgb.split()
-    
+
     # Chromatic shift (R shifted left 4px, B shifted right 4px)
     shift = 4
     r_shifted = Image.new("L", (target_width, target_height), 0)
     r_shifted.paste(r.crop((shift, 0, target_width, target_height)), (0, 0))
-    
+
     b_shifted = Image.new("L", (target_width, target_height), 0)
     b_shifted.paste(b.crop((0, 0, target_width - shift, target_height)), (shift, 0))
-    
+
     vhs_base = Image.merge("RGB", (r_shifted, g, b_shifted))
     vhs_base = ImageEnhance.Brightness(vhs_base).enhance(0.70)
-    
+
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     # CRT Interlaced Scanlines
     for y in range(0, target_height, 3):
         ov_draw.line([(0, y), (target_width, y)], fill=(0, 0, 0, 95), width=1)
-        
+
     for y in range(110):
         a = int(220 * (1.0 - y / 110))
         ov_draw.line([(0, y), (target_width, y)], fill=(4, 6, 10, a))
-        
+
     for y in range(target_height - 320, target_height):
         ratio = (y - (target_height - 320)) / 320
         a = int(250 * (ratio ** 1.2))
         ov_draw.line([(0, y), (target_width, y)], fill=(2, 4, 8, a))
-        
+
     # Subtle VHS tracking glitch line
     glitch_y = target_height // 2 + 70
     ov_draw.rectangle([0, glitch_y, target_width, glitch_y + 8], fill=(20, 35, 50, 90))
@@ -1376,34 +1373,34 @@ def _render_layout_vhs_analog_horror(
         if (gx // 8) % 2 == 0:
             ov_draw.line([(gx, glitch_y), (gx + 6, glitch_y)], fill=(180, 220, 255, 120), width=2)
             ov_draw.line([(gx, glitch_y + 4), (gx + 5, glitch_y + 4)], fill=(120, 180, 230, 80), width=1)
-            
+
     # OSD Header: Vector triangle for play symbol
     osd_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 20)
     ov_draw.text((25, 20), "PLAY", font=osd_font, fill=(230, 245, 255, 240))
     ov_draw.polygon([(82, 23), (92, 29), (82, 35)], fill=(230, 245, 255, 240))
     ov_draw.text((100, 20), "02:44:19  SP", font=osd_font, fill=(230, 245, 255, 240))
-    
+
     # Red blinking REC dot + text
     ov_draw.ellipse([target_width - 170, 24, target_width - 156, 38], fill=(240, 30, 30, 255))
     ov_draw.text((target_width - 148, 20), "REC  /b/", font=osd_font, fill=(240, 30, 30, 255))
-    
+
     warn_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 15)
     ov_draw.text((25, 48), f"[ARCHIVE_FEED: TGACH_BOARD__{board_id.upper()}]", font=warn_font, fill=(0, 230, 255, 200))
-    
+
     logo_size = 46
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (25, 78), logo_resized)
-    
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "АНАЛОГОВЫЙ КОШМАР")).upper()
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 18)
     badge_bbox = ov_draw.textbbox((0, 0), badge_clean, font=badge_font)
     badge_w = (badge_bbox[2] - badge_bbox[0]) + 18
     ov_draw.rectangle([82, 85, 82 + badge_w, 117], fill=(180, 10, 20, 220), outline=(0, 230, 255, 220), width=1)
     ov_draw.text((91, 91), badge_clean, font=badge_font, fill=(255, 255, 255, 255))
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "СИГНАЛ НЕЛЬЗЯ ЗАГЛУШИТЬ"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Перехват анонимной трансляции. Заходи в тред."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 34
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1412,11 +1409,11 @@ def _render_layout_vhs_analog_horror(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font_size = 20
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     start_y = target_height - 35 - (len(hl_lines)*(hl_font_size+6)) - (len(sub_lines)*(sub_font_size+6)) - 35
     curr_y = start_y
     for line in hl_lines:
@@ -1424,29 +1421,29 @@ def _render_layout_vhs_analog_horror(
         ov_draw.text((38, curr_y), line, font=hl_font, fill=(0, 240, 255, 200))
         ov_draw.text((35, curr_y), line, font=hl_font, fill=(255, 255, 255, 255))
         curr_y += hl_font_size + 6
-        
+
     curr_y += 8
     for line in sub_lines:
         for ox, oy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
             ov_draw.text((35 + ox, curr_y + oy), line, font=sub_font, fill=(0, 0, 0, 255))
         ov_draw.text((35, curr_y), line, font=sub_font, fill=(210, 240, 255, 255))
         curr_y += sub_font_size + 6
-        
+
     ov_draw.text((35, target_height - 36), f">> BROADCAST KEY // TELEGRAM: {bot_username}", font=warn_font, fill=(0, 230, 255, 255))
-    
+
     # Phosphor Cyan QR Code
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#00ffff", back_color="#040a12")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 30
     qr_box_y = target_height - qr_h - 45
-    
+
     ov_draw.rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], fill=(4, 10, 18, 255), outline=(0, 230, 255, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
-    
+
     tag_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 11)
     ov_draw.text((qr_box_x + 6, qr_box_y + qr_h + 8), "[SIGNAL_DECODE]", font=tag_font, fill=(0, 230, 255, 255))
-    
+
     return Image.alpha_composite(vhs_base.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_dark_gothic_scroll(
@@ -1462,44 +1459,44 @@ def _render_layout_dark_gothic_scroll(
     darkened = ImageEnhance.Brightness(base.convert("RGB")).enhance(0.58)
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     p1 = 20
     p2 = 28
     ov_draw.rectangle([p1, p1, target_width - p1, target_height - p1], outline=(180, 140, 60, 220), width=2)
     ov_draw.rectangle([p2, p2, target_width - p2, target_height - p2], outline=(120, 90, 40, 180), width=1)
-    
+
     for cx, cy in [(p1, p1), (target_width - p1, p1), (p1, target_height - p1), (target_width - p1, target_height - p1)]:
         d = 7
         ov_draw.polygon([(cx - d, cy), (cx, cy - d), (cx + d, cy), (cx, cy + d)], fill=(225, 180, 70, 255))
-        
+
     ov_draw.rectangle([p1 + 2, p1 + 2, target_width - p1 - 2, 74], fill=(18, 12, 14, 240))
     ov_draw.line([(p1 + 2, 74), (target_width - p1 - 2, 74)], fill=(180, 140, 60, 255), width=2)
-    
+
     banner_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 24)
     b_title = f"+ EDICTUM INQUISITIONIS + SACRA DVACHIA /{board_id}/ +"
     bw = ov_draw.textlength(b_title, font=banner_font)
     ov_draw.text(((target_width - bw)//2, 34), b_title, font=banner_font, fill=(225, 185, 75, 255))
-    
+
     seal = draw_wax_seal(64)
     overlay.paste(seal, (36, 90), seal)
-    
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "ЕРЕСЬ /b/")).upper()
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     badge_bbox = ov_draw.textbbox((0, 0), badge_clean, font=badge_font)
     badge_w = (badge_bbox[2] - badge_bbox[0]) + 20
     ov_draw.rectangle([112, 102, 112 + badge_w, 140], fill=(130, 16, 24, 230), outline=(220, 175, 65, 230), width=1)
     ov_draw.text((122, 108), badge_clean, font=badge_font, fill=(245, 240, 230, 255))
-    
+
     for y in range(target_height - 310, target_height - p1):
         ratio = (y - (target_height - 310)) / (310 - p1)
         a = int(250 * (ratio ** 1.1))
         ov_draw.line([(p1 + 2, y), (target_width - p1 - 2, y)], fill=(12, 8, 10, a))
-        
+
     ov_draw.line([(p1 + 2, target_height - 310), (target_width - p1 - 2, target_height - 310)], fill=(180, 140, 60, 240), width=2)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ОСТАВЬ НАДЕЖДУ, ВСЯК СЮДА ВХОДЯЩИЙ"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Тайный орден анонимных еретиков ждет тебя."))
-    
+
     max_text_w = target_width - 240
     hl_font_size = 34
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1508,11 +1505,11 @@ def _render_layout_dark_gothic_scroll(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font_size = 20
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     start_y = target_height - 40 - (len(hl_lines)*(hl_font_size+6)) - (len(sub_lines)*(sub_font_size+6)) - 30
     curr_y = start_y
     for line in hl_lines:
@@ -1520,30 +1517,30 @@ def _render_layout_dark_gothic_scroll(
             ov_draw.text((42 + ox, curr_y + oy), line, font=hl_font, fill=(100, 12, 18, 255))
         ov_draw.text((42, curr_y), line, font=hl_font, fill=(235, 195, 85, 255))
         curr_y += hl_font_size + 6
-        
+
     curr_y += 6
     for line in sub_lines:
         for ox, oy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
             ov_draw.text((42 + ox, curr_y + oy), line, font=sub_font, fill=(0, 0, 0, 255))
         ov_draw.text((42, curr_y), line, font=sub_font, fill=(240, 235, 225, 255))
         curr_y += sub_font_size + 6
-        
+
     ov_draw.text((42, target_height - 42), f"+ SIGILLUM HERETICUM: {bot_username} +", font=ImageFont.truetype(MAIN_FONT, 15), fill=(210, 165, 60, 255))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#dfb74a", back_color="#140c0e")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - qr_w - 38
     qr_box_y = target_height - qr_h - 52
-    
+
     ov_draw.rectangle([qr_box_x - 6, qr_box_y - 6, qr_box_x + qr_w + 6, qr_box_y + qr_h + 6], fill=(16, 10, 12, 255), outline=(190, 150, 60, 255), width=2)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
-    
+
     qtag_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 12)
     qtag = "+ SIGILLUM +"
     qtw = ov_draw.textlength(qtag, font=qtag_font)
     ov_draw.text((qr_box_x + (qr_w - qtw)//2, qr_box_y + qr_h + 8), qtag, font=qtag_font, fill=(225, 185, 75, 255))
-    
+
     return Image.alpha_composite(darkened.convert("RGBA"), overlay).convert("RGB")
 
 def _render_layout_brutalist_poster(
@@ -1558,52 +1555,52 @@ def _render_layout_brutalist_poster(
     """Layout 10: Raw Swiss Brutalism with stark mono, acid yellow, hazard stripes and raw architectural grid."""
     canvas = Image.new("RGB", (target_width, target_height), (240, 240, 240))
     draw = ImageDraw.Draw(canvas)
-    
+
     # Outer frame: 8px heavy black border
     draw.rectangle([0, 0, target_width - 1, target_height - 1], outline=(0, 0, 0), width=8)
-    
+
     # Top header bar: Acid Yellow with Hazard Stripes
     top_h = 56
     draw.rectangle([8, 8, target_width - 8, top_h], fill=(255, 230, 0))
     draw.line([(8, top_h), (target_width - 8, top_h)], fill=(0, 0, 0), width=4)
-    
+
     for sx in range(target_width - 160, target_width - 12, 14):
         draw.polygon([(sx, 8), (sx + 8, 8), (sx - 4, top_h), (sx - 12, top_h)], fill=(0, 0, 0))
-        
+
     logo_size = 40
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     canvas.paste(logo_resized, (18, 12), logo_resized)
-    
+
     head_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 24)
     draw.text((68, 18), f"TGACH://BRUTAL_NET /{board_id}/", font=head_font, fill=(0, 0, 0))
-    
+
     # Image frame in middle with aspect-ratio preserving crop
     pad = 20
     img_w = target_width - pad * 2
     img_h = int(target_height * 0.48)
     im_cropped = fit_and_crop(base.convert("RGB"), img_w, img_h)
-    
+
     im_enh = ImageEnhance.Color(im_cropped).enhance(0.4)
     im_enh = ImageEnhance.Contrast(im_enh).enhance(1.2)
     canvas.paste(im_enh, (pad, top_h + 16))
-    
+
     draw.rectangle([pad, top_h + 16, pad + img_w, top_h + 16 + img_h], outline=(0, 0, 0), width=4)
-    
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "RAW INDUSTRIAL /b/")).upper()
     b_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 18)
     b_bbox = draw.textbbox((0, 0), badge_clean, font=b_font)
     bw = (b_bbox[2] - b_bbox[0]) + 16
     draw.rectangle([pad + 8, top_h + 24, pad + 8 + bw, top_h + 52], fill=(0, 0, 0))
     draw.text((pad + 16, top_h + 28), badge_clean, font=b_font, fill=(255, 230, 0))
-    
+
     # Bottom container: Stark Black
     bottom_y = top_h + 16 + img_h + 14
     draw.rectangle([pad, bottom_y, target_width - pad, target_height - pad], fill=(12, 12, 14))
     draw.rectangle([pad, bottom_y, target_width - pad, target_height - pad], outline=(0, 0, 0), width=4)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "НУЛЕВАЯ ТОЛЕРАНТНОСТЬ К СОЕ")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Сырая правда без цензуры. Вступай."))
-    
+
     max_text_w = target_width - 250
     hl_font_size = 32
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1612,37 +1609,37 @@ def _render_layout_brutalist_poster(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, draw)
-        
+
     sub_font_size = 18
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, draw)
-    
+
     curr_y = bottom_y + 18
     for line in hl_lines:
         draw.text((pad + 18, curr_y), line, font=hl_font, fill=(255, 230, 0))
         curr_y += hl_font_size + 4
-        
+
     curr_y += 6
     for line in sub_lines:
         draw.text((pad + 18, curr_y), line, font=sub_font, fill=(240, 240, 240))
         curr_y += sub_font_size + 4
-        
+
     draw.text((pad + 18, target_height - pad - 26), f"NODE://TG_{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 14), fill=(160, 160, 160))
-    
+
     # Inverted High-Contrast QR Code (Acid Yellow on Black)
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#ffe600", back_color="#0c0c0e")
     qr_w, qr_h = qr_img.size
     qr_box_x = target_width - pad - qr_w - 16
     qr_box_y = bottom_y + 16
-    
+
     draw.rectangle([qr_box_x - 4, qr_box_y - 4, qr_box_x + qr_w + 4, qr_box_y + qr_h + 4], fill=(12, 12, 14), outline=(255, 230, 0), width=2)
     canvas.paste(qr_img, (qr_box_x, qr_box_y))
-    
+
     q_tag = "[ACCESS_NODE]"
     qw = draw.textlength(q_tag, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 11))
     draw.text((qr_box_x + (qr_w - qw)//2, qr_box_y + qr_h + 6), q_tag, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 11), fill=(255, 230, 0))
-    
+
     return canvas
 
 def _render_layout_comic_bubble(
@@ -1656,50 +1653,50 @@ def _render_layout_comic_bubble(
 ) -> Image.Image:
     """Layout 11: Pop-Art Action Comic with speech bubble, action badges and vibrant high-energy layout."""
     canvas = Image.new("RGBA", (target_width, target_height), (20, 20, 30, 255))
-    
+
     base_conv = ImageEnhance.Color(base.convert("RGB")).enhance(1.3)
     base_conv = ImageEnhance.Contrast(base_conv).enhance(1.15)
-    
+
     overlay = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    
+
     # Top Comic Header
     ov_draw.rectangle([0, 0, target_width, 64], fill=(255, 215, 0, 255), outline=(0, 0, 0, 255), width=3)
-    
+
     logo_size = 46
     logo_resized = tgach_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
     overlay.paste(logo_resized, (18, 9), logo_resized)
-    
+
     ch_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 28)
     ov_draw.text((76, 16), f"TGACH COMICS: ISSUE #{board_id.upper()}", font=ch_font, fill=(0, 0, 0, 255))
-    
+
     # Action Badge in corner
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "ВБРОС ВЕКА!")).upper()
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     badge_bbox = ov_draw.textbbox((0, 0), badge_clean, font=badge_font)
     bw = (badge_bbox[2] - badge_bbox[0]) + 20
-    
+
     ov_draw.rectangle([target_width - bw - 28, 14, target_width - 16, 52], fill=(235, 30, 60, 255), outline=(0, 0, 0, 255), width=2)
     ov_draw.text((target_width - bw - 18, 18), badge_clean, font=badge_font, fill=(255, 255, 255, 255))
-    
+
     # Bottom Speech Bubble Container
     bubble_y = target_height - 290
     bubble_x = 24
     bubble_w = target_width - 48
     bubble_h = 260
-    
+
     tail_pts = [(120, bubble_y), (140, bubble_y - 28), (170, bubble_y)]
     ov_draw.polygon([(x + 5, y + 5) for x, y in tail_pts], fill=(0, 0, 0, 160))
     ov_draw.rounded_rectangle([bubble_x + 6, bubble_y + 6, bubble_x + bubble_w + 6, bubble_y + bubble_h + 6], radius=24, fill=(0, 0, 0, 160))
-    
+
     ov_draw.polygon(tail_pts, fill=(255, 255, 255, 255))
     ov_draw.rounded_rectangle([bubble_x, bubble_y, bubble_x + bubble_w, bubble_y + bubble_h], radius=24, fill=(255, 255, 255, 255), outline=(0, 0, 0, 255), width=4)
     ov_draw.line([(120, bubble_y), (140, bubble_y - 28)], fill=(0, 0, 0, 255), width=4)
     ov_draw.line([(140, bubble_y - 28), (170, bubble_y)], fill=(0, 0, 0, 255), width=4)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "КТО ЗДЕСЬ СЫЧ? Я СЫЧ!"))
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Главный анонимный комикс рунета прямо в твоем телефоне."))
-    
+
     max_text_w = bubble_w - 180
     hl_font_size = 34
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1708,37 +1705,37 @@ def _render_layout_comic_bubble(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_text_w, ov_draw)
-        
+
     sub_font_size = 20
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_text_w, ov_draw)
-    
+
     curr_y = bubble_y + 24
     for line in hl_lines:
         ov_draw.text((bubble_x + 24, curr_y), line, font=hl_font, fill=(225, 20, 45, 255))
         curr_y += hl_font_size + 4
-        
+
     curr_y += 6
     for line in sub_lines:
         ov_draw.text((bubble_x + 24, curr_y), line, font=sub_font, fill=(30, 30, 35, 255))
         curr_y += sub_font_size + 4
-        
+
     ov_draw.text((bubble_x + 24, bubble_y + bubble_h - 32), f">> JOIN: {bot_username}", font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 16), fill=(0, 136, 204, 255))
-    
+
     # Comic Barcode / QR Code
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#000000", back_color="#ffffff")
     qr_w, qr_h = qr_img.size
     qr_box_x = bubble_x + bubble_w - qr_w - 22
     qr_box_y = bubble_y + 22
-    
+
     ov_draw.rectangle([qr_box_x - 4, qr_box_y - 4, qr_box_x + qr_w + 4, qr_box_y + qr_h + 4], fill=(255, 255, 255, 255), outline=(0, 0, 0, 255), width=3)
     overlay.paste(qr_img, (qr_box_x, qr_box_y), qr_img)
-    
+
     lbl = "|| SCAN NOW ||"
     lw = ov_draw.textlength(lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11))
     ov_draw.text((qr_box_x + (qr_w - lw)//2, qr_box_y + qr_h + 8), lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11), fill=(0, 0, 0, 255))
-    
+
     return Image.alpha_composite(base_conv.convert("RGBA"), overlay).convert("RGB")
 
 
@@ -1754,27 +1751,27 @@ def _render_layout_biohazard_zone(
     """Layout 12: Toxic post-apoc biohazard zone with hazard stripes, radiation meter and acid green highlights."""
     canvas = Image.new("RGB", (target_width, target_height), (18, 16, 14))
     draw = ImageDraw.Draw(canvas)
-    
+
     draw.rectangle([0, 0, target_width - 1, target_height - 1], outline=(12, 10, 8), width=6)
-    
+
     top_h = 56
     draw.rectangle([6, 6, target_width - 6, top_h], fill=(26, 22, 16))
     stripe_w = 16
     for x in range(6, target_width, stripe_w * 2):
         draw.polygon([(x, 6), (x + stripe_w, 6), (x + stripe_w - 12, top_h), (x - 12, top_h)], fill=(255, 185, 0))
-        
+
     draw.rectangle([16, 10, 410, top_h - 6], fill=(12, 11, 10), outline=(255, 185, 0), width=2)
     logo_sz = 30
     logo_res = tgach_logo.resize((logo_sz, logo_sz), Image.Resampling.LANCZOS)
     canvas.paste(logo_res, (22, 13), logo_res)
-    
+
     h_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     draw.text((58, 15), f"BIOHAZARD ZONE /{board_id}/", font=h_font, fill=(57, 255, 20))
-    
+
     draw.rectangle([target_width - 165, 10, target_width - 16, top_h - 6], fill=(12, 11, 10), outline=(255, 50, 50), width=2)
     rad_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 13)
     draw.text((target_width - 155, 16), "RAD: 950 R/h", font=rad_font, fill=(255, 60, 60))
-    
+
     pad = 16
     img_w = target_width - pad * 2
     img_h = int(target_height * 0.54)
@@ -1782,24 +1779,24 @@ def _render_layout_biohazard_zone(
     im_crop = ImageEnhance.Color(im_crop).enhance(0.75)
     im_crop = ImageEnhance.Contrast(im_crop).enhance(1.2)
     canvas.paste(im_crop, (pad, top_h + 12))
-    
+
     draw.rectangle([pad, top_h + 12, pad + img_w, top_h + 12 + img_h], outline=(190, 150, 20), width=3)
     for cx, cy in [(pad+4, top_h+16), (pad+img_w-8, top_h+16), (pad+4, top_h+12+img_h-8), (pad+img_w-8, top_h+12+img_h-8)]:
         draw.ellipse([cx, cy, cx+4, cy+4], fill=(210, 200, 170), outline=(40, 30, 20))
-        
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "ТОКСИЧНАЯ ЗОНА")).upper()
     b_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 17)
     bb = draw.textbbox((0, 0), badge_clean, font=b_font)
     bw = (bb[2] - bb[0]) + 20
     draw.rectangle([pad + 10, top_h + 20, pad + 10 + bw, top_h + 48], fill=(12, 11, 10), outline=(57, 255, 20), width=2)
     draw.text((pad + 20, top_h + 24), f"! {badge_clean}", font=b_font, fill=(57, 255, 20))
-    
+
     bot_y = top_h + 12 + img_h + 10
     draw.rectangle([pad, bot_y, target_width - pad, target_height - pad], fill=(14, 13, 11), outline=(80, 70, 50), width=2)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАРАЖЕНИЕ ДВАЧЕМ 100%")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Уровень токсичности зашкаливает. Пиздуй в тред."))
-    
+
     max_tw = target_width - 240
     hl_font_size = 32
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -1808,23 +1805,23 @@ def _render_layout_biohazard_zone(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
-        
+
     sub_font_size = 18
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_tw, draw)
-    
+
     curr_y = bot_y + 16
     for line in hl_lines:
         draw.text((pad + 16, curr_y), line, font=hl_font, fill=(255, 190, 0))
         curr_y += hl_font_size + 4
-        
+
     curr_y += 6
     for line in sub_lines:
         draw.text((pad + 16, curr_y), line, font=sub_font, fill=(210, 230, 200))
         curr_y += sub_font_size + 4
-        
+
     draw.text((pad + 16, target_height - pad - 24), f"DOSIMETER_ID://{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 13), fill=(57, 255, 20))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#39ff14", back_color="#0e0d0b")
     qr_w, qr_h = qr_img.size
@@ -1832,11 +1829,11 @@ def _render_layout_biohazard_zone(
     qr_by = bot_y + 14
     draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(10, 9, 8), outline=(57, 255, 20), width=2)
     canvas.paste(qr_img, (qr_bx, qr_by))
-    
+
     q_lbl = "DANGER"
     qw = draw.textlength(q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11))
     draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 5), q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11), fill=(255, 190, 0))
-    
+
     return canvas
 
 
@@ -1852,18 +1849,18 @@ def _render_layout_ascii_terminal(
     """Layout 13: Pure retro green-on-black DOS/BBS terminal with ASCII borders and phosphor glow."""
     canvas = Image.new("RGB", (target_width, target_height), (4, 10, 5))
     draw = ImageDraw.Draw(canvas)
-    
+
     for y in range(0, target_height, 4):
         draw.line([(0, y), (target_width, y)], fill=(2, 6, 3), width=1)
-        
+
     draw.rectangle([10, 10, target_width - 11, target_height - 11], outline=(0, 220, 70), width=2)
     draw.rectangle([14, 14, target_width - 15, target_height - 15], outline=(0, 140, 45), width=1)
-    
+
     top_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 16)
     draw.text((24, 22), f"C:\\DVACH\\BBS\\TGACH.EXE -BOARD /{board_id}/", font=top_font, fill=(0, 255, 90))
     draw.text((target_width - 175, 22), "[V3.20_640KB_OK]", font=top_font, fill=(0, 180, 60))
     draw.line([(14, 48), (target_width - 15, 48)], fill=(0, 220, 70), width=2)
-    
+
     pad_x = 20
     img_w = target_width - pad_x * 2
     img_h = int(target_height * 0.53)
@@ -1871,24 +1868,24 @@ def _render_layout_ascii_terminal(
     im_gray = ImageOps.grayscale(im_crop)
     im_phos = ImageOps.colorize(im_gray, black=(0, 15, 5), white=(0, 255, 80))
     canvas.paste(im_phos, (pad_x, 56))
-    
+
     draw.rectangle([pad_x, 56, pad_x + img_w, 56 + img_h], outline=(0, 220, 70), width=2)
-    
+
     for cx, cy in [(pad_x-4, 52), (pad_x+img_w-4, 52), (pad_x-4, 52+img_h), (pad_x+img_w-4, 52+img_h)]:
         draw.text((cx, cy), "+", font=top_font, fill=(0, 255, 120))
-        
+
     badge_clean = clean_text_for_font(slogan_dict.get("badge", "TERMINAL /b/")).upper()
     b_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 15)
     b_tag = f"[SYS_OP: {badge_clean}]"
     draw.rectangle([pad_x + 10, 64, pad_x + 10 + draw.textlength(b_tag, font=b_font) + 10, 88], fill=(0, 25, 10), outline=(0, 255, 90), width=1)
     draw.text((pad_x + 15, 68), b_tag, font=b_font, fill=(0, 255, 90))
-    
+
     bot_y = 56 + img_h + 10
     draw.rectangle([pad_x, bot_y, target_width - pad_x, target_height - 18], fill=(2, 14, 6), outline=(0, 160, 50), width=2)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "СВЯЗЬ С СЕРВЕРОМ УСТАНОВЛЕНА")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Введи команду или сканируй матрицу."))
-    
+
     max_tw = target_width - 240
     hl_font_size = 28
     hl_font = ImageFont.truetype(IMPACT_FONT or MONO_FONT or MAIN_FONT, hl_font_size)
@@ -1897,23 +1894,23 @@ def _render_layout_ascii_terminal(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MONO_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
-        
+
     sub_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 16)
     sub_lines = wrap_text(f"> {subline_clean}", sub_font, max_tw, draw)
-    
+
     curr_y = bot_y + 12
     for line in hl_lines:
         draw.text((pad_x + 16, curr_y), line, font=hl_font, fill=(0, 255, 100))
         curr_y += hl_font_size + 4
-        
+
     curr_y += 4
     for line in sub_lines:
         draw.text((pad_x + 16, curr_y), line, font=sub_font, fill=(150, 240, 170))
         curr_y += 20
-        
+
     draw.text((pad_x + 16, curr_y + 4), f"C:\\> CONNECT {bot_username} _", font=sub_font, fill=(0, 255, 100))
     draw.text((pad_x + 16, target_height - 34), "[PORT: 23/TELNET] [BAUD: 56K] [STATUS: ONLINE]", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 11), fill=(0, 170, 60))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#00ff66", back_color="#020e06")
     qr_w, qr_h = qr_img.size
@@ -1921,11 +1918,11 @@ def _render_layout_ascii_terminal(
     qr_by = bot_y + 12
     draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(0, 10, 4), outline=(0, 255, 100), width=2)
     canvas.paste(qr_img, (qr_bx, qr_by))
-    
+
     q_lbl = "[MATRIX_NET]"
     qw = draw.textlength(q_lbl, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 10))
     draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 6), q_lbl, font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 10), fill=(0, 255, 100))
-    
+
     return canvas
 
 
@@ -1941,13 +1938,13 @@ def _render_layout_y2k_win98(
     """Layout 14: Windows 98/2000 retro OS dialog with 3D beveled borders, navy titlebar, and system buttons."""
     canvas = Image.new("RGB", (target_width, target_height), (0, 128, 128))
     draw = ImageDraw.Draw(canvas)
-    
+
     margin = 16
     win_w = target_width - margin * 2
     win_h = target_height - margin * 2
     wx1, wy1 = margin, margin
     wx2, wy2 = margin + win_w, margin + win_h
-    
+
     draw.rectangle([wx1, wy1, wx2, wy2], fill=(192, 192, 192))
     draw.line([(wx1, wy1), (wx2, wy1)], fill=(255, 255, 255), width=3)
     draw.line([(wx1, wy1), (wx1, wy2)], fill=(255, 255, 255), width=3)
@@ -1955,7 +1952,7 @@ def _render_layout_y2k_win98(
     draw.line([(wx1, wy2), (wx2, wy2)], fill=(0, 0, 0), width=3)
     draw.line([(wx2 - 2, wy1 + 2), (wx2 - 2, wy2 - 2)], fill=(128, 128, 128), width=2)
     draw.line([(wx1 + 2, wy2 - 2), (wx2 - 2, wy2 - 2)], fill=(128, 128, 128), width=2)
-    
+
     tb_h = 34
     tb_y1 = wy1 + 4
     tb_y2 = tb_y1 + tb_h
@@ -1965,14 +1962,14 @@ def _render_layout_y2k_win98(
         g = int(0 * (1 - ratio) + 132 * ratio)
         b = int(128 * (1 - ratio) + 208 * ratio)
         draw.line([(x, tb_y1), (x, tb_y2)], fill=(r, g, b), width=1)
-        
+
     logo_sz = 22
     logo_res = tgach_logo.resize((logo_sz, logo_sz), Image.Resampling.LANCZOS)
     canvas.paste(logo_res, (wx1 + 8, tb_y1 + 6), logo_res)
-    
+
     tb_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 17)
     draw.text((wx1 + 36, tb_y1 + 7), f"Dvach OS - [/{board_id}/ Fatal Alert: Reality Not Found]", font=tb_font, fill=(255, 255, 255))
-    
+
     btn_w, btn_h = 20, 20
     bx = wx2 - 10 - btn_w
     by = tb_y1 + 7
@@ -1986,7 +1983,7 @@ def _render_layout_y2k_win98(
         sw = draw.textlength(sym, font=s_font)
         draw.text((bx + (btn_w - sw)//2, by + 2), sym, font=s_font, fill=(0, 0, 0))
         bx -= btn_w + 4
-        
+
     pad = 14
     im_x1 = wx1 + pad
     im_y1 = tb_y2 + 10
@@ -1994,21 +1991,21 @@ def _render_layout_y2k_win98(
     img_h = int(win_h * 0.54)
     im_crop = fit_and_crop(base.convert("RGB"), img_w, img_h)
     canvas.paste(im_crop, (im_x1, im_y1))
-    
+
     draw.line([(im_x1 - 2, im_y1 - 2), (im_x1 + img_w + 2, im_y1 - 2)], fill=(128, 128, 128), width=2)
     draw.line([(im_x1 - 2, im_y1 - 2), (im_x1 - 2, im_y1 + img_h + 2)], fill=(128, 128, 128), width=2)
     draw.line([(im_x1 + img_w + 2, im_y1 - 2), (im_x1 + img_w + 2, im_y1 + img_h + 2)], fill=(255, 255, 255), width=2)
     draw.line([(im_x1 - 2, im_y1 + img_h + 2), (im_x1 + img_w + 2, im_y1 + img_h + 2)], fill=(255, 255, 255), width=2)
-    
+
     bot_y1 = im_y1 + img_h + 12
     icon_sz = 40
     draw.ellipse([im_x1 + 4, bot_y1, im_x1 + 4 + icon_sz, bot_y1 + icon_sz], fill=(220, 20, 20), outline=(0, 0, 0), width=2)
     ic_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 26)
     draw.text((im_x1 + 17, bot_y1 + 4), "X", font=ic_font, fill=(255, 255, 255))
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "КРИТИЧЕСКИЙ СБОЙ В РЕАЛЕ")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Нажмите 'Зайти' для аварийного перехода в Тгач."))
-    
+
     text_x = im_x1 + icon_sz + 16
     max_tw = win_w - (icon_sz + 36) - 165
     hl_font_size = 28
@@ -2018,10 +2015,10 @@ def _render_layout_y2k_win98(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
-        
+
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 16)
     sub_lines = wrap_text(subline_clean, sub_font, max_tw, draw)
-    
+
     cy = bot_y1
     for line in hl_lines:
         draw.text((text_x, cy), line, font=hl_font, fill=(0, 0, 0))
@@ -2030,7 +2027,7 @@ def _render_layout_y2k_win98(
     for line in sub_lines:
         draw.text((text_x, cy), line, font=sub_font, fill=(50, 50, 50))
         cy += 20
-        
+
     btn_w2, btn_h2 = 120, 32
     btn_x = text_x
     btn_y = cy + 10
@@ -2042,7 +2039,7 @@ def _render_layout_y2k_win98(
     b_txt = "OK (Зайти)"
     bw2 = draw.textlength(b_txt, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14))
     draw.text((btn_x + (btn_w2 - bw2)//2, btn_y + 7), b_txt, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14), fill=(0, 0, 0))
-    
+
     btn_x2 = btn_x + btn_w2 + 10
     draw.rectangle([btn_x2, btn_y, btn_x2 + btn_w2, btn_y + btn_h2], fill=(192, 192, 192))
     draw.line([(btn_x2, btn_y), (btn_x2 + btn_w2, btn_y)], fill=(255, 255, 255), width=2)
@@ -2052,7 +2049,7 @@ def _render_layout_y2k_win98(
     b_txt2 = "Отмена"
     bw3 = draw.textlength(b_txt2, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14))
     draw.text((btn_x2 + (btn_w2 - bw3)//2, btn_y + 7), b_txt2, font=ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 14), fill=(0, 0, 0))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#000080", back_color="#ffffff")
     qr_w, qr_h = qr_img.size
@@ -2062,17 +2059,17 @@ def _render_layout_y2k_win98(
     draw.line([(qr_bx - 4, qr_by - 4), (qr_bx + qr_w + 4, qr_by - 4)], fill=(128, 128, 128), width=2)
     draw.line([(qr_bx - 4, qr_by - 4), (qr_bx - 4, qr_by + qr_h + 4)], fill=(128, 128, 128), width=2)
     canvas.paste(qr_img, (qr_bx, qr_by))
-    
+
     q_lbl = "Link_QR.lnk"
     qw = draw.textlength(q_lbl, font=ImageFont.truetype(MAIN_FONT, 12))
     draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 5), q_lbl, font=ImageFont.truetype(MAIN_FONT, 12), fill=(0, 0, 128))
-    
+
     sb_y = wy2 - 24
     draw.line([(wx1 + 4, sb_y), (wx2 - 4, sb_y)], fill=(128, 128, 128), width=1)
     draw.line([(wx1 + 4, sb_y + 1), (wx2 - 4, sb_y + 1)], fill=(255, 255, 255), width=1)
     draw.text((wx1 + 10, sb_y + 4), f"Ready | 1 Object(s) selected | {bot_username}", font=ImageFont.truetype(MAIN_FONT, 12), fill=(60, 60, 60))
     draw.text((wx2 - 120, sb_y + 4), "My Computer", font=ImageFont.truetype(MAIN_FONT, 12), fill=(60, 60, 60))
-    
+
     return canvas
 
 
@@ -2088,21 +2085,21 @@ def _render_layout_schizo_collage(
     """Layout 15: DIY Punk Xerox Zine / Schizo Riot collage with torn duct tape, high contrast b&w grain, and blood red stencil."""
     canvas = Image.new("RGB", (target_width, target_height), (228, 224, 216))
     draw = ImageDraw.Draw(canvas)
-    
+
     draw.rectangle([6, 6, target_width - 7, target_height - 7], outline=(15, 15, 15), width=6)
-    
+
     top_h = 56
     draw.rectangle([12, 12, target_width - 12, top_h], fill=(16, 16, 18))
     draw.polygon([(6, 12), (64, 6), (48, 36), (6, 32)], fill=(180, 30, 40))
     draw.polygon([(target_width - 64, 6), (target_width - 6, 12), (target_width - 6, 32), (target_width - 48, 36)], fill=(180, 30, 40))
-    
+
     logo_sz = 32
     logo_res = tgach_logo.resize((logo_sz, logo_sz), Image.Resampling.LANCZOS)
     canvas.paste(logo_res, (34, 16), logo_res)
-    
+
     th_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 22)
     draw.text((76, 18), f"ШИЗО-ВЕСТНИК /{board_id}/ : СВЕРХСЕКРЕТНО", font=th_font, fill=(255, 245, 230))
-    
+
     pad = 18
     img_w = target_width - pad * 2
     img_h = int(target_height * 0.54)
@@ -2111,9 +2108,9 @@ def _render_layout_schizo_collage(
     im_bw = ImageEnhance.Contrast(im_bw).enhance(1.6)
     im_bw = im_bw.convert("RGB")
     canvas.paste(im_bw, (pad, top_h + 12))
-    
+
     draw.rectangle([pad, top_h + 12, pad + img_w, top_h + 12 + img_h], outline=(15, 15, 15), width=4)
-    
+
     stamp_w, stamp_h = 240, 40
     stamp_x = pad + 14
     stamp_y = top_h + 22
@@ -2121,13 +2118,13 @@ def _render_layout_schizo_collage(
     st_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     st_clean = clean_text_for_font(slogan_dict.get("badge", "ОДОБРЕНО ШИЗОЙ")).upper()
     draw.text((stamp_x + 12, stamp_y + 8), f"* {st_clean} *", font=st_font, fill=(255, 255, 255))
-    
+
     bot_y = top_h + 12 + img_h + 10
     draw.rectangle([pad, bot_y, target_width - pad, target_height - pad], fill=(20, 20, 22), outline=(15, 15, 15), width=3)
-    
+
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "САНИТАРЫ УЖЕ БЕССИЛЬНЫ")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Твой диагноз подтвержден на Дваче. Пиздуй в палату."))
-    
+
     max_tw = target_width - 240
     hl_font_size = 32
     hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
@@ -2136,25 +2133,25 @@ def _render_layout_schizo_collage(
         hl_font_size -= 4
         hl_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, hl_font_size)
         hl_lines = wrap_text(headline_clean, hl_font, max_tw, draw)
-        
+
     sub_font_size = 18
     sub_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, sub_font_size)
     sub_lines = wrap_text(subline_clean, sub_font, max_tw, draw)
-    
+
     curr_y = bot_y + 14
     for line in hl_lines:
         lw = draw.textlength(line, font=hl_font)
         draw.rectangle([pad + 14, curr_y - 2, pad + 18 + lw, curr_y + hl_font_size + 4], fill=(225, 29, 72))
         draw.text((pad + 16, curr_y), line, font=hl_font, fill=(255, 255, 255))
         curr_y += hl_font_size + 6
-        
+
     curr_y += 4
     for line in sub_lines:
         draw.text((pad + 16, curr_y), line, font=sub_font, fill=(230, 225, 215))
         curr_y += sub_font_size + 4
-        
+
     draw.text((pad + 16, target_height - pad - 24), f"ZINE://DVACH_{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 13), fill=(225, 29, 72))
-    
+
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#e11d48", back_color="#121214")
     qr_w, qr_h = qr_img.size
@@ -2162,11 +2159,11 @@ def _render_layout_schizo_collage(
     qr_by = bot_y + 12
     draw.rectangle([qr_bx - 4, qr_by - 4, qr_bx + qr_w + 4, qr_by + qr_h + 4], fill=(12, 12, 14), outline=(225, 29, 72), width=2)
     canvas.paste(qr_img, (qr_bx, qr_by))
-    
+
     q_lbl = "SCHIZO_KEY"
     qw = draw.textlength(q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11))
     draw.text((qr_bx + (qr_w - qw)//2, qr_by + qr_h + 5), q_lbl, font=ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 11), fill=(225, 29, 72))
-    
+
     return canvas
 
 
@@ -2289,21 +2286,21 @@ def build_invite_image_card(
     Renders a complete, high-quality graphic invite card using one of 12 distinct layouts.
     """
     target_width, target_height = 800, 800
-    
+
     if base_image is None:
         base = create_procedural_background(target_width, target_height, style=random.randint(0, 1))
     else:
         base = fit_and_crop(base_image.convert("RGB"), target_width, target_height)
         enhancer = ImageEnhance.Brightness(base)
         base = enhancer.enhance(0.72)
-    
+
     tgach_logo = draw_tgach_logo(64)
-    
+
     raw_input_text = custom_text or text
     if isinstance(slogan_dict, str):
         raw_input_text = slogan_dict
         slogan_dict = None
-        
+
     if not slogan_dict:
         if raw_input_text:
             slogan_dict = {
@@ -2313,9 +2310,9 @@ def build_invite_image_card(
             }
         else:
             slogan_dict = random.choice(IMAGE_SLOGANS)
-            
+
     resolved_style = resolve_layout_style(layout_style)
-        
+
     if resolved_style == 1:
         final_img = _render_layout_demotivator(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
     elif resolved_style == 2:
@@ -2348,7 +2345,7 @@ def build_invite_image_card(
         final_img = _render_layout_schizo_collage(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
     else:
         final_img = _render_layout_cyber_board(base, target_width, target_height, slogan_dict, board_id, bot_username, tgach_logo)
-        
+
     buf = io.BytesIO()
     final_img.save(buf, format="JPEG", quality=92, optimize=True)
     buf.seek(0)
@@ -2400,19 +2397,19 @@ def render_custom_demotivator(
     target_width, target_height = 800, 850
     canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
     draw = ImageDraw.Draw(canvas)
-    
+
     img_box_w = 680
     img_box_h = 520
     img_box_x = (target_width - img_box_w) // 2
     img_box_y = 50
-    
+
     if base_image is None:
         img_content = create_procedural_background(img_box_w, img_box_h, style=1)
     else:
         img_content = fit_and_crop(base_image.convert("RGB"), img_box_w, img_box_h)
-        
+
     canvas.paste(img_content, (img_box_x, img_box_y))
-    
+
     border_pad = 6
     draw.rectangle(
         [
@@ -2424,35 +2421,35 @@ def render_custom_demotivator(
         outline=(255, 255, 255),
         width=3
     )
-    
+
     title_clean = clean_text_for_font(title.strip().upper())
     subtitle_clean = clean_text_for_font(subtitle.strip()) if subtitle else ""
-    
+
     title_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 38)
     sub_font = ImageFont.truetype(MAIN_FONT, 20)
-    
+
     title_lines = wrap_text(title_clean, title_font, target_width - 80, draw)
     sub_lines = wrap_text(subtitle_clean, sub_font, target_width - 100, draw) if subtitle_clean else []
-    
+
     curr_y = img_box_y + img_box_h + 35
     for line in title_lines:
         w = draw.textlength(line, font=title_font)
         x = (target_width - w) // 2
         draw.text((x, curr_y), line, font=title_font, fill=(255, 255, 255))
         curr_y += 44
-        
+
     curr_y += 6
     for line in sub_lines:
         w = draw.textlength(line, font=sub_font)
         x = (target_width - w) // 2
         draw.text((x, curr_y), line, font=sub_font, fill=(220, 220, 220))
         curr_y += 26
-        
+
     logo = draw_tgach_logo(36)
     logo_w, logo_h = logo.size
     canvas.paste(logo, (target_width - logo_w - 20, target_height - logo_h - 15), logo)
     draw.text((target_width - logo_w - 180, target_height - 28), f"ТГАЧ /b/ • {bot_username}", font=ImageFont.truetype(MAIN_FONT, 13), fill=(120, 120, 120))
-    
+
     buf = io.BytesIO()
     canvas.save(buf, format="JPEG", quality=93, optimize=True)
     buf.seek(0)

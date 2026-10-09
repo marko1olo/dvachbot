@@ -924,7 +924,7 @@ def polish_transform(text: str, header: str | None = None) -> tuple[str, str | b
 
     # ── Pipeline Stage 7: Pseudo-Polish Orthography ──────────────────
     result = _stage_pseudo_polish(result)
-    
+
     # ── Visual generation chance ─────────────────────────────────────
     if len(text) < 180 and random.random() < 0.25:
         image_bytes = create_visual_post('polish', result, header)

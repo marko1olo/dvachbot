@@ -5,13 +5,10 @@ Adversarial Empirical Stress Testing Suite for get_board_chunk and _format_post_
 """
 
 import time
-import pytest
 import unittest
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timezone
 import main
-import ai_manager
-import post_helpers
 from post_helpers import _format_post_text, _format_media_context, _MEDIA_DESC_CACHE
 
 UTC = timezone.utc
@@ -143,7 +140,7 @@ class TestChallengerChunkStress(unittest.IsolatedAsyncioTestCase):
         Adversarial micro-benchmarking: breaks down exact CPU time spent in each stage of chunk compilation.
         """
         await self._populate_payload(200, 50, "breakdown")
-        
+
         # Breakdown steps for 200 posts
         # 1. Post filtering and sorting
         t0 = time.perf_counter()
@@ -208,7 +205,7 @@ class TestChallengerChunkStress(unittest.IsolatedAsyncioTestCase):
             cleaned_chunk = "\n".join(limited_lines)
         t_accum = ((time.perf_counter() - t0) / 100) * 1000
 
-        print(f"\n[BREAKDOWN] 200 posts micro-timing:")
+        print("\n[BREAKDOWN] 200 posts micro-timing:")
         print(f"  1. Storage scan & sort (200 posts): {t_sort:.4f} ms")
         print(f"  2. File_id extraction (200 posts):   {t_fids:.4f} ms")
         print(f"  3. Formatting & Anon naming (200p):  {t_format:.4f} ms")

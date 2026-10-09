@@ -1,21 +1,16 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
-from datetime import datetime, timezone
 
 import shared_state
 from shared_state import (
-    BoundedDict,
     messages_storage,
     post_to_messages,
     message_to_post,
-    storage_lock,
     _trim_post_copy_maps_unlocked,
-    _drop_post_copy_maps_unlocked,
     BroadcastConfig,
 )
 from common.config import BOT_POST_CACHE_LIMIT, BOT_COPY_CACHE_POST_LIMIT, BOT_MESSAGE_TO_POST_LIMIT
-from common.database import get_post_info_by_copy, get_post_copies, get_post_by_num
+from common.database import get_post_info_by_copy
 
 
 class TestReplyResolutionAndHydration(unittest.IsolatedAsyncioTestCase):

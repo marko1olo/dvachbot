@@ -1,16 +1,11 @@
-import asyncio
-import hashlib
 import json
 import time
-from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
 from common.database import db_transaction
-from common.db_pool import get_pool
 from site_tgach.tagging_worker import (
     get_tasks,
-    process_image_cpu,
 )
 
 
@@ -43,7 +38,7 @@ async def test_secondary_file_id_registration_via_tags_registry(isolated_test_db
     # 2. Simulate _save_tags_registry logic for fid_secondary sharing sha_primary
     updated_tags = "megumin, explosion, anime, updated"
     updated_desc = "Megumin casting explosion updated"
-    
+
     async with db_transaction(db):
         async with db.execute(
             """

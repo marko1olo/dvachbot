@@ -11,17 +11,12 @@ Empirical unit & integration test suite covering Milestone 3 fixes:
 
 import time
 import json
-import asyncio
-import re
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 
 import shared_state
 import main
-import common.bot_helpers as bh
 from common.text_utils import strip_cot_and_drafts, clean_ai_thinking, strip_thinking_tags
 from ai_manager import (
     parse_cyberchad_response,
@@ -29,7 +24,6 @@ from ai_manager import (
     parse_batch_music_roast_response,
     CYBERCHAD_RATE_LIMIT_REJECTIONS,
     _LEGACY_RATE_LIMIT_REJECTIONS,
-    RATE_LIMIT_REJECTION_MARKERS,
 )
 import handlers.message_router as mr
 from common.bot_helpers import accept_duel_logic, decline_duel_logic
@@ -38,9 +32,7 @@ from common.database import (
     add_user_global_balance,
     deduct_user_global_balance,
     get_abu_fund_total,
-    record_user_transaction,
 )
-import combat_moderation_engine as cme
 from combat_moderation_engine import (
     create_combat_appeal_session,
     callback_combat_bail,

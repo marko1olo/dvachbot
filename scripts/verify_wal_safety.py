@@ -9,7 +9,6 @@ import asyncio
 import os
 import tempfile
 import aiosqlite
-import pytest
 
 
 async def run_wal_safety_audit():

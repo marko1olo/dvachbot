@@ -1,7 +1,6 @@
 import os
 import sys
 import unittest
-import html
 import re
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,7 +9,6 @@ if PROJECT_ROOT not in sys.path:
 
 from site_tgach.main import format_post_text as format_post_text_site
 from Dubsite_tgach.main import format_post_text as format_post_text_dubsite
-from common.text_utils import sanitize_html
 
 class TestAdversarialSuiteM1Backend(unittest.TestCase):
 
@@ -31,7 +29,7 @@ class TestAdversarialSuiteM1Backend(unittest.TestCase):
         """CRITICAL REGRESSION: URLs with # fragment anchors get truncated at #"""
         raw_text = "Documentation: https://example.com/docs.html#section-install"
         res_site = format_post_text_site(raw_text)
-        
+
         self.assertIn('href="https://example.com/docs.html#section-install"', res_site, f"Truncated URL in href: {res_site}")
 
     def test_03_original_bug_corrupted_link(self):

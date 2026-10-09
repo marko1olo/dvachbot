@@ -11,18 +11,14 @@ Focus:
 """
 
 import asyncio
-import random
-import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import shared_state
-from broadcaster import _format_message_body, _format_quote_block, _format_reply_line
+from broadcaster import _format_message_body, _format_quote_block
 from handlers.message_router import (
     _CYBERCHAD_USER_LAST_DIRECT,
     _CYBERCHAD_USER_LAST_REJECT,
-    CYBERCHAD_RATE_LIMIT_REJECTIONS,
-    _is_direct_cyberchad_trigger,
     build_quick_quote_info,
     trigger_cyberchad_with_rate_limit,
 )

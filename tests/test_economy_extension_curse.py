@@ -6,15 +6,13 @@ economy_extension.py. Even though the live version comes from main.py,
 this code is part of the repository and must be tested to close coverage gaps.
 """
 
-import asyncio
-import json
 import time
 from unittest import mock
 
 import pytest
 
 from economy_extension import cmd_curse
-from tests.economy_live import BOARD, REPLY_CHAT_ID, REPLY_MESSAGE_ID, live_economy
+from tests.economy_live import BOARD, live_economy
 
 CURSER = 2001
 TARGET = 2002

@@ -11,8 +11,7 @@ Validates:
 
 import io
 import math
-import warnings
-from PIL import Image, ImageStat
+from PIL import Image
 import pytest
 
 import stats_v2

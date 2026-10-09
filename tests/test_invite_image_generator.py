@@ -7,7 +7,7 @@ def test_styles_registry():
     """Verify all 16 styles and alias resolution."""
     assert len(iig.INVITE_LAYOUT_STYLES) == 16
     assert len(iig.STYLE_NAMES) == 16
-    
+
     expected_styles = [
         "CYBER_BOARD",
         "DEMOTIVATOR_2CH",
@@ -63,7 +63,7 @@ def test_slogans_and_companion_texts_collection():
         assert "badge" in s and len(s["badge"]) > 0
         assert "headline" in s and len(s["headline"]) > 0
         assert "subline" in s and len(s["subline"]) > 0
-        
+
     assert len(iig.AUTO_POST_COMPANION_TEXTS) >= 15
     for t in iig.AUTO_POST_COMPANION_TEXTS:
         assert isinstance(t, str) and len(t) > 20
@@ -91,7 +91,7 @@ def test_all_16_styles_rendering_procedural():
         assert isinstance(buf, io.BytesIO)
         raw = buf.getvalue()
         assert len(raw) > 1000
-        
+
         img = Image.open(io.BytesIO(raw))
         assert img.format == "JPEG"
         assert img.size == (800, 800)

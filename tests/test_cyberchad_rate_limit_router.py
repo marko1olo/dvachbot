@@ -1,15 +1,13 @@
 import asyncio
-import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-from aiogram.types import Message, User, Chat
+from aiogram.types import Message, User
 
 import shared_state
 from handlers.message_router import (
     _CYBERCHAD_USER_LAST_DIRECT,
     _CYBERCHAD_USER_LAST_REJECT,
     CYBERCHAD_RATE_LIMIT_REJECTIONS,
-    CYBERCHAD_DIRECT_TRIGGER_REGEX,
     _is_direct_cyberchad_trigger,
     trigger_cyberchad_with_rate_limit,
     handle_cyberchad_rate_limit_and_trigger,

@@ -8,7 +8,6 @@ and applies brutal Cyberchad DSP audio filters via ffmpeg for Telegram Voice Not
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
 import random

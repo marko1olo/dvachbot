@@ -8,11 +8,9 @@ Tests for Upgraded Cyberchad:
 5. Replacement of legacy PersonaBot with Cyberchad in schedule_persona_reply and execute_auto_roast.
 """
 
-import os
 import json
-import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import shared_state
 from common.tts_engine import CYBERCHAD_PRESETS

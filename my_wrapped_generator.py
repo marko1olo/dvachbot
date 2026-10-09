@@ -4,23 +4,17 @@ my_wrapped_generator.py — Standalone Personalized "2ch Wrapped" Card Generator
 Produces high-resolution (1080x1080) personal analytics posters in dark cyberpunk style.
 """
 
-import os
 import io
-import time
-import json
 import sqlite3
 import contextlib
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import seaborn as sns
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 
-from common.anon_identity import get_anon_id, generate_anon_name
+from common.anon_identity import generate_anon_name
 from common.chart_lock import matplotlib_guard
 
 THEME_BG = "#0b0f17"
@@ -44,7 +38,7 @@ def fetch_user_wrapped_data(user_id: int) -> Dict[str, Any]:
     """Fetches user metrics for Wrapped generation."""
     with contextlib.closing(connect_ro_db()) as conn:
         c = conn.cursor()
-        
+
         # 1. Total Posts & Character volume
         c.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(content)), 0) FROM Posts WHERE author_id = ?", (user_id,))
         p_row = c.fetchone()
@@ -197,7 +191,7 @@ def generate_my_wrapped_poster(user_id: int) -> io.BytesIO:
         # --- Card 5: Degradation Bar ---
         ax5.set_facecolor(THEME_CARD)
         ax5.set_xticks([]); ax5.set_yticks([])
-        
+
         pct = data['cringe_pct']
         bar_color = COLOR_PINK if pct > 50 else COLOR_CYAN
         ax5.text(0.05, 0.70, "ШКАЛА ДЕГРАДАЦИИ И МАТОЕМКОСТИ:", fontsize=10, color=COLOR_TEXT_MAIN, fontweight='bold')

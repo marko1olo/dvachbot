@@ -1,16 +1,12 @@
 import pytest
 import json
-import asyncio
 import io
 from PIL import Image
 from unittest.mock import patch, MagicMock, AsyncMock
 from site_tgach.vision import (
     describe_image,
-    prepare_image_for_analysis,
     prepare_image_for_groq,
     _call_gemini_native,
-    _build_gemini_safety_settings,
-    GEMINI_SAFETY_CATEGORIES,
 )
 
 
@@ -357,7 +353,6 @@ class TestVisionCascade:
     async def test_neuro_moderator_404_resilience(self):
         """When Groq or Gemini returns 404, _safe_groq_json penalizes token and doesn't retry in tight loop."""
         from site_tgach.neuro_moderator import _safe_groq_json
-        from common.token_pool import groq_pool
         from unittest.mock import patch, AsyncMock
 
         mock_resp_404 = MagicMock()

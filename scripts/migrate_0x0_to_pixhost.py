@@ -50,7 +50,7 @@ deleted_only = 0
 BATCH = 500
 for i in range(0, len(file_ids_0x0), BATCH):
     batch = file_ids_0x0[i:i+BATCH]
-    
+
     for file_id in batch:
         # Check if already has pixhost mirror
         c.execute("SELECT 1 FROM FileMirrors WHERE file_id=? AND mirror_type='pixhost'", (file_id,))
@@ -59,7 +59,7 @@ for i in range(0, len(file_ids_0x0), BATCH):
             # Delete the 0x0 task
             c.execute("DELETE FROM MirrorQueue WHERE file_id=? AND mirror_type='0x0'", (file_id,))
             continue
-        
+
         # Check if already in pixhost queue
         c.execute("SELECT 1 FROM MirrorQueue WHERE file_id=? AND mirror_type='pixhost'", (file_id,))
         if c.fetchone():
@@ -67,7 +67,7 @@ for i in range(0, len(file_ids_0x0), BATCH):
             # Delete the 0x0 task
             c.execute("DELETE FROM MirrorQueue WHERE file_id=? AND mirror_type='0x0'", (file_id,))
             continue
-        
+
         # Check file type - pixhost only supports images, not video/audio
         c.execute("SELECT file_type FROM FileRegistry WHERE file_id=?", (file_id,))
         row = c.fetchone()
@@ -76,7 +76,7 @@ for i in range(0, len(file_ids_0x0), BATCH):
             c.execute("DELETE FROM MirrorQueue WHERE file_id=? AND mirror_type='0x0'", (file_id,))
             deleted_only += 1
             continue
-        
+
         # Insert pixhost task and delete 0x0 task
         try:
             c.execute(
@@ -87,7 +87,7 @@ for i in range(0, len(file_ids_0x0), BATCH):
             migrated += 1
         except Exception as e:
             print(f"Error for {file_id[:15]}: {e}")
-    
+
     db.commit()
     done = min(i + BATCH, len(file_ids_0x0))
     print(f"  Progress: {done}/{len(file_ids_0x0)} processed...")
@@ -95,7 +95,7 @@ for i in range(0, len(file_ids_0x0), BATCH):
 db.commit()
 db.close()
 
-print(f"\nDone!")
+print("\nDone!")
 print(f"  Migrated to pixhost: {migrated}")
 print(f"  Skipped (already mirrored): {skipped_already_mirrored}")
 print(f"  Skipped (already queued): {skipped_already_queued}")

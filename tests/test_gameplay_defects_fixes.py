@@ -2,8 +2,7 @@ import asyncio
 import json
 import time
 import pytest
-import aiosqlite
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import main
 
@@ -118,7 +117,7 @@ async def test_votemute_broadcast_spawns_for_active_users(isolated_test_db):
     """Verify votemute card broadcast triggers for active users."""
     import votemute_engine
     import shared_state
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import patch
 
     shared_state.board_data['b'] = {
         'users': {'active': {101, 102, 103, 104, 105}, 'banned': set()},

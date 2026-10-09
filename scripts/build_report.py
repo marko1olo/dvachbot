@@ -25,7 +25,7 @@ complaints = defaultdict(list)
 for post_row in posts:
     post = dict(post_row)
     content_raw = post.get('content', '')
-    
+
     text = ''
     try:
         data = json.loads(content_raw)
@@ -35,16 +35,16 @@ for post_row in posts:
             text = ' '.join(item.get('text', '') for item in data if isinstance(item, dict) and item.get('type') == 'text')
     except:
         text = str(content_raw)
-        
+
     text_lower = text.lower()
-    if len(text) < 10: 
+    if len(text) < 10:
         continue # Ignore too short messages
-        
+
     matched_cats = set()
     for cat, patterns in keywords.items():
         if any(re.search(p, text_lower) for p in patterns):
             matched_cats.add(cat)
-            
+
     if matched_cats:
         complaints[post['author_id']].append({
             'post_num': post['post_num'],
@@ -64,28 +64,28 @@ for author_id, user_complaints in complaints.items():
         if 'админ' in t or 'бот' in t or 'размуть' in t or 'почини' in t or 'баг' in t or 'ошибк' in t or 'пропал' in t or 'грабеж' in t or 'скам' in t or 'предлагаю' in t or 'верни' in t:
             is_valid = True
             break
-            
+
     # if not is_valid: continue
 
     report_md += f"## User ID: {author_id}\n\n"
     report_md += "### Complaints / Posts:\n"
     for c in user_complaints:
         report_md += f"- **Post {c['post_num']}** ({', '.join(c['categories'])}): `{c['text']}`\n"
-        
+
     cursor.execute('SELECT reason, expires_at FROM Mutes WHERE user_id = ?', (author_id,))
     mutes = cursor.fetchall()
     if mutes:
         report_md += "### Mutes found:\n"
         for m in mutes:
             report_md += f"- Reason: {m['reason']}, Expires at: {m['expires_at']}\n"
-            
+
     cursor.execute('SELECT amount, category, description, timestamp FROM UserTransactions WHERE user_id = ? AND timestamp >= ?', (author_id, time_start))
     txs = cursor.fetchall()
     if txs:
         report_md += "### Recent Transactions:\n"
         for t in txs:
             report_md += f"- [{t['timestamp']}] {t['amount']} (Cat: {t['category']}): {t['description']}\n"
-            
+
     report_md += "---\n\n"
 
 with open('c:/Users/danat/Desktop/dvachbot/draft_report.md', 'w', encoding='utf-8') as f:

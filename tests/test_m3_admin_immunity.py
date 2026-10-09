@@ -6,12 +6,9 @@ Verifies all admin exemption paths and target immunity across:
 3. main.py (BoardMiddleware banned/lockdown bypass, check_cooldown mode switches, /roast & /summarize cooldowns, handle_attack_abuse_check, combat target immunity for /shoot, /pepperspray, /rob, /curse, /partyvan, /schizopill).
 """
 
-import asyncio
 from datetime import datetime, timedelta, UTC
-import io
 import time
 import unittest
-from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import common.config
@@ -20,7 +17,6 @@ from common.spam_filter import (
     is_spam_filtered,
     analyze_message_for_spam,
     check_rate_limit,
-    _check_repeats,
     _check_cross_board_spam,
     set_spam_filter_words,
 )
@@ -192,7 +188,6 @@ class TestMainAdminImmunity(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_cooldown_mode_switch_admin_bypass(self):
         """Admins must bypass mode switch 1-hour cooldown."""
-        from aiogram import types
         from main import check_cooldown
         import shared_state
 
@@ -223,7 +218,7 @@ class TestMainAdminImmunity(unittest.IsolatedAsyncioTestCase):
 
     async def test_ai_roast_and_summarize_cooldown_admin_bypass(self):
         """Admins must bypass /roast and /summarize cooldowns."""
-        from main import cmd_roast, cmd_summarize, ROAST_COOLDOWN, SUMMARIZE_COOLDOWN
+        from main import cmd_roast
         import shared_state
 
         shared_state.board_data[TEST_BOARD] = {

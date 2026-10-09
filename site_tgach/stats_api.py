@@ -6,7 +6,6 @@ Provides /app/stats HTML view and /api/stats/* endpoints with in-memory caching.
 
 import os
 import time
-import json
 import sqlite3
 import contextlib
 from typing import Dict, Any
@@ -41,14 +40,14 @@ async def get_dashboard_data():
     """Returns cached JSON metrics for charts."""
     global _DASHBOARD_CACHE, _LAST_CACHE_TIME
     now = time.time()
-    
+
     if _DASHBOARD_CACHE and (now - _LAST_CACHE_TIME < 30.0):
         return _DASHBOARD_CACHE
 
     day_ago = now - 86400
     with contextlib.closing(connect_ro_db()) as conn:
         c = conn.cursor()
-        
+
         # 1. 24h Posts & Users
         c.execute("SELECT COUNT(*), COUNT(DISTINCT author_id) FROM Posts WHERE timestamp > ?", (day_ago,))
         row_24h = c.fetchone()

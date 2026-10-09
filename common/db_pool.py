@@ -201,7 +201,7 @@ class LazyLock:
 _reconnect_lock = LazyLock()
 
 # Глобальный замок для синхронизации задач внутри одного процесса (Task-Safety).
-# Обязателен при использовании ручных транзакций (BEGIN IMMEDIATE), 
+# Обязателен при использовании ручных транзакций (BEGIN IMMEDIATE),
 # чтобы задачи не вклинивались в чужие транзакции.
 db_lock = LazyLock()
 
@@ -211,7 +211,7 @@ async def get_pool():
     Thread-Safe: безопасен для одновременной работы бота и сайта.
     """
     global _db_connection
-    
+
     # 1. Быстрая проверка (Optimistic check)
     if _db_connection is not None:
         try:
@@ -231,15 +231,15 @@ async def get_pool():
             except Exception:
                 import traceback; traceback.print_exc()
             print("[DB] Reconnecting to database...")
-        
+
         # 3. Аккуратное закрытие старого трупа (если есть)
         if _db_connection:
             try:
                 await _db_connection.close()
-            except Exception: 
+            except Exception:
                 import traceback; traceback.print_exc()
             _db_connection = None
-        
+
         retries = 3
         for attempt in range(retries):
             try:
@@ -247,8 +247,8 @@ async def get_pool():
                 # Теперь мы обязаны сами писать BEGIN/COMMIT, но получаем полный контроль
                 # и возможность использовать BEGIN IMMEDIATE для предотвращения дедлоков.
                 conn = await aiosqlite.connect(DB_NAME, timeout=30.0, isolation_level=None)
-                
-                await conn.execute("PRAGMA busy_timeout = 25000;")  
+
+                await conn.execute("PRAGMA busy_timeout = 25000;")
                 await conn.execute("PRAGMA journal_mode=WAL;")
                 await conn.execute("PRAGMA synchronous = NORMAL;")
                 await conn.execute("PRAGMA temp_store = MEMORY;")
@@ -258,7 +258,7 @@ async def get_pool():
                 await conn.execute("PRAGMA foreign_keys = ON;")
                 await conn.execute("PRAGMA wal_autocheckpoint=500;")
                 # Нет await conn.commit(), так как мы в режиме autocommit (isolation_level=None)
-                
+
                 _db_connection = conn
                 print(f"[DB] Connected successfully (attempt {attempt+1}, isolation_level=None)")
                 return _db_connection
@@ -271,7 +271,7 @@ async def get_pool():
                 else:
                     print(f"[DB] CRITICAL ERROR: {e}")
                     raise e
-            
+
         return _db_connection
 
 async def create_pool():

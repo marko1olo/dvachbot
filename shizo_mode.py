@@ -1193,23 +1193,23 @@ def _apply_bipolar_casing(text: str) -> str:
 
 def _apply_mirror_words(text: str) -> str:
     """Зеркальное отражение длинных слов (читают задом наперед)"""
-    if random.random() >= 0.12: 
+    if random.random() >= 0.12:
         return text
-    
+
     def _mirror(m):
         word = m.group(0)
         return word[::-1] if random.random() < 0.25 else word
-        
+
     return _MIRROR_PATTERN.sub(_mirror, text)
 
 def _apply_redacted(text: str) -> str:
     """Паранойя: цензурирование слов"""
     if random.random() >= 0.15:
         return text
-        
+
     def _redact(m):
         return "██████" if random.random() < 0.15 else m.group(0)
-        
+
     return _REDACT_PATTERN.sub(_redact, text)
 
 def _stage_glitch(text: str) -> str:
@@ -1314,14 +1314,14 @@ def _apply_schizo_numerology(text: str) -> str:
         if words:
             target_word = random.choice(words).upper()
             length = len(target_word)
-            
+
             logic = random.choice([
                 f"{length} букв... {length} умножить на 3... ОНИ УЖЕ В ПУТИ.",
                 f"Это {length} уровень матрицы. ТЫ САМ СЕБЯ ВЫДАЛ.",
                 f"Слово состоит из {length} символов. Прямо как в чертежах 5G-вышек.",
                 f"{length}... Именно столько чипов в твоей голове."
             ])
-            
+
             numerology_block = f"\n\n[ТЫ НАПИСАЛ «{target_word}». {logic}]"
             return text + numerology_block
     return text

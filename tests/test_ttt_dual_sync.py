@@ -1,18 +1,12 @@
 import unittest
-import asyncio
-import time
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from ttt_engine import (
-    TicTacToeGame,
     create_ttt_challenge,
     accept_ttt_challenge,
-    process_ttt_move,
-    surrender_ttt_game,
     sync_ttt_screens,
     active_ttt_games,
     user_active_ttt_session,
-    get_ttt_game_keyboard,
     TURN_TIMEOUT_SECONDS,
 )
 

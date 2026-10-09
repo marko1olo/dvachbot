@@ -29,10 +29,9 @@ Coverage Matrix:
     * Seller PM notification failure handling (TelegramForbiddenError, TelegramBadRequest suppression).
 """
 
-import asyncio
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 import aiosqlite

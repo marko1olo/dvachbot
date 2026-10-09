@@ -1,4 +1,3 @@
-import pytest
 from common.extractive_summary import (
     generate_extractive_summary,
     _parse_dump_lines,

@@ -1,22 +1,15 @@
-import asyncio
-import os
 import io
-import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from PIL import Image
 
 import aiosqlite
-from common.db_pool import LazyLock, db_lock
-import common.database as db_mod
+from common.db_pool import db_lock
 from common.database import (
     get_user_global_balance,
-    add_user_global_balance,
     deduct_user_global_balance,
 )
 import shared_state
 import archive_manager
-import invite_image_generator
 from invite_image_generator import _decode_and_verify_image
 import site_tgach.main as site_main
 import Dubsite_tgach.main as dub_site_main
@@ -51,11 +44,11 @@ async def test_deduct_user_global_balance_atomic(tmp_path):
                 PRIMARY KEY (user_id, board_id)
             )
         """)
-        
+
         # User 12345 has 100 on 'b' and 150 on 'vg'
         await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (12345, 'b', 100.0)")
         await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (12345, 'vg', 150.0)")
-        
+
         total = await get_user_global_balance(db, 12345)
         assert total == 250.0
 

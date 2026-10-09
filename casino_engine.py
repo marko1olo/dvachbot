@@ -426,7 +426,7 @@ def get_slots_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
     top_row = [InlineKeyboardButton(text=f"🔄 Крутить снова ({bet} ₪)", callback_data=f"cas:slots:spin:{bet}")]
     if doubled <= balance:
         top_row.append(InlineKeyboardButton(text=f"2x Ставка ({format_bet_amount(doubled)})", callback_data=f"cas:slots:spin:{doubled}"))
-    
+
     presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:slots:spin:{p}")
@@ -471,7 +471,7 @@ def get_coinflip_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarku
     ctrl_row = []
     if doubled <= balance:
         ctrl_row.append(InlineKeyboardButton(text=f"x2 Ставка ({format_bet_amount(doubled)})", callback_data=f"cas:coin:preset:{doubled}"))
-    
+
     buttons = [
         [
             InlineKeyboardButton(text=f"🦅 Орел ({bet} ₪)", callback_data=f"cas:coin:heads:{bet}"),

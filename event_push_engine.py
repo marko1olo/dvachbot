@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("runtime")
 

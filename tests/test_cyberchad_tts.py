@@ -19,8 +19,6 @@ from common.tts_engine import (
     list_presets,
     CYBERCHAD_PRESETS,
     CyberchadPreset,
-    DEFAULT_VOICE,
-    CYBERCHAD_FFMPEG_FILTER,
     CYBERCHAD_GTTS_FALLBACK_FILTER,
 )
 
@@ -553,7 +551,7 @@ class TestCyberchadBoardBroadcast:
 
             # process_new_post called twice: 1 for text, 1 for voice
             assert mock_process_post.call_count == 2
-            
+
             # 1st call: text roast
             call_text_params = mock_process_post.call_args_list[0][0][0]
             assert call_text_params.board_id == "b"

@@ -10,7 +10,6 @@ Implements:
 import hmac
 import hashlib
 from functools import lru_cache
-from typing import Optional, Tuple
 
 
 # Secret salt for one-way deterministic hashing of user IDs
@@ -57,7 +56,7 @@ def get_anon_id(user_id: int, stream: str = "ru") -> str:
         return "Анон0" if stream not in ["en", "int"] else "Anon0"
 
     h = int(hmac.new(SALT, str(user_id).encode("utf-8"), hashlib.sha256).hexdigest(), 16)
-    
+
     # 50/50 choice between CVCVCV and CVCCVC
     pattern_type = h & 1
     h >>= 1

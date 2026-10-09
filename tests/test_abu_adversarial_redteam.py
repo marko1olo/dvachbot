@@ -1,4 +1,3 @@
-import pytest
 import re
 import abu_engine
 import moderation_config

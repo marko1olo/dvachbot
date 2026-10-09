@@ -1,7 +1,6 @@
 import sys
-import os
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import patch
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, r"c:\Users\danat\Desktop\dvachbot")
@@ -13,10 +12,6 @@ from japanese_translator import (
     _post_is_too_old,
     is_image_recent,
     record_served_image,
-    _RECENT_SERVED_URLS,
-    _RECENT_SERVED_URLS_SET,
-    _RECENT_SERVED_HASHES,
-    _RECENT_SERVED_HASHES_SET,
     LOLI_IMAGE_NEGATIVE_TAGS,
 )
 

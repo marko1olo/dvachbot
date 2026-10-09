@@ -13,9 +13,7 @@ Focus Areas:
 """
 
 import asyncio
-import time
 import random
-import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,19 +22,7 @@ from aiogram.types import Message, User, Chat
 import shared_state
 from common.spam_filter import (
     check_flood,
-    is_bayan,
-    check_bayan,
-    check_link_or_ad_spam,
-    _check_cross_board_spam,
     evaluate_message_for_autoshadowmute,
-    analyze_message_for_spam,
-    SpamResult,
-    BURST_FLOOD_LIMIT,
-    BURST_FLOOD_WINDOW,
-    RATE_FLOOD_LIMIT,
-    RATE_FLOOD_WINDOW,
-    MINUTE_FLOOD_LIMIT,
-    MINUTE_FLOOD_WINDOW,
     FLOOD_BASE_MUTE_SEC,
     _user_request_timestamps,
     _bayan_tracker,
@@ -47,24 +33,17 @@ from common.spam_filter import (
     _spam_trackers,
     cross_board_spam_tracker,
     user_spam_locks,
-    contains_phone_number,
-    mask_phone_numbers,
-    check_phone_dox,
 )
 from handlers.message_router import (
     process_shadow_reject,
     check_spam,
-    resolve_archive_or_inline_reply,
 )
 from ai_manager import (
     register_post_and_maybe_trigger_cyberchad_intervention,
     build_reply_chain_context,
     _BOARD_FIGHT_TRACKER,
     _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION,
-    _LAST_CYBERCHAD_INTERVENTION,
     _LAST_DIRECT_ROAST_USER_TS,
-    CYBERCHAD_FIGHT_INTERVENTION_PROMPT,
-    CYBERCHAD_DIRECT_ROAST_PROMPT,
 )
 from common.tts_engine import (
     CYBERCHAD_PRESETS,
@@ -75,7 +54,6 @@ from common.tts_engine import (
     clean_tts_text,
     synthesize_cyberchad_voice_with_meta,
 )
-import cyberchad_tts
 
 
 def make_test_message(user_id: int = 1001, text: str = "test post", content_type: str = "text") -> MagicMock:

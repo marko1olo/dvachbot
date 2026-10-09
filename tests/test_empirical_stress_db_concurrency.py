@@ -1,6 +1,5 @@
 import asyncio
 import pytest
-import aiosqlite
 from common.db_pool import LazyLock, db_lock, db_sleep
 
 @pytest.mark.asyncio
@@ -30,7 +29,7 @@ async def test_db_sleep_cancellation_during_sleep():
     t = asyncio.create_task(task_holding_lock())
     await lock_held.wait()
     await asyncio.sleep(0.02)
-    
+
     # Verify db_lock was released during db_sleep
     assert not db_lock.locked()
     assert not db_lock.is_owned_by_current_task()
@@ -76,7 +75,7 @@ async def test_db_sleep_cancellation_during_reacquire():
     await task_b_got_lock.wait()
     # At this point, Task B holds db_lock. Task A is waking up from sleep(0.1) and waiting on db_lock.acquire()
     await asyncio.sleep(0.15)
-    
+
     # Cancel Task A while it is waiting in finally: await db_lock.acquire()
     ta.cancel()
     try:
@@ -108,10 +107,10 @@ async def test_non_owner_calling_db_sleep():
         await task_a_holding.wait()
         assert db_lock.locked()
         assert not db_lock.is_owned_by_current_task()
-        
+
         # Call db_sleep from non-owner task
         await db_sleep(0.05)
-        
+
         # Verify lock was NOT released during Task B's sleep
         assert db_lock.locked()
         assert not db_lock.is_owned_by_current_task()
@@ -156,7 +155,7 @@ async def test_lazylock_cross_task_safety():
     Verify LazyLock correctly identifies owner across multiple tasks.
     """
     lock = LazyLock()
-    
+
     assert not lock.locked()
     assert not lock.is_owned_by_current_task()
 

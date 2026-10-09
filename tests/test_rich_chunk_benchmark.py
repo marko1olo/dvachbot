@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import time
-import pytest
 import unittest
 from datetime import datetime, timezone
 import main

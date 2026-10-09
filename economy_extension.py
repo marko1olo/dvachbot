@@ -46,9 +46,8 @@ import json
 import time
 import random
 import re
-import asyncio
 import httpx
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple
 
 try:
     from main import cmd_mega
@@ -64,7 +63,6 @@ from datetime import datetime, timedelta, UTC
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
 from common.anon_identity import get_anon_id
 from common.database import record_user_transaction, add_user_global_balance, get_user_global_balance, deduct_user_global_balance
 
@@ -108,11 +106,11 @@ def apply_tinfoil_damage(
 
     current_remaining = hat_until - now
     damage_sec = int(hours_damage * 3600)
-    
+
     is_burned = False
     if burn_chance > 0.0 and random.random() < burn_chance:
         is_burned = True
-        
+
     new_remaining = current_remaining - damage_sec
     if is_burned or new_remaining <= 0:
         target_items.pop("tinfoil_hat", None)
@@ -687,8 +685,9 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
                 await message.reply(f"✅ <b>УСПЕХ! (Оценка ИИ: {int(score*100)}/100)</b>\n<i>{narrative}</i>\n\n💸 Но карманы жертвы оказались пусты.", parse_mode="HTML")
         else:
             # Пативэн
-            if hasattr(main_module, 'apply_regular_mute'):
-                await main_module.apply_regular_mute(user_id, board_id, 1800)
+            import main
+            if hasattr(main, 'apply_regular_mute'):
+                await main.apply_regular_mute(user_id, board_id, 1800)
             await message.reply(f"❌ <b>ПРОВАЛ! (Оценка ИИ: {int(score*100)}/100)</b>\n<i>{narrative}</i>\n\n🚓 План оказался тупым. За тобой выехал Пативэн (мут на 30 мин)!", parse_mode="HTML")
 
     except Exception as e:
@@ -706,7 +705,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
     if target_id == user_id:
         await message.reply("Нельзя вызвать Пативэн на самого себя, шиз.")
         return
-        
+
     db = await get_pool()
     async with db.execute("SELECT posts_count FROM Users WHERE user_id=? AND board_id=?", (target_id, board_id)) as cursor:
         target_row = await cursor.fetchone()
@@ -720,7 +719,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
         active_items = json.loads(active_items_str)
     except Exception:
         active_items = {}
-        
+
     if not active_items.get("partyvan_gun"):
         await message.reply("У тебя нет доступа к вызову Пативэна! Купи его в /shop.")
         return
@@ -753,7 +752,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
                 return
     except Exception:
         pass
-        
+
     now = int(time.time())
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
         row = await c.fetchone()
@@ -769,16 +768,16 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
-        
+
         target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!"
         try: await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
         return
-        
+
     active_items["partyvan_gun"] = False
-    
+
     try:
         import main
         apply_regular_mute = getattr(main, 'apply_regular_mute', None)
@@ -792,24 +791,24 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
             await apply_regular_mute(target_id, board_id, 12*3600)
     except Exception:
         pass
-    
+
     async with db_lock:
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(active_items), user_id, board_id))
         await db.commit()
     register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
-        
+
     try:
         await message.bot.send_message(
-            target_id, 
-            "🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b>\nЗа тобой выехал Пативэн (вызван кем-то из анонов).\nТы запакован в бобик и улетаешь в мут на 12 часов.", 
+            target_id,
+            "🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b>\nЗа тобой выехал Пативэн (вызван кем-то из анонов).\nТы запакован в бобик и улетаешь в мут на 12 часов.",
             parse_mode="HTML"
         )
     except Exception: pass
     try:
         await message.bot.send_message(
-            user_id, 
-            f"🚔 Пативэн успешно выслан за аноном <code>{target_id}</code>!", 
+            user_id,
+            f"🚔 Пативэн успешно выслан за аноном <code>{target_id}</code>!",
             parse_mode="HTML"
         )
     except Exception: pass
@@ -829,7 +828,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
     if target_id == user_id:
         await message.reply("Ты и так говно.")
         return
-        
+
     db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
@@ -838,7 +837,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
         active_items = json.loads(active_items_str)
     except Exception:
         active_items = {}
-        
+
     if not active_items.get("shit_gun"):
         await message.reply("У тебя нет говна в карманах! Купи его в /shop.")
         return
@@ -854,10 +853,10 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
             parse_mode="HTML"
         )
         return
-        
+
     active_items["shit_gun"] = False
     now = int(time.time())
-    
+
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
         row = await c.fetchone()
         target_items_str = row[0] if row and row[0] else "{}"
@@ -871,9 +870,9 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
         bounce = True
     else:
         bounce = random.random() < 0.20
-    
+
     final_target = user_id if bounce else target_id
-    
+
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (final_target, board_id)) as c:
         row = await c.fetchone()
         final_items_str = row[0] if row and row[0] else "{}"
@@ -881,14 +880,14 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
         final_items = json.loads(final_items_str)
     except Exception:
         final_items = {}
-        
+
     duration_sec = random.randint(3600, 10800)
     dur_h = duration_sec // 3600
     dur_m = (duration_sec % 3600) // 60
     dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
 
     final_items["shit_until"] = int(time.time()) + duration_sec
-    
+
     async with db_lock:
         if bounce:
             final_items["shit_gun"] = False # they consume the item when throwing
@@ -901,27 +900,27 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
                              (json.dumps(final_items), target_id, board_id))
         await db.commit()
     register_attacker_effect("shit_gun", user_id, final_target, duration_sec)
-        
+
     if bounce:
         try:
             await message.bot.send_message(
-                user_id, 
-                f"🐒 Ты попытался метнуть говно, но ветер дунул в лицо! Ты сам обмазан говном на {dur_str} 💩", 
+                user_id,
+                f"🐒 Ты попытался метнуть говно, но ветер дунул в лицо! Ты сам обмазан говном на {dur_str} 💩",
                 parse_mode="HTML"
             )
         except Exception: pass
     else:
         try:
             await message.bot.send_message(
-                target_id, 
-                f"🐒 В тебя метнули кусок говна! Ты обмазан говном на {dur_str} 💩", 
+                target_id,
+                f"🐒 В тебя метнули кусок говна! Ты обмазан говном на {dur_str} 💩",
                 parse_mode="HTML"
             )
         except Exception: pass
         try:
             await message.bot.send_message(
-                user_id, 
-                f"🐒 Ты успешно метнул кусок говна в <code>{target_id}</code>!", 
+                user_id,
+                f"🐒 Ты успешно метнул кусок говна в <code>{target_id}</code>!",
                 parse_mode="HTML"
             )
         except Exception: pass
@@ -958,18 +957,18 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
             parse_mode="HTML"
         )
         return
-        
+
     db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
     try: active_items = json.loads(active_items_str)
     except Exception: active_items = {}
-        
+
     if not active_items.get("knife_gun"):
         await message.reply("У тебя нет заточки! Купи её в /shop.")
         return
-        
+
     async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
         row = await c.fetchone()
         target_balance = row[0] if row and row[0] else 0
@@ -989,7 +988,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
     active_items["knife_gun"] = False
     register_target_attack(target_id)
     set_combat_cooldown(user_id, 180)
-    
+
     now = int(time.time())
     if target_items.get("tinfoil_hat", 0) > now:
         # Tinfoil blocks the attack
@@ -1000,7 +999,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(target_items), target_id, board_id))
             await db.commit()
-            
+
         if destroyed:
             attacker_msg = "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось, но от твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
             target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели! От удара она <b>была уничтожена</b>."
@@ -1029,7 +1028,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         try: await message.delete()
         except Exception: pass
         return
-        
+
     async with db_lock:
         async with db.execute(
             "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
@@ -1065,14 +1064,14 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
     if target_id == user_id:
         await message.reply("Сам себе слабительное?")
         return
-        
+
     db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
     try: active_items = json.loads(active_items_str)
     except Exception: active_items = {}
-        
+
     if not active_items.get("laxative_gun"):
         await message.reply("У тебя нет слабительного! Купи его в /shop.")
         return
@@ -1105,7 +1104,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
                 return
     except Exception:
         pass
-        
+
     active_items["laxative_gun"] = False
     now = int(time.time())
 
@@ -1121,7 +1120,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
-            
+
         attacker_msg = "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую."
         target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!"
 
@@ -1134,7 +1133,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
         return
 
     curse_until = now + 3600
-    
+
     async with db_lock:
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(active_items), user_id, board_id))
@@ -1145,7 +1144,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
             pass
         await db.commit()
     register_attacker_effect("laxative_gun", user_id, target_id, 3600)
-        
+
     try: await message.bot.send_message(target_id, "🚽 Тебе подсыпали слабительное! В течение 1 часа ты не сможешь писать посты длиннее 50 символов (не успеешь дописать и побежишь в туалет).", parse_mode="HTML")
     except Exception: pass
     try: await message.bot.send_message(user_id, f"🚽 Ты успешно подсыпал слабительное Анону <b>[{get_anon_id(target_id)}]</b>!", parse_mode="HTML")

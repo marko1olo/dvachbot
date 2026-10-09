@@ -19,11 +19,8 @@ Validates:
 5. delivery_manager.py checks SQLite DB Mutes table in addition to RAM.
 """
 
-import time
-import pytest
 import unittest
-from datetime import datetime, timedelta, UTC
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import shared_state
 from common.spam_filter import (
@@ -35,7 +32,7 @@ from common.spam_filter import (
     evaluate_message_for_autoshadowmute,
     _user_request_timestamps,
 )
-from handlers.message_router import check_spam, process_shadow_reject
+from handlers.message_router import process_shadow_reject
 
 
 class TestM1GhostPostAndFloodComprehensive(unittest.IsolatedAsyncioTestCase):

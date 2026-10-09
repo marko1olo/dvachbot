@@ -2,7 +2,7 @@ import httpx
 import logging
 import os
 import random
-import asyncio 
+import asyncio
 import time
 from pathlib import Path
 
@@ -79,7 +79,7 @@ async def _upload_logic(req_type, file_source, is_file=False):
 
     url = "https://catbox.moe/user/api.php"
     headers = {"User-Agent": random.choice(USER_AGENTS)}
-    
+
     strategies = [{"proxy": None, "name": "Direct/System"}]
     if PROXY_URL:
         strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
@@ -90,18 +90,18 @@ async def _upload_logic(req_type, file_source, is_file=False):
         try:
             proxy_cfg = strategy["proxy"]
             mode_name = strategy["name"]
-            
+
             bind_addr = "0.0.0.0" if not proxy_cfg else None
             transport = httpx.AsyncHTTPTransport(local_address=bind_addr, retries=3)
 
             async with httpx.AsyncClient(
-                timeout=request_timeout, 
-                verify=False, 
-                proxy=proxy_cfg, 
+                timeout=request_timeout,
+                verify=False,
+                proxy=proxy_cfg,
                 transport=transport,
                 headers=headers
             ) as client:
-                
+
                 if is_file:
                     # Поддержка загрузки из памяти: (filename, bytes)
                     if isinstance(file_source, tuple):
@@ -115,7 +115,7 @@ async def _upload_logic(req_type, file_source, is_file=False):
                         if not os.path.exists(file_source):
                             logger.error(f"Catbox: File not found {file_source}")
                             return None
-                        
+
                         fname, fbytes = await asyncio.to_thread(_read_upload_file, file_source)
                         files = {'fileToUpload': (fname, fbytes)}
                         data = _build_data(req_type, file_source)
@@ -140,7 +140,7 @@ async def _upload_logic(req_type, file_source, is_file=False):
                         return link
                     else:
                         logger.warning(f"⚠️ Catbox returned weird response: {link[:100]}")
-                
+
                 elif resp.status_code == 412 or "uploads paused" in resp.text.lower() or "storage issues" in resp.text.lower():
                     _CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + CATBOX_PAUSE_COOLDOWN
                     logger.warning(f"❌ Catbox Service Paused: {resp.text[:120]}. Pausing Catbox uploads for {int(CATBOX_PAUSE_COOLDOWN // 60)}m.")
@@ -157,8 +157,8 @@ async def _upload_logic(req_type, file_source, is_file=False):
             continue
         except Exception as e:
             logger.error(f"⛔ Catbox Unexpected Error ({strategy['name']}): {repr(e)}")
-            break 
-            
+            break
+
     return None
 
 async def upload_url_to_catbox(file_url: str) -> str | None:
@@ -171,4 +171,4 @@ async def upload_file_to_catbox(file_path: str) -> str | None:
 
 async def upload_bytes_to_catbox(file_bytes: bytes, filename: str) -> str | None:
     """Для тяжелых файлов из памяти."""
-    return await _upload_logic('fileupload', (filename, file_bytes), is_file=True)  
+    return await _upload_logic('fileupload', (filename, file_bytes), is_file=True)

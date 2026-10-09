@@ -26,10 +26,10 @@ async def generate_rss(board_id: str, request):
     """Генерирует RSS 2.0 для конкретной доски."""
     if board_id not in BOARD_CONFIG:
         return Response(status_code=404)
-        
+
     board_name = BOARD_CONFIG[board_id]['name']
     base_url = str(request.base_url).rstrip('/')
-    
+
     xml = ['<?xml version="1.0" encoding="UTF-8" ?>']
     xml.append('<rss version="2.0">')
     xml.append('<channel>')
@@ -39,7 +39,7 @@ async def generate_rss(board_id: str, request):
     xml.append(f'<link>{xml_escape(base_url)}/{xml_escape(board_id)}/</link>')
     xml.append(f'<description>Последние треды в разделе {xml_escape(board_name)}</description>')
     xml.append(f'<lastBuildDate>{formatdate(time.time())}</lastBuildDate>')
-    
+
     db = await get_pool()
     try:
         # Берем последние 20 тредов
@@ -89,8 +89,8 @@ async def generate_rss(board_id: str, request):
     except Exception as e:
         err_msg = str(e).encode('ascii', 'replace').decode('ascii')
         print(f"RSS Error: {err_msg}")
-        
+
     xml.append('</channel>')
     xml.append('</rss>')
-    
+
     return Response(content="\n".join(xml), media_type="application/xml")

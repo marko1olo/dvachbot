@@ -69,10 +69,10 @@ total_processed = 0
 while True:
     c.execute(fetch_query, (BATCH_SIZE,))
     rows = c.fetchall()
-    
+
     if not rows:
         break
-    
+
     for (file_id,) in rows:
         try:
             c.execute(
@@ -86,16 +86,16 @@ while True:
         except Exception as e:
             print(f"  Error inserting {file_id[:15]}: {e}")
             skipped += 1
-    
+
     db.commit()
     total_processed += len(rows)
     progress_pct = total_processed / total_missing * 100
     print(f"  [{progress_pct:.0f}%] Processed: {total_processed:,}/{total_missing:,} | Inserted: {inserted:,} | Skipped: {skipped:,}")
 
 db.close()
-print(f"\nDone!")
+print("\nDone!")
 print(f"  Total inserted into MirrorQueue: {inserted:,}")
 print(f"  Skipped (already in queue/mirrored): {skipped:,}")
-print(f"mirror_worker.py will process these automatically at rate of ~20 files per 10s.")
+print("mirror_worker.py will process these automatically at rate of ~20 files per 10s.")
 estimated_hours = inserted / (20 / 10) / 3600
 print(f"Estimated processing time: ~{estimated_hours:.1f} hours")

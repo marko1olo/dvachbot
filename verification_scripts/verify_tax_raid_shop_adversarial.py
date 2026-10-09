@@ -29,7 +29,6 @@ from wardrobe_engine import CLOTHING_CATALOG
 from whale_economy_engine import (
     calculate_wealth_tax,
     execute_oligarch_raid,
-    process_daily_wealth_tax,
 )
 
 

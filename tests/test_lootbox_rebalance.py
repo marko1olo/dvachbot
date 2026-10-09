@@ -23,11 +23,8 @@ Features Covered:
 
 import random
 import time
-from typing import Dict, Any
 
-import pytest
 
-import lootbox_engine
 from lootbox_engine import (
     TRASH_ITEMS,
     PREMIUM_JUNK,

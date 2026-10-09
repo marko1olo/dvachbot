@@ -3,14 +3,14 @@ import time
 import random
 import json
 import logging
-from aiogram import Bot, types
+from aiogram import types
 from shared_state import *
-from shared_state import NewPostParams
 from common.config import *
 from common.database import *
 from common.db_pool import LazyLock
 from common.anon_identity import get_anon_id
 from typing import Optional, Any
+from post_processor import process_new_post
 
 classic_duel_lock = LazyLock()
 
@@ -23,7 +23,7 @@ async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> boo
     if not bot or not user_id:
         return False
     try:
-        from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
+        from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
         await bot.send_message(
             chat_id=user_id,
             text=text,
@@ -75,7 +75,6 @@ def is_ai_slop_content(content: dict | None = None, text: str | None = None) -> 
         return True
     return False
 
-from post_processor import NewPostContext, NewPostProcessor, process_new_post
 
 def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
     if not uid:
@@ -291,7 +290,7 @@ async def check_user_is_muted(db, user_id: int, board_id: str | None = None) -> 
     main_mod = sys.modules.get('__main__')
     b_data = getattr(main_mod, 'board_data', {})
     b_id = board_id or 'b'
-    
+
     board_mutes = b_data.get(b_id, {}).get('mutes', {})
     all_mutes = b_data.get('ALL', {}).get('mutes', {})
     if (board_mutes.get(user_id) and board_mutes[user_id] > now_dt) or \
@@ -354,7 +353,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
     db = await get_pool()
     if user_id is None:
         user_id = getattr(getattr(message, "from_user", None), "id", None)
-    
+
     if challenger_id == user_id:
         await message.answer("Нельзя принять собственный вызов, трус.")
         return
@@ -446,7 +445,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
 
                                         winner_id = random.choice([challenger_id, user_id])
                                         loser_id  = challenger_id if winner_id == user_id else user_id
-                                        
+
                                         # 5% Rake to Abu's Fund and payout to winner
                                         rake = max(1, int(amount * 0.05))
                                         net_win = amount - rake
@@ -455,7 +454,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                                         await add_user_global_balance(db, winner_id, board_id, winner_payout)
                                         await add_to_abu_fund(db, rake)
                                         await record_user_transaction(db, winner_id, winner_payout, 'duel', f'Победа в дуэли против [{get_anon_id(loser_id)}]')
-                                        
+
                                         try:
                                             w_items = await _get_user_active_items(db, winner_id, board_id)
                                             from achievements_engine import check_and_unlock_achievement
@@ -614,12 +613,12 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
 async def decline_duel_logic(message: types.Message, challenger_id: int, user_id: int | None = None) -> bool:
     if user_id is None:
         user_id = message.from_user.id
-    
+
     broadcast_msgs = []
     async with classic_duel_lock:
         if challenger_id not in _active_duels:
             return False
-            
+
         duel = _active_duels.get(challenger_id, {})
         target_id = duel.get("target_id")
         if target_id and user_id != target_id and user_id != challenger_id:
@@ -845,7 +844,7 @@ async def delete_message_after_delay(message: types.Message, delay: int):
 
 async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int = 1800):
     """Applies mute in board_data in-memory and database."""
-    from datetime import datetime, timedelta, timezone, UTC
+    from datetime import datetime, timedelta, UTC
     now_dt = datetime.now(UTC)
     expire_dt = now_dt + timedelta(seconds=duration_seconds)
     if board_id in board_data and 'mutes' in board_data[board_id]:

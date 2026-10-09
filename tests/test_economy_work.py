@@ -1,18 +1,12 @@
 # -*- coding: utf-8 -*-
-import asyncio
-import datetime
-import json
-import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
 from aiogram import types
-from aiogram.types import InlineKeyboardMarkup, User, Chat
+from aiogram.types import InlineKeyboardMarkup
 
-import economy_extension
 from economy_extension import cmd_work_menu, cb_work_action
-import main
 
 
 class TestEconomyWork(unittest.IsolatedAsyncioTestCase):

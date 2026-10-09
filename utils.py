@@ -1,5 +1,3 @@
-from typing import List
-import re
 
 def split_text(text: str, limit: int) -> list[str]:
     """

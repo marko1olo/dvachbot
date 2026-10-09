@@ -8,7 +8,7 @@ def extract_strings_from_file(filepath):
             content = f.read()
     except Exception:
         return []
-    
+
     try:
         tree = ast.parse(content)
     except SyntaxError:
@@ -16,8 +16,8 @@ def extract_strings_from_file(filepath):
 
     phrases = []
     target_methods = {
-        'send_message', 'reply', 'answer', 'edit_text', 
-        'answer_callback_query', 'send_photo', 'send_document', 
+        'send_message', 'reply', 'answer', 'edit_text',
+        'answer_callback_query', 'send_photo', 'send_document',
         'reply_text', 'reply_photo'
     }
 
@@ -28,7 +28,7 @@ def extract_strings_from_file(filepath):
                 func_name = node.func.attr
             elif isinstance(node.func, ast.Name):
                 func_name = node.func.id
-                
+
             if func_name in target_methods:
                 for arg in node.args:
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):

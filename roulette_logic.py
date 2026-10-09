@@ -145,7 +145,7 @@ def load_roulette_data(file_path: str) -> List[Dict[str, Any]]:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            
+
         if not isinstance(data, dict):
             return []
 
@@ -165,14 +165,14 @@ def load_roulette_data(file_path: str) -> List[Dict[str, Any]]:
                 event_copy = event.copy()
                 event_copy['source_roulette'] = roulette_name
                 all_events.append(event_copy)
-                
+
     except FileNotFoundError:
         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА: Файл рулетки не найден по пути: {file_path}")
         return []
     except json.JSONDecodeError:
         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА: Не удалось декодировать JSON из файла: {file_path}")
         return []
-        
+
     return all_events
 
 def get_random_event(all_events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

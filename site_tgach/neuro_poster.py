@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 from common.http_utils import api_retry
 import logging
@@ -10,8 +9,8 @@ import httpx
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool, google_pool
 from common.database import (
-    create_post, 
-    get_thread_by_op_post, 
+    create_post,
+    get_thread_by_op_post,
     get_op_posts_for_board,
     update_thread_last_updated,
     create_thread_entry,
@@ -20,20 +19,20 @@ from common.database import (
 )
 
 # === НАСТРОЙКА ПРОКСИ ===
-PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None 
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
 # ========================
 
 AI_CONFIG = {
     "provider": "groq",
-    "api_key": None, 
+    "api_key": None,
     "base_url": "https://api.groq.com/openai/v1",
-    "model": "qwen/qwen3.8-27b", 
+    "model": "qwen/qwen3.8-27b",
     "temperature": 0.9,
 }
 
 POSTING_INTERVALS = {
-    "min": 120,  
-    "max": 300   
+    "min": 120,
+    "max": 300
 }
 
 SYSTEM_PROMPTS = {
@@ -204,12 +203,12 @@ class NeuroManager:
         )
 
         target_model = model or AI_CONFIG["model"]
-        
+
         # Если в запросе нет картинок — пробуем Groq (текстовая генерация)
         if not has_images:
             for i in range(3):
                 api_key = groq_pool.get_token()
-                if not api_key: 
+                if not api_key:
                     logger.error("❌ No Groq API keys available.")
                     break
 
@@ -224,16 +223,16 @@ class NeuroManager:
                         await _throttle_poster_provider("groq", min_interval=2.5)
                         # local_address="0.0.0.0" фиксит проблемы с TUN на Windows
                         transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
-                        
+
                         async with httpx.AsyncClient(
-                            proxy=strategy["proxy"], 
+                            proxy=strategy["proxy"],
                             transport=transport,
                             verify=False,
                             timeout=40.0
                         ) as http_client:
-                            
+
                             async with AsyncOpenAI(
-                                api_key=api_key, 
+                                api_key=api_key,
                                 base_url=AI_CONFIG["base_url"],
                                 http_client=http_client,
                                 max_retries=0
@@ -255,8 +254,8 @@ class NeuroManager:
                             logger.warning(f"⚠️ Groq Rate Limit via {strategy['name']}. Penalizing key...")
                             groq_pool.penalize_token(api_key, 120.0)
                             await asyncio.sleep(2.5)
-                            break 
-                        
+                            break
+
                         if (
                             re.search(r'\b401\b', err_str)
                             or "unauthorized" in err_str.lower()
@@ -267,7 +266,7 @@ class NeuroManager:
                             break
 
                         continue
-        
+
         # Fallback to Google Gemini (or primary path for image analysis)
         gemini_keys = google_pool.get_all_active_tokens()
         if gemini_keys:
@@ -315,12 +314,12 @@ class NeuroManager:
         """
         if not AI_CONFIG["api_key"] and not groq_pool.tokens:
              pass
-             
-        active_streams = ['ru'] 
+
+        active_streams = ['ru']
         for board_id, settings in BOARD_SETTINGS.items():
             if not settings["enabled"]: continue
             if random.random() > settings["chance"]: continue
-            
+
             current_stream = random.choice(active_streams)
             try:
                 result_log = await self.make_post(board_id, settings, stream=current_stream)
@@ -328,31 +327,31 @@ class NeuroManager:
                     logger.warning(f"Neuro-poster skipped /{board_id}/: {result_log}")
                 else:
                     logger.info(f"Neuro-poster success /{board_id}/: {result_log}")
-                
-                await asyncio.sleep(random.randint(5, 15)) 
+
+                await asyncio.sleep(random.randint(5, 15))
             except Exception as e:
                 logger.error(f"Neuro-posting error on /{board_id}/ [{current_stream}]: {e}", exc_info=True)
 
     async def analyze_vibe(self, text: str, stream: str) -> str:
         if not text.strip(): return "Neutral"
-        
+
         system_msg = (
             "Analyze the text context. Classify the vibe into exactly ONE category from this list:\n"
             "Toxic, Cozy, Horny, Sad, Nerd, Schizo, Neutral, Funny, Lol, Politics, War, Argue, Tech, Code, Anime, Creep, Dark, Philosoph.\n"
             "Reply with ONE word only. No explanations."
         )
-        
+
         messages = [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": text[:1000]}
         ]
-        
+
         result = await self._safe_api_call(
             messages=messages,
             max_tokens=10,
-            temperature=0.3 
+            temperature=0.3
         )
-        
+
         if result:
             cleaned = result.replace(".", "").strip()
             valid_vibes = ["Toxic", "Cozy", "Horny", "Sad", "Nerd", "Schizo", "Neutral"]
@@ -367,17 +366,17 @@ class NeuroManager:
         """
         if not settings:
             settings = {
-                "style": "random, chaotic, anonymous imageboard user", 
+                "style": "random, chaotic, anonymous imageboard user",
                 "allow_new_threads": True
             }
 
         mode = "reply"
-        
+
         if forced_mode:
             mode = forced_mode
         elif settings.get("allow_new_threads", False) and random.random() < 0.05:
             mode = "thread"
-            
+
         if mode == "thread":
             return await self._create_thread(board_id, settings, stream)
         else:
@@ -401,19 +400,19 @@ class NeuroManager:
             )
             if not threads: return f"❌ Нет тредов в /{board_id}/ [{stream}]"
             target_thread = random.choice(threads)
-        
+
         thread_id = target_thread['id']
-        
+
         _, replies = await get_thread_by_op_post(thread_id)
         pool = replies[-15:] if replies else []
-        
+
         mode_roll = random.random()
         target_ids = []
-        
+
         op_text = target_thread['content'].get('text', '')[:300] or "[Media]"
         context_prompt = tpl["thread"].format(board=board_id, op_text=op_text)
         instruction = ""
-        
+
         if mode_roll < 0.2 or not pool:
             # Коммент к треду
             instruction = tpl["instr_thread"]
@@ -430,16 +429,16 @@ class NeuroManager:
             count = random.randint(2, 3)
             victims = random.sample(pool, min(len(pool), count))
             victims.sort(key=lambda x: x['timestamp'])
-            
+
             check_text = ""
             for v in victims:
                 target_ids.append(v['id'])
                 check_text += f"- Post {v['id']}: {v['content'].get('text', '')[:100]}\n"
-            
+
             instruction = tpl["instr_multi"].format(text=check_text)
 
         response_text = await self._generate_text(context_prompt, instruction, settings["style"], stream)
-        
+
         if not response_text or len(response_text.strip()) < 3:
             logger.warning(f"⚠️ [Neuro-Poster] All LLMs failed on /{board_id}/ [{stream}]. Using troll phrase fallback.")
             try:
@@ -449,18 +448,18 @@ class NeuroManager:
             except Exception as tp_err:
                 logger.error(f"Troll phrase fallback failed: {tp_err}")
                 response_text = "Лол, ну и позорище в треде."
-        
+
         prefix = ""
         if target_ids:
             prefix = "\n".join([f">>{tid}" for tid in target_ids]) + "\n"
-            
+
         final_text = prefix + response_text
         fake_user_id = random.randint(-99999999, -10000000)
-        
+
         content = {"text": final_text, "files": [], "type": "text"}
-        
+
         db_reply_to = target_ids[-1] if target_ids else thread_id
-        
+
         await create_post(
             board_id=board_id,
             author_id=fake_user_id,
@@ -470,11 +469,11 @@ class NeuroManager:
             is_from_site=True,
             post_mode="reply",
             stream=stream,
-            thread_id_from_bot=str(thread_id) 
+            thread_id_from_bot=str(thread_id)
         )
-        
+
         await update_thread_last_updated(thread_id, time.time())
-        
+
         mode_str = f"REPLY({len(target_ids)})" if target_ids else "THREAD"
         logger.info(f"🤖 [{stream.upper()}] Neuro-{mode_str} in /{board_id}/: {response_text[:30]}...")
         return f"✅ [{stream}] {mode_str}: {response_text}"
@@ -482,10 +481,10 @@ class NeuroManager:
     async def _create_thread(self, board_id: str, settings: dict, stream: str):
             tpl = CONTEXT_TEMPLATES.get(stream, CONTEXT_TEMPLATES['ru'])
             prompt = tpl["new_thread"].format(board=board_id, style=settings["style"])
-            
+
             persona_key = "default"
             persona_prompt = ""
-            
+
             if stream == 'ru':
                 keys = list(PERSONAS.keys())
                 weights = [PERSONAS[k]['weight'] for k in keys]
@@ -500,17 +499,17 @@ class NeuroManager:
                 {"role": "system", "content": full_system_msg},
                 {"role": "user", "content": prompt}
             ]
-            
+
             logger.info(f"🧵 Neuro-Thread Persona [{stream}]: {persona_key.upper()}")
-            
+
             result = await self._safe_api_call(
                 messages=messages,
                 max_tokens=150,
                 temperature=1.1
             )
-            
+
             if not result or len(result.strip()) < 3:
-                logger.warning(f"⚠️ [Neuro-Poster] Thread creation LLM failed. Using troll phrase fallback.")
+                logger.warning("⚠️ [Neuro-Poster] Thread creation LLM failed. Using troll phrase fallback.")
                 try:
                     from troll_phrases import get_random_troll_phrase
                     title = "Аноны, поясните за жизнь"
@@ -523,30 +522,30 @@ class NeuroManager:
             if "|" in result:
                 parts = result.split("|", 1)
                 if len(parts) == 2: title, text = parts
-            
+
             fake_user_id = random.randint(-99999999, -10000000)
-            
+
             # Картинка
             rand_file = await get_random_file_from_db()
             files = [rand_file] if rand_file else []
-            
+
             content = {"text": text.strip(), "files": files, "type": "files" if files else "text"}
             ts = time.time()
-            
+
             pid = await create_post(
                 board_id=board_id,
-                author_id=fake_user_id, 
-                content=content, 
-                timestamp=ts, 
-                reply_to=None, 
-                is_shadow_muted=False, 
-                is_from_site=True, 
-                post_mode="new_thread", 
+                author_id=fake_user_id,
+                content=content,
+                timestamp=ts,
+                reply_to=None,
+                is_shadow_muted=False,
+                is_from_site=True,
+                post_mode="new_thread",
                 stream=stream
             )
-            
+
             await create_thread_entry(pid, board_id, fake_user_id, title.strip(), ts, stream)
-            
+
             logger.info(f"🤖 [{stream.upper()}] Neuro-THREAD in /{board_id}/: {title}")
             return f"✅ [{stream}] NEW THREAD: {title}"
 
@@ -554,7 +553,7 @@ class NeuroManager:
         # Выбор персоны (только для RU, для остальных default)
         persona_key = "default"
         persona_prompt = ""
-        
+
         if stream == 'ru':
             keys = list(PERSONAS.keys())
             weights = [PERSONAS[k]['weight'] for k in keys]
@@ -572,7 +571,7 @@ class NeuroManager:
 
         base_system_msg = SYSTEM_PROMPTS.get(stream, SYSTEM_PROMPTS['ru'])
         full_system_msg = base_system_msg + persona_prompt
-        
+
         messages = [
             {"role": "system", "content": full_system_msg},
             {"role": "user", "content": full_user_prompt}
@@ -580,18 +579,18 @@ class NeuroManager:
         logger.info(f"🎭 Neuro-Persona [{stream}]: {persona_key.upper()}")
         text = await self._safe_api_call(
             messages=messages,
-            max_tokens=150, 
+            max_tokens=150,
             temperature=AI_CONFIG["temperature"]
         )
-        
+
         if text:
             for bad in ['User:', 'Anon:', 'System:', 'AI:']:
                 text = text.replace(bad, '')
             return text
-            
+
         return None
 
-    async def generate_summary(self, text_dump: str, stream: str) -> str:        
+    async def generate_summary(self, text_dump: str, stream: str) -> str:
         prompts = {
             "ru": (
                 "Ты — Анон с имиджборды (Двач). Твоя задача: написать подробную, циничную и смешную суть (summary) этого треда (посты разделены '|'). "
@@ -610,9 +609,9 @@ class NeuroManager:
             ),
             "jp": "お前は2chねらーだ。「|」で区切られたスレの流れを毒舌で、ネットスラング（草、ｗ、～だろ）を多用して解説しろ。丁寧語禁止。煽り全開で。段落を分けて、[b]強調[/b]や、行頭の'>'（レス引用）を自由に使え。"
         }
-        
+
         system_msg = prompts.get(stream, prompts['ru'])
-        
+
         try:
             from summarize import summarize_text_with_hf
             result = await summarize_text_with_hf(system_msg, text_dump)
@@ -625,14 +624,14 @@ class NeuroManager:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": text_dump}
         ]
-        
+
         result = await self._safe_api_call(
             messages=messages,
             max_tokens=250,
             temperature=0.8
         )
         if result:
-            return result   
+            return result
         return "Нейронка сдохла."
 
     async def ocr_image(self, image_url: str, stream: str) -> str:
@@ -658,9 +657,9 @@ class NeuroManager:
             messages=messages,
             max_tokens=500,
             temperature=0.1,
-            model="qwen/qwen3.8-27b" 
+            model="qwen/qwen3.8-27b"
         )
-        
+
         if result: return result
         return "Ошибка распознавания (возможно, лимиты или файл недоступен)."
 
@@ -685,14 +684,14 @@ class NeuroManager:
 
         result = await self._safe_api_call(
             messages=messages,
-            max_tokens=300, 
+            max_tokens=300,
             temperature=0.3,
-            model="qwen/qwen3.8-27b" 
+            model="qwen/qwen3.8-27b"
         )
-        
+
         if result:
             clean = result.replace("Tags:", "").replace("Here are the tags:", "").strip()
             clean = " ".join(clean.split())
             return clean
-            
+
         return ""

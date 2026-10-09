@@ -54,7 +54,7 @@ if _orig_handle_updates:
 # Глобальный кэш запущенных клиентов: {bot_token: Client}
 _ACTIVE_CLIENTS = {}
 _LAST_USED = {}  # {bot_token: timestamp}
-_CLIENT_LOCK = asyncio.Lock()   
+_CLIENT_LOCK = asyncio.Lock()
 _CONNECTION_COOLDOWN = {}
 import json
 
@@ -97,14 +97,14 @@ async def _cleanup_idle_clients():
     try:
         now = time.time()
         idle_timeout = 600 # 10 минут
-        
+
         tokens_to_remove = []
-        
+
         # Ищем кандидатов на удаление (без лока, чтобы не блокировать всё)
         for token, last_time in _LAST_USED.items():
             if now - last_time > idle_timeout:
                 tokens_to_remove.append(token)
-                
+
         if not tokens_to_remove:
             return
 
@@ -120,7 +120,7 @@ async def _cleanup_idle_clients():
                         logger.info(f"💤 [MTProto] Client stopped due to inactivity: {token[:10]}...")
                     except Exception as e:
                         logger.warning(f"⚠️ Error stopping idle client: {e}")
-                    
+
                     token = raw_cleanup_token
                     _ACTIVE_CLIENTS.pop(token, None)
                     _LAST_USED.pop(token, None)
@@ -158,13 +158,13 @@ async def get_active_client(bot_token: str):
 
     async with _CLIENT_LOCK:
         _LAST_USED[bot_token] = time.time()
-        
+
         if bot_token in _ACTIVE_CLIENTS:
             client = _ACTIVE_CLIENTS[bot_token]
             if client.is_connected:
                 return client
             else:
-                try: 
+                try:
                     await client.start()
                     return client
                 except Exception as e:
@@ -177,14 +177,14 @@ async def get_active_client(bot_token: str):
         short_token = secret_fingerprint(bot_token)
         sess_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "sessions")
         os.makedirs(sess_dir, exist_ok=True)
-        
+
         client = Client(
             name=f"bot_{short_token}_{os.getpid()}_{int(time.time()*1000)}",
             api_id=int(API_ID),
             api_hash=API_HASH,
             bot_token=bot_token,
             workdir=sess_dir,
-            no_updates=True, 
+            no_updates=True,
             in_memory=True,
             ipv6=False
         )
@@ -280,7 +280,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
             )
 
             return bool(path and os.path.exists(output_path) and os.path.getsize(output_path) > 0)
-    
+
     except asyncio.TimeoutError:
         logger.error(f"❌ [MTProto] Download Timed Out: {file_id[:15]}...")
         return False
@@ -342,13 +342,13 @@ async def upload_file_mtproto(bot_token: str, chat_id: int, file_bytes: bytes, f
         if not msg:
             return None
         res = {"message_id": msg.id}
-        
+
         media = getattr(msg, msg.media.value) if msg.media else None
         if media:
             res["file_id"] = getattr(media, "file_id", None)
             thumb = getattr(media, "thumbs", [None])[0] if hasattr(media, "thumbs") else None
             res["thumb_id"] = getattr(thumb, "file_id", None)
-            
+
         return res
 
     except Exception as e:

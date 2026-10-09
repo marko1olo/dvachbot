@@ -8,7 +8,6 @@ Database Sentiment & Moderation Forensics in stats_v2.py.
 
 import pytest
 import time
-import sqlite3
 
 from stats_v2 import run_db_sentiment_moderation_forensics, generate_forensics_report_text
 

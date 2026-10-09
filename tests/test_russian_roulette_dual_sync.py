@@ -1,12 +1,9 @@
 import unittest
-import asyncio
-import time
 from unittest.mock import AsyncMock, patch
 
 from russian_roulette_pvp import (
     create_rr_challenge,
     accept_rr_challenge,
-    pull_rr_trigger,
     sync_rr_screens,
     active_rr_games,
     user_active_rr_game,
@@ -24,11 +21,11 @@ class TestRussianRouletteDualSync(unittest.IsolatedAsyncioTestCase):
         self.mock_db = AsyncMock()
         self.mock_db.execute = AsyncMock()
         self.mock_db.commit = AsyncMock()
-        
+
         # Patch db_pool
         self.pool_patch = patch("russian_roulette_pvp.get_pool", return_value=self.mock_db)
         self.pool_patch.start()
-        
+
         # Patch user balance & transactions
         self.bal_patch = patch("russian_roulette_pvp.get_user_global_balance", return_value=50000.0)
         self.bal_patch.start()
@@ -57,14 +54,14 @@ class TestRussianRouletteDualSync(unittest.IsolatedAsyncioTestCase):
         ok, _, gid = await create_rr_challenge("b", p1, bet)
         self.assertTrue(ok)
         game = active_rr_games[gid]
-        
+
         # Simulate P1 receiving card in their DM
         p1_chat = 111111
         p1_msg = 901
         game["chat_id"] = p1_chat
         game["msg_id"] = p1_msg
         game["player_msgs"][p1] = (p1_chat, p1_msg)
-        
+
         # Third-party user receives broadcast card
         bcast_chat = 333333
         bcast_msg = 902
@@ -87,7 +84,7 @@ class TestRussianRouletteDualSync(unittest.IsolatedAsyncioTestCase):
         # Verify bot edited both P1 and P2 messages
         edited_calls = mock_bot.edit_message_text.call_args_list
         edited_chats = [c.kwargs.get("chat_id") for c in edited_calls]
-        
+
         self.assertIn(p1_chat, edited_chats, "P1 screen must be edited")
         self.assertIn(p2_chat, edited_chats, "P2 screen must be edited")
         self.assertIn(bcast_chat, edited_chats, "Third-party broadcast must be neutralized")
@@ -95,13 +92,13 @@ class TestRussianRouletteDualSync(unittest.IsolatedAsyncioTestCase):
         # Verify buttons: Active player has shoot button, waiting player has wait button
         turn = game["turn"]
         waiting_player = p2 if turn == p1 else p1
-        
+
         p_turn_kb = get_rr_game_keyboard(gid, is_finished=False, is_my_turn=True)
         p_wait_kb = get_rr_game_keyboard(gid, is_finished=False, is_my_turn=False)
 
         self.assertIn("СПУСТИТЬ КУРОК", p_turn_kb.inline_keyboard[0][0].text)
         self.assertEqual(f"rr_shoot:{gid}", p_turn_kb.inline_keyboard[0][0].callback_data)
-        
+
         self.assertIn("Очередь соперника", p_wait_kb.inline_keyboard[0][0].text)
         self.assertEqual(f"rr_wait:{gid}", p_wait_kb.inline_keyboard[0][0].callback_data)
 

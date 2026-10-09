@@ -1,17 +1,14 @@
-import asyncio
 import io
 import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import shared_state
 from leaderboard_card import (
     LEADERBOARD_CACHE,
     MAX_LEADERBOARD_CACHE_SIZE,
-    CACHE_TTL,
     generate_leaderboard_payload,
     LeaderboardData,
-    LeaderboardEntry,
 )
 from dice_duel_engine import active_dice_games, dice_watchdog_step, dice_engine_lock
 from russian_roulette_pvp import active_rr_games, rr_watchdog_step, rr_lock

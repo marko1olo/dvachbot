@@ -19,7 +19,7 @@ def print_indexes(table):
         return
     print(f"Indexes for {table}:")
 
-    cur.execute(f"""
+    cur.execute("""
         SELECT m.name, i.name
         FROM pragma_index_list(?) m, pragma_index_info(m.name) i
     """, (table,))

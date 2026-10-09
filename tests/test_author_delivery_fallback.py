@@ -24,7 +24,7 @@ async def test_author_delivery_fallback_on_direct_failure():
     processor.final_content = {"type": "text", "text": "test post content"}
     # Simulate author delivery failed (empty results)
     processor.author_results = []
-    
+
     # Run _enqueue_and_notify with mocked enqueue_board_message
     enqueued_items = []
     async def mock_enqueue(board_id, item):
@@ -37,7 +37,7 @@ async def test_author_delivery_fallback_on_direct_failure():
         await processor._enqueue_and_notify()
     finally:
         delivery_manager.enqueue_board_message = orig_enqueue
-        
+
     assert 7716348189 in processor.recipients, "Author must be added to recipients if direct delivery failed"
     assert len(enqueued_items) == 1
     assert 7716348189 in enqueued_items[0]["recipients"]
@@ -59,7 +59,7 @@ async def test_broadcaster_raw_media_timeout_scaling():
         verbose=False
     )
     bc = MessageBroadcaster(cfg)
-    
+
     # Check that _send_one_guarded detects raw media and uses >= 120s request timeout
     captured_timeouts = []
     async def mock_send_one(uid, req_timeout):
@@ -67,7 +67,7 @@ async def test_broadcaster_raw_media_timeout_scaling():
         mock_msg = MagicMock()
         mock_msg.message_id = 12345
         return [mock_msg]
-        
+
     bc._send_one = mock_send_one
     await bc._send_one_guarded(7716348189, timeout_sec=120.0)
     assert len(captured_timeouts) == 1

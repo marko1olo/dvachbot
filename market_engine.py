@@ -12,12 +12,11 @@ import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
-from aiogram import F, Router, types, Bot
+from aiogram import F, Router, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from common.db_pool import db_lock, db_transaction, get_pool
+from common.db_pool import db_transaction, get_pool
 from common.database import (
     add_to_abu_fund,
     add_user_global_balance,

@@ -15,10 +15,8 @@ Hilarious & Brutal Counter-Reactions on AI Target Attacks (author_id == 0).
 """
 
 import pytest
-import asyncio
-import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from common.bot_helpers import handle_cyberchad_counter_action, _get_user_active_items
 from common.database import get_user_global_balance, get_abu_fund_total

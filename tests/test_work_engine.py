@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import asyncio
 import json
 import time
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -19,7 +18,7 @@ def mock_daytime_work():
 
 def test_work_vacancies_structure():
     assert len(WORK_VACANCIES) == 26, f"Expected 26 vacancies, found {len(WORK_VACANCIES)}"
-    
+
     expected_keys = [
         "bottles", "sweeper", "shoplifter", "courier", "captcha", "cho_security", "spy",
         "crypto_wiper", "factory", "mod_b", "it_freelance", "scam", "deputy", "cam_model",

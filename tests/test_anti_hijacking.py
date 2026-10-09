@@ -7,14 +7,12 @@ tests/test_anti_hijacking.py — Verification of message ownership and anti-hija
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from aiogram.types import CallbackQuery, Message, User, Chat
+from aiogram.types import CallbackQuery, Message, User
 
 from main import (
     _MENU_MESSAGE_OWNERS,
     _record_menu_owner,
-    _check_menu_owner,
     cb_prof_card,
-    cb_prof_ledger,
     cb_shop_cat_weapons,
     cb_shop_buy,
 )

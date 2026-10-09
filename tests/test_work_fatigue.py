@@ -3,8 +3,7 @@
 tests/test_work_fatigue.py — Unit tests for work fatigue and rolling 24h shifts decay per vacancy.
 """
 import time
-import pytest
-from common.work_engine import execute_job_action, WORK_VACANCIES
+from common.work_engine import execute_job_action
 
 def test_work_fatigue_progression():
     """Verify each consecutive shift on the SAME vacancy in 24h reduces payout progressively down to 20% floor."""

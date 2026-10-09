@@ -1,12 +1,10 @@
 import pytest
-import asyncio
 import time
 from unittest import mock
 from aiogram.types import Message, Chat, User
 
-import shared_state
 from shared_state import message_to_post, messages_storage, post_to_messages, storage_lock
-from common.database import create_post, add_post_copies, get_post_by_num, get_post_info_by_copy
+from common.database import create_post, add_post_copies
 from handlers.message_router import resolve_reply_from_message
 from post_processor import NewPostContext, NewPostProcessor
 

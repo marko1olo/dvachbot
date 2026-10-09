@@ -5,26 +5,26 @@ OUTPUT_FILE = "clean_import.sql"
 
 def fix_dump_final():
     print(f"🔧 Финальная чистка {INPUT_FILE}...")
-    
+
     if not os.path.exists(INPUT_FILE):
         print("❌ Файл backup.sql не найден!")
         return
 
     lines_kept = 0
     lines_skipped = 0
-    
+
     skip_trigger = False
     skip_fts_multiline = False
 
     with open(INPUT_FILE, 'r', encoding='utf-8', errors='replace') as fin:
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as fout:
-            
+
             # Настройки
             fout.write("PRAGMA foreign_keys = OFF;\n")
             fout.write("PRAGMA synchronous = OFF;\n")
             fout.write("PRAGMA journal_mode = WAL;\n")
             fout.write("BEGIN TRANSACTION;\n")
-            
+
             # Пустая таблица FTS (заглушка)
             fout.write("CREATE VIRTUAL TABLE IF NOT EXISTS PostsFTS USING fts5(content, content='Posts', content_rowid='post_num');\n")
 
@@ -44,7 +44,7 @@ def fix_dump_final():
                 # 3. Удаляем ТРИГГЕРЫ
                 if "CREATE TRIGGER" in line:
                     skip_trigger = True
-                
+
                 if skip_trigger:
                     lines_skipped += 1
                     if line_strip.endswith("END;"):
@@ -58,7 +58,7 @@ def fix_dump_final():
                         if not line_strip.endswith(";"):
                             skip_fts_multiline = True
                         continue
-                
+
                 if skip_fts_multiline:
                     lines_skipped += 1
                     if line_strip.endswith(";"):
@@ -76,12 +76,12 @@ def fix_dump_final():
                 # ВСЁ ОСТАЛЬНОЕ ПИШЕМ
                 fout.write(line)
                 lines_kept += 1
-                
+
                 if lines_kept % 200000 == 0:
                     print(f"⏳ Живых строк: {lines_kept}...", end='\r')
 
             fout.write("\nCOMMIT;")
-    
+
     print(f"\n✅ Файл готов: {OUTPUT_FILE}")
     print(f"🗑️ Вырезано мусора: {lines_skipped}")
     print("👉 Выполняй: sqlite3.exe dvach_bot.db < clean_import.sql")

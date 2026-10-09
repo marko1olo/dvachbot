@@ -1,7 +1,6 @@
 import sys
 import os
 import unittest
-import time
 from unittest.mock import patch, MagicMock, AsyncMock
 
 # Setup required env var

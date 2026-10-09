@@ -1,14 +1,9 @@
-import pytest
-import re
 from html.parser import HTMLParser
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import shared_state
-from shared_state import BoundedDict, message_to_post
+from shared_state import BoundedDict
 from common.text_chunker import (
     count_tg_utf16_units,
-    utf16_to_char_index,
-    get_open_tags,
     chunk_html_message,
     safe_html_truncate,
 )
@@ -63,7 +58,7 @@ class TestBoundedDict:
         bd = BoundedDict(max_size=limit)
         for i in range(250):
             bd[i] = f"val_{i}"
-        
+
         assert len(bd) == limit
         # Oldest 150 items (0..149) should have been evicted
         for i in range(150):
@@ -171,7 +166,7 @@ class TestTextChunker:
         p1 = "Paragraph 1: " + ("word " * 500)
         p2 = "Paragraph 2: " + ("word " * 500)
         full_text = f"{p1}\n\n{p2}"
-        
+
         chunks = chunk_html_message(full_text, max_chars=3500)
         assert len(chunks) >= 2
         for chk in chunks:
@@ -232,7 +227,7 @@ class TestTextChunker:
         """safe_html_truncate truncates cleanly and closes all open tags."""
         text = "<b><i><u>" + ("Очень длинный текст поста " * 50) + "</u></i></b>"
         truncated = safe_html_truncate(text, max_units=200, suffix="…")
-        
+
         assert count_tg_utf16_units(truncated) <= 200
         assert truncated.endswith("…</u></i></b>")
         validator = HTMLTagValidator()

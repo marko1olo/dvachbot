@@ -16,27 +16,17 @@ Tiers Covered:
 
 import asyncio
 import json
-import os
-import shutil
-import tempfile
 import time
-from typing import Dict, List, Optional
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiosqlite
 import pytest
-from aiogram import Bot, types
+from aiogram import Bot
 from aiogram.types import (
     CallbackQuery,
     Chat,
-    Document,
-    InlineKeyboardMarkup,
     Message,
-    PhotoSize,
     User,
-    Video,
-    VideoNote,
-    Voice,
 )
 
 import shared_state
@@ -47,27 +37,16 @@ from shared_state import (
     NewPostParams,
     ShadowRejectContext,
 )
-import ai_manager
 from ai_manager import (
     _LAST_CYBERCHAD_INTERVENTION,
     _BOARD_FIGHT_TRACKER,
     register_post_and_maybe_trigger_cyberchad_intervention,
-    CYBERCHAD_FIGHT_INTERVENTION_PROMPT,
 )
 from common.spam_filter import (
-    BURST_FLOOD_LIMIT,
-    BURST_FLOOD_WINDOW,
-    RATE_FLOOD_LIMIT,
-    RATE_FLOOD_WINDOW,
-    MINUTE_FLOOD_LIMIT,
-    MINUTE_FLOOD_WINDOW,
     FLOOD_BASE_MUTE_SEC,
     BAYAN_BASE_MUTE_SEC,
-    BAYAN_RESET_SEC,
     check_flood,
     check_bayan,
-    evaluate_message_for_autoshadowmute,
-    handle_shadow_mute_continuation,
     _user_request_timestamps,
     _bayan_tracker,
     _bayan_mute_count,
@@ -75,14 +54,9 @@ from common.spam_filter import (
     _board_recent_fingerprints,
 )
 from common.database import (
-    _apply_migrations,
-    _create_indices,
-    _create_tables,
-    _insert_initial_data,
     apply_shadow_mute,
     get_shadow_mute_info,
     update_shadow_mute,
-    apply_regular_mute,
     add_user_global_balance,
     deduct_user_global_balance,
     get_user_global_balance,
@@ -93,26 +67,19 @@ from common.database import (
 )
 from common.bot_helpers import (
     handle_cyberchad_counter_action,
-    _get_user_active_items,
 )
 from russian_roulette_pvp import (
     get_rr_lobby_keyboard,
     get_adaptive_rr_bet_presets,
-    format_rr_bet_amount,
     MIN_RR_BET,
     MAX_RR_BET,
 )
 from dice_duel_engine import (
     get_dice_lobby_keyboard,
-    get_adaptive_dice_bet_presets,
-    format_dice_bet_amount,
-    MIN_DICE_BET,
     MAX_DICE_BET,
 )
-import stats_v2
 from stats_v2 import (
     make_sparkline,
-    generate_instant_snapshot_text,
 )
 
 
@@ -595,7 +562,6 @@ class TestTier1R3DynamicPvPLobbies:
     @pytest.mark.asyncio
     async def test_r3_direct_command_stake_parsing(self, isolated_test_db):
         """Direct commands with amount (e.g. /duel 250) parse the exact number."""
-        import main
         from main import _handle_duel_create
         user_id = 401
         board_id = "b"
@@ -615,7 +581,6 @@ class TestTier1R3DynamicPvPLobbies:
     @pytest.mark.asyncio
     async def test_r3_challenge_broadcast_only_after_confirmation(self, isolated_test_db):
         """Lobby creation opens selector; broadcast occurs ONLY after player confirms the stake."""
-        import main
         from main import _handle_duel_create
         user_id = 402
         board_id = "b"

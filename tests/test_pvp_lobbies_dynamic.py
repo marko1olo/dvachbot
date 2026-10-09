@@ -10,26 +10,18 @@ Dynamic PvP Duel & Game Lobby (/duel, /dice, /ttt, /rr).
 """
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from russian_roulette_pvp import (
     cmd_russian_roulette,
     get_rr_lobby_keyboard,
     get_adaptive_rr_bet_presets,
-    format_rr_lobby_message,
-    MIN_RR_BET,
-    MAX_RR_BET,
 )
 from dice_duel_engine import (
     get_dice_lobby_keyboard,
     get_adaptive_dice_bet_presets,
-    format_dice_bet_amount,
     cmd_dice_duel_entry,
-    MIN_DICE_BET,
-    MAX_DICE_BET,
 )
-from ttt_engine import get_ttt_lobby_keyboard, cmd_ttt
 from common.database import add_user_global_balance
 
 

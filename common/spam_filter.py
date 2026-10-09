@@ -6,7 +6,7 @@ import re
 import difflib
 import unicodedata
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Any
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, UTC
 from enum import Enum, auto
@@ -483,7 +483,7 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
             return False
     except Exception:
         pass
-    
+
     clean_canonical = canonicalize_spam_text(text)
 
     # Check phone leak
@@ -650,7 +650,7 @@ def check_bayan(
         return False, 0
 
     tracker = _bayan_tracker[user_id]
-    
+
     # Prune old entries
     while tracker and now - tracker[0][0] > BAYAN_WINDOW_SEC:
         tracker.popleft()
@@ -666,7 +666,7 @@ def check_bayan(
         1 for item in tracker
         if item[1] == fp and not (media_group_id and len(item) > 3 and item[3] == str(media_group_id))
     )
-    
+
     if bayan_count >= BAYAN_THRESHOLD:
         last_mute = _bayan_mute_last_ts[user_id]
         if last_mute and now - last_mute > BAYAN_RESET_SEC:
@@ -674,7 +674,7 @@ def check_bayan(
 
         escalation = _bayan_mute_count[user_id]
         mute_seconds = int(min(MAX_BAYAN_MUTE_SEC, BAYAN_BASE_MUTE_SEC * (2 ** escalation)))
-        
+
         _bayan_mute_count[user_id] = escalation + 1
         _bayan_mute_last_ts[user_id] = now
         tracker.clear()
@@ -1222,9 +1222,9 @@ def _check_repeats(
                 last_items_deque.popleft()
             else:
                 break
-                
+
         last_items_deque.append((now, content))
-        
+
         # Consecutive identical items check:
         # e.g., max_repeats = 3 allows up to 3 identical stickers/animations in a row; 4th is blocked.
         consecutive_limit = effective_max_repeats + 1
@@ -1275,7 +1275,7 @@ def _check_cross_board_spam(
 
     now = now_ts or time.time()
     user_cb = cross_board_spam_tracker[user_id]
-    
+
     # Prune older than CROSS_BOARD_WINDOW
     while user_cb and now - user_cb[0][0] > CROSS_BOARD_WINDOW:
         user_cb.popleft()
@@ -1299,7 +1299,7 @@ def _check_cross_board_spam(
                         is_duplicate = True
                 elif contents[0] == contents[1] == contents[2]:
                     is_duplicate = True
-                
+
                 if is_duplicate:
                     if record_history:
                         user_cb.clear()
@@ -1337,11 +1337,11 @@ def check_rate_limit(
 
     now_ts = time.time()
     tracker = _spam_trackers[board_id][user_id]
-    
+
     # Prune old timestamps
     tracker[:] = [t for t in tracker if t > now_ts - rules['window_sec']]
     tracker.append(now_ts)
-    
+
     if posts_count is None:
         posts_count = get_cached_user_posts(user_id)
     tier = get_user_tier(posts_count)
@@ -1518,7 +1518,7 @@ async def evaluate_message_for_autoshadowmute(
     if text_content or file_unique_id or file_id:
         payload = text_content or file_unique_id or file_id or ""
         if not _check_cross_board_spam(user_id, board_id, payload, msg_type, raw_content_type):
-            cb_reason = f"Кросс-борд веерный спам по доскам"
+            cb_reason = "Кросс-борд веерный спам по доскам"
             from common.database import apply_shadow_mute
             logger.warning(
                 f"🚫 [SPAM_FILTER_TRIGGER: CROSS_BOARD] user={user_id} board={board_id} duration={BAYAN_BASE_MUTE_SEC}s"
@@ -1539,7 +1539,7 @@ async def evaluate_message_for_autoshadowmute(
         media_group_id=media_group_id
     )
     if is_bayan_trigger:
-        reason = f"3+ баяна за 3 минуты"
+        reason = "3+ баяна за 3 минуты"
         from common.database import apply_shadow_mute
         logger.warning(
             f"🚫 [SPAM_FILTER_TRIGGER: BAYAN] user={user_id} board={board_id} duration={bayan_mute_sec}s"
@@ -1593,7 +1593,7 @@ async def analyze_message_for_spam(
 
     now = datetime.now(UTC)
     violations = _spam_violations[board_id].setdefault(user_id, {'level': 0, 'last_reset': now})
-    
+
     if now - violations['last_reset'] > timedelta(minutes=5):
         violations['level'] = 0
         violations['last_reset'] = now
@@ -1604,7 +1604,7 @@ async def analyze_message_for_spam(
     if not check_rate_limit(board_id, user_id, rules, posts_count=posts_count, media_group_id=media_group_id):
         violations['level'] += 1
         return SpamResult.BAN_REQUIRED, violations['level']
-        
+
     return SpamResult.CLEAN, violations['level']
 
 
@@ -1612,9 +1612,9 @@ def check_image_spam_limit(board_id: str, requested_images: int) -> bool:
     """Checks the global board image spam limit (Sliding Window)."""
     now_ts = time.time()
     tracker = image_spam_tracker[board_id]
-    
+
     tracker[:] = [t for t in tracker if now_ts - t < IMAGE_SPAM_WINDOW]
-    
+
     if len(tracker) + requested_images > IMAGE_SPAM_LIMIT:
         return False
     return True

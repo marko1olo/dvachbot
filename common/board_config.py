@@ -8,7 +8,7 @@ dotenv_path = project_root / '.env'
 load_dotenv(dotenv_path=dotenv_path)
 
 # --- НАСТРОЙКИ ---
-ENABLE_MULTILANG = False 
+ENABLE_MULTILANG = False
 CIS_COUNTRY_CODES = {'RU', 'UA', 'BY', 'KZ', 'KG', 'TJ', 'UZ', 'AM', 'AZ', 'MD', 'TM'}
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://example.com")

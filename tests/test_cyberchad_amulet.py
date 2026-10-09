@@ -7,7 +7,6 @@ Tests for Cyberchad Amulet ('Оберег от Киберчеда'):
 4. Rate limit rejection using respectful adoring phrases for amulet owners.
 """
 
-import time
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -17,13 +16,10 @@ from common.cyberchad_guard import record_cyberchad_trigger_approved, reset_user
 from ai_manager import (
     CYBERCHAD_AMULET_ADORATION_PROMPT,
     CYBERCHAD_AMULET_DEFENSE_PROMPT,
-    CYBERCHAD_AMULET_DEFENSE_FALLBACK_ROASTS,
-    CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS,
     register_post_and_maybe_trigger_cyberchad_intervention,
     schedule_persona_reply,
     _BOARD_FIGHT_TRACKER,
     _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION,
-    _LAST_CHAD_POST_TS,
 )
 from handlers.message_router import (
     trigger_cyberchad_with_rate_limit,
@@ -449,7 +445,6 @@ async def test_cyberchad_amulet_expiration_and_toggle():
 async def test_cmd_amulet_and_callbacks():
     """Verify /amulet command and inline callbacks for toggling and discarding."""
     import main
-    from unittest.mock import MagicMock
     now = 2000000.0
     user_id = 99999
 

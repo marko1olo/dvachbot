@@ -1,7 +1,6 @@
-import sys
 import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
 os.environ["BOT_TOKEN"] = "123:test"

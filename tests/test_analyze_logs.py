@@ -8,8 +8,6 @@ if _scripts_dir not in sys.path:
 import unittest
 import tempfile
 import os
-import builtins
-from unittest.mock import patch
 from datetime import datetime, timedelta
 import analyze_logs
 
@@ -43,7 +41,7 @@ class TestAnalyzeLogs(unittest.TestCase):
         # Valid LIVE
         log_content += f"{dt2},123 | [LIVE] 1.2.3.4\n"
         # Invalid format
-        log_content += f"invalid line\n"
+        log_content += "invalid line\n"
         # Old date
         old_dt = (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
         log_content += f"{old_dt},123 | [DO] 1.2.3.4 | GET /api/data\n"
@@ -98,7 +96,7 @@ class TestAnalyzeLogs(unittest.TestCase):
 
     def test_analyze_visitors_log_date_parse_error(self):
         # Test date parse error by providing valid general format but invalid date string
-        log_content = f"9999-99-99 99:99:99,123 | [DO] 1.2.3.4 | GET /api/data\n"
+        log_content = "9999-99-99 99:99:99,123 | [DO] 1.2.3.4 | GET /api/data\n"
         self.create_log_file(log_content)
 
         analyze_logs.analyze_visitors_log(self.log_filepath)

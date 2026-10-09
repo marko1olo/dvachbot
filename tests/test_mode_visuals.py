@@ -1,7 +1,5 @@
 import unittest
 from unittest.mock import patch, MagicMock
-import os
-import io
 from PIL import Image, ImageFont
 
 from mode_visuals import create_visual_post

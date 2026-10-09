@@ -1,10 +1,9 @@
-import asyncio
 import io
 import json
 import os
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import patch
 
 from common.async_file_io import (
     copy_fileobj_to_temp,

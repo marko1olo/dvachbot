@@ -1,12 +1,9 @@
 import unittest
-import asyncio
-import time
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from dice_duel_engine import (
     create_dice_challenge,
     accept_dice_challenge,
-    execute_player_roll,
     sync_dice_screens,
     active_dice_games,
     user_active_dice_game,

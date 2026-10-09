@@ -5,8 +5,7 @@ Verifies safe_tg_caption shielding against TelegramBadRequest 'Bad Request: MESS
 """
 
 import re
-import pytest
-from common.text_utils import safe_tg_caption, clean_html_tags, clean_html_for_tg
+from common.text_utils import safe_tg_caption
 from leaderboard_card import LeaderboardData, LeaderboardEntry, format_leaderboard_text
 from stats_generator import UserStatsCardData, _format_text_report
 

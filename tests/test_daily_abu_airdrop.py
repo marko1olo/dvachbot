@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import asyncio
 import json
 import time
 from unittest import mock
@@ -12,7 +11,6 @@ from daily_abu_airdrop_engine import (
     check_and_grant_newbie_post_bonus,
     fetch_daily_qualified_users,
     execute_daily_airdrop,
-    DAILY_PRIZE_PER_WINNER,
     NEWBIE_GRANT_AMOUNT,
 )
 

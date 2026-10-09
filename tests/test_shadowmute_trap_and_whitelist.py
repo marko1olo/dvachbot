@@ -14,9 +14,7 @@ Verification suite for:
 """
 
 import time
-import pytest
 import unittest
-from datetime import datetime, UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import shared_state
@@ -25,7 +23,6 @@ from common.spam_filter import (
     check_link_or_ad_spam,
     is_spam_filtered,
     evaluate_message_for_autoshadowmute,
-    handle_shadow_mute_continuation,
 )
 from handlers.message_router import check_spam
 

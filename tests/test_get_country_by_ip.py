@@ -1,7 +1,7 @@
 import sys
 import os
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"

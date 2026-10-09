@@ -1,21 +1,18 @@
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-import json
-import time
 
 @pytest.mark.asyncio
 async def test_slots_spin_animation_in_place():
     """Verify that _execute_slots_spin edits caption in-place with spinning animation and then final reels."""
     from main import _execute_slots_spin
-    
+
     mock_bot = AsyncMock()
     mock_msg = AsyncMock()
     mock_msg.chat.id = 12345
     mock_msg.edit_caption = AsyncMock()
 
     mock_db = AsyncMock()
-    
+
     with patch("main.casino_engine.check_casino_cooldown", return_value=(True, 0)), \
          patch("main.get_pool", return_value=mock_db), \
          patch("main.get_user_global_balance", return_value=10000), \
@@ -162,7 +159,7 @@ async def test_open_duel_card_keyboard_has_accept_button():
         mock_msg.answer.assert_called_once()
         call_kwargs = mock_msg.answer.call_args[1]
         kb = call_kwargs["reply_markup"]
-        
+
         # Verify both Accept and Cancel buttons are present on the public card
         buttons = [btn for row in kb.inline_keyboard for btn in row]
         button_callbacks = [b.callback_data for b in buttons]

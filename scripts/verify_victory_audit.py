@@ -3,7 +3,6 @@ import os
 import py_compile
 import sqlite3
 import ast
-import json
 import time
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -64,7 +63,7 @@ def check_sqlite_wal_and_integrity():
     if not os.path.exists(DB_PATH):
         print("❌ Database file does not exist!")
         return False
-    
+
     db_size = os.path.getsize(DB_PATH)
     wal_size = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
     shm_size = os.path.getsize(DB_PATH + "-shm") if os.path.exists(DB_PATH + "-shm") else 0
@@ -233,7 +232,7 @@ def check_ast_integrity_and_facades():
     post_helpers_path = os.path.join(REPO_ROOT, "post_helpers.py")
     with open(post_helpers_path, "r", encoding="utf-8", errors="ignore") as f:
         ph_content = f.read()
-    
+
     # Verify compact_icon is not added to custom_prefix
     if 'custom_prefix = badge_emoji + debuff_icons + prefix_str' in ph_content:
         print("✅ post_helpers.py: custom_prefix correctly omits compact_icon.")

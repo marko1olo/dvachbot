@@ -19,7 +19,6 @@ import tempfile
 import threading
 import tracemalloc
 import unittest
-import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import matplotlib
@@ -46,7 +45,7 @@ class TestAnalyticsChallengerStress(unittest.TestCase):
         conn = sqlite3.connect(cls.db_path)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
-        
+
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS Users (
@@ -331,7 +330,7 @@ class TestAnalyticsChallengerStress(unittest.TestCase):
             self.assertEqual(data['total_posts'], 0)
             self.assertEqual(data['balance'], 0)
             self.assertIn("Одинокий Волк", data['top_partner'])
-            
+
             buf = my_wrapped_generator.generate_my_wrapped_poster(999999999)
             self.assertIsInstance(buf, io.BytesIO)
             self.assertGreater(buf.getbuffer().nbytes, 1000)
@@ -450,7 +449,7 @@ class TestAnalyticsChallengerStress(unittest.TestCase):
                     "FileRegistry (file_unique_id TEXT, tags TEXT, created_at REAL)",
                     "Mutes (user_id INT, mute_type TEXT, expires_at REAL)"]:
             conn.execute(f"CREATE TABLE IF NOT EXISTS {tbl}")
-        
+
         # Insert 15 users, all with 0 balance
         for i in range(1, 16):
             conn.execute("INSERT INTO Users (user_id, balance, active_items) VALUES (?, 0, '{}')", (i,))

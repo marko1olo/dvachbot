@@ -5,7 +5,6 @@ CORS headers (Access-Control-Allow-Origin: *), and valid image binary data.
 """
 import sys
 import os
-import asyncio
 from unittest.mock import patch, AsyncMock
 
 # Add project root to sys.path

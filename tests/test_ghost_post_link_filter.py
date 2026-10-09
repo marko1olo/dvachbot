@@ -9,9 +9,7 @@ Verifies:
 """
 
 import time
-import pytest
 import unittest
-from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import shared_state

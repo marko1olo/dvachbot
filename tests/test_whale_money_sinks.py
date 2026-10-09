@@ -7,12 +7,9 @@ Comprehensive test suite for Milestone 3 (Whale Money Sinks & Currency Dilution)
 - F3.3: Super-Wealth Tax (progressive brackets, idle surcharge) & Class Wars (/raid_oligarch)
 """
 
-import asyncio
 import json
-import math
 import random
 import time
-from typing import Any, Dict, List
 
 import pytest
 
@@ -20,7 +17,6 @@ import common.config
 import common.database
 import common.db_pool
 import lootbox_engine
-import whale_economy_engine
 from whale_economy_engine import (
     buy_whale_safe,
     calculate_wealth_tax,

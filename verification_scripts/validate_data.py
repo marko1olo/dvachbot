@@ -24,9 +24,9 @@ def validate():
     # 2. Проверяем все посты
     with open(posts_file, 'r', encoding='utf-8') as f:
         posts_data = json.load(f)
-    
+
     print(f"Анализирую {len(posts_data)} постов...")
-    
+
     invalid_posts = []
     for post in posts_data:
         board_id = post.get('board_id')
@@ -39,14 +39,14 @@ def validate():
         print("Проблема может быть в чем-то другом. Это неожиданный результат.")
     else:
         print(f"\n--- ⛔ ВАЛИДАЦИЯ ПРОВАЛЕНА: Найдено {len(invalid_posts)} постов с некорректным board_id! ---")
-        
+
         invalid_board_ids = [post.get('board_id') for post in invalid_posts]
         id_counts = Counter(invalid_board_ids)
-        
+
         print("\nРаспределение по некорректным board_id:")
         for board_id, count in id_counts.items():
             print(f" - ID доски '{board_id}': {count} постов")
-            
+
         print("\nПримеры некорректных постов (первые 5):")
         for i, post in enumerate(invalid_posts[:5]):
             print(f" {i+1}. post_num: {post.get('post_num')}, board_id: '{post.get('board_id')}'")

@@ -3,8 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from work_alerts import (
-    WORK_ALERT_PHRASES, WORK_ALERT_50_PHRASES, WORK_ALERT_100_PHRASES, schedule_work_cooldown_alert,
-    _work_cooldown_alert_task, _scheduled_work_alerts
+    WORK_ALERT_PHRASES, WORK_ALERT_50_PHRASES, WORK_ALERT_100_PHRASES, _work_cooldown_alert_task
 )
 
 
@@ -39,9 +38,9 @@ async def test_work_cooldown_alert_task_fires():
          patch("common.db_pool.get_pool", new=AsyncMock(return_value=MagicMock())), \
          patch("common.bot_helpers._get_user_active_items", new=AsyncMock(return_value={"work_cooldowns": {"bottles": 0}})), \
          patch("banner_manager.send_banner_message", new=AsyncMock()) as mock_send_banner:
-        
+
         await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0)
-        
+
         mock_send_banner.assert_called_once()
         args, kwargs = mock_send_banner.call_args
         caption_lower = kwargs["caption"].lower()
@@ -59,9 +58,9 @@ async def test_work_cooldown_alert_skips_if_active_cooldown_remains():
          patch("common.db_pool.get_pool", new=AsyncMock(return_value=MagicMock())), \
          patch("common.bot_helpers._get_user_active_items", new=AsyncMock(return_value={"work_cooldowns": {"factory": 9999999999}})), \
          patch("banner_manager.send_banner_message", new=AsyncMock()) as mock_send_banner:
-        
+
         await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0)
-        
+
         mock_send_banner.assert_not_called()
 
 
@@ -76,9 +75,9 @@ async def test_work_cooldown_alert_tier_50_fires():
          patch("common.db_pool.get_pool", new=AsyncMock(return_value=MagicMock())), \
          patch("common.bot_helpers._get_user_active_items", new=AsyncMock(return_value={"work_cooldowns": {"factory": 9999999999}})), \
          patch("banner_manager.send_banner_message", new=AsyncMock()) as mock_send_banner:
-        
+
         await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0, tier=50)
-        
+
         mock_send_banner.assert_called_once()
         args, kwargs = mock_send_banner.call_args
         caption_lower = kwargs["caption"].lower()

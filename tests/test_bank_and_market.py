@@ -5,22 +5,19 @@ test_bank_and_market.py — Comprehensive Unit & Integration Tests for:
 2. P2P Flea Market / Bazaar (market_engine.py)
 """
 
-import time
 import json
 import pytest
 import aiosqlite
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from bank_engine import (
-    BANK_TIERS, normalize_tier_id, get_tier_info,
     calculate_deposit_state, create_bank_deposit,
-    withdraw_bank_deposit, get_user_bank_summary
+    withdraw_bank_deposit
 )
 from market_engine import (
     classify_item, find_item_by_name_or_id,
     extract_item_for_escrow, restore_item_to_active_items,
     create_market_listing, cancel_market_listing, buy_market_listing,
-    get_market_catalog, get_user_listings
+    get_market_catalog
 )
 
 

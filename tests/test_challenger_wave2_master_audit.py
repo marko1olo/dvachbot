@@ -32,19 +32,14 @@ Empirical stress-testing and adversarial challenge suite covering:
 =============================================================================
 """
 
-import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import aiosqlite
 
-import common.config
 import common.database as db_mod
-import common.spam_filter as spam_mod
 import handlers.message_router as router_mod
 import lootbox_engine
 import main
@@ -56,8 +51,6 @@ from combat_moderation_engine import (
 )
 from common.spam_filter import (
     MAX_MEDIA_GROUP_ITEMS,
-    MEDIA_GROUP_WINDOW,
-    USER_TIERS,
     _seen_media_groups,
     _shadow_mute_applied_ts,
     _user_media_burst_tracker,

@@ -7,11 +7,10 @@ Automated unit and integration tests for:
 4. Daily Work Quests Engine (generation, progress, Abu rewards).
 """
 
-import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import common.daily_quests_engine as qe
-from common.work_engine import is_night_shift_active, execute_job_action, WORK_VACANCIES
+from common.work_engine import is_night_shift_active, execute_job_action
 from news_channel_publisher import publish_casino_jackpot_news
 
 

@@ -5,7 +5,6 @@ Unit and E2E test suite for deflationary burned rake (10% on bets > 50,000 ₪)
 and Flash Ultra daily usage nerf (max 2/day).
 """
 
-import pytest
 import time
 from datetime import datetime, timezone
 import casino_engine

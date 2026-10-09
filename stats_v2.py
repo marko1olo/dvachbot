@@ -6,32 +6,27 @@ Supports Instant ASCII Sparklines, HD Theme Posters (Economy, PvP, Drama, Memeti
 and safe read-only WAL database querying.
 """
 
-import os
 import io
 import time
-import math
 import json
 import sqlite3
 import contextlib
 import warnings
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict, Counter
+from collections import Counter
 from typing import Dict, List, Tuple, Optional, Any
 
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import seaborn as sns
-import pandas as pd
 
-from PIL import Image, ImageDraw, ImageFont
 
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 warnings.filterwarnings("ignore", message=".*Glyph.*")
 
-from common.anon_identity import get_anon_id, generate_anon_name
+from common.anon_identity import generate_anon_name
 from common.chart_lock import matplotlib_guard
 
 # -----------------------------------------------------------------------------
@@ -95,7 +90,7 @@ def make_sparkline(numbers: List[float], length: int = 12) -> str:
     mn, mx = min(condensed), max(condensed)
     if mx == mn:
         return SPARK_BARS[3] * len(condensed)
-    
+
     spark = ""
     for val in condensed:
         idx = int((val - mn) / (mx - mn) * (len(SPARK_BARS) - 1))
@@ -117,7 +112,7 @@ def generate_instant_snapshot_text(board_id: Optional[str] = None) -> Tuple[str,
 
     with contextlib.closing(connect_ro_db()) as conn:
         c = conn.cursor()
-        
+
         b_filter = "AND board_id = ?" if board_id else ""
         params_24h = (day_ago, board_id) if board_id else (day_ago,)
         params_7d = (week_ago, board_id) if board_id else (week_ago,)
@@ -269,7 +264,7 @@ def generate_economy_heists_poster() -> io.BytesIO:
             bets = (cas_row['bets'] if cas_row and cas_row['bets'] is not None else 0)
             wins = (cas_row['wins'] if cas_row and cas_row['wins'] is not None else 0)
             rake = max(0, bets - wins)
-            
+
             if bets == 0 and wins == 0:
                 ax2.text(0.5, 0.5, "Ставок в казино пока нет", ha='center', va='center', color=COLOR_TEXT_MUTED, fontsize=9)
                 ax2.set_xticks([]); ax2.set_yticks([])
@@ -313,7 +308,7 @@ def generate_economy_heists_poster() -> io.BytesIO:
                 decile_sums = [sum(d) for d in deciles]
                 total_w = max(1.0, float(sum(balances)))
                 decile_pcts = [d_sum / total_w * 100 for d_sum in decile_sums]
-                
+
                 xs = [f"D{i+1}" for i in range(10)]
                 colors_dec = [plt.cm.magma(0.2 + 0.7 * (p / max(max(decile_pcts or [1]), 0.001))) for p in decile_pcts]
                 bars4 = ax4.bar(xs, decile_pcts, color=colors_dec, edgecolor=THEME_BG, width=0.7)
@@ -402,7 +397,7 @@ def generate_pvp_bioweapons_poster() -> io.BytesIO:
                 (row1['van'] or 0) if row1 else 0,
                 (row1['pepper'] or 0) if row1 else 0
             ]
-            
+
             x_pos = range(len(d_labels))
             ax1.bar(x_pos, d_counts, color=[COLOR_GREEN, COLOR_AMBER, COLOR_PURPLE, COLOR_BLUE, COLOR_PINK], edgecolor=THEME_BG, width=0.6)
             ax1.set_xticks(list(x_pos))
@@ -425,7 +420,7 @@ def generate_pvp_bioweapons_poster() -> io.BytesIO:
                         durations.append((exp - now_ts) / 3600.0)
                 except Exception:
                     pass
-            
+
             if durations:
                 sns.boxplot(y=durations, ax=ax2, color=COLOR_CYAN)
                 ax2.set_title("Запас прочности фольги (ч)", fontsize=11, fontweight='bold', color=COLOR_CYAN)
@@ -484,12 +479,12 @@ def generate_pvp_bioweapons_poster() -> io.BytesIO:
                 GROUP BY d ORDER BY d
             """)
             t_rows = [dict(r) for r in c.fetchall()]
-            
+
             # Pad 7 days
             day_map = {r['d']: r['cnt'] for r in t_rows}
             date_list = [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(6, -1, -1)]
             counts_padded = [day_map.get(dt, 0) for dt in date_list]
-            
+
             xs = range(len(date_list))
             ax4.fill_between(xs, counts_padded, color=COLOR_PINK, alpha=0.25)
             ax4.plot(xs, counts_padded, color=COLOR_PINK, marker='o', linewidth=2)
@@ -583,7 +578,7 @@ def generate_bayan_memetics_poster() -> io.BytesIO:
                     t_clean = t.strip().lower()
                     if t_clean and len(t_clean) > 2 and t_clean not in ('media', 'photo', 'image'):
                         tag_counter[t_clean] += 1
-            
+
             top_tags = tag_counter.most_common(5)
             if top_tags:
                 t_lbls = [t[0][:10] for t in top_tags]
@@ -621,7 +616,7 @@ def generate_bayan_memetics_poster() -> io.BytesIO:
                 ]
             else:
                 slang_counts = [0, 0, 0, 0, 0, 0]
-            
+
             x_pos = range(len(slang_words))
             ax3.bar(x_pos, slang_counts, color=[COLOR_AMBER, COLOR_PINK, COLOR_PURPLE, COLOR_GREEN, COLOR_CYAN, COLOR_BLUE], edgecolor=THEME_BG)
             ax3.set_xticks(list(x_pos))
@@ -812,7 +807,7 @@ def generate_drama_beef_poster() -> io.BytesIO:
             h_rows = {r['h']: r['cnt'] for r in c.fetchall()}
             hours_24 = list(range(24))
             counts_24 = [h_rows.get(h, 0) for h in hours_24]
-            
+
             colors_24 = [COLOR_PURPLE if 1 <= h <= 5 else COLOR_CYAN for h in hours_24]
             ax4.bar(hours_24, counts_24, color=colors_24, edgecolor=THEME_BG, width=0.8)
             ax4.set_xticks(hours_24[::2])

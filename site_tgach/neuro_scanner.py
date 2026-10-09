@@ -26,8 +26,8 @@ class NeuroScanner:
         }
         self.client = httpx.AsyncClient(
             transport=transport,
-            timeout=30.0, 
-            headers=headers, 
+            timeout=30.0,
+            headers=headers,
             follow_redirects=True,
             verify=False
         )
@@ -38,12 +38,12 @@ class NeuroScanner:
 
     async def scan_and_schedule(self, board_source='b', target_board='b', target_stream='ru'):
         logger.info(f"🕵️ [Scanner] Scanning /{board_source}/ for content...")
-        
+
         # 1. Скачиваем каталог (Используем прямой домен hk, который стабильнее отдает API)
         url = f"https://2ch.org/{board_source}/catalog.json"
         try:
             resp = await self.client.get(url, follow_redirects=True)
-            
+
             # ПРОВЕРКА: Если Двач подсунул HTML (заглушку) вместо JSON
             content_type = resp.headers.get("content-type", "")
             if "application/json" not in content_type:
@@ -53,7 +53,7 @@ class NeuroScanner:
             if resp.status_code != 200:
                 logger.error(f"Failed to fetch catalog: {resp.status_code}")
                 return False
-                
+
             data = resp.json()
         except Exception as e:
             logger.error(f"Catalog fetch error: {e}", exc_info=True)
@@ -66,22 +66,22 @@ class NeuroScanner:
         for t in threads:
             num = str(t.get('num'))
             posts_count = int(t.get('posts_count', 0))
-            
+
             # Пропускаем уже импортированные (проверяем по БД ImportQueue/Requests)
             if await self._is_already_imported(num):
                 continue
-                
+
             # Лимиты постов
             if posts_count < 50 or posts_count > 350:
                 continue
-                
+
             # Пропускаем закрепленные и закрытые (обычно это правила)
             if t.get('closed') == 1 or t.get('sticky') == 1:
                 continue
 
             comment = t.get('comment', '')[:500] # Берем начало текста
             subject = t.get('subject', '')
-            
+
             # Предварительная оценка контента
             candidates.append({
                 'num': num,
@@ -99,17 +99,17 @@ class NeuroScanner:
 
         # Берем случайные 10 кандидатов для анализа (увеличили выборку)
         batch = random.sample(candidates, min(len(candidates), 10))
-        
+
         best_candidate = None
         best_score = -1
-        
+
         # 3. AI Filter (Асинхронно, макс 4 потока, с задержкой)
         sem = asyncio.Semaphore(4) # Ограничиваем одновременные запросы кол-вом ключей
 
         async def evaluate_wrapper(cand):
             async with sem:
                 # Небольшая задержка, чтобы запросы не улетали на сервер Groq в одну миллисекунду
-                await asyncio.sleep(random.uniform(0.5, 1.5)) 
+                await asyncio.sleep(random.uniform(0.5, 1.5))
                 try:
                     score = await self._evaluate_thread_ai(cand['subject'], cand['comment'])
                 except Exception as e:
@@ -138,19 +138,19 @@ class NeuroScanner:
         # Вычисляем "естественную" скорость треда
         life_time_seconds = time.time() - best_candidate['timestamp']
         if life_time_seconds < 1: life_time_seconds = 1
-        
+
         avg_seconds_per_post = life_time_seconds / best_candidate['posts_count']
-        
+
         # Маппинг на наши границы (1 мин ... 60 мин)
         # Если там постят каждые 10 сек -> у нас 1 мин
         # Если там постят раз в час -> у нас 60 мин
-        
+
         target_avg = max(180, min(3600, avg_seconds_per_post)) # Clamp between 60s and 3600s
-        
+
         # Делаем разброс +/- 30%
         interval_min = int(target_avg * 0.7)
         interval_max = int(target_avg * 1.3)
-        
+
         # 5. Запуск Импорта
         logger.info(f"✅ [Scanner] WINNER: {best_candidate['subject']} (Score {best_score}). Starting import...")
 
@@ -160,19 +160,19 @@ class NeuroScanner:
                     "INSERT INTO ImportRequests (user_id, url, target_board, comment, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (0, best_candidate['url'], target_board, "Neuro-Auto-Import", "approved", time.time())
                 )
-        
+
         await self._notify_admin(best_candidate, interval_min, interval_max, target_board)
-        
+
         sim_settings = {
             "enabled": True,
             "start_delay_mins": 1, # Начинаем почти сразу
             "interval_min": interval_min,
             "interval_max": interval_max
         }
-        
+
         target_channel_id = STORAGE_CHANNELS.get(target_stream, STORAGE_CHANNELS['ru'])
         importer = ThreadImporter(self.bot, target_channel_id)
-        
+
         # Запускаем в фоне
         spawn_task(
             importer.process_thread(best_candidate['url'], target_board, target_stream, sim_settings)
@@ -192,12 +192,12 @@ class NeuroScanner:
             "Criteria for LOW score (0-4): Spam, 'roll' threads, pure porn/fap threads, casino ads, unintelligible nonsense, repetetive 'bayan'.\n"
             "Output ONLY the number (integer). No text."
         )
-        
+
         messages = [
             {"role": "system", "content": "You are a moderator of an imageboard. You filter trash."},
             {"role": "user", "content": prompt}
         ]
-        
+
         try:
             res = await self.neuro._safe_api_call(messages, max_tokens=5, temperature=0.1)
             if not res: return 0
@@ -215,12 +215,12 @@ class NeuroScanner:
         async with get_db_connection() as conn:
             # Проверяем в очереди импорта (active)
             async with conn.execute(
-                "SELECT 1 FROM ImportQueue WHERE original_post_num = ? LIMIT 1", 
+                "SELECT 1 FROM ImportQueue WHERE original_post_num = ? LIMIT 1",
                 (orig_num,)
             ) as res:
                 if await res.fetchone():
                     return True
-            
+
             # Проверяем в выполненных заявках (history)
             # В ImportRequests мы храним URL.
             url_pattern = f"%/{orig_num}.html"
@@ -230,7 +230,7 @@ class NeuroScanner:
             ) as res2:
                 if await res2.fetchone():
                     return True
-            
+
         return False
 
     async def _notify_admin(self, thread_data, min_int, max_int, target_board):
@@ -249,7 +249,7 @@ class NeuroScanner:
             f"🎯 <b>Цель:</b> /{target_board}/\n"
             f"🔗 <a href='{thread_data['url']}'>Оригинал</a>"
         )
-        
+
         for admin_id in ADMIN_IDS:
             try:
                 await self.bot.send_message(admin_id, msg, parse_mode="HTML")
@@ -258,13 +258,13 @@ class NeuroScanner:
 
 async def scanner_loop(app_state):
     await asyncio.sleep(60)
-    
+
     neuro_manager = app_state.neuro_manager
     bot = app_state.file_uploader_bot
     scanner = NeuroScanner(bot, neuro_manager)
-    
+
     logger.info("👀 Neuro-Scanner Loop Started")
-    
+
     try:
         while True:
             try:

@@ -2,23 +2,18 @@ import shared_state
 import asyncio
 import logging
 logger = logging.getLogger(__name__)
-import re
-import html
 import random
 import time
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Any, Optional, Dict, List, Tuple
 from aiogram import Bot
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaAnimation
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramNetworkError
-import aiohttp
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from common.task_manager import spawn_task
-from common.database import update_post_content, add_channel_copy, create_post, get_stream_active_users, process_mentions_and_notify, add_post_copies
+from common.database import update_post_content, create_post, get_stream_active_users, process_mentions_and_notify, add_post_copies
 
 from text_assets import VERIFICATION_SUCCESS_MESSAGES
 from shared_state import *
@@ -29,14 +24,13 @@ async def send_message_to_users(*args, **kwargs):
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from post_helpers import format_header, format_thread_post_header, apply_shadow_autoreplace, check_post_numerals, execute_auto_roast
 from thread_texts import thread_messages
-from utils import split_text
 import __main__ as main
 
 UTC = timezone.utc
 
 async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, stream: str):
     if user_id <= 0: return
-    
+
     from common.db_pool import get_pool, db_lock, db_transaction
     db = await get_pool()
 
@@ -58,7 +52,7 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
                             """,
                             (user_id, board_id)
                         )
-                        
+
                         async with db.execute(
                             """
                             UPDATE Users 
@@ -245,7 +239,7 @@ class NewPostProcessor:
                                 self.author_content['text'] += f"\n\n<i>{flag_ru_tag}</i>"
             except Exception:
                 pass
-                        
+
         try:
             from common.forward_utils import contains_board_post_header, format_forwarded_quote
             for field in ('text', 'caption'):
@@ -258,7 +252,7 @@ class NewPostProcessor:
         self.final_content = apply_shadow_autoreplace(self.author_content)
         self.final_content['reply_to_post'] = self.reply_to_post
         self.author_content['reply_to_post'] = self.reply_to_post
-        
+
         self.image_bytes_to_send = self.final_content.pop('image_bytes', None)
         self.author_image_bytes = self.author_content.pop('image_bytes', None)
         self.voice_bytes_to_send = self.final_content.pop('voice_bytes', None)
@@ -279,7 +273,7 @@ class NewPostProcessor:
             thread_id_from_bot=self.thread_id,
             stream=self.stream
         )
-        
+
         # Fallback retry if create_post returned None (e.g. temporary SQLite lock/timeout)
         if self.current_post_num is None:
             max_retries = 3
@@ -486,14 +480,14 @@ class NewPostProcessor:
                             'file_id': getattr(m_val, 'file_id', None) or (m_val if isinstance(m_val, str) else None)
                         })
                 content_for_ram['media'] = cleaned_media
-            
+
             chain_depth = 0
             reply_to = self.final_content.get('reply_to_post')
             if reply_to:
                 parent_data = messages_storage.get(reply_to)
                 if parent_data:
                     chain_depth = parent_data.get('chain_depth', 0) + 1
-                    
+
             messages_storage[self.current_post_num] = {
                 'author_id': self.user_id, 'timestamp': now_dt,
                 'content': content_for_ram,
@@ -504,7 +498,7 @@ class NewPostProcessor:
                 _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
             if MAX_COPY_MAP_POSTS_IN_MEMORY > 0:
                 _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
-            
+
             if chain_depth > 0 and chain_depth % 15 == 0:
                 try:
                     bot_for_roast = GLOBAL_BOTS.get(self.board_id)
@@ -534,7 +528,7 @@ class NewPostProcessor:
                         elif d_attr: item = {'type': 'document', 'file_id': d_attr.file_id}
                         elif a_attr: item = {'type': 'audio', 'file_id': a_attr.file_id}
                         if item: new_media_items.append(item)
-                    if new_media_items: 
+                    if new_media_items:
                         self.final_content['media'] = new_media_items
                         self.final_content.pop('image_url', None)
                         self.final_content.pop('image_bytes', None)
@@ -732,7 +726,7 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
                 candidate_bots.append(b)
 
     if not candidate_bots:
-        print(f"⛔ Ошибка: боты для постинга в служебный канал не найдены.")
+        print("⛔ Ошибка: боты для постинга в служебный канал не найдены.")
         return
     details = details or {}
     title = escape_html(thread_info.get('title', 'Без названия'))

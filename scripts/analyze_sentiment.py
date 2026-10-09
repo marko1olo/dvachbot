@@ -41,17 +41,17 @@ for t_id, t_posts in threads.items():
 
 for p in posts:
     if not p['content']: continue
-    
+
     try:
         c_json = json.loads(p['content'])
         text = str(c_json.get('text', c_json.get('caption', ''))).lower()
     except:
         continue
-        
+
     is_bot = any(k in text for k in bot_keywords)
     is_game = any(k in text for k in game_keywords)
     is_toxic = any(k in text for k in toxic_keywords)
-    
+
     post_data = {
         'post_num': p['post_num'],
         'author_id': p['author_id'],
@@ -59,7 +59,7 @@ for p in posts:
         'text': c_json.get('text', c_json.get('caption', '')),
         'timestamp': p['timestamp']
     }
-    
+
     if is_bot and len(results["bot_feedback"]) < 200:
         results["bot_feedback"].append(post_data)
     if is_game and len(results["game_feedback"]) < 200:

@@ -3,7 +3,6 @@ from unittest.mock import patch, MagicMock
 import pr_merger
 import subprocess
 import sys
-import sys
 from pathlib import Path
 # scripts/ moved here after refactor
 _scripts_dir = str(Path(__file__).resolve().parents[1] / 'scripts')

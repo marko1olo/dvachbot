@@ -1,6 +1,5 @@
 import unittest
 from unittest.mock import patch, AsyncMock
-import asyncio
 import sqlite3
 
 from common.database import sync_boards_with_config

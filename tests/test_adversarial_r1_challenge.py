@@ -10,15 +10,12 @@ import asyncio
 import hashlib
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import common.database as db_module
 from common.db_pool import db_transaction, execute_with_retry
 from site_tgach.tagging_worker import (
     get_tasks,
-    process_image_cpu,
     is_audio_media,
 )
 
@@ -302,7 +299,7 @@ async def test_adversarial_burst_50_plus_posts_identical_sha_drain(isolated_test
         cycles += 1
         # Fetch batch with limit=5 (simulating worker batching)
         batch = await get_tasks(db, limit=5)
-        
+
         telemetry_log.append({
             "cycle": cycles,
             "tasks_returned": len(batch),
@@ -427,7 +424,7 @@ async def test_adversarial_concurrent_worker_burst_race(isolated_test_db):
         total_rows = (await cursor.fetchone())[0]
     assert total_rows == 30, f"Expected 30 rows in FileRegistry, got {total_rows}"
 
-    print(f"\n[EMPIRICAL PROOF 2] 5 concurrent workers processed 30 duplicate SHA files with zero lock errors or collisions.")
+    print("\n[EMPIRICAL PROOF 2] 5 concurrent workers processed 30 duplicate SHA files with zero lock errors or collisions.")
 
 
 @pytest.mark.asyncio
@@ -503,7 +500,7 @@ async def test_adversarial_fts_triggers_on_composite_replace_and_delete(isolated
     assert row is not None
     assert row[0] == fid_secondary
 
-    print(f"\n[EMPIRICAL PROOF 3] FileTagsFTS triggers (INSERT, UPDATE, DELETE) verified 100% compliant.")
+    print("\n[EMPIRICAL PROOF 3] FileTagsFTS triggers (INSERT, UPDATE, DELETE) verified 100% compliant.")
 
 
 @pytest.mark.asyncio
@@ -546,12 +543,12 @@ async def test_adversarial_malformed_and_extreme_edge_cases(isolated_test_db):
 
     # Save long_fid
     tags, sha, _ = await _simulate_worker_task_processing(db, tasks[0])
-    
+
     # Gap tasks should now be 0
     after_tasks = await get_tasks(db)
     assert len(after_tasks) == 0
 
-    print(f"\n[EMPIRICAL PROOF 4] Malformed JSON shapes, non-array types, and extreme 600-char file_ids handled gracefully without exceptions.")
+    print("\n[EMPIRICAL PROOF 4] Malformed JSON shapes, non-array types, and extreme 600-char file_ids handled gracefully without exceptions.")
 
 
 @pytest.mark.asyncio

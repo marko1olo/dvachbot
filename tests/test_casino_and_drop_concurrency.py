@@ -15,7 +15,7 @@ async def test_casino_and_drop_concurrency():
 
 async def run_tests():
     print("=== STARTING CASINO & MONEY DROP TEST SUITE ===")
-    
+
     # 1. Test Slots Engine
     print("\n--- Testing Slots Engine ---")
     wins = 0
@@ -44,7 +44,7 @@ async def run_tests():
     print("\n--- Testing Blackjack Math ---")
     hand1 = [("A", "♠️"), ("K", "♥️")]
     assert casino_engine.calculate_hand(hand1) == 21, "Natural 21 must equal 21"
-    
+
     hand2 = [("A", "♠️"), ("A", "♥️"), ("9", "♦️")]
     assert casino_engine.calculate_hand(hand2) == 21, "A + A + 9 must equal 21"
 
@@ -108,7 +108,7 @@ async def run_tests():
         )
         assert ok, f"Drop creation failed: {msg}"
         assert drop_rec is not None
-        
+
         # Verify donor balance deducted
         cur = await db.execute("SELECT balance FROM Users WHERE user_id = ?", (donor_id,))
         row = await cur.fetchone()
@@ -117,7 +117,7 @@ async def run_tests():
 
         # Step B: 100 parallel workers try to claim the drop at the exact same microsecond!
         drop_id = drop_rec.drop_id
-        
+
         async def try_claim(user_id: int):
             return await drop_engine.claim_money_drop(
                 drop_id=drop_id,
@@ -175,7 +175,7 @@ async def run_tests():
         exp_drop.expires_at = time.time() - 1.0
         expired_drops = await drop_engine.expire_unclaimed_drops_step(db_lock, db)
         assert len(expired_drops) == 1, "Expected 1 expired drop"
-        
+
         # Verify refund
         cur = await db.execute("SELECT balance FROM Users WHERE user_id = ?", (donor_id,))
         row = await cur.fetchone()

@@ -8,13 +8,12 @@ as well as auction_router handling /auction, /bid, /whale_safe, and /raid_oligar
 """
 
 import asyncio
-import json
 import logging
 import math
 import re
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from aiogram import Router, F, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton

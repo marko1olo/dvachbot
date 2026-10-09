@@ -12,10 +12,10 @@ def test_can_push_cooldown():
     event_push_engine._user_event_cooldowns.clear()
     uid = 12345
     etype = "duel"
-    
+
     assert event_push_engine._can_push(uid, etype) is True
     assert event_push_engine._can_push(uid, etype) is False
-    
+
     # Different event type
     assert event_push_engine._can_push(uid, "rr") is True
 
@@ -36,7 +36,7 @@ async def test_push_duel_open():
     mock_bot = AsyncMock()
     mock_bot.me = MagicMock()
     mock_bot.me.username = "test_bot"
-    
+
     with patch("event_push_engine.push_event_to_board", new_callable=AsyncMock) as mock_push:
         mock_push.return_value = 1
         event_push_engine._user_event_cooldowns.clear()

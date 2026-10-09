@@ -67,7 +67,7 @@ class TestBotPool(unittest.TestCase):
         self.pool._loaded_streams.add('ru')
         self.pool.bots_map['ru'] = {101: bot1, 102: bot2}
         self.pool.iterators['ru'] = itertools.cycle([(101, bot1), (102, bot2)])
-        
+
         # Initially, bot1 is returned
         bot_id1, _ = self.pool.get_next_bot('ru')
         self.assertEqual(bot_id1, 101)

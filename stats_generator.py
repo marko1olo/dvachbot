@@ -5,7 +5,7 @@ import contextlib
 import time
 import json
 import math
-from collections import defaultdict, deque
+from collections import defaultdict
 from dataclasses import dataclass
 import io
 import random
@@ -24,7 +24,7 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("matplotlib.category").setLevel(logging.WARNING)
 
 from common.chart_lock import matplotlib_guard
-from common.anon_identity import get_anon_id, generate_anon_name
+from common.anon_identity import get_anon_id
 
 # Use non-interactive backend
 matplotlib.use('Agg')
@@ -147,7 +147,6 @@ def _generate_chart_2(c, images):
     ''', (time.time() - (60 * 24 * 3600),))
     data = c.fetchall()
     if data:
-        import numpy as _np
         df = pd.DataFrame(data)
         weeks = df['week'].tolist()
         counts = df['cnt'].tolist()
@@ -400,7 +399,7 @@ def _generate_chart_7(thirty_days_ago, c, images):
         FROM Posts WHERE timestamp > ?
     ''', (thirty_days_ago,))
     r7 = c.fetchone()
-    
+
     c.execute('''
         SELECT author_id, COUNT(*) as cnt
         FROM Posts
@@ -417,7 +416,7 @@ def _generate_chart_7(thirty_days_ago, c, images):
             return
 
         fig, (ax_pie, ax_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
-        
+
         wedges, texts, autotexts = ax_pie.pie(
             [night_p, day_p], labels=['Ночной сыч (01:00-06:00)', 'Дневной анон (06:00-01:00)'],
             autopct='%1.1f%%', startangle=140,
@@ -466,14 +465,14 @@ def _generate_chart_8(thirty_days_ago, c, images):
                     counts['other'] += 1
             except Exception:
                 counts['text'] += 1
-        
+
         media_total = sum(v for k, v in counts.items() if k != 'text')
         text_total = counts['text']
         if (text_total + media_total) == 0:
             return
 
         fig, (ax8_pie, ax8_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
-        
+
         wedges, texts, autotexts = ax8_pie.pie(
             [text_total, media_total], labels=['Текст\n(чистый пост)', 'Медиа\n(картинка/видео)'],
             autopct='%1.1f%%', startangle=120,
@@ -491,7 +490,7 @@ def _generate_chart_8(thirty_days_ago, c, images):
         sorted_types = sorted(counts.items(), key=lambda x: x[1], reverse=False)
         types_ru = [labels_map.get(k, k) for k, v in sorted_types]
         types_val = [v for k, v in sorted_types]
-        
+
         cmap_m = plt.get_cmap('spring')
         colors_m = [cmap_m(0.2 + 0.7 * i / len(types_val)) for i in range(len(types_val))]
         bars8 = ax8_bar.barh(types_ru, types_val, color=colors_m, edgecolor='#0d1117', linewidth=0.6)
@@ -521,7 +520,7 @@ def _generate_chart_9(thirty_days_ago, c, images):
         singles_cnt = r9['singles'] or 0
         if (replies_cnt + singles_cnt) == 0:
             return
-        
+
         c.execute('''
             SELECT (repl.timestamp - orig.timestamp) as delta_sec
             FROM Posts repl
@@ -529,9 +528,9 @@ def _generate_chart_9(thirty_days_ago, c, images):
             WHERE repl.timestamp > ? AND repl.timestamp >= orig.timestamp
         ''', (thirty_days_ago,))
         deltas = [row['delta_sec'] for row in c.fetchall()]
-        
+
         fig, (ax9_pie, ax9_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
-        
+
         wedges, texts, autotexts = ax9_pie.pie(
             [replies_cnt, singles_cnt], labels=['Диалоги\n(ответ на пост)', 'Монологи\n(крик в пустоту)'],
             autopct='%1.1f%%', startangle=140,
@@ -553,12 +552,12 @@ def _generate_chart_9(thirty_days_ago, c, images):
             b_mid = int(((d_arr > 900) & (d_arr <= 3600)).sum())
             b_slow = int(((d_arr > 3600) & (d_arr <= 21600)).sum())
             b_late = int((d_arr > 21600).sum())
-            
+
             d_labels = ['< 2 мин (Мгновенно)', '2–15 мин (Быстро)', '15–60 мин (Живой тред)', '1–6 часов (Слоупоки)', '> 6 часов (Некробамп)']
             d_vals = [b_fast, b_quick, b_mid, b_slow, b_late]
             d_labels.reverse()
             d_vals.reverse()
-            
+
             cmap_d = plt.get_cmap('viridis')
             colors_d = [cmap_d(0.25 + 0.7 * i / len(d_vals)) for i in range(len(d_vals))]
             bars9 = ax9_bar.barh(d_labels, d_vals, color=colors_d, edgecolor='#0d1117', linewidth=0.6)
@@ -570,7 +569,7 @@ def _generate_chart_9(thirty_days_ago, c, images):
             ax9_bar.set_title('Скорость ответа на реплаи (Latency)', fontsize=12, fontweight='bold', color='#7ee787')
             ax9_bar.set_xlim(0, max_dv * 1.30)
             ax9_bar.xaxis.set_major_formatter(plt.FuncFormatter(lambda val, _: f'{int(val):,}'))
-            
+
         plt.tight_layout()
         save_chart(images, '9_dialogue_level.png', bbox_inches='tight')
 
@@ -2118,7 +2117,6 @@ def _generate_chart_34(c, images):
 def _generate_chart_35(c, images):
     # ── 35. Bump Chart — Недельный рейтинг топ-5 авторов (8 нед) ─────────────
     try:
-        import numpy as _np
         t56 = time.time() - 56 * 86400
         c.execute('''
             SELECT
@@ -3181,7 +3179,6 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str, theme: 
 
 
 def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
-    import random
     from PIL import Image, ImageDraw, ImageFont
 
     if isinstance(data, dict):
@@ -3263,7 +3260,7 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
     # 2. Header Area
     av_x, av_y, av_s = 36, 32, 70
     draw.rounded_rectangle([av_x, av_y, av_x + av_s, av_y + av_s], radius=12, fill=t['header_fill'], outline=t['header_border'], width=2)
-    
+
     rng = random.Random(data.user_id)
     av_color = t['accent_default']
     grid = [[rng.random() > 0.45 for _ in range(3)] for _ in range(5)]
@@ -3278,7 +3275,7 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
 
     # User Header Text
     draw.text((126, 34), data.schizo_name, font=f_title, fill=t['title_color'])
-    
+
     prefix_str = f"Титул: [{data.custom_prefix}]  •  " if data.custom_prefix else ""
     board_tag = f"/{data.fav_board}/"
     role_tag = f"Статус: {data.role.upper()}"
@@ -3321,7 +3318,7 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
     by = 352
     draw.text((36, by), "ДОСТИЖЕНИЯ И ЭКИПИРОВКА:", font=f_badge, fill=t['subtitle_color'])
     bx = 36
-    
+
     badge_colors = {
         "Легенда": (255, 200, 40, 255),
         "Базовик": (0, 230, 150, 255),
@@ -3344,10 +3341,10 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
         b_name = raw_badge
         for em in ["👑", "🔥", "⚡", "💎", "🚨", "🕊️", "💰", "📉", "👽", "🛡️", "🐒", "🌱"]:
             b_name = b_name.replace(em, "").strip()
-        
+
         b_color = badge_colors.get(b_name, t['accent_default'])
         bw = int(draw.textlength(b_name, font=f_badge)) + 34
-        
+
         draw.rounded_rectangle([bx, by + 18, bx + bw, by + 46], radius=8, fill=t['card_bg'], outline=t['card_border'], width=1)
         draw.ellipse([bx + 10, by + 28, bx + 18, by + 36], fill=b_color)
         draw.text((bx + 24, by + 24), b_name, font=f_badge, fill=t['title_color'])
@@ -3362,7 +3359,7 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
 
     track_w = W - 72
     draw.rounded_rectangle([36, bar_y + 18, 36 + track_w, bar_y + 30], radius=6, fill=t['header_fill'])
-    
+
     fill_w = max(12, int(track_w * (data.cringe_factor / 100.0)))
     bar_color = t['bar_danger'] if data.cringe_factor > 60 else t['bar_color']
     draw.rounded_rectangle([36, bar_y + 18, 36 + fill_w, bar_y + 30], radius=6, fill=bar_color)

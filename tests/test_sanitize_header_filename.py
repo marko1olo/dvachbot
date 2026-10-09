@@ -1,4 +1,3 @@
-import pytest
 from site_tgach.main import sanitize_header_filename
 
 def test_sanitize_header_filename():

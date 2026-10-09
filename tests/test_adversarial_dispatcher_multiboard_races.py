@@ -11,7 +11,6 @@ Adversarial Stress Test Suite for DvachBot:
 import asyncio
 from datetime import datetime
 import json
-import os
 from pathlib import Path
 import random
 import re
@@ -25,23 +24,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import aiosqlite
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import BotCommand, Chat, Message, User, CallbackQuery
+from aiogram import Bot, types
+from aiogram.types import Chat, Message, User, CallbackQuery
 
-import achievements_engine
-import common.bot_helpers as bot_helpers
 from common.bot_helpers import _get_user_active_items, merge_user_active_items_rows
-from common.database import record_user_transaction, add_user_global_balance, get_user_global_balance, deduct_user_global_balance
-from common.db_pool import db_lock, get_pool
-import dice_duel_engine
-import drop_engine
+from common.database import get_user_global_balance
+from common.db_pool import db_lock
 import economy_extension
 import main
-import russian_roulette_pvp
-import stats_hub_router
-import ttt_engine
-import votemute_engine
-import wardrobe_engine
 
 
 def create_mock_message(

@@ -7,7 +7,7 @@ Functions: RE_ARCHIVE_LINK, resolve_archive_or_inline_reply
 import json
 import time
 import pytest
-from handlers.message_router import RE_ARCHIVE_LINK, resolve_archive_or_inline_reply
+from handlers.message_router import resolve_archive_or_inline_reply
 
 
 async def _seed_test_post(db, post_num=501707, board_id="b", author_id=123, channel_message_id=None, text="Sample post"):

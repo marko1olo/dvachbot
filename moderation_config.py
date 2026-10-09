@@ -1,5 +1,4 @@
 import re
-import random
 
 SHADOW_REPLACEMENTS = [
     "я люблю глотать сперму",

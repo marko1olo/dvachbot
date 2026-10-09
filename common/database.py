@@ -21,7 +21,7 @@ import sqlite3
 from collections import defaultdict
 import collections.abc
 import json
-from common.json_utils import fast_json_loads, fast_json_dumps
+from common.json_utils import fast_json_dumps
 import random
 import time
 import logging
@@ -39,9 +39,6 @@ from common.db_pool import (
     db_sleep,
     db_lock,
     db_transaction,
-    safe_begin_immediate,
-    safe_commit,
-    safe_rollback,
 )
 get_db = get_pool
 from common.config import (
@@ -120,7 +117,7 @@ async def _create_tables(db):
         CREATE INDEX IF NOT EXISTS idx_usertransactions_uid_ts 
         ON UserTransactions(user_id, timestamp DESC);
         ''')
-        
+
         await cursor.execute("""
         CREATE TABLE IF NOT EXISTS Boards (
             board_id TEXT PRIMARY KEY,
@@ -1044,7 +1041,7 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postfiles_orig ON PostFiles(original_file_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postfiles_thumb ON PostFiles(thumbnail_file_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postfiles_post_num ON PostFiles(post_num);")
-    
+
         # Injected optimization indices
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_spam_filter_board_word ON SpamFilterWords(board_id, word);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_queue_created ON NotificationQueue(created_at);")
@@ -1221,10 +1218,10 @@ async def initialize_database():
             await db.execute("PRAGMA mmap_size = 268435456;")
             await db.execute("PRAGMA cache_size = -60000;")
             await db.execute("PRAGMA foreign_keys = ON;")
-            
+
             # Начало транзакции для изменения схемы
             await db.execute("BEGIN IMMEDIATE")
-            
+
             await _create_tables(db)
             await _apply_migrations(db)
             await _create_indices(db)
@@ -1232,7 +1229,7 @@ async def initialize_database():
             await _insert_initial_data(db)
             if not ENABLE_REPLY_NOTIFICATIONS:
                 await db.execute("DELETE FROM NotificationQueue")
-            
+
             await db.execute("COMMIT")
             await sync_daily_limits_from_db(db)
             await sync_user_immunity_from_db(db)
@@ -1263,50 +1260,50 @@ async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
     Использует глобальный db_lock и транзакцию IMMEDIATE.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # 1. Проверяем существующий
                 async with db.execute("SELECT api_token FROM Users WHERE user_id = ? AND api_token IS NOT NULL LIMIT 1", (user_id,)) as cursor:
                     row = await cursor.fetchone()
-                
+
                 if row and row[0]:
                     await db.execute("COMMIT")
                     return row[0]
-                
+
                 # 2. Генерируем новый (нужна проверка на уникальность)
-                # Важно: проверка уникальности должна быть внутри этой же транзакции или 
+                # Важно: проверка уникальности должна быть внутри этой же транзакции или
                 # мы доверяем генератору. Здесь генератор внешний, но проверку делаем через БД.
-                
+
                 async def check_if_token_exists(token: str) -> bool:
                     # Используем то же соединение db внутри транзакции
                     async with db.execute("SELECT 1 FROM Users WHERE api_token = ? LIMIT 1", (token,)) as c:
                         return await c.fetchone() is not None
-                
+
                 new_token = await token_generator_func(check_if_token_exists)
-                
+
                 # 3. Обнуляем старые и пишем новый
                 await db.execute("UPDATE Users SET api_token = NULL WHERE user_id = ?", (user_id,))
-                
+
                 # Убедимся, что юзер существует
                 await db.execute(
-                    "INSERT OR IGNORE INTO Users (user_id, board_id, created_at) VALUES (?, 'b', ?)", 
+                    "INSERT OR IGNORE INTO Users (user_id, board_id, created_at) VALUES (?, 'b', ?)",
                     (user_id, time.time())
                 )
-                
+
                 await db.execute("UPDATE Users SET api_token = ? WHERE user_id = ? AND board_id = 'b'", (new_token, user_id))
-                
+
                 await db.execute("COMMIT")
                 return new_token
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -1453,7 +1450,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
     import json
     from common.config import DB_POST_LIMIT, BOT_POST_CACHE_LIMIT
     from common.db_pool import get_pool, db_lock
-    
+
     print("🔄 Начало загрузки состояния из базы данных SQLite...")
     state_data = {
         'board_data': defaultdict(lambda: {
@@ -1485,11 +1482,11 @@ async def load_state_from_db(thread_boards: set) -> dict:
         'message_to_post': {},
         'post_counter': 0,
     }
-    
+
     async with db_lock:
         try:
             db = await get_pool()
-            
+
             print("  > Загрузка пользователей...")
             try:
                 async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media, disable_ai_roasts FROM Users WHERE user_id > 0") as cursor:
@@ -1512,7 +1509,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         state_data['board_data'][board_id]['user_settings'][user_id] = {
                             'nsfw': bool(nsfw),
                             'hide': h_words,
-                            'shadow_gif': bool(s_gif),       
+                            'shadow_gif': bool(s_gif),
                             'shadow_sticker': bool(s_sticker),
                             'shadow_media': bool(s_media),
                             'lie_media': bool(s_lie),
@@ -1541,7 +1538,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                             b_data_ref = state_data['board_data'][b_id]
                             if 'active_pin' in settings:
                                 b_data_ref['active_pin'] = settings['active_pin']
-                            mode_keys = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode', 
+                            mode_keys = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode',
                                          'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode',
                                          'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode']
                             for mode in mode_keys:
@@ -1569,8 +1566,8 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         'title': title,
                         'created_at': datetime.fromtimestamp(created_at_ts, tz=UTC).isoformat(),
                         'is_archived': bool(is_archived),
-                        'posts': [],         
-                        'subscribers': set(), 
+                        'posts': [],
+                        'subscribers': set(),
                         'stream': stream or 'ru'
                     }
                     user_state_map = state_data['board_data'][board_id]['user_state']
@@ -1598,7 +1595,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                     try:
                         content_data = json.loads(content_str)
                     except: content_data = {}
-                    
+
                     if reply_to_post_num:
                         content_data['reply_to_post'] = reply_to_post_num
 
@@ -1610,7 +1607,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         "thread_id": thread_id,
                         "reply_to_post_num": reply_to_post_num,
                     }
-                    
+
                     if post_num > max_post_num_loaded:
                         max_post_num_loaded = post_num
 
@@ -1654,7 +1651,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
             print(f"  > Загрузка кэша копий сообщений ({len(copy_cache_post_nums)} из {len(loaded_post_nums)} постов)...")
             if copy_cache_post_nums:
                 loaded_post_nums_list = list(copy_cache_post_nums)
-                CHUNK_SIZE = 900 
+                CHUNK_SIZE = 900
                 for i in range(0, len(loaded_post_nums_list), CHUNK_SIZE):
                     chunk = loaded_post_nums_list[i:i + CHUNK_SIZE]
                     placeholders = ','.join('?' for _ in chunk)
@@ -1671,7 +1668,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                             elif isinstance(existing, list):
                                 existing.append(msg_id)
                             state_data['message_to_post'][(rec_id, msg_id)] = p_num
-                            
+
         except Exception as e:
             print(f"⛔ ОШИБКА при загрузке состояния: {e}")
             import traceback
@@ -1680,7 +1677,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
 
     print("✅ Состояние успешно загружено.")
     return state_data
-async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None, hidden_words: list = None, 
+async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None, hidden_words: list = None,
                                   shadow_gif: int = None, shadow_sticker: int = None, shadow_media: int = None,
                                   lie_media: int = None, disable_ai_roasts: int = None, hide_ai_slop: int = None):
     """
@@ -1688,7 +1685,7 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
     Использует явные транзакции и глобальный лок.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     if disable_ai_roasts is None and hide_ai_slop is not None:
         disable_ai_roasts = hide_ai_slop
 
@@ -1697,7 +1694,7 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 if nsfw is not None:
                     await db.execute("UPDATE Users SET nsfw_spoiler = ? WHERE user_id = ? AND board_id = ?", (nsfw, user_id, board_id))
                 if hidden_words is not None:
@@ -1717,13 +1714,13 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                     await db.execute("UPDATE Users SET lie_media = ? WHERE user_id = ? AND board_id = ?", (lie_media, user_id, board_id))
                 if disable_ai_roasts is not None:
                     await db.execute("UPDATE Users SET disable_ai_roasts = ? WHERE user_id = ? AND board_id = ?", (disable_ai_roasts, user_id, board_id))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -1740,13 +1737,13 @@ async def update_board_settings(board_id: str, updates: dict):
     Критически важно использовать транзакцию здесь, так как мы делаем SELECT затем UPDATE.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Читаем внутри транзакции
                 async with db.execute("SELECT settings FROM Boards WHERE board_id = ?", (board_id,)) as cursor:
                     row = await cursor.fetchone()
@@ -1756,22 +1753,22 @@ async def update_board_settings(board_id: str, updates: dict):
                             current_settings = json.loads(row[0])
                         except json.JSONDecodeError:
                             current_settings = {}
-                
+
                 current_settings.update(updates)
                 settings_json = json.dumps(current_settings, default=str)
-                
+
                 # Пишем
                 await db.execute(
                     "UPDATE Boards SET settings = ? WHERE board_id = ?",
                     (settings_json, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -1789,13 +1786,13 @@ async def add_or_activate_user(user_id: int, board_id: str):
     """
     from common.db_pool import get_pool, db_lock
     from common.anon_identity import get_referral_code
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
                     (user_id, board_id)
@@ -1808,13 +1805,13 @@ async def add_or_activate_user(user_id: int, board_id: str):
                     "INSERT OR IGNORE INTO ReferralAliases (code, user_id) VALUES (?, ?)",
                     (get_referral_code(user_id), user_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -1829,15 +1826,15 @@ async def update_user_status(user_id: int, board_id: str, status: str):
     """
     if status not in ['active', 'banned']:
         return
-        
+
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
                     (user_id, board_id)
@@ -1846,13 +1843,13 @@ async def update_user_status(user_id: int, board_id: str, status: str):
                     "UPDATE Users SET status = ? WHERE user_id = ? AND board_id = ?",
                     (status, user_id, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -1876,7 +1873,7 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
     """
     from common.db_pool import get_pool, db_lock
     from datetime import datetime, timedelta, UTC
-    
+
     if expires_at is None:
         if duration_seconds is not None:
             expires_at = (datetime.now(UTC) + timedelta(seconds=duration_seconds)).timestamp()
@@ -1893,12 +1890,12 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                 board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
     except Exception:
         pass
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             await db.execute("BEGIN IMMEDIATE")
-            
+
             if expires_at and expires_at > datetime.now(UTC).timestamp():
                 try:
                     await db.execute(
@@ -1934,7 +1931,7 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'shadow'",
                     (user_id, board_id)
                 )
-            
+
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
@@ -1951,12 +1948,12 @@ async def create_thread(thread_id: str, board_id: str, op_id: int, title: str, c
     Создает новую запись о треде в таблице Threads и обновляет локацию.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             await db.execute("BEGIN IMMEDIATE")
-            
+
             await db.execute(
                 """
                 INSERT INTO Threads (thread_id, thread_num, board_id, op_id, title, created_at, last_updated_at, is_archived, stream)
@@ -1972,7 +1969,7 @@ async def create_thread(thread_id: str, board_id: str, op_id: int, title: str, c
                 "UPDATE Users SET location = ? WHERE user_id = ? AND board_id = ?",
                 (thread_id, op_id, board_id)
             )
-            
+
             await db.execute("COMMIT")
             return True
         except Exception as e:
@@ -1985,13 +1982,13 @@ async def update_user_location(user_id: int, board_id: str, location: str):
     Обновляет местоположение пользователя (main или thread_id) на доске.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
                     (user_id, board_id)
@@ -2000,13 +1997,13 @@ async def update_user_location(user_id: int, board_id: str, location: str):
                     "UPDATE Users SET location = ? WHERE user_id = ? AND board_id = ?",
                     (location, user_id, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -2027,14 +2024,14 @@ async def _get_thread_id_for_post(db: aiosqlite.Connection, parent_post_num: int
         row = await cursor.fetchone()
     return row[0] if row else None
 async def create_post(
-    author_id: int, 
-    board_id: str, 
-    content: dict, 
-    timestamp: float, 
+    author_id: int,
+    board_id: str,
+    content: dict,
+    timestamp: float,
     reply_to: Optional[int] = None,
     is_shadow_muted: bool = False,
-    is_from_site: bool = False, 
-    post_mode: str = None, 
+    is_from_site: bool = False,
+    post_mode: str = None,
     stream: str = 'ru',
     thread_id_from_bot: Optional[str] = None,
     files_metadata: Optional[List[dict]] = None,
@@ -2044,8 +2041,8 @@ async def create_post(
 ) -> Optional[int]:
     global _CACHED_MAX_POST_NUM
     # Локальный импорт, чтобы гарантировать наличие db_lock без правки шапки файла
-    from common.db_pool import get_pool, db_lock, db_transaction
-    
+    from common.db_pool import get_pool, db_transaction
+
     local_logger = logging.LoggerAdapter(logging.getLogger(__name__), {'request_id': request_id_for_log})
     # Anti-Dox: auto-mask leaked phone numbers in post content (unless admin)
     try:
@@ -2065,13 +2062,13 @@ async def create_post(
             pass
 
     content_json = fast_json_dumps(content, default=_json_serializer)
-    
+
     # Защищенная транзакция через db_transaction: автоматический ROLLBACK при таймауте/ошибке,
     # защита от зависания db_lock и сброс осиротевших транзакций.
     try:
         async with asyncio.timeout(45.0):
             db = await get_pool()
-            if not db or not getattr(db, "_running", True): 
+            if not db or not getattr(db, "_running", True):
                 return None
 
             for attempt in range(10):
@@ -2081,7 +2078,7 @@ async def create_post(
                         async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
                             if not await c.fetchone():
                                 await db.execute("INSERT OR IGNORE INTO Boards (board_id, name) VALUES (?, ?)", (board_id, board_id))
-                        
+
                         valid_reply_to = None
                         inherited_thread_id = None
                         if reply_to:
@@ -2090,14 +2087,14 @@ async def create_post(
                                 if row:
                                     valid_reply_to = row[0]
                                     inherited_thread_id = row[1]
-                        
+
                         await db.execute(
                             """INSERT OR IGNORE INTO Users 
                                (user_id, board_id, status, location, stream, created_at) 
                                VALUES (?, ?, 'active', 'main', ?, ?)""",
                             (author_id, board_id, stream, time.time())
                         )
-                        
+
                         final_thread_id = thread_id_from_bot
                         if is_from_site:
                             if post_mode == 'new_thread':
@@ -2107,7 +2104,7 @@ async def create_post(
                         else:
                             if not final_thread_id and valid_reply_to:
                                 final_thread_id = inherited_thread_id
-                        
+
                         post_query = """
                             INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2192,7 +2189,7 @@ async def create_post(
                     if _CACHED_MAX_POST_NUM is not None:
                         _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
                     return post_num
-                    
+
                 except sqlite3.OperationalError as e:
                     err_str = str(e).lower()
                     if ("locked" in err_str or "busy" in err_str or "cannot start a transaction" in err_str) and attempt < 9:
@@ -2217,7 +2214,7 @@ async def get_user_status(user_id: int, board_id: str) -> Optional[str]:
     Получает статус пользователя.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -2245,7 +2242,7 @@ async def get_shadow_mute_status(user_id: int, board_id: str, db=None) -> bool:
     Проверяет теневой бан.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -2439,7 +2436,7 @@ async def apply_shadow_mute(
         pass
 
     info = await get_shadow_mute_info(user_id, board_id)
-    
+
     if info['is_muted']:
         cur_expires = info['expires_at'] or (now_ts + info['remaining_seconds'])
         # ЗАПРЕЩЕНО накручивать штраф или продлевать мут пользователю, который уже находится в активном муте!
@@ -2477,7 +2474,7 @@ def _process_site_db_row(row):
     """
     if row is None:
         return None  # Возвращаем None, если строка пустая
-        
+
     try:
         # Превращаем Row в обычный дикт
         if hasattr(row, '_asdict'):
@@ -2491,23 +2488,23 @@ def _process_site_db_row(row):
                     post_dict['content'] = json.loads(post_dict['content'])
                 except json.JSONDecodeError:
                     post_dict['content'] = {"text": post_dict['content'], "type": "text"}
-            
+
             if not isinstance(post_dict['content'], dict):
                 post_dict['content'] = {"text": str(post_dict['content']), "type": "text"}
-            
+
             if 'type' not in post_dict['content']:
                 post_dict['content']['type'] = 'text'
         else:
             post_dict['content'] = {"text": "", "type": "text"}
-            
+
         return post_dict
     except Exception as e:
         print(f"⚠️ Ошибка обработки строки (Post): {e}")
         return None
 async def get_op_posts_for_board(
-    board_id: Union[str, List[str]], 
-    sort_by: str = "new", 
-    page: int = 1, 
+    board_id: Union[str, List[str]],
+    sort_by: str = "new",
+    page: int = 1,
     page_size: int = 10,
     stream: str = 'ru',
     observer_id: int = None,
@@ -2515,7 +2512,7 @@ async def get_op_posts_for_board(
     reply_limit: int = 3
 ) -> list:
     from common.db_pool import get_pool, db_lock
-    
+
     offset = (page - 1) * page_size
     async with db_lock:
         for attempt in range(3):
@@ -2523,7 +2520,7 @@ async def get_op_posts_for_board(
                 db = await get_pool()
                 op_posts = []
                 pin_clause = "IFNULL(t.is_pinned, 0) DESC," if not ignore_pin else ""
-                
+
                 # Общая часть для WHERE
                 params = []
                 viewer_id = observer_id if observer_id else -1
@@ -2540,7 +2537,7 @@ async def get_op_posts_for_board(
                     else:
                         where_clause += " AND p.board_id = ?"
                         params.append(board_id)
-                
+
                 check_board_str = board_id[0] if isinstance(board_id, list) and board_id else board_id
                 if check_board_str != 'int':
                     where_clause += " AND (p.stream = ? OR p.stream IS NULL)"
@@ -2553,26 +2550,26 @@ async def get_op_posts_for_board(
                         INNER JOIN Threads t ON p.post_num = t.thread_num
                         {where_clause}
                     """
-                    
+
                     target_ids_pool = []
                     async with db.execute(ids_query, params) as cursor:
                         async for row in cursor:
                             target_ids_pool.append(row[0])
-                    
+
                     if not target_ids_pool: return []
-                    
+
                     seed_val = int(time.time() / 600)
                     rng = random.Random(seed_val)
                     rng.shuffle(target_ids_pool)
-                    
+
                     target_ids = target_ids_pool[offset : offset + page_size]
-                
+
                 else: # bump или new
                     if sort_by == "bump":
                         order_clause = f"ORDER BY {pin_clause} IFNULL(t.is_archived, 0) ASC, IFNULL(t.last_updated_at, p.timestamp) DESC, p.post_num DESC"
                     else:
                         order_clause = f"ORDER BY {pin_clause} p.timestamp DESC, p.post_num DESC"
-                    
+
                     limit_params = [page_size, offset]
                     ids_query = f"""
                         SELECT p.post_num
@@ -2582,16 +2579,16 @@ async def get_op_posts_for_board(
                         {order_clause}
                         LIMIT ? OFFSET ?
                     """
-                    
+
                     target_ids = []
                     async with db.execute(ids_query, params + limit_params) as cursor:
                         async for row in cursor:
                             val = row['post_num'] if hasattr(row, 'keys') else row[0]
                             target_ids.append(val)
-                
+
                 if not target_ids:
                     return []
-                
+
                 id_placeholders = ','.join('?' for _ in target_ids)
                 data_query = f"""
                     SELECT 
@@ -2605,9 +2602,9 @@ async def get_op_posts_for_board(
                     WHERE p.post_num IN ({id_placeholders})
                     GROUP BY p.post_num
                 """
-                posts_map = {} 
-                real_thread_id_map = {} 
-                
+                posts_map = {}
+                real_thread_id_map = {}
+
                 async with db.execute(data_query, target_ids) as cursor:
                     columns = [desc[0] for desc in cursor.description]
                     async for row in cursor:
@@ -2624,7 +2621,7 @@ async def get_op_posts_for_board(
                             # которые int() не принимает
                             if clean_tid_str.isdecimal():
                                 real_thread_id_map[int(clean_tid_str)] = pid
-                        
+
                         try:
                             pd['id'] = pid
                             pd['content'] = json.loads(pd['content'])
@@ -2635,17 +2632,17 @@ async def get_op_posts_for_board(
                             pd['anon_count'] = 1
                             pd['latest_replies'] = []
                             posts_map[pid] = pd
-                        except: 
+                        except:
                             continue
-                            
+
                 for pid in target_ids:
                     if pid in posts_map:
                         op_posts.append(posts_map[pid])
-                        
+
                 all_possible_thread_ids = list(real_thread_id_map.keys())
                 all_possible_thread_ids.extend(target_ids)
                 valid_tids_str = [f"'{str(x)}'" for x in all_possible_thread_ids if x]
-                
+
                 if valid_tids_str:
                     in_clause = ",".join(valid_tids_str)
                     replies_fetch_query = f"""
@@ -2695,14 +2692,14 @@ async def get_op_posts_for_board(
                                     if '_all_replies' not in target: target['_all_replies'] = []
                                     target['_all_replies'].append(reply_obj)
                             except Exception: continue
-                            
+
                 for post in op_posts:
                     if '_authors' in post: post['anon_count'] = len(post.pop('_authors'))
                     if '_all_replies' in post:
                         all_reps = post.pop('_all_replies')
                         post['latest_replies'] = all_reps[-reply_limit:]
                 return op_posts
-                
+
             except Exception as e:
                 if attempt < 2:
                     await db_sleep(0.2 * (attempt + 1))
@@ -2713,17 +2710,17 @@ async def get_op_posts_for_board(
     return []
 async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
     from common.db_pool import get_pool, db_lock
-    
+
     # --- ФАЗА 1: СБОР ДАННЫХ (БЛОКИРУЮЩАЯ, НО БЫСТРАЯ) ---
     raw_op_data = None
     raw_replies_data = []
     raw_crosslinks_data = []
-    
+
     for attempt in range(10):
         try:
             async with db_lock:
                 db = await get_pool()
-                
+
                 # 1. Забираем ОП-пост
                 op_post_query = """
                     SELECT p.post_num, p.content, p.timestamp, p.author_id, p.board_id, 
@@ -2744,7 +2741,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
 
                 if not raw_op_data:
                     return None
-                
+
                 # Если передан номер ответа, а не ОП-поста — переключаемся на реальный ОП-пост
                 if raw_op_data.get('thread_id') and str(raw_op_data['thread_id']) != str(op_post_num):
                     real_op_num = int(raw_op_data['thread_id'])
@@ -2757,7 +2754,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                             else:
                                 raw_op_data = dict(zip(cols, row))
                             op_post_num = real_op_num
-                
+
                 if raw_op_data['is_shadow'] and raw_op_data['author_id'] != current_user_id:
                     return None
 
@@ -2783,12 +2780,12 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
 
                 # 3. Забираем CrossLinks
                 all_ids = [raw_op_data['post_num']] + [r['post_num'] for r in raw_replies_data]
-                
+
                 raw_crosslinks_data = []
                 if all_ids:
                     placeholders = ','.join('?' for _ in all_ids)
                     board_id = raw_op_data['board_id']
-                    
+
                     q_links = f"""
                         SELECT source_board, source_post, target_post 
                         FROM CrossLinks 
@@ -2798,7 +2795,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                     async with db.execute(q_links, params) as cursor:
                         async for row in cursor:
                             raw_crosslinks_data.append(row)
-            break 
+            break
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower() or "busy" in str(e).lower():
                 await db_sleep(0.1 * (attempt + 1))
@@ -2821,7 +2818,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
         except:
             op_post['content'] = {"text": "", "type": "text"}
         op_post['thread_id'] = op_post['id']
-        
+
         if current_user_id:
             op_post['is_op_yours'] = (op_post['author_id'] == current_user_id)
 
@@ -2844,11 +2841,11 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
         all_posts = [op_post] + replies
         backlinks_map = defaultdict(set)
         thread_ids = set(p['id'] for p in all_posts)
-        
+
         for p in all_posts:
             if p.get('reply_to_post_num') and p['reply_to_post_num'] in thread_ids:
                 backlinks_map[p['reply_to_post_num']].add(p['id'])
-    
+
             txt = p.get('content', {}).get('text', '')
             if txt:
                 refs = RE_POST_REF.findall(txt)
@@ -2864,7 +2861,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
         for row in raw_crosslinks_data:
             s_board, s_post, t_post = row
             links_map[t_post].append({'board': s_board, 'post': s_post})
-        
+
         for p in all_posts:
             if p['id'] in links_map:
                 p['external_links'] = links_map[p['id']]
@@ -2880,7 +2877,7 @@ async def is_thread_archived(thread_op_num: int) -> bool:
     Использует цикл попыток для защиты от блокировок БД.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -2902,19 +2899,19 @@ async def is_thread_archived(thread_op_num: int) -> bool:
 
 async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str = 'ru', observer_id: int = None) -> list:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             db.row_factory = aiosqlite.Row
             viewer_id = observer_id if observer_id is not None else -1
-            
+
             stream_clause = "AND stream = ?" if board_id != 'int' else ""
             params = [board_id]
             if board_id != 'int':
                 params.append(stream)
             params.append(offset)
-            
+
             query = f"""
                 SELECT post_num, content, timestamp, author_id, board_id, reply_to_post_num, stream
                 FROM Posts 
@@ -2936,13 +2933,13 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
                     post_data['id'] = post_data['post_num']
                     try:
                         post_data['content'] = json.loads(post_data['content'])
-                    except: 
+                    except:
                         post_data['content'] = {'text': '', 'type': 'text'}
                     post_data['backlinks'] = []
                     posts.append(post_data)
-            
+
             posts_map = {p['id']: p for p in posts}
-            
+
             for p in posts:
                 refs = set()
                 if p.get('reply_to_post_num'):
@@ -2978,10 +2975,10 @@ async def get_post_by_num(post_num: int) -> Optional[Dict[str, Any]]:
                 row = await cursor.fetchone()
                 if row is None:
                     return None
-                
+
                 cols = [d[0] for d in cursor.description]
                 row_data = dict(zip(cols, row))
-            
+
             post_data = _process_site_db_row(row_data)
             if post_data and 'post_num' in post_data:
                 post_data['id'] = post_data['post_num']
@@ -3008,7 +3005,7 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
         return None
 async def get_post_count_in_thread(thread_op_num: int) -> int:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3030,21 +3027,21 @@ async def archive_thread_in_db(thread_op_num: int):
     Помечает тред как архивный.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE Threads SET is_archived = 1 WHERE thread_num = ?", (thread_op_num,))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -3056,10 +3053,10 @@ async def archive_thread_in_db(thread_op_num: int):
                 print(f"⚠️ Error archiving thread {thread_op_num}: {e}")
                 break
 async def create_thread_entry(
-    thread_op_num: int, 
-    board_id: str, 
-    op_id: int, 
-    title: str, 
+    thread_op_num: int,
+    board_id: str,
+    op_id: int,
+    title: str,
     timestamp: float,
     stream: str = 'ru',
     thread_type: str = 'default'
@@ -3068,16 +3065,16 @@ async def create_thread_entry(
     Создает ПОЛНУЮ запись для нового треда (используется сайтом/импортером).
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Обновляем пост (делаем его ОП-постом)
                 await db.execute("UPDATE Posts SET thread_id = ? WHERE post_num = ?", (thread_op_num, thread_op_num))
-                
+
                 # Создаем запись о треде
                 await db.execute(
                     """
@@ -3087,17 +3084,17 @@ async def create_thread_entry(
                     """,
                     (thread_op_num, thread_op_num, board_id, op_id, title, timestamp, timestamp, stream, thread_type)
                 )
-                
+
                 if thread_type != 'default':
                      await db.execute("INSERT OR IGNORE INTO ThreadUnlocks (thread_id, user_id) VALUES (?, ?)", (thread_op_num, op_id))
-                     
+
                 await db.execute("COMMIT")
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -3108,7 +3105,7 @@ async def create_thread_entry(
                 except: pass
                 print(f"Критическая ошибка при создании записи для треда #{thread_op_num}: {e}")
                 break
-            
+
     return False
 async def process_mentions_and_notify(source_post_num: int, board_id: str, text: str, author_id: int, reply_to_ui: int = None):
     """
@@ -3124,7 +3121,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
         return
 
     from common.db_pool import get_pool, db_lock
-    
+
     import json
 
     params = [json.dumps(list(mentions)), board_id]
@@ -3135,10 +3132,10 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 notifications_to_insert = []
                 site_notifs = []
-                
+
                 # 1. Находим получателей (авторов постов, на которые сослались)
                 query = "SELECT post_num, author_id, thread_id FROM Posts WHERE post_num IN (SELECT value FROM json_each(?)) AND board_id = ?"
                 async with db.execute(query, params) as cursor:
@@ -3147,30 +3144,30 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                         if recipient_id > 0 and recipient_id != author_id:
                             # Если thread_id is None (ОП-пост или чат), используем ID родительского поста
                             final_thread_id = str(thread_id if thread_id is not None else parent_post_num)
-                            
+
                             # NotificationQueue: (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at)
                             # source_post_num = пост получателя (на который ответили)
                             # reply_post_num = новый пост с ответом
                             if ENABLE_REPLY_NOTIFICATIONS:
                                 notifications_to_insert.append((
-                                    recipient_id, 
-                                    parent_post_num, 
-                                    new_reply_post_num, 
-                                    board_id, 
+                                    recipient_id,
+                                    parent_post_num,
+                                    new_reply_post_num,
+                                    board_id,
                                     final_thread_id,
                                     current_time
                                 ))
-                            
+
                             # UserReplies: (user_id, board_id, thread_id, post_num, parent_num, is_read, created_at)
                             # post_num = новый пост с ответом
                             # parent_num = пост получателя (на который ответили)
                             site_notifs.append((
-                                recipient_id, 
-                                board_id, 
-                                final_thread_id, 
-                                new_reply_post_num, 
-                                parent_post_num, 
-                                0, 
+                                recipient_id,
+                                board_id,
+                                final_thread_id,
+                                new_reply_post_num,
+                                parent_post_num,
+                                0,
                                 current_time
                             ))
                 if notifications_to_insert:
@@ -3186,14 +3183,14 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
                         site_notifs
                     )
-                
+
                 await db.execute("COMMIT")
                 return
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -3221,23 +3218,23 @@ async def delete_post_by_num(post_num: int) -> bool:
     Атомарно удаляет пост или весь тред с гарантированной очисткой всех зависимых таблиц.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     post_id_str = str(post_num)
     post_id_int = int(post_num)
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Проверяем, тред ли это (по thread_id или thread_num)
                 async with db.execute(
                     "SELECT 1 FROM Threads WHERE thread_id = ? OR thread_num = ? LIMIT 1",
                     (post_id_str, post_id_int)
                 ) as cursor:
                     is_thread = await cursor.fetchone() is not None
-                
+
                 if is_thread:
                     print(f"🗑️ [DB] Удаление ТРЕДА #{post_num}...")
                     # Собираем все номера постов треда для очистки связанных таблиц
@@ -3248,7 +3245,7 @@ async def delete_post_by_num(post_num: int) -> bool:
                         thread_post_nums = [row[0] for row in await cursor.fetchall()]
                     if post_id_int not in thread_post_nums:
                         thread_post_nums.append(post_id_int)
-                    
+
                     if thread_post_nums:
                         # Используем iter_sql_chunks во избежание ошибки too many SQL variables (лимит 999)
                         for chunk in iter_sql_chunks(thread_post_nums, chunk_size=400):
@@ -3278,7 +3275,7 @@ async def delete_post_by_num(post_num: int) -> bool:
                                 chunk
                             )
                             await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", chunk)
-                    
+
                     await db.execute("DELETE FROM UserReplies WHERE thread_id = ?", (post_id_str,))
                     await db.execute(
                         "DELETE FROM Posts WHERE thread_id = ? OR thread_id = ? OR post_num = ?",
@@ -3288,7 +3285,7 @@ async def delete_post_by_num(post_num: int) -> bool:
                         "DELETE FROM Threads WHERE thread_id = ? OR thread_num = ?",
                         (post_id_str, post_id_int)
                     )
-                    
+
                     # Мгновенная очистка кэша тредов
                     for cache_list in _THREAD_CACHE.values():
                         cache_list[:] = [t for t in cache_list if t != post_id_str and t != str(post_id_int)]
@@ -3307,21 +3304,21 @@ async def delete_post_by_num(post_num: int) -> bool:
                     await db.execute("DELETE FROM UserReplies WHERE post_num = ? OR parent_num = ?", (post_id_int, post_id_int))
                     await db.execute("UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num = ?", (post_id_int,))
                     await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
-                
+
                 # Мгновенная очистка медиа-кэша (удаляем все вхождения постов треда или одиночного поста)
                 del_post_nums_set = set(thread_post_nums) if is_thread else {post_id_int}
                 for cache_list in _VIDEO_CACHE.values():
                     cache_list[:] = [item for item in cache_list if item[0] not in del_post_nums_set]
                 for cache_list in _IMAGE_CACHE.values():
                     cache_list[:] = [item for item in cache_list if item[0] not in del_post_nums_set]
-                
+
                 await db.execute("COMMIT")
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -3332,14 +3329,14 @@ async def delete_post_by_num(post_num: int) -> bool:
                 except: pass
                 logger.error(f"[DB] Критическая ошибка при удалении #{post_num}: {e}")
                 break
-            
+
     return False
 async def ban_user_on_board(user_id: int, board_id: str) -> bool:
     """
     Устанавливает статус 'banned' для пользователя на указанной доске.
     """
     from common.db_pool import get_pool, db_lock, db_transaction
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3354,7 +3351,7 @@ async def ban_user_on_board(user_id: int, board_id: str) -> bool:
                         ("banned", user_id, board_id)
                     )
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -3364,7 +3361,7 @@ async def ban_user_on_board(user_id: int, board_id: str) -> bool:
             except Exception as e:
                 print(f"Критическая ошибка при бане user #{user_id} на доске {board_id}: {e}")
                 break
-            
+
     return False
 async def update_post_content(post_num: int, content: dict):
     """
@@ -3373,7 +3370,7 @@ async def update_post_content(post_num: int, content: dict):
     """
     from common.db_pool import get_pool, db_lock, db_transaction
     content_json = json.dumps(content, default=_json_serializer)
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3399,11 +3396,11 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
     """
     if not copies_data:
         return
-        
+
     from common.db_pool import get_pool, db_lock, db_transaction
-    
+
     data_to_insert = [(post_num, recipient_id, msg_id) for recipient_id, msg_id in copies_data]
-    
+
     try:
         async with asyncio.timeout(30.0):
             async with db_lock:
@@ -3691,7 +3688,7 @@ async def get_posts_from_broadcast_queue(last_timestamp: float) -> tuple[list[di
     try:
         query = "SELECT post_num, created_at FROM BroadcastQueue WHERE created_at > ?"
         async with db.execute(query, (last_timestamp,)) as cursor:
-            rows = await cursor.fetchall() 
+            rows = await cursor.fetchall()
         if not rows:
             return [], last_timestamp
         post_nums = [row[0] for row in rows]
@@ -3738,7 +3735,7 @@ async def get_post_for_broadcast(post_num: int) -> Optional[Dict[str, Any]]:
     Использует цикл попыток при блокировке базы.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3757,21 +3754,21 @@ async def get_post_for_broadcast(post_num: int) -> Optional[Dict[str, Any]]:
                     row = await cursor.fetchone()
                     if not row:
                         return None
-                    
+
                     cols = [d[0] for d in cursor.description]
                     post_dict = dict(zip(cols, row))
-                
+
                 post_dict['id'] = post_dict.pop('post_num')
                 post_dict['is_op_post'] = str(post_dict.get('thread_id')) == str(post_dict.get('id'))
-                
+
                 try:
                     if isinstance(post_dict.get('content'), str):
                         post_dict['content'] = json.loads(post_dict['content'])
                 except (json.JSONDecodeError, TypeError):
                     post_dict['content'] = {'text': '[Ошибка данных]', 'type': 'text'}
-                    
+
                 return post_dict
-                
+
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -3788,24 +3785,24 @@ async def cleanup_broadcast_queue(retention_hours: int = 6):
     from common.db_pool import get_pool, db_lock
     cutoff_timestamp = time.time() - (retention_hours * 3600)
     stale_unsent_cutoff = time.time() - (7 * 86400)
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "DELETE FROM BroadcastQueue WHERE (is_sent_to_tg = 1 AND created_at < ?) OR created_at < ?",
                     (cutoff_timestamp, stale_unsent_cutoff)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
                     continue
@@ -3823,19 +3820,19 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
     только после того, как бот смог обработать запись.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                
+
                 # 1. Читаем ID без блокирующего файл BEGIN IMMEDIATE
                 async with db.execute("SELECT post_num FROM BroadcastQueue WHERE is_sent_to_tg = 0") as cursor:
                     rows = await cursor.fetchall()
-                
+
                 if not rows:
                     return []
-                    
+
                 post_nums = [row[0] for row in rows]
 
                 # 2. Читаем контент постов ПАЧКАМИ
@@ -3860,7 +3857,7 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                         post_dict['content'] = {}
                         post_dict['_broadcast_decode_failed'] = True
                     processed_posts.append(post_dict)
-                        
+
                 return processed_posts
 
             except sqlite3.OperationalError as e:
@@ -3872,7 +3869,7 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
             except Exception as e:
                 print(f"⛔ ОШИБКА в get_and_clear_broadcast_queue: {e}")
                 break
-            
+
     return []
 
 async def mark_broadcast_posts_sent(post_nums: list[int] | tuple[int, ...] | set[int]) -> int:
@@ -3916,7 +3913,7 @@ async def get_user_by_token(token: str) -> Optional[dict]:
     Находит пользователя по его API токену.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3925,7 +3922,7 @@ async def get_user_by_token(token: str) -> Optional[dict]:
                     row = await cursor.fetchone()
                     if not row:
                         return None
-                    
+
                     cols = [d[0] for d in cursor.description]
                     return dict(zip(cols, row))
             except sqlite3.OperationalError as e:
@@ -3959,7 +3956,7 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
     Выполняет полнотекстовый поиск.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -3967,7 +3964,7 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
             final_query = f'"{sanitized_query}"'
 
             viewer_id = observer_id if observer_id is not None else -1
-            
+
             if only_archived:
                 sql_query = f"""
                     SELECT p.* FROM Posts p
@@ -3992,11 +3989,11 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
                 params.append(board_id)
             sql_query += " ORDER BY bm25(PostsFTS) LIMIT ?"
             params.append(limit)
-            
+
             async with db.execute(sql_query, params) as cursor:
                 rows = await cursor.fetchall()
                 cols = [d[0] for d in cursor.description]
-            
+
             results = []
             for row in rows:
                 if hasattr(row, 'keys'):
@@ -4188,9 +4185,9 @@ def cleanup_old_posts_from_db(limit: int = 50000):
     CHANNEL_COPY_RETENTION_SECONDS = 7 * 24 * 3600
     LOGS_LIFETIME = 14 * 24 * 3600
     ALERTS_LIFETIME = 14 * 24 * 3600
-    EPHEMERAL_BOARDS = ('thread', 'test') 
+    EPHEMERAL_BOARDS = ('thread', 'test')
     EPHEMERAL_LIMIT = 500
-    
+
     con = sqlite3.connect(DB_NAME, timeout=30.0, isolation_level=None)
     try:
         with con:
@@ -4204,7 +4201,7 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             except: pass
             try: con.execute('PRAGMA foreign_keys=ON')
             except: pass
-            
+
             # 1. Telegram copy retention. PostCopies (3 days) & ChannelCopies (7 days).
             _cleanup_telegram_copies(con, POST_COPY_RETENTION_SECONDS, POST_COPY_RETENTION_LIMIT, CHANNEL_COPY_RETENTION_SECONDS)
 
@@ -4235,7 +4232,7 @@ async def add_spam_word(board_id: str, word: str) -> bool:
     Добавляет новое стоп-слово для доски в БД.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     norm_word = str(word).strip().lower() if word else ""
     if not norm_word:
         return False
@@ -4245,18 +4242,18 @@ async def add_spam_word(board_id: str, word: str) -> bool:
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO SpamFilterWords (board_id, word) VALUES (?, ?)",
                     (board_id, norm_word)
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4273,7 +4270,7 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
     Удаляет стоп-слово для доски из БД.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     norm_word = str(word).strip().lower() if word else ""
     if not norm_word:
         return False
@@ -4283,19 +4280,19 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 async with db.execute(
                     "DELETE FROM SpamFilterWords WHERE board_id = ? AND LOWER(word) = ?",
                     (board_id, norm_word)
                 ) as cursor:
                     count = cursor.rowcount
-                
+
                 await db.execute("COMMIT")
                 return count > 0
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4309,24 +4306,24 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
 async def add_reaction_ban(user_id: int, board_id: str):
     """Добавляет пользователя в список забаненных по реакциям для доски."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO ReactionBans (user_id, board_id) VALUES (?, ?)",
                     (user_id, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4341,24 +4338,24 @@ async def add_reaction_ban(user_id: int, board_id: str):
 async def remove_reaction_ban(user_id: int, board_id: str):
     """Удаляет пользователя из списка забаненных по реакциям для доски."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "DELETE FROM ReactionBans WHERE user_id = ? AND board_id = ?",
                     (user_id, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4375,7 +4372,7 @@ async def load_all_reaction_bans() -> Dict[str, set]:
     """
     from common.db_pool import get_pool, db_lock
     from collections import defaultdict
-    
+
     reaction_bans_map = defaultdict(set)
     async with db_lock:
         try:
@@ -4391,24 +4388,24 @@ async def load_all_reaction_bans() -> Dict[str, set]:
             return defaultdict(set)
 async def update_post_thread_id(post_num: int, thread_id: int):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "UPDATE Posts SET thread_id = ? WHERE post_num = ?",
                     (thread_id, post_num)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4422,24 +4419,24 @@ async def add_reaction_to_queue(user_id: int, post_num: int, emoji: str):
     Добавляет запрос на реакцию в очередь в БД.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT INTO ReactionQueue (user_id, post_num, emoji, created_at) VALUES (?, ?, ?, ?)",
                     (user_id, post_num, emoji, time.time())
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4457,7 +4454,7 @@ async def get_and_clear_reaction_queue() -> list[dict]:
     Атомарно извлекает все реакции из очереди и очищает ее.
     """
     from common.db_pool import get_pool, db_transaction
-    
+
     db = await get_pool()
     try:
         async with db_transaction(db, immediate=True):
@@ -4466,14 +4463,14 @@ async def get_and_clear_reaction_queue() -> list[dict]:
                 if not rows:
                     return []
                 cols = [d[0] for d in cursor.description]
-            
+
             result_data = []
             ids_to_delete = []
             for row in rows:
                 d = dict(zip(cols, row))
                 result_data.append(d)
                 ids_to_delete.append(d["id"])
-                
+
             # Пачками: очередь пишет сайт, разгребает бот. Пока бот лежит,
             # реакции копятся без потолка, и одним DELETE ... IN (...) их
             # уже не удалить — запрос упал бы на лимите переменных SQLite,
@@ -4587,18 +4584,18 @@ def _append_random_media_to_caches(
 
 async def refresh_random_indexes():
     global _VIDEO_CACHE, _IMAGE_CACHE, _THREAD_CACHE, _LAST_MAX_POST_NUM, _LAST_CACHE_UPDATE
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     try:
         db = await get_pool()
         async with db.execute("SELECT MAX(post_num) FROM Posts") as cursor:
             row = await cursor.fetchone()
             current_max = row[0] if row and row[0] else 0
-            
+
         if current_max == _LAST_MAX_POST_NUM and (_VIDEO_CACHE or _IMAGE_CACHE or _THREAD_CACHE):
             return
-            
+
     except Exception:
         import traceback; traceback.print_exc()
 
@@ -4606,7 +4603,7 @@ async def refresh_random_indexes():
         try:
             time.time()
             db = await get_pool()
-            
+
             new_video_cache = defaultdict(list)
             new_image_cache = defaultdict(list)
             new_thread_cache = defaultdict(list)
@@ -4655,7 +4652,7 @@ async def refresh_random_indexes():
                 _LAST_CACHE_UPDATE = time.time()
                 print(f"Random Cache Incremental Updated: +{added_media} media, max={current_max}")
                 return
-            
+
             query = """
                 SELECT board_id, post_num, content 
                 FROM Posts 
@@ -4666,13 +4663,13 @@ async def refresh_random_indexes():
                     OR json_extract(content, '$.file_id') IS NOT NULL
                   )
             """
-            
+
             async with db.execute(query) as cursor:
                 async for row in cursor:
                     bid, pid, content_str = row
                     try:
                         _append_random_media_to_caches(new_video_cache, new_image_cache, bid, pid, content_str)
-                                
+
                     except: continue
 
             query_threads = """
@@ -4689,12 +4686,12 @@ async def refresh_random_indexes():
             _VIDEO_CACHE = new_video_cache
             _IMAGE_CACHE = new_image_cache
             _THREAD_CACHE = new_thread_cache
-            
+
             _LAST_MAX_POST_NUM = current_max
             _LAST_CACHE_UPDATE = time.time()
-            
+
             print(f"Random Cache Updated: V:{sum(len(x) for x in _VIDEO_CACHE.values())} I:{sum(len(x) for x in _IMAGE_CACHE.values())}")
-            
+
         except Exception as e:
             print(f"Error updating random indexes: {e}")
 
@@ -4711,18 +4708,18 @@ async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], a
         valid_boards = [b for b in allowed_boards if b in cache_dict and cache_dict[b]]
     else:
         valid_boards = [b for b in cache_dict.keys() if cache_dict[b]]
-        
+
     if not valid_boards:
         return None
 
     total_count = sum(len(cache_dict[b]) for b in valid_boards)
     if total_count == 0: return None
-    
+
     target_idx = random.randint(0, total_count - 1)
-    
+
     chosen_pair = None
     current_idx = 0
-    
+
     for b in valid_boards:
         count = len(cache_dict[b])
         if target_idx < current_idx + count:
@@ -4730,13 +4727,13 @@ async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], a
             chosen_pair = cache_dict[b][inner_idx]
             break
         current_idx += count
-        
+
     if not chosen_pair: return None
 
     pid, file_idx = chosen_pair
     for _ in range(5):
         post = await get_post_by_num(pid)
-        
+
         if post and 'content' in post:
             files = _extract_random_media_files(post['content'])
             if file_idx < len(files):
@@ -4746,7 +4743,7 @@ async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], a
         for c in [_VIDEO_CACHE, _IMAGE_CACHE]:
             if pid in c:
                 del c[pid]
-            else: 
+            else:
                 for b in c:
                     c[b] = [item for item in c[b] if item[0] != pid]
         total_count = sum(len(cache_dict[b]) for b in valid_boards)
@@ -4761,7 +4758,7 @@ async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], a
             curr += len(cache_dict[b])
 
     return None
-    
+
 async def get_random_video_post(allowed_boards: List[str] = None):
     return await _get_random_media_item(_VIDEO_CACHE, allowed_boards, media_kind='video')
 
@@ -4773,7 +4770,7 @@ async def update_thread_last_updated(thread_op_num: int, timestamp: float):
     Обновляет время последнего ответа (last_updated_at) для треда.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -4900,24 +4897,24 @@ async def sync_boards_with_config(board_config: dict):
                 break
 async def create_bottle(sender_id: int, recipient_id: int, message: str) -> bool:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT INTO Bottles (sender_id, recipient_id, message_text, timestamp) VALUES (?, ?, ?, ?)",
                     (sender_id, recipient_id, message, time.time())
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4931,31 +4928,31 @@ async def create_bottle(sender_id: int, recipient_id: int, message: str) -> bool
 
 async def read_and_delete_bottle(user_id: int) -> dict | None:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Читаем внутри транзакции
                 find_query = "SELECT id, message_text FROM Bottles WHERE recipient_id = ? AND is_read = 0 ORDER BY timestamp ASC LIMIT 1"
                 async with db.execute(find_query, (user_id,)) as cursor:
                     bottle_data = await cursor.fetchone()
-                
+
                 if not bottle_data:
                     await db.execute("COMMIT")
                     return None
-                    
+
                 bottle_id, message_text = bottle_data
                 await db.execute("DELETE FROM Bottles WHERE id = ?", (bottle_id,))
-                
+
                 await db.execute("COMMIT")
                 return {"message": message_text}
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -4978,15 +4975,15 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
     Возвращает список ID затронутых постов.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     affected_posts = []
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Ищем посты через сопоставление с PostFiles по file_id
                 query = """
                     SELECT post_num, content, is_shadow FROM Posts 
@@ -4997,7 +4994,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 """
                 async with db.execute(query, (file_id, file_id)) as cursor:
                     rows = await cursor.fetchall()
-                
+
                 if not rows:
                     await db.execute("COMMIT")
                     return []
@@ -5018,7 +5015,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                         if not is_shadow:
                             shadow_updates.append((post_num,))
                             needs_update = True
-                            
+
                     elif action == 'blur':
                         # Ставим флаг цензуры в JSON, если его нет
                         if not content.get('is_censored'):
@@ -5026,7 +5023,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                             new_json = json.dumps(content, default=_json_serializer)
                             blur_updates.append((new_json, post_num))
                             needs_update = True
-                    
+
                     if needs_update:
                         affected_posts.append(post_num)
 
@@ -5052,7 +5049,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 except: pass
                 print(f"⚠️ Auto-Censure DB Error: {e}")
                 break
-                
+
     return []
 async def get_recent_tags_summary(limit_files: int = 2000, top_n: int = 100) -> list[tuple[str, int]]:
     """
@@ -5061,12 +5058,12 @@ async def get_recent_tags_summary(limit_files: int = 2000, top_n: int = 100) -> 
     """
     from common.db_pool import get_pool
     from collections import Counter
-    
+
     # Кэшируем результат на уровне базы или приложения, чтобы не дергать часто
     # Но здесь просто быстрый селект
-    
+
     tags_counter = Counter()
-    
+
     try:
         db = await get_pool()
         # Берем только файлы, у которых есть теги
@@ -5076,7 +5073,7 @@ async def get_recent_tags_summary(limit_files: int = 2000, top_n: int = 100) -> 
             ORDER BY created_at DESC 
             LIMIT ?
         """
-        
+
         # Чтение без лока, так как это аналитика и не требует строгой консистентности
         async with db.execute(query, (limit_files,)) as cursor:
             async for row in cursor:
@@ -5087,10 +5084,10 @@ async def get_recent_tags_summary(limit_files: int = 2000, top_n: int = 100) -> 
                     t_clean = t.strip().lower()
                     if len(t_clean) > 2: # Игнорируем мусор
                         tags_counter[t_clean] += 1
-                        
+
         # Возвращаем топ-N тегов: [('anime', 150), ('webm', 120), ...]
         return tags_counter.most_common(top_n)
-        
+
     except Exception as e:
         print(f"⛔ Error getting recent tags: {e}")
         return []
@@ -5111,21 +5108,21 @@ async def get_shadow_muted_users(board_id: str) -> list[dict]:
 async def lift_ban(user_id: int, board_id: str):
     """Снимает обычный бан (ставит статус active)."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE Users SET status = 'active' WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5140,15 +5137,15 @@ async def lift_ban(user_id: int, board_id: str):
 async def lift_shadow_ban(user_id: int, board_id: str):
     """Снимает теневой бан."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL')", (user_id, board_id))
-                
+
                 await db.execute("COMMIT")
                 try:
                     from shared_state import board_data
@@ -5160,7 +5157,7 @@ async def lift_shadow_ban(user_id: int, board_id: str):
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5178,13 +5175,13 @@ async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int,
     """
     expires_at = time.time() + duration_seconds
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
                     (user_id, board_id)
@@ -5202,13 +5199,13 @@ async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int,
                         )
                     else:
                         raise
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5232,18 +5229,18 @@ async def remove_regular_mute(user_id: int, board_id: str):
     Удаляет обычный мут из базы данных на конкретной доске.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
                     (user_id, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 try:
                     from shared_state import board_data
@@ -5255,7 +5252,7 @@ async def remove_regular_mute(user_id: int, board_id: str):
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5324,7 +5321,7 @@ async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 2
               AND json_array_length(json_extract(content, '$.files')) > 0
             ORDER BY timestamp DESC
             LIMIT ? OFFSET ?
-        """        
+        """
         posts = []
         async with db.execute(query, (board_id, stream, page_size, offset)) as cursor:
             cols = [d[0] for d in cursor.description]
@@ -5333,7 +5330,7 @@ async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 2
                     post_data = dict(row)
                 else:
                     post_data = dict(zip(cols, row))
-                
+
                 try:
                     post_data['id'] = post_data.pop('post_num')
                     posts.append(post_data)
@@ -5365,7 +5362,7 @@ async def get_random_active_thread() -> Optional[tuple[str, str]]:
     """
     if not _THREAD_CACHE or (time.time() - _LAST_CACHE_UPDATE > 1800):
         await refresh_random_indexes()
-        
+
     if not _THREAD_CACHE:
         return None
     valid_boards = [b for b in _THREAD_CACHE.keys() if _THREAD_CACHE[b]]
@@ -5373,9 +5370,9 @@ async def get_random_active_thread() -> Optional[tuple[str, str]]:
 
     total_count = sum(len(_THREAD_CACHE[b]) for b in valid_boards)
     if total_count == 0: return None
-    
+
     target_idx = random.randint(0, total_count - 1)
-    
+
     current_idx = 0
     for b in valid_boards:
         count = len(_THREAD_CACHE[b])
@@ -5384,7 +5381,7 @@ async def get_random_active_thread() -> Optional[tuple[str, str]]:
             thread_id = _THREAD_CACHE[b][inner_idx]
             return (b, thread_id)
         current_idx += count
-        
+
     return None
 async def get_random_file_from_db() -> dict | None:
     """
@@ -5393,35 +5390,35 @@ async def get_random_file_from_db() -> dict | None:
     """
     # Используем общий механизм выборки для картинок
     post = await _get_random_media_item(_IMAGE_CACHE)
-    
+
     if post and 'content' in post and 'files' in post['content']:
         files = post['content']['files']
         # _get_random_media_item уже выбрала конкретный файл по взвешенному рандому
         idx = post.get('_selected_file_index')
-        
+
         if idx is not None and 0 <= idx < len(files):
             return files[idx]
-            
+
     return None
 async def set_user_role(user_id: int, role: str):
     if role not in ['admin', 'mod', 'user']: return
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE Users SET role = ? WHERE user_id = ?", (role, user_id))
                 await db.execute("INSERT OR IGNORE INTO Users (user_id, board_id, role) VALUES (?, 'b', ?)", (user_id, role))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5438,18 +5435,18 @@ async def get_user_role(user_id: int) -> str:
         return row[0] if row else 'user'
 async def create_alert(user_id: int, content: str, image_url: str = None, btn_text: str = None, btn_link: str = None, target_board: str = 'all'):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             await db.execute("BEGIN IMMEDIATE")
-            
+
             await db.execute(
                 """INSERT INTO UserAlerts (user_id, content, image_url, btn_text, btn_link, target_board, created_at) 
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, content, image_url, btn_text, btn_link, target_board, time.time())
             )
-            
+
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
@@ -5468,29 +5465,29 @@ async def get_pending_alerts(user_id: int, current_board: str) -> list[dict]:
         rows = await cursor.fetchall()
         return [
             {
-                "id": r[0], "user_id": r[1], "content": r[2], 
+                "id": r[0], "user_id": r[1], "content": r[2],
                 "image_url": r[3], "btn_text": r[4], "btn_link": r[5],
                 "target_board": r[6], "is_read": r[7], "created_at": r[8]
-            } 
+            }
             for r in rows
         ]
 async def mark_alert_read(alert_id: int):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE UserAlerts SET is_read = 1, read_at = ? WHERE id = ?", (time.time(), alert_id))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5512,10 +5509,10 @@ async def get_all_alerts_for_admin(limit: int = 50) -> list[dict]:
         rows = await cursor.fetchall()
         return [
             {
-                "id": r[0], "user_id": r[1], "content": r[2], 
+                "id": r[0], "user_id": r[1], "content": r[2],
                 "image_url": r[3], "btn_text": r[4], "btn_link": r[5],
                 "target_board": r[6], "is_read": r[7], "created_at": r[8]
-            } 
+            }
             for r in rows
         ]
 async def register_file_owner(file_id: str, bot_id: int):
@@ -5523,23 +5520,23 @@ async def register_file_owner(file_id: str, bot_id: int):
     Регистрирует владельца файла.
     """
     if not file_id or not bot_id: return
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(20):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)", (file_id, bot_id))
-                
+
                 await db.execute("COMMIT")
-                return 
+                return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
                     continue
@@ -5554,24 +5551,24 @@ async def register_new_file(sha256: str, phash: str, file_id: str, thumb_id: str
     Регистрирует новый файл.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(20):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (sha256, phash, file_id, thumb_id, ftype, time.time(), blurhash)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
                     continue
@@ -5594,7 +5591,7 @@ async def delete_posts_in_thread_after(thread_id: str, post_num_start: int):
     Удаляет все посты в треде, начиная с указанного номера (включительно).
     """
     from common.db_pool import get_pool, db_lock
-    
+
     # Если пытаются удалить с ОП-поста, вызываем обычное удаление
     if str(post_num_start) == str(thread_id):
         # delete_post_by_num уже адаптирован и использует лок
@@ -5606,24 +5603,24 @@ async def delete_posts_in_thread_after(thread_id: str, post_num_start: int):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "DELETE FROM Posts WHERE thread_id = ? AND post_num >= ?",
                     (str(thread_id), post_num_start)
                 )
-                
+
                 # Обновляем last_updated_at треда на время последнего живого поста
                 async with db.execute("SELECT timestamp FROM Posts WHERE thread_id = ? ORDER BY post_num DESC LIMIT 1", (str(thread_id),)) as cursor:
                     row = await cursor.fetchone()
                     if row:
                         await db.execute("UPDATE Threads SET last_updated_at = ? WHERE thread_num = ?", (row[0], int(thread_id)))
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5720,13 +5717,13 @@ async def set_user_stream(user_id: int, board_id: str, stream: str):
     if stream not in ['ru', 'en', 'jp']:
         stream = 'ru'
     from common.db_pool import get_pool, db_lock
-        
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
                     (user_id, board_id)
@@ -5735,13 +5732,13 @@ async def set_user_stream(user_id: int, board_id: str, stream: str):
                     "UPDATE Users SET stream = ? WHERE user_id = ? AND board_id = ?",
                     (stream, user_id, board_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5782,7 +5779,7 @@ async def get_stream_active_users(board_id: str, stream: str) -> set[int]:
 async def get_archived_threads(page: int = 1, page_size: int = 20) -> list:
     from common.db_pool import get_pool, db_lock
     offset = (page - 1) * page_size
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -5809,7 +5806,7 @@ async def get_archived_threads(page: int = 1, page_size: int = 20) -> list:
                         op_posts.append(post_data)
                     except Exception:
                         continue
-            
+
             if op_posts:
                 thread_ids = [str(p['id']) for p in op_posts]
                 placeholders = ','.join('?' for _ in thread_ids)
@@ -5835,7 +5832,7 @@ async def get_archived_threads(page: int = 1, page_size: int = 20) -> list:
 async def get_global_chat_posts(page: int = 1, page_size: int = 50) -> list:
     from common.db_pool import get_pool, db_lock
     offset = (page - 1) * page_size
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -5859,11 +5856,11 @@ async def get_global_chat_posts(page: int = 1, page_size: int = 50) -> list:
                     try:
                         post_data['id'] = post_data.pop('post_num')
                         post_data['content'] = json.loads(post_data['content'])
-                        post_data['backlinks'] = [] 
+                        post_data['backlinks'] = []
                         posts.append(post_data)
                     except Exception:
                         continue
-            
+
             posts_map = {p['id']: p for p in posts}
             for p in posts:
                 refs = set()
@@ -5879,7 +5876,7 @@ async def get_global_chat_posts(page: int = 1, page_size: int = 50) -> list:
                     if ref_id in posts_map:
                         if p['id'] not in posts_map[ref_id]['backlinks']:
                             posts_map[ref_id]['backlinks'].append(p['id'])
-            
+
             for p in posts:
                 p['backlinks'].sort()
             return posts
@@ -5894,24 +5891,24 @@ async def restore_thread_from_archive(thread_id: str):
     Восстанавливает тред из архива (делает доступным для постинга).
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "UPDATE Threads SET is_archived = 0, last_updated_at = ? WHERE thread_num = ?",
                     (time.time(), int(thread_id))
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5926,38 +5923,38 @@ async def create_report(post_num: int, category: str, reason: str, sender_ip_has
     Создает жалобу на пост.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Проверка дубликатов (чтение внутри транзакции)
                 async with db.execute(
-                    "SELECT 1 FROM Reports WHERE post_num = ? AND sender_ip_hash = ?", 
+                    "SELECT 1 FROM Reports WHERE post_num = ? AND sender_ip_hash = ?",
                     (post_num, sender_ip_hash)
                 ) as cursor:
                     if await cursor.fetchone():
                         await db.execute("COMMIT")
                         return False
-                
+
                 # Создание репорта
                 await db.execute(
                     "INSERT INTO Reports (post_num, category, reason, sender_ip_hash, created_at) VALUES (?, ?, ?, ?, ?)",
                     (post_num, category, reason, sender_ip_hash, time.time())
                 )
-                
+
                 # Обновление счетчика у поста
                 await db.execute("UPDATE Posts SET report_count = report_count + 1 WHERE post_num = ?", (post_num,))
-                
+
                 await db.execute("COMMIT")
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5968,7 +5965,7 @@ async def create_report(post_num: int, category: str, reason: str, sender_ip_has
                 except: pass
                 print(f"⛔ Error creating report: {e}")
                 break
-            
+
     return False
 async def get_active_reports(limit: int = 50) -> list[dict]:
     """Получает список активных (незакрытых) жалоб."""
@@ -6007,21 +6004,21 @@ async def resolve_report(report_id: int, resolution: str):
     Закрывает жалобу (resolution: 'resolved' или 'dismissed').
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE Reports SET status = ? WHERE id = ?", (resolution, report_id))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6055,7 +6052,7 @@ async def load_all_spam_words() -> Dict[str, set]:
     """
     from common.db_pool import get_pool, db_lock
     from collections import defaultdict
-    
+
     spam_words_map = defaultdict(set)
     async with db_lock:
         try:
@@ -6075,21 +6072,21 @@ async def set_system_setting(key: str, value: str):
     Устанавливает системную настройку.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("INSERT OR REPLACE INTO SystemSettings (key, value) VALUES (?, ?)", (key, value))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6108,24 +6105,24 @@ async def get_system_setting(key: str) -> str:
         return ""
 async def create_board(board_id: str, name: str, description: str, owner_id: int, approved: int = 0) -> bool:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT INTO Boards (board_id, name, description, owner_id, is_approved) VALUES (?, ?, ?, ?, ?)",
                     (board_id, name, description, owner_id, approved)
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6139,21 +6136,21 @@ async def create_board(board_id: str, name: str, description: str, owner_id: int
 
 async def approve_board(board_id: str):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE Boards SET is_approved = 1 WHERE board_id = ?", (board_id,))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6165,22 +6162,22 @@ async def approve_board(board_id: str):
 
 async def delete_board(board_id: str):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("DELETE FROM Boards WHERE board_id = ?", (board_id,))
                 await db.execute("DELETE FROM Posts WHERE board_id = ?", (board_id,))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6191,24 +6188,24 @@ async def delete_board(board_id: str):
                 break
 async def toggle_op_hidden(post_num: int, hide: bool) -> bool:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "UPDATE Posts SET is_op_hidden = ? WHERE post_num = ?",
                     (1 if hide else 0, post_num)
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6240,24 +6237,24 @@ async def get_all_boards_for_admin() -> list[dict]:
         return []
 async def create_import_request(user_id: int, url: str, board_id: str, comment: str) -> bool:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT INTO ImportRequests (user_id, url, target_board, comment, created_at) VALUES (?, ?, ?, ?, ?)",
                     (user_id, url, board_id, comment, time.time())
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6270,21 +6267,21 @@ async def create_import_request(user_id: int, url: str, board_id: str, comment: 
 
 async def update_import_request_status(request_id: int, status: str):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE ImportRequests SET status = ? WHERE id = ?", (status, request_id))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6311,14 +6308,14 @@ async def get_pending_import_requests() -> list[dict]:
         return []
 async def create_feedback(user_id: int, category: str, contact: str, message: str) -> bool:
     from common.db_pool import get_pool, db_lock
-    
+
     now = time.time()
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Дедупликация: если тот же текст от того же юзера пришел менее 10 сек назад — отдавать True без повторной вставки
                 async with db.execute(
                     "SELECT id FROM Feedback WHERE user_id = ? AND message = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1",
@@ -6328,18 +6325,18 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
                     if existing:
                         await db.execute("COMMIT")
                         return True
-                
+
                 await db.execute(
                     "INSERT INTO Feedback (user_id, category, contact, message, created_at) VALUES (?, ?, ?, ?, ?)",
                     (user_id, category, contact, message, now)
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6411,7 +6408,7 @@ async def get_post_details_for_admin(post_num: int) -> dict | None:
             data = dict(zip(main_cols, row))
         try:
             data['content'] = json.loads(data['content'])
-        except: 
+        except:
             data['content'] = {"text": "Error parsing"}
         author_id = data['author_id']
         query_history = """
@@ -6441,7 +6438,7 @@ async def get_post_details_for_admin(post_num: int) -> dict | None:
                     h_item['preview'] = "[Ошибка данных]"
                 if 'content' in h_item: del h_item['content']
                 history.append(h_item)
-        
+
         data['history'] = history
         return data
     except Exception as e:
@@ -6449,13 +6446,13 @@ async def get_post_details_for_admin(post_num: int) -> dict | None:
         return None
 async def shadow_wipe_user(user_id: int, board_id: str = None) -> int:
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 if board_id and board_id != 'ALL':
                     async with db.execute("UPDATE Posts SET is_shadow = 1 WHERE author_id = ? AND board_id = ?", (user_id, board_id)) as cursor:
                         row_count = cursor.rowcount
@@ -6467,7 +6464,7 @@ async def shadow_wipe_user(user_id: int, board_id: str = None) -> int:
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6479,24 +6476,24 @@ async def shadow_wipe_user(user_id: int, board_id: str = None) -> int:
     return 0
 async def add_channel_copy(post_num: int, channel_id: int, message_id: int):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(15):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
                     (post_num, channel_id, message_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6508,24 +6505,24 @@ async def add_channel_copy(post_num: int, channel_id: int, message_id: int):
 
 async def set_channel_message_id(post_num: int, message_id: int):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "UPDATE Posts SET channel_message_id = ? WHERE post_num = ?",
                     (message_id, post_num)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6544,10 +6541,10 @@ async def check_phash_ban(phash_str: str) -> bool:
     Проверяет pHash на похожесть с забаненными.
     """
     if not phash_str: return False
-    
+
     global _BANNED_PHASH_CACHE, _BANNED_CACHE_TIMESTAMP
     from common.db_pool import get_pool, db_lock
-    
+
     # Обновляем кэш раз в 10 минут
     if time.time() - _BANNED_CACHE_TIMESTAMP > 600:
         async with db_lock:
@@ -6558,10 +6555,10 @@ async def check_phash_ban(phash_str: str) -> bool:
                     _BANNED_PHASH_CACHE = {r[0] for r in rows}
                     _BANNED_CACHE_TIMESTAMP = time.time()
             except: pass
-            
+
     if phash_str in _BANNED_PHASH_CACHE:
         return True
-        
+
     return False
 async def get_banned_files_list(limit: int = 100) -> list[dict]:
     """
@@ -6605,7 +6602,7 @@ async def register_media_repost(board_id: str, file_unique_id: str, post_num: in
     """
     if not board_id or not file_unique_id:
         return 1
-    from common.db_pool import get_pool, db_lock, db_transaction
+    from common.db_pool import get_pool, db_transaction
 
     upsert = """
         INSERT INTO MediaReposts (board_id, file_unique_id, times, first_post_num, first_seen)
@@ -6646,9 +6643,9 @@ async def get_duplicate_counts(file_ids: list[str]) -> dict:
     Возвращает словарь {file_id: count}.
     """
     if not file_ids: return {}
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     placeholders = ','.join('?' for _ in file_ids)
     # Используем self-join или subquery, это может быть долго, поэтому лок обязателен
     query = f"""
@@ -6663,7 +6660,7 @@ async def get_duplicate_counts(file_ids: list[str]) -> dict:
         ) counts ON f.phash = counts.phash
         WHERE f.file_id IN ({placeholders})
     """
-    
+
     counts = {}
     async with db_lock:
         try:
@@ -6674,12 +6671,12 @@ async def get_duplicate_counts(file_ids: list[str]) -> dict:
                     counts[row[0]] = row[1]
         except Exception as e:
             print(f"⚠️ Dup check error: {e}")
-            
+
     return counts
 async def get_recent_posts_global(limit: int = 20) -> list[dict]:
     """Возвращает последние N постов со всех досок для Live Feed."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -6698,7 +6695,7 @@ async def get_recent_posts_global(limit: int = 20) -> list[dict]:
                         post_data = dict(row)
                     else:
                         post_data = dict(zip(cols, row))
-                    
+
                     try:
                         post_data['id'] = post_data.pop('post_num')
                         if isinstance(post_data['content'], str):
@@ -6716,8 +6713,8 @@ async def get_recent_posts_global(limit: int = 20) -> list[dict]:
             if 'db' in locals() and db:
                 db.row_factory = None
 async def get_global_feed_posts(
-    board_ids: Union[str, List[str], None], 
-    page: int = 1, 
+    board_ids: Union[str, List[str], None],
+    page: int = 1,
     page_size: int = 20,
     stream: str = 'ru',
     observer_id: int = None,
@@ -6725,24 +6722,24 @@ async def get_global_feed_posts(
     sort_by: str = 'new'
 ) -> list:
     from common.db_pool import get_pool, db_lock
-    
+
     offset = (page - 1) * page_size
     viewer_id = observer_id if observer_id else -1
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             db.row_factory = aiosqlite.Row
-            
+
             where_clauses = [
                 f"(IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})",
                 "(p.stream = ? OR p.stream IS NULL)"
             ]
-            
+
             if not include_chat:
                 where_clauses.append("p.thread_id IS NOT NULL")
             params = [stream]
-            
+
             if board_ids:
                 if isinstance(board_ids, list) and len(board_ids) > 0:
                     placeholders = ','.join('?' for _ in board_ids)
@@ -6751,31 +6748,31 @@ async def get_global_feed_posts(
                 elif isinstance(board_ids, str):
                     where_clauses.append("p.board_id = ?")
                     params.append(board_ids)
-            
+
             where_str = " AND ".join(where_clauses)
-            
+
             if sort_by == 'random':
                 ids_query = f"SELECT p.post_num FROM Posts p WHERE {where_str}"
-                
+
                 all_ids = []
                 async with db.execute(ids_query, params) as cursor:
                     async for row in cursor:
                         all_ids.append(row['post_num'])
-                
+
                 if not all_ids:
                     return []
 
                 seed_val = int(time.time() / 600)
                 rng = random.Random(seed_val)
                 rng.shuffle(all_ids)
-                
+
                 target_ids = all_ids[offset : offset + page_size]
-                
+
                 if not target_ids:
                     return []
-                
+
                 placeholders_in = ','.join('?' for _ in target_ids)
-                
+
                 query = f"""
                     SELECT 
                         p.post_num, p.board_id, p.thread_id, p.content, p.timestamp, p.author_id, p.stream, p.is_shadow,
@@ -6786,7 +6783,7 @@ async def get_global_feed_posts(
                     WHERE p.post_num IN ({placeholders_in})
                 """
                 query_params = target_ids
-                
+
             else:
                 query = f"""
                     SELECT 
@@ -6809,7 +6806,7 @@ async def get_global_feed_posts(
                         post_data = dict(row)
                     else:
                         post_data = dict(zip(cols, row))
-                
+
                     try:
                         post_data['id'] = post_data.pop('post_num')
                         if isinstance(post_data['content'], str):
@@ -6820,7 +6817,7 @@ async def get_global_feed_posts(
                         posts_unordered.append(post_data)
                     except Exception:
                         continue
-            
+
             if sort_by == 'random':
                 posts_map = {p['id']: p for p in posts_unordered}
                 posts = []
@@ -6829,7 +6826,7 @@ async def get_global_feed_posts(
                         posts.append(posts_map[pid])
             else:
                 posts = posts_unordered
-                        
+
             return posts
 
         except Exception as e:
@@ -6841,17 +6838,17 @@ async def get_global_feed_posts(
 async def get_full_user_info(user_id: int) -> Optional[Dict[str, Any]]:
     """Возвращает полное досье на пользователя по ID."""
     from common.db_pool import get_pool, db_lock
-    
+
     info = {
         "user_id": user_id,
         "first_seen": 0,
         "total_posts": 0,
-        "boards": [], 
+        "boards": [],
         "active_bans": [],
         "last_posts": [],
         "global_role": "user"
     }
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -6863,7 +6860,7 @@ async def get_full_user_info(user_id: int) -> Optional[Dict[str, Any]]:
                     if "admin" in roles: info["global_role"] = "admin"
                     elif "mod" in roles: info["global_role"] = "mod"
                     elif "janitor" in roles: info["global_role"] = "janitor"
-                    
+
                     for r in rows:
                         info["boards"].append({
                             "board_id": r[0],
@@ -6880,7 +6877,7 @@ async def get_full_user_info(user_id: int) -> Optional[Dict[str, Any]]:
                 async for row in cursor:
                     if hasattr(row, 'keys'): pd = dict(row)
                     else: pd = dict(zip(cols, row))
-                    
+
                     try:
                         if isinstance(pd['content'], str):
                             pd['content'] = json.loads(pd['content'])
@@ -6895,7 +6892,7 @@ async def get_full_user_info(user_id: int) -> Optional[Dict[str, Any]]:
                         "type": row[1],
                         "expires_at": row[2]
                     })
-            
+
             return info
 
         except Exception as e:
@@ -6906,31 +6903,31 @@ async def remove_users_from_board_batch(user_ids: list[int], board_id: str):
     Массово удаляет список пользователей с доски с защитой от блокировок.
     """
     if not user_ids: return
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 placeholders = ','.join('?' for _ in user_ids)
                 query = f"DELETE FROM Users WHERE board_id = ? AND user_id IN ({placeholders})"
                 params = [board_id] + list(user_ids)
-                
+
                 async with db.execute(query, params) as cursor:
                     count = cursor.rowcount
-                
+
                 await db.execute("COMMIT")
-                
+
                 if count > 0:
                     print(f"  > DB: Удалено {count} пользователей с доски '{board_id}'.")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6943,24 +6940,24 @@ async def ban_hash(value: str, type: str, reason: str):
     from common.db_pool import get_pool, db_lock
     # При сбросе кэша в глобальной области видимости может потребоваться импорт или доступ к переменной модуля
     # Здесь предполагаем, что _BANNED_CACHE_TIMESTAMP доступна или будет обновлена при следующем чтении
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
-                    "INSERT OR REPLACE INTO BannedHashes (hash_value, hash_type, reason) VALUES (?, ?, ?)", 
+                    "INSERT OR REPLACE INTO BannedHashes (hash_value, hash_type, reason) VALUES (?, ?, ?)",
                     (value, type, reason)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -6974,21 +6971,21 @@ async def ban_hash(value: str, type: str, reason: str):
 
 async def unban_hash(hash_value: str):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("DELETE FROM BannedHashes WHERE hash_value = ?", (hash_value,))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -7002,7 +6999,7 @@ async def get_all_channel_copies(post_num: int) -> list[tuple[int, int]]:
     Возвращает список всех мест, где лежит этот пост в каналах.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -7018,63 +7015,63 @@ async def cleanup_shadow_posts_db(hours: int = 24):
     cutoff = time.time() - (hours * 3600)
     chunk_size = 500  # Удаляем по 500 штук за раз
     total_deleted = 0
-    
+
     # Внешний цикл для порционной обработки
     while True:
         async with db_lock:
             # Цикл попыток для одной транзакции
             transaction_success = False
             deleted_in_chunk = 0
-            
+
             for attempt in range(10):
                 try:
                     db = await get_pool()
                     await db.execute("BEGIN IMMEDIATE")
-                    
+
                     # 1. Находим ID кандидатов на удаление (LIMIT)
                     # Используем подзапрос для получения ID, чтобы удалить связанные треды и посты
                     # SQLite delete limit эмулируется через WHERE rowid IN (SELECT ... LIMIT N)
-                    
+
                     ids_to_delete = []
                     async with db.execute(
-                        "SELECT post_num FROM Posts WHERE is_shadow = 1 AND timestamp < ? LIMIT ?", 
+                        "SELECT post_num FROM Posts WHERE is_shadow = 1 AND timestamp < ? LIMIT ?",
                         (cutoff, chunk_size)
                     ) as cursor:
                         rows = await cursor.fetchall()
                         ids_to_delete = [r[0] for r in rows]
-                    
+
                     if not ids_to_delete:
                         await db.execute("COMMIT")
                         transaction_success = True
                         break # Больше нечего удалять
-                        
+
                     placeholders = ','.join('?' for _ in ids_to_delete)
-                    
+
                     # 2. Удаляем треды, если эти посты были ОП-постами
                     # Преобразуем int ID в строки для thread_id
                     thread_ids = [str(x) for x in ids_to_delete]
                     t_placeholders = ','.join('?' for _ in thread_ids)
-                    
+
                     await db.execute(
-                        f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", 
+                        f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})",
                         thread_ids
                     )
-                    
+
                     # 3. Удаляем сами посты
                     async with db.execute(
-                        f"DELETE FROM Posts WHERE post_num IN ({placeholders})", 
+                        f"DELETE FROM Posts WHERE post_num IN ({placeholders})",
                         ids_to_delete
                     ) as cursor:
                         deleted_in_chunk = cursor.rowcount
-                    
+
                     await db.execute("COMMIT")
                     transaction_success = True
                     break
-                    
+
                 except sqlite3.OperationalError as e:
                     try: await db.execute("ROLLBACK")
                     except: pass
-                    
+
                     if "locked" in str(e).lower() or "busy" in str(e).lower():
                         await db_sleep(0.2 * (attempt + 1))
                         continue
@@ -7090,10 +7087,10 @@ async def cleanup_shadow_posts_db(hours: int = 24):
         if transaction_success:
             if deleted_in_chunk == 0:
                 break
-            
+
             total_deleted += deleted_in_chunk
             # ВАЖНО: Пауза между транзакциями, чтобы дать другим записать данные
-            await db_sleep(0.5) 
+            await db_sleep(0.5)
         else:
             # Если транзакция не прошла после всех попыток
             break
@@ -7103,13 +7100,13 @@ async def cleanup_shadow_posts_db(hours: int = 24):
 async def get_detailed_statistics() -> dict:
     from common.db_pool import get_pool, db_lock
     from common.board_config import BOARD_CONFIG
-    
+
     now = time.time()
     day_ago = now - 86400
     week_ago = now - 604800
     hour_ago = now - 3600
     stats = {}
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -7136,7 +7133,7 @@ async def get_detailed_statistics() -> dict:
                         stats[bid]["posts_24h"] = row[2] or 0
                         stats[bid]["posts_7d"] = row[3] or 0
                         stats[bid]["posts_1h"] = row[4] or 0
-            
+
             async with db.execute("""
                 SELECT board_id,
                        COUNT(*) as total,
@@ -7151,7 +7148,7 @@ async def get_detailed_statistics() -> dict:
                         stats[bid]["total_threads"] = row[1]
                         stats[bid]["threads_24h"] = row[2] or 0
                         stats[bid]["threads_7d"] = row[3] or 0
-            
+
             for bid in stats.keys():
                 async with db.execute("""
                     SELECT thread_id, title, last_updated_at 
@@ -7173,11 +7170,10 @@ async def get_detailed_statistics() -> dict:
             print(f"⛔ Stats error: {e}")
             return {}
 async def process_cross_links(source_board: str, source_post: int, text: str, stream: str = 'ru'):
-    import re
     refs = RE_BOARD_POST_REF.findall(text or "")
     refs = CROSS_LINK_PATTERN.findall(text or "")
     if not refs: return
-    
+
     potential_targets = set()
     for t_board, t_post in refs:
         if t_board == source_board: continue
@@ -7193,18 +7189,18 @@ async def process_cross_links(source_board: str, source_post: int, text: str, st
                 placeholders = ','.join('?' for _ in potential_targets)
                 query = f"SELECT post_num FROM Posts WHERE post_num IN ({placeholders}) AND stream = ?"
                 params = list(potential_targets) + [stream]
-                
+
                 async with db.execute(query, params) as cursor:
                     async for row in cursor:
                         valid_targets.add(row[0])
-                
+
                 await db.execute("BEGIN IMMEDIATE")
                 links_to_insert = []
                 for target_board, target_post_str in set(refs):
                     target_post = int(target_post_str)
                     if target_post in valid_targets:
                         links_to_insert.append((source_board, source_post, target_board, target_post))
-                
+
                 if links_to_insert:
                     await db.executemany(
                         "INSERT OR IGNORE INTO CrossLinks (source_board, source_post, target_board, target_post) VALUES (?, ?, ?, ?)",
@@ -7224,16 +7220,15 @@ async def process_cross_links(source_board: str, source_post: int, text: str, st
                 except: pass
                 break
 async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optional[int] = None):
-    import re
     refs = set(RE_POST_REF.findall(text))
     refs = set(REF_PATTERN.findall(text))
-    
+
     if reply_to_int:
         refs.add(str(reply_to_int))
-        
+
     if str(source_post_num) in refs:
         refs.remove(str(source_post_num))
-        
+
     if not refs: return
 
     from common.db_pool import get_pool, db_lock
@@ -7243,36 +7238,36 @@ async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optio
         for attempt in range(10):
             try:
                 db = await get_pool()
-                
+
                 # 1. Проверяем существование целевых постов (Foreign Key Constraint)
                 valid_targets = set()
                 params = list(refs)
                 placeholders = ','.join('?' for _ in params)
-                
+
                 # Читаем существующие ID (можно без транзакции, если WAL, но мы уже под локом)
                 async with db.execute(f"SELECT post_num FROM Posts WHERE post_num IN ({placeholders})", params) as cursor:
                     async for row in cursor:
                         valid_targets.add(row[0])
-                
+
                 if not valid_targets:
                     return
 
                 # 2. Вставка
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 links_to_insert = [(target, source_post_num) for target in valid_targets]
                 await db.executemany(
                     "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
                     links_to_insert
                 )
-                
+
                 await db.execute("COMMIT")
                 return
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -7326,7 +7321,7 @@ async def find_post_by_file_id(file_id_substring: str) -> dict | None:
         """
         async with db.execute(query, (file_id_substring, file_id_substring)) as cursor:
             row = await cursor.fetchone()
-            
+
         if not row:
             # Fallback к поиску по JSON content в Posts (для постов до миграции PostFiles)
             query_fallback = """
@@ -7352,7 +7347,7 @@ async def find_post_by_file_id(file_id_substring: str) -> dict | None:
     except Exception as e:
         print(f"⛔ Ошибка поиска файла в БД: {e}")
         return None
-    
+
 async def get_activity_history(days: int = 7) -> dict:
     """Возвращает количество постов по дням за последние N дней."""
     db = await get_pool()
@@ -7385,7 +7380,7 @@ async def get_newspaper_data(date_str: str) -> dict:
         end_ts = start_ts + 86400
     except Exception:
         return {}
-        
+
     res = {
         "date": date_str,
         "total_posts": 0,
@@ -7396,7 +7391,7 @@ async def get_newspaper_data(date_str: str) -> dict:
         "recent_media": [],
         "quotes": []
     }
-    
+
     def _parse_post_content(raw):
         if not raw:
             return "", []
@@ -7426,17 +7421,17 @@ async def get_newspaper_data(date_str: str) -> dict:
         async with db.execute("SELECT COUNT(*) FROM Posts WHERE timestamp BETWEEN ? AND ? AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
             row = await cursor.fetchone()
             if row: res["total_posts"] = row[0]
-            
+
         # 2. Active authors
         async with db.execute("SELECT COUNT(DISTINCT author_id) FROM Posts WHERE timestamp BETWEEN ? AND ? AND author_id != 0 AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
             row = await cursor.fetchone()
             if row: res["active_authors"] = row[0]
-            
+
         # 3. New threads count
         async with db.execute("SELECT COUNT(*) FROM Threads WHERE created_at BETWEEN ? AND ?", (start_ts, end_ts)) as cursor:
             row = await cursor.fetchone()
             if row: res["new_threads_count"] = row[0]
-            
+
         # 4. Top threads by posts in this day
         query_threads = """
             SELECT p.thread_id, p.board_id, t.title, COUNT(p.post_num) as cnt
@@ -7454,7 +7449,7 @@ async def get_newspaper_data(date_str: str) -> dict:
                     "title": r["title"] or "Без названия",
                     "posts_count": r["cnt"]
                 })
-                
+
         # 5. Media Gallery (Photos, Videos, GIFs)
         query_media = """
             SELECT pf.post_num, pf.file_type, pf.original_file_id, pf.thumbnail_file_id, pf.original_url, pf.thumbnail_url,
@@ -7498,7 +7493,7 @@ async def get_newspaper_data(date_str: str) -> dict:
                     continue
                 if re.search(r"(.)\1{12,}", c_text):
                     continue
-                
+
                 res["longest_posts"].append({
                     "post_num": r["post_num"],
                     "id": r["post_num"],
@@ -7557,7 +7552,7 @@ async def get_top_active_threads(hours: int = 8, limit: int = 10):
 async def get_updates_since(board_id: str, since_ts: float) -> list[dict]:
     """Для поллинга: возвращает посты, созданные после since_ts. Скрывает shadow-посты."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -7594,24 +7589,24 @@ async def add_file_mirror(file_id: str, mirror_type: str, url: str):
     Добавляет зеркало для файла.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT OR IGNORE INTO FileMirrors (file_id, mirror_type, url) VALUES (?, ?, ?)",
                     (file_id, mirror_type, url)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -7629,11 +7624,11 @@ async def register_file_owners_batch(conn: aiosqlite.Connection, owner_pairs: li
     """
     if not owner_pairs:
         return
-        
-    # В этой функции мы не делаем BEGIN/COMMIT, так как предполагается, 
-    # что она часть большей транзакции. 
+
+    # В этой функции мы не делаем BEGIN/COMMIT, так как предполагается,
+    # что она часть большей транзакции.
     # Но мы добавляем retry на уровне execute для надежности.
-    
+
     for attempt in range(10):
         try:
             async with conn.cursor() as cursor:
@@ -7657,25 +7652,25 @@ async def cleanup_notification_queue(retention_hours: int = 48):
     """
     from common.db_pool import get_pool, db_lock
     cutoff_timestamp = time.time() - (retention_hours * 3600)
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 async with db.execute("DELETE FROM NotificationQueue WHERE created_at < ?", (cutoff_timestamp,)) as cursor:
                     deleted_count = cursor.rowcount
-                
+
                 await db.execute("COMMIT")
-                
+
                 if deleted_count > 0:
                     print(f"🧹 Очистка БД: Удалено {deleted_count} устаревших уведомлений.")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
                     continue
@@ -7689,24 +7684,24 @@ async def log_global_event(source: str, text: str):
     Записывает событие в единую базу логов.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT INTO GlobalLogs (source, event_text, created_at) VALUES (?, ?, ?)",
                     (source, text, time.time())
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -7722,16 +7717,16 @@ async def add_to_mod_queue(post_num: int, file_id: str, reason: str, score: floa
     Добавляет пост в очередь на ручную проверку.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Проверяем, нет ли уже этого поста в очереди
                 async with db.execute("SELECT 1 FROM ModQueue WHERE post_num = ?", (post_num,)) as cursor:
-                    if await cursor.fetchone(): 
+                    if await cursor.fetchone():
                         await db.execute("COMMIT")
                         return
 
@@ -7739,13 +7734,13 @@ async def add_to_mod_queue(post_num: int, file_id: str, reason: str, score: floa
                     "INSERT INTO ModQueue (post_num, file_id, reason, score, created_at) VALUES (?, ?, ?, ?, ?)",
                     (post_num, file_id, reason, score, time.time())
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -7787,7 +7782,7 @@ async def get_mod_queue() -> list[dict]:
                         elif f.get('original_url'): thumb = f['original_url']
                         break
                 d['thumb_url'] = thumb
-            except: 
+            except:
                 d['thumb_url'] = ""
             results.append(d)
         return results
@@ -7799,9 +7794,9 @@ async def get_file_details_batch(file_ids: list[str]) -> dict:
     """
     if not file_ids:
         return {}
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     placeholders = ','.join('?' for _ in file_ids)
     query = f"SELECT file_id, file_type, sha256 FROM FileRegistry WHERE file_id IN ({placeholders})"
     details_map = {}
@@ -7820,7 +7815,7 @@ async def get_file_details_batch(file_ids: list[str]) -> dict:
                             ext = 'mp4'
                         elif ftype in ['audio', 'voice']:
                             ext = 'ogg'
-                        
+
                         details_map[fid] = {
                             "type": ftype,
                             "filename": f"{sha[:16]}.{ext}" if sha else f"{fid}.{ext}"
@@ -7841,11 +7836,11 @@ async def get_blurhashes_batch(file_ids: list[str]) -> dict:
     """
     if not file_ids: return {}
     from common.db_pool import get_pool, db_lock
-    
+
     placeholders = ','.join('?' for _ in file_ids)
     query = f"SELECT file_id, blurhash FROM FileRegistry WHERE file_id IN ({placeholders}) AND blurhash IS NOT NULL"
     res = {}
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -7912,21 +7907,21 @@ async def resolve_mod_queue(item_id: int):
     Убирает из очереди (например, админ одобрил или удалил).
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("UPDATE ModQueue SET status = 'resolved' WHERE id = ?", (item_id,))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -7950,14 +7945,14 @@ async def get_file_mirrors(file_id: str) -> dict:
 
 async def check_file_deduplication(sha256: str):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             async with db.execute("SELECT reason FROM BannedHashes WHERE hash_value = ?", (sha256,)) as cursor:
                 if await cursor.fetchone():
                     return {"banned": True, "reason": "SHA256 Ban"}
-            
+
             query = """
                 SELECT
                     fr.file_id,
@@ -7995,13 +7990,13 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
     Переносит тред и все его посты в другую доску.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # 1. Проверяем, существует ли тред
                 async with db.execute("SELECT 1 FROM Threads WHERE thread_num = ?", (int(thread_id),)) as cursor:
                     if not await cursor.fetchone():
@@ -8012,16 +8007,16 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
                 await db.execute("UPDATE Threads SET board_id = ? WHERE thread_num = ?", (new_board_id, int(thread_id)))
 
                 # 3. Обновляем таблицу Posts
-                await db.execute("UPDATE Posts SET board_id = ? WHERE thread_id = ? OR post_num = ?", 
+                await db.execute("UPDATE Posts SET board_id = ? WHERE thread_id = ? OR post_num = ?",
                                  (new_board_id, thread_id, thread_id))
-                
+
                 await db.execute("COMMIT")
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8032,7 +8027,7 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
                 except: pass
                 print(f"⛔ Error moving thread {thread_id}: {e}")
                 break
-            
+
     return False
 async def get_and_clear_admin_actions() -> list[dict]:
     """
@@ -8040,21 +8035,21 @@ async def get_and_clear_admin_actions() -> list[dict]:
     Использует BEGIN IMMEDIATE для защиты от дедлоков.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # 1. Читаем действия
                 async with db.execute("SELECT id, action_type, user_id, board_id, expires_at FROM AdminActionQueue") as cursor:
                     rows = await cursor.fetchall()
-                
+
                 if not rows:
                     await db.execute("COMMIT")
                     return []
-                
+
                 # 2. Очищаем очередь (удаляем всё, что прочитали)
                 ids = [r[0] for r in rows]
                 # Пачками — тот же лимит переменных SQLite. Админ-действий
@@ -8063,15 +8058,15 @@ async def get_and_clear_admin_actions() -> list[dict]:
                 for chunk in iter_sql_chunks(ids):
                     placeholders = ','.join('?' for _ in chunk)
                     await db.execute(f"DELETE FROM AdminActionQueue WHERE id IN ({placeholders})", chunk)
-                
+
                 await db.execute("COMMIT")
-                
+
                 return [{"type": r[1], "user_id": r[2], "board_id": r[3], "expires": r[4]} for r in rows]
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8086,7 +8081,7 @@ async def get_channel_message_id(post_num: int) -> int | None:
     Получает ID сообщения в канале.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -8097,26 +8092,26 @@ async def get_channel_message_id(post_num: int) -> int | None:
             return None
 async def add_to_hf_queue(file_id: str):
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # ПРАВКА: Если файл уже в очереди, обновляем его время, чтобы он прыгнул в начало (LIFO)
                 await db.execute("""
                     INSERT INTO PendingHF (file_id, created_at) 
                     VALUES (?, ?)
                     ON CONFLICT(file_id) DO UPDATE SET created_at = excluded.created_at
                 """, (file_id, time.time()))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8131,24 +8126,24 @@ async def remove_from_hf_queue(file_ids: list[str]):
     from common.db_pool import get_pool, db_lock
 
     chunk_size = 900
-    
+
     async with db_lock:
         for attempt in range(20):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 for i in range(0, len(file_ids), chunk_size):
                     chunk = file_ids[i:i+chunk_size]
                     placeholders = ','.join('?' for _ in chunk)
                     await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", chunk)
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
                     continue
@@ -8156,20 +8151,20 @@ async def remove_from_hf_queue(file_ids: list[str]):
             except Exception:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                logging.error(f"❌ HF Queue critical delete error.")
+                logging.error("❌ HF Queue critical delete error.")
                 break
 async def add_to_mirror_queue(file_id: str, mirror_type: str):
     """
     Добавляет задачу на создание зеркала в очередь.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # ПРАВКА: При повторном добавлении сбрасываем попытки и ставим текущее время
                 # Duplicate requests must not reset retry backoff.
                 await db.execute("""
@@ -8177,13 +8172,13 @@ async def add_to_mirror_queue(file_id: str, mirror_type: str):
                     VALUES (?, ?, ?, 0)
                     ON CONFLICT(file_id, mirror_type) DO NOTHING
                 """, (file_id, mirror_type, time.time()))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8194,11 +8189,11 @@ async def add_to_mirror_queue(file_id: str, mirror_type: str):
                 break
 async def add_post_to_random_cache(post_data: dict):
     global _LAST_MAX_POST_NUM
-    
+
     pid = post_data.get('id') or post_data.get('post_num')
     bid = post_data.get('board_id')
     if not pid or not bid: return
-    
+
     pid_int = int(pid)
     for c in [_VIDEO_CACHE, _IMAGE_CACHE]:
         for b in c:
@@ -8253,24 +8248,24 @@ async def reschedule_mirror_task(task_id: int, attempt: int):
     from common.db_pool import get_pool, db_lock
     delay = min(300 * (2 ** attempt), 3600)
     next_time = time.time() + delay
-    
+
     async with db_lock:
         for try_idx in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "UPDATE MirrorQueue SET attempts = ?, next_run_at = ? WHERE id = ?",
                     (attempt + 1, next_time, task_id)
                 )
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (try_idx + 1))
                     continue
@@ -8302,7 +8297,7 @@ async def get_system_queue_counts() -> dict:
             stats['import_sim'] = (await c.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ('image', 'photo') AND (tags IS NULL OR tags = '')") as c:
             stats['tagging'] = (await c.fetchone())[0]
-            
+
     except Exception as e:
         print(f"Stats Error: {e}")
         return {'mirror': 0, 'notif': 0, 'mod': 0, 'broadcast': 0, 'delivery': 0, 'import': 0, 'tagging': 0, 'import_sim': 0}
@@ -8361,26 +8356,26 @@ async def toggle_thread_endless(thread_id: str, endless: bool):
     Переключает режим бесконечного треда.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "UPDATE Threads SET is_endless = ? WHERE thread_num = ?",
                     (1 if endless else 0, int(thread_id))
                 )
                 if endless:
                     await db.execute("UPDATE Threads SET is_archived = 0 WHERE thread_num = ?", (int(thread_id),))
-                
+
                 await db.execute("COMMIT")
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8396,15 +8391,15 @@ async def trim_thread_posts(thread_id: str, max_posts: int = 1000):
     Атомарно удаляет старые посты, оставляя только N последних.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
-                op_id_int = int(thread_id) 
-                
+
+                op_id_int = int(thread_id)
+
                 query = """
                     DELETE FROM Posts
                     WHERE thread_id = ?
@@ -8416,12 +8411,12 @@ async def trim_thread_posts(thread_id: str, max_posts: int = 1000):
                           LIMIT ?
                       )
                 """
-                
+
                 async with db.execute(query, (thread_id, op_id_int, thread_id, max_posts)) as cursor:
                     count = cursor.rowcount
-                
+
                 await db.execute("COMMIT")
-                
+
                 if count > 0:
                     print(f"✂️ Trimmed thread {thread_id}: deleted {count} old posts (Atomic).")
                 return
@@ -8429,7 +8424,7 @@ async def trim_thread_posts(thread_id: str, max_posts: int = 1000):
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8445,21 +8440,21 @@ async def remove_mirror_task(task_id: int):
     Удаляет выполненную задачу.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(15):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute("DELETE FROM MirrorQueue WHERE id = ?", (task_id,))
-                
+
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
                     continue
@@ -8474,7 +8469,7 @@ async def get_hf_queue_batch(limit: int = 50) -> list[str]:
     Защищено db_lock для безопасного чтения.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(5):
             try:
@@ -8494,7 +8489,7 @@ async def get_queue_stats() -> tuple[int, float]:
     Возвращает (кол-во файлов, время самого старого).
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -8505,19 +8500,19 @@ async def get_queue_stats() -> tuple[int, float]:
                 return count, oldest
         except:
             return 0, 0
-    
+
 async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: int, board_id: str, thread_id: int, reply_author_id: int):
     """
     Проверяет, кому нужно отправить уведомление, и ставит его в очередь.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # Проверяем автора оригинала (чтение внутри цикла транзакции)
                 async with db.execute("SELECT author_id FROM Posts WHERE post_num = ?", (source_post_num,)) as cursor:
                     row = await cursor.fetchone()
@@ -8525,7 +8520,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                         await db.execute("COMMIT")
                         return
                     original_author_id = row[0]
-                
+
                 if original_author_id > 0 and original_author_id != reply_author_id:
                     curr_time = time.time()
 
@@ -8539,21 +8534,21 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                                VALUES (?, ?, ?, ?, ?, ?)""",
                             (original_author_id, source_post_num, reply_post_num, board_id, effective_thread_id, curr_time)
                         )
-                    
+
                     await db.execute(
                         """INSERT INTO UserReplies 
                            (user_id, board_id, thread_id, post_num, parent_num, is_read, created_at) 
                            VALUES (?, ?, ?, ?, ?, 0, ?)""",
                         (original_author_id, board_id, effective_thread_id, reply_post_num, source_post_num, curr_time)
                     )
-                
+
                 await db.execute("COMMIT")
                 return
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8570,7 +8565,7 @@ async def get_and_clear_notification_queue() -> list[dict]:
     Забирает все уведомления и очищает таблицу.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     if not ENABLE_REPLY_NOTIFICATIONS:
         try:
             async with db_lock:
@@ -8579,22 +8574,22 @@ async def get_and_clear_notification_queue() -> list[dict]:
         except Exception:
             pass
         return []
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 # 1. Забираем и удаляем данные уведомлений
                 async with db.execute("DELETE FROM NotificationQueue RETURNING recipient_id, source_post_num, reply_post_num, board_id, thread_id") as cursor:
                     rows = await cursor.fetchall()
-                
+
                 await db.execute("COMMIT")
 
                 if not rows:
                     return []
-                
+
                 # 2. Возвращаем результат
                 return [
                     {
@@ -8605,11 +8600,11 @@ async def get_and_clear_notification_queue() -> list[dict]:
                         "thread_id": r[4]
                     } for r in rows
                 ]
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -8620,50 +8615,50 @@ async def get_and_clear_notification_queue() -> list[dict]:
                 except: pass
                 print(f"⛔ Ошибка в get_and_clear_notification_queue: {e}")
                 break
-            
+
     return []
 async def save_poll_vote_db(post_num: int, user_id: int, option_index: int) -> bool:
     """
     Атомарная запись голоса.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 await db.execute(
                     "INSERT INTO PollVotes (post_num, user_id, option_index) VALUES (?, ?, ?)",
                     (post_num, user_id, option_index)
                 )
-                
+
                 await db.execute("COMMIT")
                 return True
-                
+
             except sqlite3.IntegrityError:
                 try: await db.execute("ROLLBACK")
                 except: pass
                 # Пользователь уже голосовал — это нормальное поведение, не ошибка.
                 return False
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Poll Vote DB Error: {e}")
                 break
-                
+
             except Exception as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
                 print(f"Poll Vote Error: {e}")
                 break
-            
+
     return False
 
 async def get_poll_results(post_num: int) -> dict:
@@ -8700,7 +8695,7 @@ async def get_poll_results_batch(post_nums: list[int]) -> dict[int, dict[str, in
 async def get_file_tags(file_id: str) -> list[str]:
     """Возвращает список тегов для файла."""
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -8714,36 +8709,36 @@ async def get_file_tags(file_id: str) -> list[str]:
 
 async def search_files_by_tags(tags: list[str], limit: int = 50, offset: int = 0) -> list[dict]:
     if not tags: return []
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     search_terms = []
     for t in tags:
         cleaned = "".join(ch for ch in t if ch.isalnum() or ch in " ")
         cleaned = cleaned.strip().replace('"', '""')
         if not cleaned: continue
-        
+
         search_terms.append(f'"{cleaned}"*')
-        
+
         words = cleaned.split()
         if len(words) > 1:
             for w in words:
                 if len(w) > 2:
                     search_terms.append(f'{w}*')
-            
+
     if not search_terms: return []
-    
+
     unique_terms = list(set(search_terms))
     fts_query = " OR ".join(unique_terms)
-    
-    query = f"""
+
+    query = """
         SELECT file_id, bm25(FileTagsFTS) as score, tags
         FROM FileTagsFTS
         WHERE FileTagsFTS MATCH ?
         ORDER BY score ASC
         LIMIT ? OFFSET ?
     """
-    
+
     results = []
     async with db_lock:
         try:
@@ -8757,7 +8752,7 @@ async def search_files_by_tags(tags: list[str], limit: int = 50, offset: int = 0
                     })
         except Exception as e:
             print(f"Tag search error: {e}")
-        
+
     return results
 async def get_mirrors_batch(file_ids: list[str]) -> dict:
     if not file_ids: return {}
@@ -8819,14 +8814,14 @@ async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
     """
     Находит посты, содержащие указанные файлы.
     """
-    if not file_ids: 
+    if not file_ids:
         return []
-        
+
     from common.db_pool import get_pool, db_lock
-    
+
     clauses = []
     params = []
-    
+
     placeholders = ",".join(["?"] * len(file_ids))
     # We query PostFiles to quickly find post_num for the given file IDs
     query = f"""
@@ -8865,7 +8860,7 @@ async def get_thread_type_and_unlock_status(thread_id: str, user_id: int) -> tup
     Использует цикл попыток при блокировке базы.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -8875,13 +8870,13 @@ async def get_thread_type_and_unlock_status(thread_id: str, user_id: int) -> tup
                     if not row:
                         return 'default', False
                     t_type = row[0] or 'default'
-                    
+
                 if t_type == 'default':
                     return 'default', True
-                    
+
                 async with db.execute("SELECT 1 FROM ThreadUnlocks WHERE thread_id = ? AND user_id = ? LIMIT 1", (thread_id, user_id)) as cursor:
                     is_unlocked = await cursor.fetchone() is not None
-                    
+
                 return t_type, is_unlocked
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
@@ -8917,12 +8912,12 @@ async def get_user_replies(user_id: int, limit: int = 20, offset: int = 0) -> li
         """
         async with db.execute(query, (user_id, limit, offset)) as cursor:
             rows = await cursor.fetchall()
-            
+
         results = []
         for r in rows:
             preview_text = ""
             has_file = False
-            
+
             if r[7] is None:
                 preview_text = "[Пост удален]"
             else:
@@ -8930,9 +8925,9 @@ async def get_user_replies(user_id: int, limit: int = 20, offset: int = 0) -> li
                     content = json.loads(r[7])
                     preview_text = content.get("text", "")[:100] if content.get("text") else "[Медиа]"
                     has_file = bool(content.get("files"))
-                except: 
+                except:
                     preview_text = "[Ошибка данных]"
-            
+
             results.append({
                 "id": r[0],
                 "board_id": r[1],
@@ -8970,9 +8965,9 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
     Возвращает полные данные постов по списку ID.
     """
     if not post_nums: return []
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     target_nums = sorted(list(set(post_nums)), reverse=True)[:142]
     placeholders = ','.join('?' for _ in target_nums)
     query = f"""
@@ -8980,7 +8975,7 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
         WHERE post_num IN ({placeholders})
         ORDER BY timestamp DESC
     """
-    
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -9002,7 +8997,7 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
                         p['content'] = {'text': '', 'files': []}
                     posts.append(p)
                 except Exception:
-                    continue            
+                    continue
             return posts
         except Exception as e:
             logger.error(f"Error in get_posts_batch: {e}", exc_info=True)
@@ -9016,7 +9011,7 @@ async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
     Переключает флаг цензуры (блюра) для списка постов.
     """
     from common.db_pool import get_pool, db_lock
-    
+
     if not post_nums:
         return {}
 
@@ -9025,17 +9020,17 @@ async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
-                
+
                 placeholders = ','.join('?' for _ in post_nums)
                 query = f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})"
-                
+
                 async with db.execute(query, post_nums) as cursor:
                     rows = await cursor.fetchall()
-                
+
                 if not rows:
                     await db.execute("COMMIT")
                     return {}
-                
+
                 updates = []
                 results = {}
                 for row in rows:
@@ -9053,17 +9048,17 @@ async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
                     new_json = json.dumps(content_dict, default=_json_serializer)
                     updates.append((new_json, p_num))
                     results[p_num] = new_state
-                
+
                 if updates:
                     await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
-                
+
                 await db.execute("COMMIT")
                 return results
-                
+
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                
+
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -9094,11 +9089,11 @@ def get_db_connection():
             await self.conn.execute("PRAGMA cache_size = -8192;")
             await self.conn.execute("PRAGMA foreign_keys = ON;")
             return self.conn
-            
+
         async def __aexit__(self, exc_type, exc, tb):
             if self.conn:
                 await self.conn.close()
-            
+
     return SafeConnection()
 
 async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
@@ -9115,7 +9110,7 @@ async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
         async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
             row = await cursor.fetchone()
             threshold_post_num = row[0] if row else None
-            
+
         if not threshold_post_num:
             return 0
 
@@ -9182,7 +9177,7 @@ async def clean_old_channelcopies_daily(retention_days: int = 7) -> int:
         async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
             row = await cursor.fetchone()
             threshold_post_num = row[0] if row else None
-            
+
         if not threshold_post_num:
             return 0
 
@@ -9815,7 +9810,7 @@ async def record_user_transaction(
                 (user_id, round(float(amount), 2), category, clean_desc, ts)
             ) as cursor:
                 return cursor.lastrowid
-        except Exception as e:
+        except Exception:
             # Table might not exist yet in tests
             return None
 
@@ -9842,8 +9837,8 @@ async def record_user_transaction(
             return None
 
 async def get_user_recent_transactions(
-    db, 
-    user_id: int, 
+    db,
+    user_id: int,
     limit: int = 10,
     offset: int = 0
 ) -> list:

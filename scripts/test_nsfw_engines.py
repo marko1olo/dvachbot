@@ -121,7 +121,7 @@ async def run_nsfw_audit():
     print("=" * 75, flush=True)
 
     results = []
-    
+
     async with aiohttp.ClientSession(headers=HEADERS) as session:
         # Category 1: ХЕНТАЙ / СЕКС / ПАЙЗУРИ
         print("\n🔥 [1/5] Testing Hardcore Hentai & Sex Engine (yande.re rating:e)...", flush=True)

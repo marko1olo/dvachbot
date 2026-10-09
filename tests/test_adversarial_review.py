@@ -8,8 +8,7 @@ import time
 import pytest
 import asyncio
 from common.work_engine import WORK_VACANCIES, execute_job_action, get_vacancies
-from wardrobe_engine import get_active_set_bonus, get_active_set_bonuses, get_equipped_gear, SET_BONUSES
-import lootbox_engine
+from wardrobe_engine import get_active_set_bonus, get_equipped_gear
 
 def test_shift_edge_cases_0_620_10000():
     # 0 shifts: only tier 1 (bottles) is unlocked
@@ -42,7 +41,7 @@ def test_shift_edge_cases_0_620_10000():
 
 def test_cooldown_mechanics_and_slippers():
     now = int(time.time())
-    
+
     # Active cooldown
     items = {
         "work_shifts": 10,
@@ -109,7 +108,7 @@ def test_all_wardrobe_set_bonuses_recognized():
     sb = get_active_set_bonus(items_wasserman)
     assert sb is not None
     assert sb.get("id") == "set_wasserman"
-    
+
     # Test Anime Hikka Set (both set_anime and set_anime_hikka aliases)
     items_anime = {
         "work_shifts": 100,
@@ -191,7 +190,7 @@ def test_item_drops_and_duplicate_inventory_handling():
 def test_all_25_vacancies_data_integrity():
     vacancies = get_vacancies()
     assert len(vacancies) == 25
-    
+
     expected_order = [
         "bottles", "sweeper", "courier", "captcha", "cho_security", "spy", "crypto_wiper", "factory",
         "mod_b", "it_freelance", "scam", "deputy", "cam_model", "escort_sugar", "crypto_cartel",
@@ -226,7 +225,6 @@ def test_all_114_commands_unshadowed():
     import re
     import main
     import inspect
-    from aiogram.filters import Command
 
     try:
         src = inspect.getsource(main.setup_bot_commands)
@@ -239,7 +237,7 @@ def test_all_114_commands_unshadowed():
         match = re.search(r"async def setup_bot_commands\b.*?(?=\n(?:async )?def |\Z)", content, re.DOTALL)
         if match:
             commands = re.findall(r'BotCommand\(command="([^"]+)"', match.group(0))
-    
+
     # Command count grows as bot features are added; accept any count >= 114
     assert len(commands) >= 114, f"Expected at least 114 commands, found {len(commands)}"
 

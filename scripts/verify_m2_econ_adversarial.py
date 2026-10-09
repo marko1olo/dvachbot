@@ -10,7 +10,6 @@ import os
 import sys
 import time
 import random
-from typing import Dict, Any
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -18,17 +17,14 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lootbox_engine import (
-    TRASH_ITEMS,
-    PREMIUM_JUNK,
     NON_BUYABLE_TITLES,
     EXCLUSIVE_RELICS,
     WEAPON_SCRAP_PRICES,
-    calculate_duplicate_cashback,
     roll_trash_lootbox,
     roll_gold_safe,
     apply_lootbox_reward,
 )
-from wardrobe_engine import CLOTHING_CATALOG, get_wardrobe_total_stats
+from wardrobe_engine import CLOTHING_CATALOG
 
 
 def log_test(name: str, passed: bool, detail: str = ""):

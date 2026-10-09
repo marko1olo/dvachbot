@@ -2,8 +2,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
-import sys
+from unittest.mock import patch
 import asyncio
 
 try:

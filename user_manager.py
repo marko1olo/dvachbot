@@ -1,6 +1,5 @@
 import asyncio
 import time
-import math
 from typing import Callable, Awaitable, Optional
 from aiogram.filters import Command
 from bot_helpers import *
@@ -9,9 +8,9 @@ from shared_state import *
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from aiogram import Router, F, types
 from aiogram.types import Message, WebAppInfo
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
 from deanonymizer import generate_deanon_info
-from common.database import get_post_info_by_copy, get_post_by_num, get_post_author_by_copy, get_pool, update_user_settings_db
+from common.database import get_post_info_by_copy, get_pool, update_user_settings_db
 from common.html_utils import escape_html
 from thread_texts import thread_messages
 from text_assets import INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP, DEANON_COOLDOWN_PHRASES
@@ -194,7 +193,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
     b_data = board_data[board_id]
     if user_id not in b_data.get('user_settings', {}):
         b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
-    
+
     settings = b_data['user_settings'][user_id]
     raw_hide = settings.get('hide', set())
     if not isinstance(raw_hide, set):
@@ -299,9 +298,9 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data[board_id]
     if not is_adm:
-        if board_id not in THREAD_BOARDS: 
+        if board_id not in THREAD_BOARDS:
             try: await message.delete()
-            except Exception as e: pass
+            except Exception: pass
             return
         user_s = b_data.get('user_state', {}).get(user_id, {})
         location = user_s.get('location', 'main')
@@ -397,7 +396,7 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
         pic_btn = "🖼 Картинка с QR"
     invite_text_raw = random.choice(source_list)
     invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
-    
+
     if lang == 'en':
         header = "📨 <b>Invite text for this board:</b>"
         footer = "<i>Just copy and send</i>"
@@ -607,7 +606,7 @@ async def cmd_check_queues(message: types.Message, board_id: str | None, stream:
 async def cmd_whisper(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: await message.delete()
-    except Exception as e: pass
+    except Exception: pass
     if not message.reply_to_message:
         await message.answer("❌ Используй /whisper в ответ на сообщение, автору которого хочешь прошептать.")
         return
@@ -616,12 +615,12 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         await message.answer("❌ Использование: <code>/whisper &lt;текст&gt;</code>", parse_mode="HTML")
         return
     text = parts[1]
-    
+
     target_id = await get_author_id_by_reply(message)
     if not target_id:
         await message.answer("❌ Не удалось найти автора оригинального сообщения.")
         return
-        
+
     if target_id == message.from_user.id:
         await message.answer("❌ Зачем шептать самому себе?")
         return
@@ -632,8 +631,8 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
     for attempt in range(max_retries):
         try:
             await message.bot.send_message(
-                target_id, 
-                f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
+                target_id,
+                f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>",
                 parse_mode="HTML"
             )
             delivered = True
@@ -663,7 +662,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
 
     if not delivered:
         await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
-        
+
     if delivered:
         # Send to admin
         admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
@@ -700,18 +699,18 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     if not post_num:
         info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
         if info: post_num = info[0]
-        
+
     if not post_num:
         await message.answer("❌ Не найдено в базе.")
         return
-        
+
     target_id = await get_author_id_by_reply(message)
     if target_id != message.from_user.id:
         await message.answer("❌ Ты не можешь редактировать чужие сообщения!")
         return
 
     msg_status = await message.answer("⏳ Удаляем контент из всех копий...")
-    
+
     # Get board_id of the post
     post_board = None
     if post_num in messages_storage:
@@ -800,7 +799,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                 content_dict['text'] = "[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]"
             if 'caption' in content_dict:
                 content_dict['caption'] = "[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]"
-                
+
     # Update SQLite explicitly using the database connection
     try:
         from common.database import update_post_content
@@ -812,14 +811,14 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
         await update_post_content(post_num, content_dict)
     except Exception as e:
         runtime_logger.warning(f"Could not update db text for redact: {e}")
-    
+
     try: await msg_status.delete()
-    except Exception as e: pass
-    
+    except Exception: pass
+
     st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей/зеркал.")
     await asyncio.sleep(4)
     try: await st_msg.delete()
-    except Exception as e: pass
+    except Exception: pass
 
 @router.message(Command("board_stats", "board_info", "bstats"))
 async def cmd_board_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -841,10 +840,10 @@ async def cmd_board_stats(message: types.Message, board_id: str | None, stream: 
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
     if on_cooldown:
         try: await message.delete()
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
-    
+
     wait_txt = "📊 Собираю статистику, вычисляю активность..." if lang != 'en' else "📊 Gathering statistics..."
     wait_msg = await message.answer(wait_txt)
     real_users_active = [uid for uid in b_data['users']['active'] if uid > 0]
@@ -877,9 +876,9 @@ async def cmd_board_stats(message: types.Message, board_id: str | None, stream: 
                       f"📈 Всего постов в тгаче: {state['post_counter']}")
     try:
         await message.answer(stats_text, parse_mode="HTML")
-    except Exception as e: pass
+    except Exception: pass
     try: await wait_msg.delete()
-    except Exception as e: pass
+    except Exception: pass
 
 @router.message(Command("global_top", "gtop"))
 async def cmd_global_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -887,13 +886,13 @@ async def cmd_global_top(message: types.Message, board_id: str | None, stream: s
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    
+
     wait_txt = "🏆 Анализирую базу данных для построения топов..." if lang != 'en' else "🏆 Computing leaderboards..."
     wait_msg = await message.answer(wait_txt)
-    
+
     top_posters = []
     top_rich = []
-    
+
     try:
         async with db_lock:
             db = await get_pool()
@@ -903,7 +902,7 @@ async def cmd_global_top(message: types.Message, board_id: str | None, stream: s
                 rows = await cursor.fetchall()
                 for r in rows:
                     if r[0]: top_posters.append((r[0], r[1]))
-            
+
             # Top 10 by balance
             q_rich = "SELECT user_id, SUM(balance) as bal FROM Users GROUP BY user_id ORDER BY bal DESC LIMIT 10"
             async with db.execute(q_rich) as cursor:
@@ -938,11 +937,11 @@ async def cmd_global_top(message: types.Message, board_id: str | None, stream: s
     text = f"{header}\n\n"
     text += f"{cat1}\n<pre>{format_table(top_posters)}</pre>\n\n"
     text += f"{cat2}\n<pre>{format_table(top_rich, ' ₽')}</pre>"
-    
+
     try:
         await wait_msg.delete()
         await message.answer(text, parse_mode="HTML")
-    except Exception as e: pass
+    except Exception: pass
 
 @router.message(Command("anime", "nya", "kawai", "kawaii"))
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1257,7 +1256,7 @@ async def _collect_stacked_anime_downloads(
                         ext = orig_url.split('.')[-1].split('?')[0].lower()
                         if len(ext) > 4:
                             ext = 'jpg'
-                    except Exception as e:
+                    except Exception:
                         ext = 'jpg'
                     processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, image_bytes)
                     real_type = detect_media_type(processed_bytes, orig_url)
@@ -1373,7 +1372,7 @@ async def _process_stacked_anime_command(
         successful_downloads = await _collect_stacked_anime_downloads(fetcher_tasks, board_id, user_id, "command")
         if not successful_downloads:
             raise ValueError("Не удалось скачать ни одного изображения.")
-            
+
         content = _prepare_anime_content(successful_downloads, caption)
 
         await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
@@ -1404,7 +1403,7 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
         try:
             sent_msg = await message.answer(cooldown_msg)
             spawn_task(delete_message_after_delay(sent_msg, 5))
-        except Exception as e: pass
+        except Exception: pass
         await _safe_delete_user_message(message)
         return
     lang = 'en' if board_id == 'int' else 'ru'
@@ -1490,7 +1489,7 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
     if board_id == 'int':
         try:
             await message.delete()
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     if not await check_cooldown(message, board_id):
@@ -1572,7 +1571,7 @@ async def cmd_app(message: types.Message, board_id: str | None, stream: str = 'r
     Отправляет кнопку для открытия веб-приложения (сайта).
     """
     if not board_id: return
-    WEBAPP_URL = "https://tgach.top" 
+    WEBAPP_URL = "https://tgach.top"
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if lang == 'en':
         text = "Click the button below to open the TGACH web interface:"
@@ -1594,7 +1593,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
     if board_id == 'int':
         try:
             await message.delete()
-        except Exception as e: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     user_id = message.from_user.id
@@ -1679,7 +1678,7 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
-    if not board_id: 
+    if not board_id:
         try: await message.delete()
         except TelegramBadRequest: pass
         return
@@ -1735,7 +1734,7 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
             caption_header = random.choice(ROULETTE_RESULT_PHRASES) # Пока оставим общие
             await message.answer_photo(photo, caption=caption_header)
         else:
-            print(f"⚠️ [cmd_roll] Image generation failed. Sending text.")
+            print("⚠️ [cmd_roll] Image generation failed. Sending text.")
             result_header = random.choice(ROULETTE_RESULT_PHRASES)
             event_desc_html = escape_html(event_desc_plain)
             result_text = f"{result_header}\n\n<b>[{event_id}]</b> {event_desc_html}"
@@ -1758,7 +1757,7 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
 async def cmd_report(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    
+
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
@@ -1770,12 +1769,12 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
         return
 
     reported_msg = message.reply_to_message
-    
+
     # Send confirmation to user
     confirm_msg = "✅ Репорт отправлен модераторам. Спасибо!"
     if lang == 'en': confirm_msg = "✅ Report sent to moderators. Thank you!"
     elif lang == 'jp': confirm_msg = "✅ モデレーターに報告しました。ありがとうございます！"
-    
+
     sent_confirm = await message.answer(confirm_msg)
     try: spawn_task(delete_message_after_delay(sent_confirm, 10))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
@@ -1785,10 +1784,10 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     author_id = await get_author_id_by_reply(message)
     if not author_id:
         author_id = "0"
-    
+
     chat_id = message.chat.id
     msg_id = reported_msg.message_id
-    
+
     # Build inline keyboard for admins
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
@@ -1803,7 +1802,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     report_text += f"От кого: <code>{message.from_user.id}</code>\n"
     report_text += f"На кого: <code>{author_id}</code>\n"
     report_text += f"Текст: <i>{escape_html(reported_msg.text or reported_msg.caption or '<медиа>')}</i>"
-    
+
     for admin_id in admins:
         try:
             await message.bot.send_message(
@@ -1812,7 +1811,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
             )
-        except Exception as e:
+        except Exception:
             import traceback; traceback.print_exc()
 
 @router.callback_query(F.data.startswith("rep:"))
@@ -1820,50 +1819,50 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
     if not board_id or not is_admin(callback.from_user.id, board_id):
         await callback.answer("У вас нет прав.", show_alert=True)
         return
-        
+
     parts = callback.data.split(":")
     action = parts[1]
     author_id = parts[2]
     chat_id = parts[3]
     msg_id = parts[4]
-    
+
     admin_id = callback.from_user.id
-    
+
     if action == "ign":
         await callback.message.edit_text(callback.message.html_text + "\n\n<i>❌ Проигнорировано модератором.</i>", parse_mode="HTML")
         await callback.answer("Жалоба отклонена")
         return
-        
+
     if action == "del":
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
-        except Exception as e:
+        except Exception:
             import traceback; traceback.print_exc()
         await callback.message.edit_text(callback.message.html_text + "\n\n<i>🗑 Пост удален модератором.</i>", parse_mode="HTML")
         await callback.answer("Пост удален")
         return
-        
+
     if action.startswith("ban"):
         if author_id == "0":
             await callback.answer("ID автора неизвестен, невозможно забанить.", show_alert=True)
             return
-            
+
         target_id = int(author_id)
         duration_hours = 1 if action == "ban1" else 24
-        
+
         async with storage_lock:
             b_data = board_data[board_id]
             b_data.setdefault('bans', {})[target_id] = time.time() + (duration_hours * 3600)
-            
+
         deleted_posts = await delete_user_posts(callback.bot, target_id, 10, board_id)
         await log_global_event('bot', f"🚨 BAN: Мод {admin_id} забанил по репорту {target_id} на {duration_hours}ч в /{board_id}/ (удалено {deleted_posts} копий)")
-        
+
         # Also try to delete the specific reported message just in case
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
-        except Exception as e:
+        except Exception:
             import traceback; traceback.print_exc()
-            
+
         await callback.message.edit_text(callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
         await callback.answer(f"Пользователь забанен на {duration_hours}ч")
 
@@ -1873,7 +1872,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     cat = callback.data.split(":")[1]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data[board_id]
-    
+
     if cat == "main":
         text_map = b_data.get('start_message_map', {})
         text = text_map.get(lang, b_data.get('start_message_text', "Help info missing."))
@@ -1893,7 +1892,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         if lang == 'en': text = "<b>💬 Chat:</b>\n<code>/whisper</code> - Secret reply\n<code>/ans</code> - Anonymous reply\n<code>/report</code> - Report post"
         elif lang == 'jp': text = "<b>💬 チャット:</b>\n<code>/whisper</code> - 秘密の返信\n<code>/ans</code> - 匿名返信\n<code>/report</code> - 通報する"
         else: text = "<b>💬 Общение:</b>\n<code>/whisper</code> - Шепот\n<code>/ans</code> - Анонимный ответ\n<code>/report</code> - Пожаловаться"
-        
+
     elif cat == "economy":
         if lang == 'en':
             text = (
@@ -1981,34 +1980,34 @@ except ImportError:
 async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    
+
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
-    
+
     if not HAS_WORDCLOUD or not GRAPH_LIBS_AVAILABLE:
         await message.answer("❌ Компоненты WordCloud или Matplotlib не установлены.")
         return
-    
+
     wait_msg = "⏳ Собираю слова за последние 24 часа..."
     if lang == 'en': wait_msg = "⏳ Gathering words for the last 24 hours..."
     elif lang == 'jp': wait_msg = "⏳ 過去24時間の単語を収集中..."
-    
+
     status_message = await message.answer(wait_msg)
-    
+
     try:
         from common.db_pool import db_lock
         db = await get_pool()
-        
+
         # 24 hours ago
         target_timestamp = time.time() - 86400
-        
+
         async with db_lock:
             async with db.execute(
                 "SELECT content FROM Posts WHERE board_id = ? AND timestamp > ?",
                 (board_id, target_timestamp)
             ) as rows:
                 posts = await rows.fetchall()
-        
+
         def process_posts(posts_list):
             text_corpus = ""
             for row in posts_list:
@@ -2026,46 +2025,46 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
                         # Remove URLs
                         text = re.sub(r'http[s]?://\S+', ' ', text)
                         text_corpus += text + " "
-                except Exception as e:
+                except Exception:
                     continue
 
             words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
             return " ".join([w for w in words if w not in STOP_WORDS])
 
         final_text = await asyncio.to_thread(process_posts, posts)
-        
+
         if not final_text.strip():
             await status_message.edit_text("❌ Хуй там плавал, а не облако слов. Вы нафлудили слишком мало текста за сутки.")
             return
 
         def generate_image(txt):
             wc = WordCloud(
-                width=1000, height=600, 
-                background_color='black', 
+                width=1000, height=600,
+                background_color='black',
                 colormap='viridis',
                 max_words=150,
                 collocations=False
             )
             wc.generate(txt)
-            
+
             img_io = io.BytesIO()
             wc.to_image().save(img_io, 'PNG')
             img_io.seek(0)
             return img_io
 
         img_io = await asyncio.to_thread(generate_image, final_text)
-        
+
         caption = f"☁️ <b>Облако слов /{board_id}/ за 24 часа</b>"
         if lang == 'en': caption = f"☁️ <b>Word Cloud /{board_id}/ (24h)</b>"
         elif lang == 'jp': caption = f"☁️ <b>ワードクラウド /{board_id}/ (24h)</b>"
-        
+
         await message.answer_photo(
             photo=types.BufferedInputFile(img_io.read(), filename="wordcloud.png"),
             caption=caption,
             parse_mode="HTML"
         )
         await status_message.delete()
-        
+
     except Exception as e:
         runtime_logger.exception(f"Error generating wordcloud: {e}")
         try:

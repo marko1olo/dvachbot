@@ -1,9 +1,7 @@
 import unittest
-import os
 import sys
 import asyncio
 import io
-import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -12,19 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramRetryAfter,
-    TelegramForbiddenError,
 )
 from common.bot_pool import MultiStreamBotPool
 from site_tgach.tagging_worker import (
     download_file_with_fallback,
-    _download_via_bot,
-    _build_download_candidates,
-    get_tasks,
     is_audio_media,
-    GET_FILE_TIMEOUT_PER_BOT,
-    DOWNLOAD_DATA_TIMEOUT_PER_BOT,
-    DOWNLOAD_TOTAL_TIMEOUT,
-    MAX_FILE_SIZE_BOT_API,
 )
 
 class TestTaggerDownloadResilience(unittest.IsolatedAsyncioTestCase):
