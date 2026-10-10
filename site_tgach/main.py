@@ -87,6 +87,8 @@ from site_tgach.security import (
     check_ddos,
     DEFAULT_POW_DIFFICULTY,
     verify_telegram_webapp_data,
+    is_safe_url,
+    ALLOWED_IMPORT_DOMAINS,
 )
 from warhammer_mode import warhammer_transform
 from site_tgach.image_processing import (
@@ -8619,6 +8621,8 @@ async def api_import_thread(
 
     if not url or not board_id or board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=400, detail="Invalid data")
+    if not is_safe_url(url, allowed_domains=ALLOWED_IMPORT_DOMAINS):
+        raise HTTPException(status_code=400, detail="Disallowed or unsafe thread URL (SSRF protected)")
     from site_tgach.importer import ThreadImporter
     from common.config import STORAGE_CHANNELS
 
@@ -9151,7 +9155,7 @@ async def api_user_request_import(
 ):
     t = request.state.t
 
-    if "2ch" not in data.url and "4chan" not in data.url and "arch" not in data.url:
+    if not is_safe_url(data.url, allowed_domains=ALLOWED_IMPORT_DOMAINS):
         raise HTTPException(400, t("err_import_url"))
     if data.board_id not in BOARD_CONFIG:
         raise HTTPException(400, t("err_import_board"))
@@ -9215,6 +9219,8 @@ async def api_admin_approve_import(
 ):
     if not user.get("is_admin"):
         raise HTTPException(403, "Forbidden")
+    if not is_safe_url(data.url, allowed_domains=ALLOWED_IMPORT_DOMAINS):
+        raise HTTPException(400, "Disallowed or unsafe import URL (SSRF protected)")
     from site_tgach.importer import ThreadImporter
     from common.config import STORAGE_CHANNELS
 
@@ -10807,8 +10813,9 @@ async def get_telegram_file(
             return await get_telegram_file(thumb_fid, request, filename, skip)
 
         # 2. Check disk cache for dynamic thumbnail
-        thumb_disk_path = os.path.join("data", "thumbnails", f"{file_id}.jpg")
-        if os.path.exists(thumb_disk_path) and os.path.getsize(thumb_disk_path) > 100:
+        safe_thumb_id = re.sub(r'[^a-zA-Z0-9_-]', '', file_id)
+        thumb_disk_path = os.path.join("data", "thumbnails", f"{safe_thumb_id}.jpg") if safe_thumb_id else ""
+        if thumb_disk_path and os.path.exists(thumb_disk_path) and os.path.getsize(thumb_disk_path) > 100:
             return FileResponse(
                 thumb_disk_path,
                 media_type="image/jpeg",

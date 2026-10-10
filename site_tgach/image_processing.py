@@ -227,7 +227,7 @@ async def process_and_upload_image(
         raise HTTPException(status_code=413, detail="File too large")
 
     HASH_LIMIT = 50 * 1024 * 1024
-    is_image_mime = content_type.startswith("image/")
+    is_image_mime = ct_clean.startswith("image/")
     sha256_hash = None
     dedup_result = None
 
@@ -262,17 +262,17 @@ async def process_and_upload_image(
         filename = f"file_{int(time.time())}{ext_part}"
 
     file_type = "document"
-    if content_type.startswith("image/") and content_type != "image/gif":
+    if (ct_clean.startswith("image/") or filename.lower().endswith(('.jpg', '.jpeg', '.png'))) and ct_clean != "image/gif":
         file_type = "image"
-    elif (content_type in ["video/mp4", "video/quicktime"] or filename.lower().endswith(('.mp4', '.mov', '.mkv'))) and not filename.lower().endswith('.webm'):
+    elif (ct_clean in ["video/mp4", "video/quicktime"] or filename.lower().endswith(('.mp4', '.mov', '.mkv'))) and not filename.lower().endswith('.webm'):
         file_type = "video"
     elif filename.lower().endswith('.webm'):
         file_type = "document"
-    elif content_type == "image/gif" or filename.lower().endswith(".gif"):
+    elif ct_clean == "image/gif" or filename.lower().endswith(".gif"):
         file_type = "gif"
-    elif content_type.startswith("audio/") or content_type == "application/ogg":
+    elif ct_clean.startswith("audio/") or ct_clean == "application/ogg":
         file_type = "audio"
-    if content_type == "image/webp" or filename.lower().endswith(".webp"):
+    if ct_clean == "image/webp" or filename.lower().endswith(".webp"):
         file_type = "sticker"
 
     phash_str = None
@@ -400,7 +400,7 @@ async def process_and_upload_image(
                 final_type = "animation"
 
             elif file_type == "audio":
-                kw = "voice" if ("ogg" in content_type or "opus" in content_type) else "audio"
+                kw = "voice" if ("ogg" in ct_clean or "opus" in ct_clean) else "audio"
                 method = "send_voice" if kw == "voice" else "send_audio"
                 sent_msg = await _send_with_retry(method, input_file, chat_id=channel_id, **{kw: input_file})
 
@@ -410,20 +410,22 @@ async def process_and_upload_image(
                 else:
                     audio_obj = getattr(sent_msg, 'audio', None)
                     result_file_id = get_fid(audio_obj)
-                    if audio_obj and audio_obj.thumbnail:
+                    if audio_obj and getattr(audio_obj, 'thumbnail', None):
                         thumb_id = get_fid(audio_obj.thumbnail)
                 final_type = kw
 
             elif file_type == "sticker":
                 sent_msg = await _send_with_retry("send_sticker", input_file, chat_id=channel_id, sticker=input_file)
-                result_file_id = get_fid(sent_msg.sticker)
-                if sent_msg.sticker.thumbnail: thumb_id = get_fid(sent_msg.sticker.thumbnail)
+                result_file_id = get_fid(getattr(sent_msg, 'sticker', None))
+                if getattr(sent_msg, 'sticker', None) and getattr(sent_msg.sticker, 'thumbnail', None):
+                    thumb_id = get_fid(sent_msg.sticker.thumbnail)
                 final_type = "sticker"
 
             else:
                 sent_msg = await _send_with_retry("send_document", input_file, chat_id=channel_id, document=input_file)
-                result_file_id = get_fid(sent_msg.document)
-                if sent_msg.document.thumbnail: thumb_id = get_fid(sent_msg.document.thumbnail)
+                result_file_id = get_fid(getattr(sent_msg, 'document', None))
+                if getattr(sent_msg, 'document', None) and getattr(sent_msg.document, 'thumbnail', None):
+                    thumb_id = get_fid(sent_msg.document.thumbnail)
                 final_type = "document"
 
             if not result_file_id:

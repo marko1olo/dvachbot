@@ -34,6 +34,7 @@ from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 # Импорты проекта
 from warhammer_mode import warhammer_transform
+from site_tgach.security import is_safe_url, ALLOWED_IMPORT_DOMAINS
 from site_tgach.image_processing import (
     apply_grimdark_filter_async,
     process_and_upload_image,
@@ -210,6 +211,9 @@ class ThreadImporter:
         self, url: str, retries: int = 3
     ) -> Optional[httpx.Response]:
         url = url.strip()
+        if not is_safe_url(url):
+            logger.warning(f"🛡️ SSRF BLOCKED request to unsafe URL: {url}")
+            return None
 
         for i in range(retries):
             try:
@@ -290,6 +294,10 @@ class ThreadImporter:
             target_url = target_url.replace(".html", ".json")
 
         logger.info(f"🌐 Fetching JSON: {target_url}")
+        if not is_safe_url(target_url, allowed_domains=ALLOWED_IMPORT_DOMAINS):
+            logger.warning(f"🛡️ SSRF BLOCKED fetch from unsafe/disallowed URL: {target_url}")
+            raise ValueError(f"SSRF Protection: URL {target_url} is not allowed or unsafe")
+
         try:
             MAX_JSON_SIZE = 10 * 1024 * 1024
             async with self.client.stream(

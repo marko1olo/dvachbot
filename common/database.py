@@ -3955,61 +3955,57 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
     """
     Выполняет полнотекстовый поиск.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
 
-    async with db_lock:
-        try:
-            db = await get_pool()
-            sanitized_query = query.replace('"', '""')
-            final_query = f'"{sanitized_query}"'
+    try:
+        db = await get_pool()
+        sanitized_query = query.replace('"', '""')
+        final_query = f'"{sanitized_query}"'
 
-            viewer_id = observer_id if observer_id is not None else -1
+        viewer_id = int(observer_id) if observer_id is not None else -1
 
-            if only_archived:
-                sql_query = f"""
-                    SELECT p.* FROM Posts p
-                    JOIN PostsFTS fts ON p.post_num = fts.rowid
-                    JOIN Threads t ON p.thread_id = t.thread_id
-                    WHERE fts.content MATCH ? 
-                      AND p.thread_id IS NOT NULL 
-                      AND t.is_archived = 1
-                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
-                """
+        if only_archived:
+            sql_query = """
+                SELECT p.* FROM Posts p
+                JOIN PostsFTS fts ON p.post_num = fts.rowid
+                JOIN Threads t ON p.thread_id = t.thread_id
+                WHERE fts.content MATCH ? 
+                  AND p.thread_id IS NOT NULL 
+                  AND t.is_archived = 1
+                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = ?)
+            """
+        else:
+            sql_query = """
+                SELECT p.* FROM Posts p
+                JOIN PostsFTS fts ON p.post_num = fts.rowid
+                WHERE fts.content MATCH ? 
+                  AND p.thread_id IS NOT NULL 
+                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = ?)
+            """
+        params = [final_query, viewer_id]
+        if board_id:
+            sql_query += " AND p.board_id = ?"
+            params.append(board_id)
+        sql_query += " ORDER BY bm25(PostsFTS) LIMIT ?"
+        params.append(limit)
+
+        async with db.execute(sql_query, params) as cursor:
+            rows = await cursor.fetchall()
+            cols = [d[0] for d in cursor.description]
+
+        results = []
+        for row in rows:
+            if hasattr(row, 'keys'):
+                row_data = row
             else:
-                sql_query = f"""
-                    SELECT p.* FROM Posts p
-                    JOIN PostsFTS fts ON p.post_num = fts.rowid
-                    WHERE fts.content MATCH ? 
-                      AND p.thread_id IS NOT NULL 
-                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
-                """
-            params = [final_query]
-            if board_id:
-                sql_query += " AND p.board_id = ?"
-                params.append(board_id)
-            sql_query += " ORDER BY bm25(PostsFTS) LIMIT ?"
-            params.append(limit)
-
-            async with db.execute(sql_query, params) as cursor:
-                rows = await cursor.fetchall()
-                cols = [d[0] for d in cursor.description]
-
-            results = []
-            for row in rows:
-                if hasattr(row, 'keys'):
-                    row_data = row
-                else:
-                    row_data = dict(zip(cols, row))
-                post = _process_search_row(row_data)
-                if post:
-                    results.append(post)
-            return results
-        except Exception as e:
-            print(f"⛔ ОШИБКА в search_posts: {e}.")
-            return []
-        finally:
-            if 'db' in locals() and db:
-                db.row_factory = None
+                row_data = dict(zip(cols, row))
+            post = _process_search_row(row_data)
+            if post:
+                results.append(post)
+        return results
+    except Exception as e:
+        logger.error(f"Error in search_posts: {e}", exc_info=True)
+        return []
 def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
     total_deleted = 0
     con.execute("PRAGMA busy_timeout = 5000;")

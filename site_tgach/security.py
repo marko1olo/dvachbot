@@ -5,9 +5,90 @@ import logging
 import random
 import os
 import hmac
-from urllib.parse import parse_qsl
+import ipaddress
+import socket
+from urllib.parse import parse_qsl, urlparse
 
 logger = logging.getLogger("security")
+
+ALLOWED_IMPORT_DOMAINS = {
+    "2ch.hk",
+    "2ch.life",
+    "4chan.org",
+    "4channel.org",
+    "4cdn.org",
+    "dobrochan.net",
+    "dobrochan.ru",
+    "2chan.net",
+    "arhivach.ng",
+    "arhivach.top",
+}
+
+DISALLOWED_HOSTNAMES = {
+    "localhost",
+    "metadata.google.internal",
+    "instance-data",
+    "169.254.169.254",
+}
+
+def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
+    """Validates that a URL is safe to fetch (protects against SSRF attacks).
+
+    Checks:
+    - Scheme must be http or https
+    - Hostname must be present and not in known metadata/internal hostnames
+    - Resolved IP addresses must not be private, loopback, link-local (e.g. 169.254.169.254),
+      multicast, unspecified, or reserved.
+    - If allowed_domains is provided, hostname must match or be a subdomain of one of them.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    url_clean = url.strip()
+    try:
+        parsed = urlparse(url_clean)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        if hostname in DISALLOWED_HOSTNAMES:
+            return False
+        if allowed_domains:
+            if not any(hostname == d or hostname.endswith("." + d) for d in allowed_domains):
+                return False
+        try:
+            ip_obj = ipaddress.ip_address(hostname)
+            if (
+                ip_obj.is_loopback
+                or ip_obj.is_private
+                or ip_obj.is_link_local
+                or ip_obj.is_multicast
+                or ip_obj.is_unspecified
+                or ip_obj.is_reserved
+            ):
+                return False
+        except ValueError:
+            try:
+                addr_info = socket.getaddrinfo(hostname, None)
+                for item in addr_info:
+                    sockaddr = item[4]
+                    ip_str = sockaddr[0]
+                    ip_obj = ipaddress.ip_address(ip_str)
+                    if (
+                        ip_obj.is_loopback
+                        or ip_obj.is_private
+                        or ip_obj.is_link_local
+                        or ip_obj.is_multicast
+                        or ip_obj.is_unspecified
+                        or ip_obj.is_reserved
+                    ):
+                        return False
+            except (socket.gaierror, socket.herror, ValueError):
+                return False
+        return True
+    except Exception:
+        return False
 
 # --- PoW (Защита от спама) ---
 POW_CACHE = {}
@@ -125,12 +206,12 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
     seen: set[str] = set()
     tokens: list[str] = []
     for key, val in os.environ.items():
-        if key.endswith("_BOT_TOKEN") and val and val not in seen:
+        if (key == "BOT_TOKEN" or key.endswith("_BOT_TOKEN")) and val and val not in seen:
             seen.add(val)
             tokens.append(val)
 
     if not tokens:
-        logger.error("No *_BOT_TOKEN variables found in env")
+        logger.error("No BOT_TOKEN or *_BOT_TOKEN variables found in env")
         return None
 
     try:

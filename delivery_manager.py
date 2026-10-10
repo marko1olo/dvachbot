@@ -1957,7 +1957,7 @@ async def site_posts_broadcaster():
                                         'type': 'text',
                                         'text': notify_text,
                                         'is_system_message': True,
-                                        'header': f"### WEBSITE ###\n{header}",
+                                        'header': header,
                                         'post_num': post_num,
                                     }
                                     broadcast_content = _attach_site_media_for_delivery(broadcast_content, source_content)
