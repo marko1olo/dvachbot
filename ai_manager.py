@@ -982,9 +982,58 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                 )
             except Exception as tts_err:
                 logger.warning(f"⚠️ [Voice Roast] Не удалось отправить голосовой ответ Киберчеда: {tts_err}")
-        # Публикация на всю доску отключена для предотвращения спама и засорения чата (User Sentiment Audit 2026).
-        # Роаст доставлен автору лично выше через _safe_send_roast / _safe_send_voice_roast.
-        logger.info(f"🎙 [Voice Roast] Обработка завершена для post_num={post_num} (автору отправлен персональный ответ без засорения ленты доски)")
+        # 3. Публикация текстового вердикта Киберчеда на доску (для всех остальных участников)
+        if post_num and board_id != 'trash':
+            try:
+                from common.bot_helpers import process_new_post
+                # Исключаем автора из пассивной очереди, так как он уже получил роаст мгновенно выше
+                await process_new_post(shared_state.NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content={
+                        'type': 'text',
+                        'text': formatted_response,
+                        'is_system_message': True,
+                        'archive_allowed': True,
+                        'is_ai_roast': True,
+                        'is_ai': True,
+                        'exclude_recipients': [author_id] if author_id else []
+                    },
+                    reply_to_post=post_num,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
+            except Exception as board_pub_err:
+                logger.warning(f"⚠️ Ошибка рассылки вердикта ГС на доску: {board_pub_err}")
+
+        # 4. Публикация голосового роаста Киберчеда на доску (для всех остальных участников)
+        if post_num and board_id != 'trash' and voice_bytes:
+            try:
+                from common.bot_helpers import process_new_post
+                caption_board = "🧿 Благоговение Киберчеда перед Владыкой" if has_cyberchad_amulet else "🔥 Разъёб от Киберчеда"
+                await process_new_post(shared_state.NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content={
+                        'type': 'voice',
+                        'voice_bytes': voice_bytes,
+                        'caption': caption_board,
+                        'text': roast,
+                        'roast_text': roast,
+                        'is_ai_roast': True,
+                        'is_ai': True,
+                        'is_cyberchad': True,
+                        'reply_to': post_num,
+                        'exclude_recipients': [author_id] if author_id else []
+                    },
+                    reply_to_post=post_num,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
+            except Exception as voice_pub_err:
+                logger.warning(f"⚠️ Ошибка рассылки голосового роаста ГС на доску: {voice_pub_err}")
     except Exception as e:
         logger.error(f"❌ Ошибка в transcribe_and_roast_voice_note: {e}", exc_info=True)
     finally:

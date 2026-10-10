@@ -10142,16 +10142,20 @@ async def api_send_bottle(
 
 
 @app.get("/api/bottle/count")
-async def api_check_bottles(user: dict = Depends(get_required_user)):
+async def api_check_bottles(user: dict | None = Depends(get_optional_user)):
+    if not user or user.get("is_guest"):
+        return {"count": 0}
     count = await get_unread_bottle_count(int(user["id"]))
     return {"count": count}
 
 
 @app.get("/api/bottle/read")
-async def api_read_bottle(request: Request, user: dict = Depends(get_required_user)):
-    res = await read_and_delete_bottle(int(user["id"]))
+async def api_read_bottle(request: Request, user: dict | None = Depends(get_optional_user)):
     lang = getattr(request.state, "lang", "ru")
     empty_msg = "Empty" if lang == "en" else ("空です" if lang == "jp" else "Пусто")
+    if not user or user.get("is_guest"):
+        return {"message": empty_msg}
+    res = await read_and_delete_bottle(int(user["id"]))
     return res or {"message": empty_msg}
 
 

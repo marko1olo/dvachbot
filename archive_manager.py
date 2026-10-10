@@ -671,15 +671,31 @@ def _format_archive_text_content(content: dict, header_text: str) -> str | None:
     return prepare_telegram_text(final_text, max_len=4096)
 
 async def _update_archive_post_content(post_num: int, content: dict, content_type: str, new_files_data: list, sender_bot_id: int):
-    from common.database import register_file_owner, update_post_content
-    new_content = content.copy()
+    from common.database import register_file_owner, update_post_content, get_post_by_num
+    import json
+
+    existing_post = await get_post_by_num(post_num)
+    if existing_post and existing_post.get('content'):
+        base_content = existing_post['content']
+        if isinstance(base_content, str):
+            try:
+                base_content = json.loads(base_content)
+            except Exception:
+                base_content = content.copy()
+        else:
+            base_content = dict(base_content)
+    else:
+        base_content = content.copy()
+
+    new_content = base_content
     new_content.pop('voice_bytes', None)
     new_content.pop('image_bytes', None)
     if content_type == 'media_group':
         new_content['media'] = new_files_data
         for f_info in new_files_data:
-            await register_file_owner(f_info['file_id'], sender_bot_id)
-    else:
+            if isinstance(f_info, dict) and 'file_id' in f_info:
+                await register_file_owner(f_info['file_id'], sender_bot_id)
+    elif new_files_data:
         new_content['file_id'] = new_files_data[0]
         await register_file_owner(new_files_data[0], sender_bot_id)
     await update_post_content(post_num, new_content)

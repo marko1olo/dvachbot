@@ -2,7 +2,8 @@ from common.config import (
     BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
     BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
     BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC, BOT_DELIVERY_INITIAL_CHUNK_SIZE,
-    BOT_PRIORITY_SPLIT_MIN_PASSIVE, BOT_PASSIVE_MAX_PREEMPTIONS
+    BOT_PRIORITY_SPLIT_MIN_PASSIVE, BOT_PASSIVE_MAX_PREEMPTIONS,
+    SITE_PUBLIC_BASE_URL
 )
 
 import os
@@ -15,11 +16,12 @@ from common.database import (
 )
 from common.board_config import BOARD_CONFIG
 from post_helpers import format_header
-from common.thread_manager import get_threads_data
+from common.thread_manager import get_threads_data, get_thread_info
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post, is_ai_slop_content
-from archive_manager import _site_public_url, _site_file_source, _site_file_send_type
+from archive_manager import _site_public_url, _site_file_source, _site_file_send_type, _forward_post_to_realtime_archive
 from datetime import timezone, datetime
+import html
 import __main__ as main
 UTC = timezone.utc
 
@@ -1918,54 +1920,61 @@ async def site_posts_broadcaster():
                         if not skip_broadcast:
                                 header = await format_header(board_id, post_num, stream=post_stream)
                                 source_content = content
+                                real_content = _attach_site_media_for_delivery(dict(source_content))
+                                real_content['header'] = header
+                                real_content['post_num'] = post_num
+                                if post.get('reply_to_post_num'):
+                                    real_content['reply_to_post'] = post['reply_to_post_num']
+
                                 if is_new_thread:
-                                    raw_text = source_content.get('text', '')
+                                    raw_text = source_content.get('text', '') or source_content.get('caption', '')
                                     clean_text_no_tags = re.sub(r'<[^>]+>', '', raw_text)
-                                    decoded_text = main.html.unescape(clean_text_no_tags)
+                                    decoded_text = html.unescape(clean_text_no_tags)
                                     title_preview = (decoded_text[:120] + '...') if len(decoded_text) > 120 else decoded_text
                                     if not title_preview.strip():
                                         title_preview = "Новый тред (медиа-контент)"
-                                    site_url = f"https://tgach.top/{board_id}/res/{post_num}.html"
+                                    base_url = getattr(main, 'SITE_PUBLIC_BASE_URL', None) or SITE_PUBLIC_BASE_URL
+                                    site_url = f"{base_url}/{board_id}/res/{post_num}.html"
                                     if post_stream == 'en':
                                         notify_text = (
                                             f"🌱 <b>New thread on website!</b>\n\n"
-                                            f"📝 {main.html.escape(title_preview)}\n\n"
+                                            f"📝 {html.escape(title_preview)}\n\n"
                                             f"🔗 <a href='{site_url}'>Open on Website</a>"
                                         )
                                     elif post_stream == 'jp':
                                         notify_text = (
                                             f"🌱 <b>サイトで新しいスレが作成されました！</b>\n\n"
-                                            f"📝 {main.html.escape(title_preview)}\n\n"
+                                            f"📝 {html.escape(title_preview)}\n\n"
                                             f"🔗 <a href='{site_url}'>サイトで開く</a>"
                                         )
                                     else:
                                         notify_text = (
                                             f"🌱 <b>На сайте создан новый тред!</b>\n\n"
-                                            f"📝 {main.html.escape(title_preview)}\n\n"
+                                            f"📝 {html.escape(title_preview)}\n\n"
                                             f"🔗 <a href='{site_url}'>Читать на сайте</a>"
                                         )
-                                    content = {
+                                    broadcast_content = {
                                         'type': 'text',
                                         'text': notify_text,
                                         'is_system_message': True,
                                         'header': f"### WEBSITE ###\n{header}",
                                         'post_num': post_num,
                                     }
-                                    content = _attach_site_media_for_delivery(content, source_content)
+                                    broadcast_content = _attach_site_media_for_delivery(broadcast_content, source_content)
+                                    if post.get('reply_to_post_num'):
+                                        broadcast_content['reply_to_post'] = post['reply_to_post_num']
                                 else:
-                                    content = _attach_site_media_for_delivery(content)
-                                    content['header'] = header
-                                    content['post_num'] = post_num
-                                if post.get('reply_to_post_num'):
-                                    content['reply_to_post'] = post['reply_to_post_num']
+                                    broadcast_content = real_content
+
                                 # Запись в messages_storage — единственное, что здесь
                                 # действительно требует storage_lock. Короткий блок,
-                                # без обращений к БД и сети.
+                                # без обращений к БД и сети. В хранилище кладется реальный пост,
+                                # а не временное сервисное уведомление о создании треда.
                                 async with storage_lock:
                                     messages_storage[post_num] = {
                                         'author_id': author_id,
                                         'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
-                                        'content': content,
+                                        'content': real_content,
                                         'board_id': board_id,
                                         'thread_id': post.get('thread_id'),
                                     }
@@ -1982,15 +1991,16 @@ async def site_posts_broadcaster():
                         if is_new_thread or not thread_id:
                             recipients = base_recipients
                         else:
-                            thread_info = main.get_thread_info(board_id, str(thread_id))
+                            thread_info = get_thread_info(board_id, str(thread_id))
                             if thread_info:
                                 subs = thread_info.get('subscribers', set())
                                 recipients = subs.intersection(base_recipients)
-                        has_worker = bool(main.GLOBAL_BOTS.get(board_id) or board_id in board_data)
+                        g_bots = getattr(main, 'GLOBAL_BOTS', None) or getattr(shared_state, 'GLOBAL_BOTS', {})
+                        has_worker = bool(g_bots.get(board_id) or board_id in board_data)
                         if recipients and has_worker:
                             enqueued = await enqueue_board_message(board_id, {
                                 'recipients': recipients,
-                                'content': content,
+                                'content': broadcast_content,
                                 'post_num': post_num,
                                 'board_id': board_id,
                                 'thread_id': thread_id if not is_new_thread else None
@@ -2006,14 +2016,14 @@ async def site_posts_broadcaster():
                                 )
                                 await mark_broadcast_posts_sent([post_num])
 
-                            if (content.get('archive_allowed') or not content.get('archive_skip')) and not is_shadow_muted:
-                                bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
+                            if (real_content.get('archive_allowed') or not real_content.get('archive_skip')) and not is_shadow_muted:
+                                bot_to_use = g_bots.get(board_id) or g_bots.get('b')
                                 if bot_to_use:
-                                    spawn_task(main._forward_post_to_realtime_archive(
+                                    spawn_task(_forward_post_to_realtime_archive(
                                         bot_instance=bot_to_use,
                                         board_id=board_id,
                                         post_num=post_num,
-                                        content=content,
+                                        content=real_content,
                                         is_shadow_muted=is_shadow_muted
                                     ))
                         else:
@@ -2034,9 +2044,10 @@ def _site_public_url(raw_url: str | None) -> str | None:
         return None
     if url.startswith(("http://", "https://")):
         return url
+    base = getattr(main, "SITE_PUBLIC_BASE_URL", None) or SITE_PUBLIC_BASE_URL
     if url.startswith("/"):
-        return f"{main.SITE_PUBLIC_BASE_URL}{url}"
-    return f"{main.SITE_PUBLIC_BASE_URL}/{url.lstrip('/')}"
+        return f"{base}{url}"
+    return f"{base}/{url.lstrip('/')}"
 
 
 def _site_media_item(file_info: dict) -> dict | None:

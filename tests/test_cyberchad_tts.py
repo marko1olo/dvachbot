@@ -306,6 +306,7 @@ class TestVoiceRoastCyberchadIntegration:
         assert kwargs.get("caption") == "🔥 Разъёб от Киберчеда"
 
     @pytest.mark.asyncio
+    @patch("ai_manager.MUSIC_ROASTS_ENABLED", True)
     @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
     @patch("ai_manager.httpx.AsyncClient")
@@ -383,6 +384,7 @@ class TestVoiceRoastCyberchadIntegration:
         assert mock_msg.answer_voice.call_args[1].get("caption") == "🔥 Разъёб от Киберчеда"
 
     @pytest.mark.asyncio
+    @patch("ai_manager.MUSIC_ROASTS_ENABLED", True)
     @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
     @patch("ai_manager.httpx.AsyncClient")
@@ -423,6 +425,7 @@ class TestVoiceRoastCyberchadIntegration:
         assert mock_msg.answer_voice.call_args[1].get("caption") == "🔥 Разъёб от Киберчеда"
 
     @pytest.mark.asyncio
+    @patch("ai_manager.MUSIC_ROASTS_ENABLED", True)
     @patch("ai_manager.handle_music_roast", new_callable=AsyncMock)
     @patch("asyncio.sleep", new_callable=AsyncMock)
     async def test_roast_album_tracks_sequentially(self, mock_sleep, mock_handle_music_roast):
@@ -571,6 +574,7 @@ class TestCyberchadBoardBroadcast:
             assert call_voice_params.content["reply_to"] == 777
 
     @pytest.mark.asyncio
+    @patch("ai_manager.MUSIC_ROASTS_ENABLED", True)
     @patch("common.tts_engine.synthesize_cyberchad_voice_with_meta", new_callable=AsyncMock)
     @patch("ai_manager.summarize_text_with_hf", new_callable=AsyncMock)
     @patch("ai_manager.httpx.AsyncClient")
