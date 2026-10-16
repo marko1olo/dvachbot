@@ -12,7 +12,6 @@ except Exception:
     import traceback; traceback.print_exc()
 import threading
 import time
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
