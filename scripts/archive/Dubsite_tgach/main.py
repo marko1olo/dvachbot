@@ -3795,6 +3795,8 @@ async def read_res_root_redirect(board_id: str):
     """
     Редирект с папки /res/ (если юзер стер номер треда) обратно на доску.
     """
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404)
     return RedirectResponse(url=f"/{board_id}/threads/", status_code=301)
 @app.get("/{board_id}/res/{post_num}.html")
 async def read_thread(board_id: str, post_num: int, request: Request, user: dict | None = Depends(get_optional_user)):
