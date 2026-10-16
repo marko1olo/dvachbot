@@ -11,14 +11,12 @@ async def kill_zombies():
 
     async with aiosqlite.connect(DB_NAME) as db:
         # Паттерны: AgAC (фото), BQAC (файлы/видео), CQAC (аудио)
-        patterns = ['AgAC%', 'BQAC%', 'CQAC%']
+        patterns = [('AgAC%',), ('BQAC%',), ('CQAC%',)]
         
-        where_clause = " OR ".join(["file_id LIKE ?"] * len(patterns))
-
         # Чистим MirrorQueue (Catbox)
-        await db.execute(f"DELETE FROM MirrorQueue WHERE {where_clause}", patterns)
+        await db.executemany("DELETE FROM MirrorQueue WHERE file_id LIKE ?", patterns)
         # Чистим PendingHF (HuggingFace)
-        await db.execute(f"DELETE FROM PendingHF WHERE {where_clause}", patterns)
+        await db.executemany("DELETE FROM PendingHF WHERE file_id LIKE ?", patterns)
         
         await db.commit()
         print("✅ Все зомби-задачи (AgAC, BQAC, CQAC) удалены из очередей.")
