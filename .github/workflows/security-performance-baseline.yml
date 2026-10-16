@@ -1,6 +1,7 @@
+---
 name: Security and Performance Baseline
 
-on:
+"on":
   push:
     branches: [main]
   pull_request:
@@ -20,7 +21,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Scan checked-out source for leaked credentials
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
@@ -34,11 +35,14 @@ jobs:
           {
             echo "# Repository footprint"
             echo "Measured at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            echo "Scope: tracked files only. This is a storage and review signal, not a FastAPI, bot, queue, or network performance benchmark."
+            echo "Scope: tracked files only. This is a storage and review"
+            echo "signal, not a FastAPI, bot, queue, or network"
+            echo "performance benchmark."
             echo
             echo "## Total apparent size"
             git ls-files -z | xargs -0 -r du -ch --apparent-size -- | tail -n 1
             echo
             echo "## 20 largest tracked paths"
-            git ls-files -z | xargs -0 -r du -ah --apparent-size -- | sort -hr | sed -n '1,20p'
+            git ls-files -z | xargs -0 -r du -ah --apparent-size -- \
+              | sort -hr | sed -n '1,20p'
           } | tee repository-footprint.txt
