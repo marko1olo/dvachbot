@@ -452,8 +452,9 @@ async def tagging_loop():
                             logger.info(f"♻️ Skip Neuro: Tags found for SHA {sha[:8]}")
                 except Exception as e:
                     logger.error(
-                        f"DB Error checking existing tags for SHA {sha[:8]}: {e}"
-                    , exc_info=True)
+                        f"DB Error checking existing tags for SHA {sha[:8]}: {e}",
+                        exc_info=True,
+                    )
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
                 if tags is None:
@@ -473,36 +474,27 @@ async def tagging_loop():
                 for attempt in range(10):
                     try:
                         async with db_lock:
-                            cursor = await db.execute(
+                            await db.execute(
                                 """
-                                UPDATE FileRegistry 
-                                SET tags = ?, phash = ?, blurhash = ?
-                                WHERE file_id = ?
+                                INSERT INTO FileRegistry
+                                (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(sha256) DO UPDATE SET
+                                    tags = excluded.tags,
+                                    phash = excluded.phash,
+                                    blurhash = excluded.blurhash
                             """,
-                                (tags, phash, b_hash, file_id),
+                                (
+                                    sha,
+                                    phash,
+                                    file_id,
+                                    None,
+                                    file_type,
+                                    time.time(),
+                                    b_hash,
+                                    tags,
+                                ),
                             )
-
-                            if cursor.rowcount == 0:
-                                await db.execute(
-                                    """
-                                    INSERT INTO FileRegistry 
-                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    ON CONFLICT(sha256) DO UPDATE SET
-                                        tags = excluded.tags,
-                                        phash = excluded.phash
-                                """,
-                                    (
-                                        sha,
-                                        phash,
-                                        file_id,
-                                        None,
-                                        file_type,
-                                        time.time(),
-                                        b_hash,
-                                        tags,
-                                    ),
-                                )
 
                             await db.commit()
                         save_success = True
@@ -512,7 +504,9 @@ async def tagging_loop():
                         if "locked" in str(e).lower():
                             await asyncio.sleep(0.5 * (attempt + 1))
                             continue
-                        logger.error(f"❌ DB Save error for {file_id[:8]}: {e}", exc_info=True)
+                        logger.error(
+                            f"❌ DB Save error for {file_id[:8]}: {e}", exc_info=True
+                        )
                         break
 
                 if not save_success:
