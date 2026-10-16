@@ -1798,20 +1798,21 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def startup_mark(label: str, started_at: float | None = None) -> float:
+    now = time.perf_counter()
+    if started_at is None:
+        print(f"[site-startup] {label}", flush=True)
+    else:
+        print(
+            f"[site-startup] {label} ({(now - started_at) * 1000:.0f}ms)",
+            flush=True,
+        )
+    return now
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks = []
-
-    def startup_mark(label: str, started_at: float | None = None) -> float:
-        now = time.perf_counter()
-        if started_at is None:
-            print(f"[site-startup] {label}", flush=True)
-        else:
-            print(
-                f"[site-startup] {label} ({(now - started_at) * 1000:.0f}ms)",
-                flush=True,
-            )
-        return now
 
     startup_mark("lifespan begin")
     step_started = startup_mark("create_pool begin")
