@@ -14,8 +14,56 @@ for mod in list(sys.modules.keys()):
     if mod.startswith("site_tgach") or mod == "site_tgach":
         del sys.modules[mod]
 
-from site_tgach.security import verify_pow
+from site_tgach.security import verify_pow, generate_challenge_str
 import site_tgach.security as security
+from unittest.mock import patch
+import time
+
+class TestGenerateChallengeStr(unittest.TestCase):
+    def setUp(self):
+        security.POW_CACHE.clear()
+
+    def test_basic_generation(self):
+        challenge = generate_challenge_str()
+
+        # Test string properties
+        self.assertIsInstance(challenge, str)
+        self.assertEqual(len(challenge), 32)
+
+        # Test cache update
+        self.assertIn(challenge, security.POW_CACHE)
+
+        now = time.time()
+        expiry = security.POW_CACHE[challenge]
+        self.assertTrue(now + 590 < expiry <= now + 610)
+
+    @patch('site_tgach.security.random.random')
+    def test_cleans_expired(self, mock_random):
+        # Force aggressive cleaning by returning < 0.1
+        mock_random.return_value = 0.05
+
+        now = time.time()
+        security.POW_CACHE['expired_1'] = now - 100
+        security.POW_CACHE['expired_2'] = now - 50
+        security.POW_CACHE['not_expired'] = now + 100
+
+        generate_challenge_str()
+
+        self.assertNotIn('expired_1', security.POW_CACHE)
+        self.assertNotIn('expired_2', security.POW_CACHE)
+        self.assertIn('not_expired', security.POW_CACHE)
+
+    @patch('site_tgach.security.MAX_POW_CACHE_SIZE', 5)
+    def test_cleans_over_limit(self):
+        now = time.time()
+        for i in range(6):
+            security.POW_CACHE[f"chal_{i}"] = now + 100
+
+        generate_challenge_str()
+
+        # len(keys) = 6. 6 // 5 = 1 item removed. + 1 newly generated = 6 total
+        self.assertEqual(len(security.POW_CACHE), 6)
+
 
 class TestVerifyPow(unittest.TestCase):
     def setUp(self):
