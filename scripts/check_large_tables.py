@@ -27,16 +27,23 @@ def check_indexes():
     chunk_size = 100
     for i in range(0, len(valid_tables), chunk_size):
         chunk = valid_tables[i:i+chunk_size]
-        q = " UNION ALL ".join(
-            [f"SELECT '{t}', COUNT(*) FROM \"{t}\"" for t in chunk]
-        )
+
+        queries = []
+        params = []
+        for t in chunk:
+            safe_t = t.replace('"', '""')
+            queries.append(f'SELECT ?, COUNT(*) FROM "{safe_t}"')  # nosec B608
+            params.append(t)
+
+        q = " UNION ALL ".join(queries)
         try:
-            cursor.execute(q)
+            cursor.execute(q, params)
             for row in cursor.fetchall():
                 counts[row[0]] = row[1]
         except sqlite3.Error:
             for t in chunk:
-                cursor.execute(f'SELECT COUNT(*) FROM "{t}"')  # nosec B608
+                safe_t = t.replace('"', '""')
+                cursor.execute(f'SELECT COUNT(*) FROM "{safe_t}"')  # nosec B608
                 counts[t] = cursor.fetchone()[0]
 
     for table in valid_tables:
