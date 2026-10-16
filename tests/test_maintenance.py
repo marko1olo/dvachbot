@@ -63,6 +63,38 @@ class TestMaintenance(unittest.TestCase):
         # Verify that the critical error message is printed
         mock_print.assert_any_call(f"⛔ КРИТИЧЕСКАЯ ОШИБКА во время обслуживания: {error_msg}")
 
+
+    @patch('maintenance.os.path.exists')
+    @patch('builtins.print')
+    @patch('maintenance.sqlite3.connect')
+    def test_run_maintenance_pragma_exceptions(self, mock_connect, mock_print, mock_exists):
+        """Test edge case: PRAGMA executions raise exceptions, but VACUUM/ANALYZE still run."""
+        mock_exists.return_value = True
+
+        mock_con = MagicMock()
+        mock_connect.return_value = mock_con
+        mock_connect.return_value.__enter__.return_value = mock_con
+
+        def mock_execute(query):
+            if 'PRAGMA' in query:
+                raise Exception(f"PRAGMA error: {query}")
+            return MagicMock()
+
+        mock_con.execute.side_effect = mock_execute
+
+        run_maintenance()
+
+        mock_exists.assert_called_once_with(DB_NAME)
+        mock_connect.assert_called_once_with(DB_NAME, timeout=15.0)
+
+        # Check that both VACUUM and ANALYZE are still called despite PRAGMA errors
+        self.assertEqual(mock_con.execute.call_count, 5) # 3 PRAGMAs + 1 VACUUM + 1 ANALYZE
+
+        # Verify success messages are printed (VACUUM and ANALYZE are successful)
+        mock_print.assert_any_call("✅ VACUUM успешно завершен.")
+        mock_print.assert_any_call("✅ ANALYZE успешно завершен.")
+        mock_print.assert_any_call("\nОбслуживание базы данных успешно завершено!")
+
     @patch('builtins.input', return_value='y')
     @patch('builtins.print')
     def test_main_block_y(self, mock_print, mock_input):
