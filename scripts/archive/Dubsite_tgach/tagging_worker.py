@@ -390,14 +390,14 @@ async def tagging_loop():
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {file_id} deleted. Marking error.")
                     async with db_lock:
-                        await db.executemany(
+                        await db.execute(
                             "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
-                            [(file_id,)],
+                            (file_id,),
                         )
                         dummy_sha = f"del_{file_id}"
-                        await db.executemany(
+                        await db.execute(
                             "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
-                            [(dummy_sha, file_id, time.time())],
+                            (dummy_sha, file_id, time.time()),
                         )
                         await db.commit()
                     continue
@@ -428,13 +428,13 @@ async def tagging_loop():
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async with db_lock:
-                        await db.executemany(
+                        await db.execute(
                             "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
-                            [(file_id,)],
+                            (file_id,),
                         )
-                        await db.executemany(
+                        await db.execute(
                             "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
-                            [(sha_fail, file_id, time.time())],
+                            (sha_fail, file_id, time.time()),
                         )
                         await db.commit()
                     continue
