@@ -36,7 +36,9 @@ def check_indexes():
                 counts[row[0]] = row[1]
         except sqlite3.Error:
             for t in chunk:
-                cursor.execute(f'SELECT COUNT(*) FROM "{t}"')  # nosec B608
+                if t not in valid_tables:
+                    raise ValueError(f"Invalid table name: {t}")
+                cursor.execute(f'SELECT COUNT(*) FROM "{t}"')
                 counts[t] = cursor.fetchone()[0]
 
     for table in valid_tables:
