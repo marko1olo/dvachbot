@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 import re
+from common.latex_utils import normalize_latex
 
 
 def apply_greentext_formatting(text: str) -> str:
@@ -37,11 +38,12 @@ def escape_html(text: str) -> str:
 
 def convert_site_tags_to_telegram(text: str) -> str:
     """
-    Преобразует BB-коды сайта в поддерживаемые HTML-теги Telegram.
-    Адаптирует визуальные эффекты под возможности мессенджера.
+    Преобразует BB-коды сайта в поддерживаемые HTML-теги Telegram
+    и нормализует LaTeX-формулы и математические величины в Unicode.
     """
     if not text:
         return ""
+    text = normalize_latex(text)
     text = re.sub(r'\[b\](.*?)\[/b\]', r'<b>\1</b>', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'\[i\](.*?)\[/i\]', r'<i>\1</i>', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', text, flags=re.IGNORECASE | re.DOTALL)

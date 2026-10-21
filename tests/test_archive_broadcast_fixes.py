@@ -593,7 +593,7 @@ async def test_pvp_and_system_announcements_have_archive_allowed():
 
 
 @pytest.mark.asyncio
-async def test_money_drop_mid_broadcast_stops_sending():
+async def test_money_drop_mid_broadcast_stops_sending(isolated_test_db):
     """Verify that _broadcast_money_drop immediately stops sending when drop is claimed mid-broadcast."""
     import main
     import drop_engine
@@ -645,7 +645,7 @@ async def test_money_drop_mid_broadcast_stops_sending():
 
 
 @pytest.mark.asyncio
-async def test_money_drop_retry_after_resilience():
+async def test_money_drop_retry_after_resilience(isolated_test_db):
     """Verify that _broadcast_money_drop and _update_all_drop_messages handle TelegramRetryAfter gracefully."""
     import main
     import drop_engine

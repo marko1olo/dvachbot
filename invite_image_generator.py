@@ -25,7 +25,7 @@ from common.config import DB_NAME
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(_BASE_DIR, "fonts")
 IMPACT_FONT = os.path.join(FONTS_DIR, "Impact.ttf") if os.path.exists(os.path.join(FONTS_DIR, "Impact.ttf")) else None
-MAIN_FONT = os.path.join(_BASE_DIR, "font1.ttf") if os.path.exists(os.path.join(_BASE_DIR, "font1.ttf")) else None
+MAIN_FONT = os.path.join(FONTS_DIR, "font1.ttf") if os.path.exists(os.path.join(FONTS_DIR, "font1.ttf")) else None
 MONO_FONT = os.path.join(FONTS_DIR, "Courier New.ttf") if os.path.exists(os.path.join(FONTS_DIR, "Courier New.ttf")) else None
 OCRA_FONT = os.path.join(FONTS_DIR, "ocra.ttf") if os.path.exists(os.path.join(FONTS_DIR, "ocra.ttf")) else None
 

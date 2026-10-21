@@ -214,11 +214,8 @@ async def publish_to_best_channel(
     raw_text = content.get('text') or content.get('caption') or ''
     sanitized_text = sanitize_html(raw_text) if raw_text else "<i>(Медиа-пост)</i>"
 
-    # Ссылки и подвал
-    footer_text = (
-        f"👤 <b>Автор:</b> {anon_tag}\n"
-        f"👉 <a href=\"https://t.me/{bot_uname}?start=post_{post_num}\">Открыть пост в боте</a>"
-    )
+    # Ссылки и подвал (полная анонимность: хэш автора скрыт)
+    footer_text = f"👉 <a href=\"https://t.me/{bot_uname}?start=post_{post_num}\">Открыть пост в боте</a>"
 
     # 3. Отправляем в канал
     msg_id = await send_channel_content(

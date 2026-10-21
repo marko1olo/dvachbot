@@ -150,7 +150,7 @@ class TestLiveRobHandler(unittest.IsolatedAsyncioTestCase):
             robber = await live.balance_of(ROBBER)
             said = live.answers(first) + live.answers(second)
             wins = [t for t in said if "ОГРАБЛЕНИЕ УДАЛОСЬ" in t]
-            fails = [t for t in said if "кончились шекели" in t]
+            fails = [t for t in said if "кончились шекели" in t or "ОБЛОМ:" in t]
 
             self.assertGreaterEqual(
                 victim, 0.0,

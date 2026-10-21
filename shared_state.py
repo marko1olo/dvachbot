@@ -62,7 +62,7 @@ INSULT_REACTIONS = {'🐓', '🐖'}
 MAT_WORDS = ["сука", "блядь", "пиздец", "ебать", "нах", "пизда", "хуйня", "ебал", "блять", "отъебись", "ебаный", "еблан", "ХУЙ", "ПИЗДА", "хуйло", "долбаёб", "пидорас"]
 
 BEST_CHANNEL_ID = int(os.getenv("BEST_CHANNEL_ID", -1002827087363))
-LIKES_THRESHOLD = 3
+LIKES_THRESHOLD = 4
 AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 4
 ENABLE_MULTILANG = False
 QUICK_QUOTE_POST_DISTANCE = 300
@@ -596,7 +596,7 @@ board_data = defaultdict(lambda: {
     },
     'single_photo_counter': defaultdict(int), # Трекер для одиночных фото
     'last_photo_group_id': defaultdict(str),  # Чтобы отличать разные группы
-    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'lie_media': False}),
+    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'lie_media': False, 'is_isolated': False}),
     'active_pin': None,
     'message_counter': defaultdict(int),
     'last_user_msgs': {},

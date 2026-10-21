@@ -24,9 +24,11 @@ async def send_message_to_users(*args, **kwargs):
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from post_helpers import format_header, format_thread_post_header, apply_shadow_autoreplace, check_post_numerals, execute_auto_roast
 from thread_texts import thread_messages
+from collections import defaultdict
 import __main__ as main
 
 UTC = timezone.utc
+_BOARD_DISPATCH_LOCKS: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, stream: str):
     if user_id <= 0: return
@@ -239,6 +241,15 @@ class NewPostProcessor:
                                 self.author_content['text'] += f"\n\n<i>{flag_ru_tag}</i>"
             except Exception:
                 pass
+
+        try:
+            from common.latex_utils import normalize_latex
+            for field in ('text', 'caption'):
+                val = self.author_content.get(field)
+                if val and isinstance(val, str):
+                    self.author_content[field] = normalize_latex(val)
+        except Exception:
+            pass
 
         try:
             from common.forward_utils import contains_board_post_header, format_forwarded_quote
@@ -656,28 +667,33 @@ class NewPostProcessor:
             now_dt = datetime.now(UTC)
             await self._apply_content_transformations()
 
-            if not await self._create_post_record(now_dt):
-                return None
+            # Per-board dispatch lock guarantees strict monotonic sequence:
+            # Post creation -> Header formatting -> Memory store -> Author confirmation -> Queue enqueue
+            # This completely prevents timeline inversion where concurrent posts overtake each other.
+            board_dispatch_lock = _BOARD_DISPATCH_LOCKS[self.board_id]
+            async with board_dispatch_lock:
+                if not await self._create_post_record(now_dt):
+                    return None
 
-            try:
-                await self._format_and_update_headers()
-            except Exception as e:
-                print(f"⚠️ Ошибка при форматировании заголовков для поста #{self.current_post_num}: {e}")
+                try:
+                    await self._format_and_update_headers()
+                except Exception as e:
+                    print(f"⚠️ Ошибка при форматировании заголовков для поста #{self.current_post_num}: {e}")
 
-            try:
-                await self._send_to_author_with_fallback()
-            except Exception as e:
-                print(f"⚠️ Ошибка при отправке подтверждения автору поста #{self.current_post_num}: {e}")
+                try:
+                    await self._save_to_memory(now_dt)
+                except Exception as e:
+                    print(f"⚠️ Ошибка при сохранении в память поста #{self.current_post_num}: {e}")
 
-            try:
-                await self._save_to_memory(now_dt)
-            except Exception as e:
-                print(f"⚠️ Ошибка при сохранении в память поста #{self.current_post_num}: {e}")
+                try:
+                    await self._send_to_author_with_fallback()
+                except Exception as e:
+                    print(f"⚠️ Ошибка при отправке подтверждения автору поста #{self.current_post_num}: {e}")
 
-            try:
-                await self._enqueue_and_notify()
-            except Exception as e:
-                print(f"⚠️ Ошибка при добавлении в очередь поста #{self.current_post_num}: {e}")
+                try:
+                    await self._enqueue_and_notify()
+                except Exception as e:
+                    print(f"⚠️ Ошибка при добавлении в очередь поста #{self.current_post_num}: {e}")
 
             return self.current_post_num
         except Exception as e:

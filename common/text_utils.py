@@ -381,6 +381,26 @@ def strip_cot_and_drafts(text: str) -> str:
     # Run base XML thinking tags removal first
     s = _strip_raw_thinking_tags(text)
 
+    # Fast path: if the output is already a valid JSON object or array (e.g. Cyberchad JSON),
+    # preserve it intact to prevent corrupting structural keys (thought, reply, generate_image, etc.)
+    import json
+    stripped_candidate = s.strip()
+    if (stripped_candidate.startswith('{') and stripped_candidate.endswith('}')) or \
+       (stripped_candidate.startswith('[') and stripped_candidate.endswith(']')):
+        try:
+            json.loads(stripped_candidate)
+            return stripped_candidate
+        except Exception:
+            pass
+
+    m_json_fence = re.search(r'```(?:json)?\s*(\{[\s\S]*\}|\[[\s\S]*\])\s*```', stripped_candidate)
+    if m_json_fence:
+        try:
+            json.loads(m_json_fence.group(1))
+            return m_json_fence.group(1).strip()
+        except Exception:
+            pass
+
     # Strip known CoT header regexes
     for pattern in RE_COT_MARKERS:
         s = pattern.sub('', s)
@@ -456,7 +476,7 @@ def strip_cot_and_drafts(text: str) -> str:
                 continue
             if has_cyrillic:
                 found_russian_body = True
-                cleaned_lines.append(stripped)
+            cleaned_lines.append(stripped)
         else:
             cleaned_lines.append(stripped)
         i += 1

@@ -45,6 +45,7 @@ auction_router = Router(name="auction_router")
 
 # Active raid lobbies in memory: raid_id -> dict
 _ACTIVE_RAIDS: Dict[str, Dict[str, Any]] = {}
+_raid_lock = asyncio.Lock()
 
 
 # =============================================================================
@@ -319,23 +320,39 @@ async def cmd_raid_oligarch(message: types.Message):
 async def cb_raid_join(callback: types.CallbackQuery):
     """
     Handles joining an active raid lobby.
+    Thread-safe, resilient against caption/photo cards and detailed feedback.
     """
     raid_id = callback.data.replace("raid_join_", "")
-    raid = _ACTIVE_RAIDS.get(raid_id)
-    if not raid:
-        await callback.answer("Рейд уже завершен или истек!", show_alert=True)
-        return
+    async with _raid_lock:
+        raid = _ACTIVE_RAIDS.get(raid_id)
+        if not raid:
+            await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
+            return
 
-    user_id = callback.from_user.id
-    if user_id in raid["voters"]:
-        await callback.answer("Ты уже участвуешь в этом рейде!", show_alert=True)
-        return
+        user_id = callback.from_user.id
+        if user_id in raid["voters"]:
+            await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
+            return
 
     db = await get_pool()
+    # Check isolation guard
+    try:
+        async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (user_id,)) as iso_c:
+            iso_row = await iso_c.fetchone()
+            if iso_row and iso_row[0]:
+                await callback.answer("🧘 Ты находишься в режиме самоизоляции и не можешь участвовать в рейдах ОБЭП.", show_alert=True)
+                return
+    except Exception:
+        pass
+
     bal = await get_user_global_balance(db, user_id)
-    async with db.execute("SELECT COALESCE(MAX(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as c:
-        p_row = await c.fetchone()
-        posts = p_row[0] if p_row else 0
+    posts = 0
+    try:
+        async with db.execute("SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as c:
+            p_row = await c.fetchone()
+            posts = p_row[0] if p_row else 0
+    except Exception:
+        posts = 0
 
     if posts < 25:
         try:
@@ -346,39 +363,74 @@ async def cb_raid_join(callback: types.CallbackQuery):
             pass
 
     if bal >= 5000 or posts < 25:
-        await callback.answer("❌ Ты не подходишь для рейда! Нужно: баланс < 5,000 ₪ и >= 25 постов.", show_alert=True)
+        reasons = []
+        if bal >= 5000:
+            reasons.append(f"баланс {bal:,.0f} ₪ ≥ 5,000 ₪")
+        if posts < 25:
+            reasons.append(f"постов {posts} < 25")
+        await callback.answer(f"❌ Ты не подходишь для рейда! Нужно: баланс < 5,000 ₪ и ≥ 25 постов ({', '.join(reasons)}).", show_alert=True)
         return
 
-    raid["voters"].append(user_id)
-    cnt = len(raid["voters"])
+    async with _raid_lock:
+        if raid_id not in _ACTIVE_RAIDS:
+            await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
+            return
+        raid = _ACTIVE_RAIDS[raid_id]
+        if user_id in raid["voters"]:
+            await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
+            return
+        raid["voters"].append(user_id)
+        cnt = len(raid["voters"])
 
     if cnt < 5:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🚩 Вступить в рейд ОБЭП ({cnt}/5)", callback_data=f"raid_join_{raid_id}")]
         ])
         tgt_str = f"Олигарх: <code>{raid['target_id']}</code>" if raid['target_id'] else "Самый богатый олигарх борды"
-        await callback.message.edit_text(
+        new_text = (
             f"☭ <b>ОБЪЯВЛЕН НАРОДНЫЙ РЕЙД ОБЭП (/raid_oligarch)!</b>\n\n"
             f"🎯 <b>Цель:</b> {tgt_str}\n"
             f"Требования к работягам: баланс &lt; 5,000 ₪ и &gt;= 25 постов.\n"
             f"Добыча: 10% капитала цели (макс 200,000 ₪).\n"
             f"70% сжигается в Фонд Яхты Абу, 30% делится поровну между 5 участниками!\n\n"
-            f"Собрано пролетариев: <b>{cnt}/5</b>",
-            reply_markup=kb
+            f"Собрано пролетариев: <b>{cnt}/5</b>"
         )
-        await callback.answer(f"Ты вступил в рейд! ({cnt}/5)")
+        try:
+            if callback.message:
+                if callback.message.caption is not None or callback.message.photo:
+                    await callback.message.edit_caption(caption=new_text, reply_markup=kb, parse_mode="HTML")
+                else:
+                    await callback.message.edit_text(text=new_text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            try:
+                if callback.message:
+                    await callback.message.edit_reply_markup(reply_markup=kb)
+            except Exception:
+                pass
+
+        await callback.answer(f"🚩 Ты вступил в рейд ОБЭП! ({cnt}/5)")
         return
 
     # 5 voters gathered! Execute!
-    _ACTIVE_RAIDS.pop(raid_id, None)
+    async with _raid_lock:
+        _ACTIVE_RAIDS.pop(raid_id, None)
+
     res = await execute_oligarch_raid(db, raid["voters"], raid["target_id"], raid["board_id"])
 
     if not res.get("ok"):
-        await callback.message.edit_text(f"❌ <b>Рейд ОБЭП провален:</b> {res.get('error')}")
+        fail_text = f"❌ <b>Рейд ОБЭП провален:</b> {res.get('error')}"
+        try:
+            if callback.message:
+                if callback.message.caption is not None or callback.message.photo:
+                    await callback.message.edit_caption(caption=fail_text, parse_mode="HTML")
+                else:
+                    await callback.message.edit_text(text=fail_text, parse_mode="HTML")
+        except Exception:
+            pass
         await callback.answer("Рейд провален!", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    win_text = (
         f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА #{res['target_id']} ЗАВЕРШЕНО!</b>\n\n"
         f"💰 Конфисковано: <b>{res['confiscated']:,.0f} ₪</b> (10% капитала)\n"
         f"🔥 Сожжено в Фонд Яхты Абу (70%): <b>{res['burned_to_abu']:,.0f} ₪</b>\n"
@@ -386,4 +438,12 @@ async def cb_raid_join(callback: types.CallbackQuery):
         f"💵 Доля каждого участника: <b>+{res['per_voter']:,.0f} ₪</b>\n\n"
         f"<i>«Экспроприация экспроприаторов прошла успешно!»</i>"
     )
-    await callback.answer("Рейд успешно завершен!")
+    try:
+        if callback.message:
+            if callback.message.caption is not None or callback.message.photo:
+                await callback.message.edit_caption(caption=win_text, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(text=win_text, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer("☭ Рейд успешно завершен!")

@@ -189,6 +189,9 @@ def _find_split_idx(source: str, limit_char_idx: int) -> int:
     Tries paragraph break, newline, sentence end, word boundary, hard boundary.
     Returns a position > 0 and <= limit_char_idx.
     """
+    if len(source) <= limit_char_idx:
+        return len(source)
+
     # 1. Paragraph break \n\n
     split_idx = source.rfind("\n\n", 0, limit_char_idx)
     if split_idx != -1 and split_idx >= limit_char_idx // 3:
@@ -254,9 +257,22 @@ def chunk_html_message(
         prefix = build_reopening_tags(inherited_open_tags)
         prefix_units = count_tg_utf16_units(prefix)
 
-        # Reserve space for closing tags of inherited context + any newly opened tags
-        # Worst case: each tag ~15 chars. Cap pessimistically at 40 tags × 15 = 600 chars.
-        max_close_reserve = min(600, (len(inherited_open_tags) + 10) * 15)
+        # Fast path: check if ALL of source fits directly in this chunk
+        new_open_tags_all = get_open_tags_incremental(inherited_open_tags, source)
+        closing_all = build_closing_tags(new_open_tags_all)
+        if prefix_units + count_tg_utf16_units(source) + count_tg_utf16_units(closing_all) <= max_chars:
+            chunk = prefix + source + closing_all
+            if chunk.strip():
+                chunks.append(chunk)
+            break
+
+        # Reserve space for closing tags
+        if "<" not in source:
+            exact_closing = build_closing_tags(inherited_open_tags)
+            max_close_reserve = count_tg_utf16_units(exact_closing)
+        else:
+            max_close_reserve = min(600, (len(inherited_open_tags) + 10) * 15)
+
         available_units = max_chars - prefix_units - max_close_reserve
 
         if available_units < 20:

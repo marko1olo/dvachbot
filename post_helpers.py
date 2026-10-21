@@ -254,6 +254,12 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
     """
     custom_prefix = ""
     if author_id > 0:
+        from shared_state import board_data
+        b_data = board_data.get(board_id, {})
+        if b_data.get('user_settings', {}).get(author_id, {}).get('is_isolated'):
+            # В режиме самоизоляции кастомные префиксы, бейджи и дебаффы полностью скрываются
+            res = await _format_header_inner(board_id, post_num, stream)
+            return encode_post_num_zw(post_num) + res
         from common.db_pool import get_pool
         import time
         import json
@@ -645,14 +651,22 @@ def _format_post_text(
     return None
 
 def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
+    stream_lang = lang or ('en' if board_id == 'int' else 'ru')
+    author_id = post.get('author_id')
+    default_anon = "Anon" if stream_lang == 'en' else ("名無し" if stream_lang == 'jp' else "Анон")
+
+    if author_id and author_id != 0:
+        from shared_state import board_data
+        b_data = board_data.get(board_id, {})
+        if b_data.get('user_settings', {}).get(author_id, {}).get('is_isolated'):
+            return default_anon
+
     name = content.get('username') or content.get('name') or content.get('author_name')
     if not name:
-        stream_lang = lang or ('en' if board_id == 'int' else 'ru')
-        author_id = post.get('author_id')
         if author_id and author_id != 0:
             name = _get_cached_anon_name(author_id, stream_lang)
         else:
-            name = "Anon" if stream_lang == 'en' else ("名無し" if stream_lang == 'jp' else "Анон")
+            name = default_anon
     return name
 
 def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None) -> str:

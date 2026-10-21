@@ -6614,6 +6614,41 @@ async def handle_attack_abuse_check(message: types.Message, db, board_id: str, u
 
     return False
 
+def is_user_isolated(user_id: int, board_id: str = 'b') -> bool:
+    """
+    Проверяет, включен ли режим самоизоляции у пользователя.
+    """
+    if not user_id or user_id <= 0:
+        return False
+    b_data = board_data.get(board_id, {})
+    return bool(b_data.get('user_settings', {}).get(user_id, {}).get('is_isolated', False))
+
+async def check_isolation_combat_guard(message: types.Message, attacker_id: int, target_id: int | None, board_id: str) -> bool:
+    """
+    Проверяет режим самоизоляции для инициатора и цели.
+    Если инициатор или цель изолированы — отправляет уведомление и возвращает True (блокируя атаку).
+    """
+    # 1. Проверяем инициатора (атакующего)
+    if is_user_isolated(attacker_id, board_id):
+        await message.answer(
+            "🧘 <b>Вы находитесь в режиме самоизоляции!</b>\n\n"
+            "Любые агрессивные действия, экономика и взаимодействие с другими анонами заблокированы.\n"
+            "<i>(Отключить изоляцию можно в /settings или командой /isolation off)</i>",
+            parse_mode="HTML"
+        )
+        return True
+
+    # 2. Проверяем цель
+    if target_id and is_user_isolated(target_id, board_id):
+        await message.answer(
+            "🧘 <b>ДЕЙСТВИЕ НЕВОЗМОЖНО!</b>\n\n"
+            "Цель находится в режиме самоизоляции: анон недосягаем для атак, порчи, грабежа и пробива.",
+            parse_mode="HTML"
+        )
+        return True
+
+    return False
+
 async def check_target_grief_protection(message: types.Message, target_id: int, user_id: int, board_id: str) -> bool:
     """
     Проверяет 5-минутное окно защиты цели от повторных атак (Anti-Griefing Target Immunity).
@@ -6683,6 +6718,8 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
     if target_id == user_id:
         await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
+        return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
@@ -7159,6 +7196,8 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     if target_id == user_id:
         await message.answer("🤦‍♂️ Ты попытался ограбить сам себя. Заточка осталась при тебе.")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
@@ -7514,6 +7553,8 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     if not target_id or target_id == user_id:
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
@@ -7689,6 +7730,8 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
     if not target_id or target_id == user_id:
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься облевать сам себя.")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
@@ -7832,6 +7875,8 @@ async def cmd_flag_ua(message: types.Message, board_id: str | None, stream: str 
     if not target_id or target_id == 0 or target_id == user_id:
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься повесить флаг сам себе.")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
@@ -7931,6 +7976,8 @@ async def cmd_flag_ru(message: types.Message, board_id: str | None, stream: str 
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id:
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься повесить флаг сам себе.")
+        return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
@@ -8350,6 +8397,8 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     if not target_id or target_id == 0 or target_id == user_id:
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
@@ -8517,6 +8566,8 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
     if not target_id or target_id == 0 or target_id == user_id:
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься накормить таблетками сам себя.")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
@@ -8680,6 +8731,8 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             return
     if not target_id or target_id == user_id:
         await message.answer("⚠️ Не удалось определить цель доноса или ты пытаешься посадить сам себя.")
+        return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
         return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
@@ -9729,6 +9782,9 @@ async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None,
 async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru', raw_command_text: str | None = None):
     if not board_id: return
     sender_id = message.from_user.id
+    if is_user_isolated(sender_id, board_id):
+        await message.answer("🧘 <b>Вы находитесь в режиме самоизоляции.</b> Перевод шекелей недоступен (капитал заморожен).", parse_mode="HTML")
+        return
     db = await get_pool()
     sender_bal = await get_user_global_balance(db, sender_id)
     sender_anon = get_anon_id(sender_id)
@@ -9815,6 +9871,14 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         await message.reply(
             "🤦‍♂️ <b>Перекладываешь шекели из левого кармана в правый?</b>\n"
             "Самому себе донатить нельзя, шизофреник. Иди на завод устраивайся: /work",
+            parse_mode="HTML"
+        )
+        return
+
+    if is_user_isolated(target_user_id, board_id):
+        await message.reply(
+            "🧘 <b>Перевод невозможен!</b>\n"
+            "Получатель находится в режиме самоизоляции и не принимает переводы.",
             parse_mode="HTML"
         )
         return
@@ -10253,6 +10317,8 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         target_id = await get_author_id_by_reply(message)
         if target_id == user_id or target_id == 0:
             target_id = None
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
 
     duel_token = make_duel_token(user_id)
     kb_duel_challenge = InlineKeyboardMarkup(inline_keyboard=[
@@ -19768,6 +19834,40 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
         else: alert = "🚫 AI-разъёбы скрыты" if new_status else "👁 AI-разъёбы включены"
         try: await callback.answer(alert)
         except TelegramBadRequest: pass
+    elif action in ("isolation_toggle", "incognito_toggle"):
+        current_status = bool(settings.get('is_isolated'))
+        new_status = not current_status
+        now = time.time()
+        last_toggle = float(settings.get('isolation_last_toggle') or 0.0)
+        cooldown = 86400.0  # 24 hours
+        elapsed = now - last_toggle
+        if last_toggle > 0 and elapsed < cooldown:
+            remaining = int(cooldown - elapsed)
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            if lang == 'en': alert = f"⏳ Self-isolation can only be toggled once every 24 hours. Available in {hours}h {minutes}m."
+            elif lang == 'jp': alert = f"⏳ 自己隔離モードの切り替えは24時間に1回のみ可能です。残り時間: {hours}時間{minutes}分。"
+            else: alert = f"⏳ Переключать режим самоизоляции можно не чаще одного раза в 24 часа. Доступно через {hours}ч {minutes}м."
+            try: await callback.answer(alert, show_alert=True)
+            except TelegramBadRequest: pass
+            return
+
+        settings['is_isolated'] = new_status
+        settings['isolation_last_toggle'] = now
+        spawn_task(update_user_settings_db(user_id, board_id, is_isolated=1 if new_status else 0, isolation_last_toggle=now))
+        text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
+        try:
+            if callback.message.caption is not None or callback.message.photo:
+                await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except TelegramBadRequest:
+            pass
+        if lang == 'en': alert = "🧘 Self-isolation enabled" if new_status else "🧘 Self-isolation disabled"
+        elif lang == 'jp': alert = "🧘 自己隔離 有効" if new_status else "🧘 自己隔離 無効"
+        else: alert = "🧘 Самоизоляция ВКЛ" if new_status else "🧘 Самоизоляция ВЫКЛ"
+        try: await callback.answer(alert)
+        except TelegramBadRequest: pass
     elif action == "hide_add":
         if lang == 'en': msg = "Type: <code>/hide add WORD</code>"
         elif lang == 'jp': msg = "入力: <code>/hide add 単語</code>"
@@ -20316,6 +20416,10 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
     ai_status = "🚫 Скрыты" if ai_hidden else "👁 Включены"
     ai_status_en = "🚫 Hidden" if ai_hidden else "👁 Enabled"
     ai_status_jp = "🚫 非表示" if ai_hidden else "👁 有効"
+    is_isolated = bool(settings.get('is_isolated'))
+    iso_status = "✅ ВКЛ" if is_isolated else "❌ ВЫКЛ"
+    iso_status_en = "✅ ON" if is_isolated else "❌ OFF"
+    iso_status_jp = "✅ 有効" if is_isolated else "❌ 無効"
     raw_hide = settings.get('hide', set())
     hidden_words = sorted(list({str(w).strip().lower() for w in raw_hide if str(w).strip()}))
     if lang == 'en':
@@ -20325,6 +20429,8 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
             f"<i>(Hides all incoming images under a spoiler)</i>\n\n"
             f"🚫 <b>AI Roasts / Neuro-Slop:</b> {ai_status_en}\n"
             f"<i>(Hides auto-roasts of audio/voice and AI persona replies)</i>\n\n"
+            f"🧘 <b>Self-Isolation:</b> {iso_status_en}\n"
+            f"<i>(Complete incognito, freezes balance/XP, immunity from robberies/curses/dossier/AI)</i>\n\n"
             f"🚫 <b>Auto-hide Words ({len(hidden_words)}):</b>\n"
         )
         empty_text = "<i>(List is empty)</i>"
@@ -20333,6 +20439,7 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
         btn_back = "🔙 Back"
         btn_lang = "🌐 Language"
         btn_ai = f"🤖 AI Roasts: {'🚫 Hidden' if ai_hidden else '👁 Shown'}"
+        btn_iso = f"🧘 Isolation: {'✅ ON' if is_isolated else '❌ OFF'}"
     elif lang == 'jp':
         text = (
             f"<b>👤 個人設定</b>\n\n"
@@ -20340,6 +20447,8 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
             f"<i>(すべての画像をスポイラーで隠します)</i>\n\n"
             f"🚫 <b>AI煽り・スロップ:</b> {ai_status_jp}\n"
             f"<i>(音声・楽曲のAIローストとAIペルソナ返信を非表示にします)</i>\n\n"
+            f"🧘 <b>自己隔離モード:</b> {iso_status_jp}\n"
+            f"<i>(完全インコグニート、資産・経験値の凍結、強盗・呪い・調査からの完全免疫)</i>\n\n"
             f"🚫 <b>NGワード ({len(hidden_words)}):</b>\n"
         )
         empty_text = "<i>(リストは空です)</i>"
@@ -20348,6 +20457,7 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
         btn_back = "🔙 戻る"
         btn_lang = "🌐 言語 / Lang"
         btn_ai = f"🤖 AI煽り: {'🚫 非表示' if ai_hidden else '👁 表示'}"
+        btn_iso = f"🧘 自己隔離: {'✅ ON' if is_isolated else '❌ OFF'}"
     else: # ru
         text = (
             f"<b>👤 Личные настройки</b>\n\n"
@@ -20355,6 +20465,8 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
             f"<i>(Скрывает все входящие картинки под спойлер)</i>\n\n"
             f"🚫 <b>AI-разъёбы / Нейрослоп:</b> {ai_status}\n"
             f"<i>(Отключает доставку автороастов треков/ГС и постов нейро-персон)</i>\n\n"
+            f"🧘 <b>Режим самоизоляции:</b> {iso_status}\n"
+            f"<i>(Полное инкогнито, заморозка опыта и шекелей, иммунитет от грабежей, порчи, досье и AI)</i>\n\n"
             f"🚫 <b>Автоскрытие ({len(hidden_words)} слов):</b>\n"
         )
         empty_text = "<i>(Список пуст)</i>"
@@ -20363,6 +20475,7 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
         btn_back = "🔙 Назад"
         btn_lang = "🌐 Язык / Lang"
         btn_ai = f"🚫 Скрыть AI-разъёбы: {'✅ ДА' if ai_hidden else '❌ НЕТ'}"
+        btn_iso = f"🧘 Самоизоляция: {'✅ ВКЛ' if is_isolated else '❌ ВЫКЛ'}"
     if hidden_words:
         words_preview = ", ".join([f"<code>{escape_html(w)}</code>" for w in hidden_words[:10]])
         text += words_preview
@@ -20372,7 +20485,7 @@ def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') 
     btn_nsfw = f"🔞 NSFW: {nsfw_status}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=btn_nsfw, callback_data="pers_nsfw_toggle"), InlineKeyboardButton(text=btn_ai, callback_data="pers_ai_toggle")],
-        [InlineKeyboardButton(text=btn_lang, callback_data="pers_lang_switch")],
+        [InlineKeyboardButton(text=btn_iso, callback_data="pers_isolation_toggle"), InlineKeyboardButton(text=btn_lang, callback_data="pers_lang_switch")],
         [InlineKeyboardButton(text=btn_add, callback_data="pers_hide_add"), InlineKeyboardButton(text=btn_del, callback_data="pers_hide_del")],
         [InlineKeyboardButton(text=btn_back, callback_data="menu_main")]
     ])
@@ -24487,6 +24600,18 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
         await message.answer(reply_text)
         await _safe_delete_user_message(message)
         return
+
+    # Проверка режима самоизоляции
+    if is_user_isolated(user_id, board_id):
+        reply_text = "🧘 You are in self-isolation. Deanon is unavailable." if lang == 'en' else "🧘 Вы находитесь в режиме самоизоляции. Пробив других анонов недоступен."
+        await message.answer(reply_text)
+        await _safe_delete_user_message(message)
+        return
+    if is_user_isolated(original_author_id, board_id):
+        reply_text = "🧘 Dossier classified: target is in self-isolation." if lang == 'en' else "🧘 <b>Досье засекречено!</b> Анон находится в режиме самоизоляции и недосягаем для деанона."
+        await message.answer(reply_text, parse_mode="HTML")
+        await _safe_delete_user_message(message)
+        return
     deanon_text = generate_deanon_info(lang=lang)
     header_text_prefix = "### DEANON ###" if lang == 'en' else "### ДЕАНОН ###"
     now_dt = datetime.now(UTC)
@@ -28075,6 +28200,12 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
     from datetime import datetime, timezone, timedelta
     from common.anon_identity import generate_anon_name
     from common.database import get_abu_fund_total
+    from abu_fund_lore import (
+        TaxReasonCategory,
+        generate_tax_notification,
+        check_milestone_events,
+        format_milestone_announcement,
+    )
 
     MSK = timezone(timedelta(hours=3))
 

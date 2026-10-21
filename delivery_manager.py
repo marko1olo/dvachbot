@@ -764,13 +764,32 @@ async def _supervise_message_worker(worker_name: str, board_id: str, bot_instanc
 
 async def message_broadcaster(bots: dict[str, Bot]):
     from common.board_config import BOARD_CONFIG
-    default_bot = bots.get('b') or next(iter(bots.values()), None)
+    main_bot = bots.get('b')
     all_boards = set(BOARD_CONFIG.keys()) | set(bots.keys())
     tasks = []
     for board_id in all_boards:
-        bot_inst = bots.get(board_id) or default_bot
-        if bot_inst:
-            tasks.append(spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_inst)))
+        # If board has a dedicated configured token, it MUST strictly use its own bot instance.
+        # NEVER substitute another board's bot (e.g. using @tgchan_chatbot for /b/),
+        # because Telegram Bot API will return 100% 403 Forbidden and wipe subscribers!
+        has_dedicated_token = bool(BOARD_CONFIG.get(board_id, {}).get('token'))
+        if has_dedicated_token:
+            bot_inst = bots.get(board_id)
+            if not bot_inst:
+                runtime_logger.warning(
+                    f"⚠️ [delivery_manager] Dedicated bot for board '{board_id}' is not active in bot pool. "
+                    f"Worker-{board_id} will NOT be started with a foreign bot to prevent 403 cross-bot bans."
+                )
+                continue
+        else:
+            # Boards without dedicated tokens share the main bot 'b'
+            bot_inst = main_bot
+            if not bot_inst:
+                runtime_logger.warning(
+                    f"⚠️ [delivery_manager] Main bot 'b' is not active. Worker-{board_id} will NOT be started."
+                )
+                continue
+
+        tasks.append(spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_inst)))
     # return_exceptions: падение одного супервизора не должно ронять
     # message_broadcaster целиком (иначе _run_background_task поднимет ВТОРОЙ
     # комплект воркеров поверх ещё живых первых).

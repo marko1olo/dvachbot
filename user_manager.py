@@ -116,6 +116,77 @@ async def cmd_nsfw(message: types.Message, board_id: str | None, stream: str = '
         err = "Error: Use 'on' or 'off'." if lang != 'ru' else "Ошибка: Используйте 'on' или 'off'."
         await message.answer(err)
 
+@router.message(Command("isolation", "incognito", "изоляция", "самоизоляция", "отшельник", ignore_case=True, ignore_mention=True))
+async def cmd_isolation(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Команда быстрого переключения режима самоизоляции (/isolation on / off).
+    """
+    if not board_id: return
+    args = (message.text or message.caption or "").split()
+    user_id = message.from_user.id
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    b_data = board_data[board_id]
+    if user_id not in b_data.get('user_settings', {}):
+        b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'is_isolated': False}
+    current_status = bool(b_data['user_settings'][user_id].get('is_isolated'))
+    if len(args) < 2:
+        status_str = "ON" if current_status else "OFF"
+        if lang == 'en':
+            msg = f"Current Self-Isolation status: <b>{status_str}</b>.\nUsage: <code>/isolation on</code> or <code>/isolation off</code>"
+        elif lang == 'jp':
+            msg = f"現在の自己隔離モード: <b>{status_str}</b>\n使い方: <code>/isolation on</code> または <code>/isolation off</code>"
+        else:
+            msg = f"Текущий статус режима самоизоляции: <b>{status_str}</b>.\nИспользование: <code>/isolation on</code> или <code>/isolation off</code>"
+        await message.answer(msg, parse_mode="HTML")
+        return
+    action = args[1].lower()
+    new_status = None
+    if action in ['on', 'enable', '1', 'вкл']:
+        new_status = True
+    elif action in ['off', 'disable', '0', 'выкл']:
+        new_status = False
+    if new_status is not None:
+        if new_status == current_status:
+            if lang == 'en':
+                already_msg = f"🧘 Self-isolation is already {'enabled' if current_status else 'disabled'}."
+            elif lang == 'jp':
+                already_msg = f"🧘 自己隔離モードは既に{'有効' if current_status else '無効'}です。"
+            else:
+                already_msg = f"🧘 Режим самоизоляции уже {'включен' if current_status else 'выключен'}."
+            await message.answer(already_msg)
+            return
+
+        now = time.time()
+        last_toggle = float(b_data['user_settings'][user_id].get('isolation_last_toggle') or 0.0)
+        cooldown = 86400.0  # 24 hours
+        elapsed = now - last_toggle
+        if last_toggle > 0 and elapsed < cooldown:
+            remaining = int(cooldown - elapsed)
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            if lang == 'en':
+                cd_msg = f"⏳ Self-isolation can only be toggled once every 24 hours. Available in {hours}h {minutes}m."
+            elif lang == 'jp':
+                cd_msg = f"⏳ 自己隔離モードの切り替えは24時間に1回のみ可能です。残り時間: {hours}時間{minutes}分。"
+            else:
+                cd_msg = f"⏳ Переключать режим самоизоляции можно не чаще одного раза в 24 часа. Доступно через {hours}ч {minutes}м."
+            await message.answer(cd_msg)
+            return
+
+        b_data['user_settings'][user_id]['is_isolated'] = new_status
+        b_data['user_settings'][user_id]['isolation_last_toggle'] = now
+        spawn_task(update_user_settings_db(user_id, board_id, is_isolated=1 if new_status else 0, isolation_last_toggle=now))
+        if lang == 'en':
+            reply = "🧘 Self-isolation enabled. Complete incognito, balance frozen, protected from attacks." if new_status else "🧘 Self-isolation disabled."
+        elif lang == 'jp':
+            reply = "🧘 自己隔離モードが有効化されました。" if new_status else "🧘 自己隔離モードが無効化されました。"
+        else:
+            reply = "🧘 Режим самоизоляции включен. Вы скрыты из экономики, опыт и баланс заморожены, атаки и досье заблокированы." if new_status else "🧘 Режим самоизоляции выключен. Экономика и взаимодействие доступны."
+        await message.answer(reply)
+    else:
+        err = "Error: Use 'on' or 'off'." if lang != 'ru' else "Ошибка: Используйте 'on' или 'off'."
+        await message.answer(err)
+
 @router.message(Command("settings", "настройки", "настройка", "setting", "options", "prefs", ignore_case=True, ignore_mention=True))
 async def cmd_settings(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -1432,6 +1503,19 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
     if original_author_id == 0:
         reply_text = "⚠️ System messages cannot be de-anonymized." if lang == 'en' else "⚠️ Системные сообщения нельзя деанонить."
         await message.answer(reply_text)
+        await _safe_delete_user_message(message)
+        return
+
+    # Проверка режима самоизоляции
+    user_settings = b_data.get('user_settings', {})
+    if user_settings.get(user_id, {}).get('is_isolated'):
+        reply_text = "🧘 You are in self-isolation. Deanon is unavailable." if lang == 'en' else "🧘 Вы находитесь в режиме самоизоляции. Пробив других анонов недоступен."
+        await message.answer(reply_text)
+        await _safe_delete_user_message(message)
+        return
+    if user_settings.get(original_author_id, {}).get('is_isolated'):
+        reply_text = "🧘 Dossier classified: target is in self-isolation." if lang == 'en' else "🧘 <b>Досье засекречено!</b> Анон находится в режиме самоизоляции и недосягаем для деанона."
+        await message.answer(reply_text, parse_mode="HTML")
         await _safe_delete_user_message(message)
         return
     deanon_text = generate_deanon_info(lang=lang)

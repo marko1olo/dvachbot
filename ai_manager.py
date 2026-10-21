@@ -931,7 +931,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
 
         b_data = getattr(shared_state, 'board_data', {}).get(board_id, {})
         author_settings = b_data.get('user_settings', {}).get(author_id, {}) if author_id else {}
-        author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop'))
+        author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop') or author_settings.get('is_isolated'))
 
         # Определяем target_msg_id для точного ответа на пост автора в чате
         target_msg_id = None
@@ -2311,7 +2311,7 @@ async def handle_music_roast_batch(
         author_id = getattr(getattr(lead_msg, 'from_user', None), 'id', None) or (lead_msg.chat.id if getattr(lead_msg, 'chat', None) else 0)
         b_data = getattr(shared_state, 'board_data', {}).get(board_id, {})
         author_settings = b_data.get('user_settings', {}).get(author_id, {}) if author_id else {}
-        author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop'))
+        author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop') or author_settings.get('is_isolated'))
 
         if author_id:
             try:

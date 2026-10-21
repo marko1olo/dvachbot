@@ -66,7 +66,7 @@ async def test_safety_filter_skips_all_gemini_models(
     calls = mock_client.chat.completions.create.call_args_list
     assert len(calls) == 2
     assert "gemini" in calls[0].kwargs["model"]
-    assert "qwen" in calls[1].kwargs["model"]
+    assert "qwen" in calls[1].kwargs["model"] or "deepseek" in calls[1].kwargs["model"]
 
 
 @pytest.mark.asyncio

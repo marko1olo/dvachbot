@@ -157,6 +157,8 @@ async def _create_tables(db):
             referrals_count INTEGER DEFAULT 0,
             posts_count INTEGER DEFAULT 0,
             last_failed_amount REAL DEFAULT 0,
+            is_isolated INTEGER DEFAULT 0,
+            isolation_last_toggle REAL DEFAULT 0,
             PRIMARY KEY (user_id, board_id),
             FOREIGN KEY (board_id) REFERENCES Boards(board_id)
         );
@@ -777,6 +779,14 @@ async def _apply_migrations(db):
         try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN disable_ai_roasts INTEGER DEFAULT 0;")
             print("✅ Migrated: Added disable_ai_roasts to Users.")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("ALTER TABLE Users ADD COLUMN is_isolated INTEGER DEFAULT 0;")
+            print("✅ Migrated: Added is_isolated to Users.")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("ALTER TABLE Users ADD COLUMN isolation_last_toggle REAL DEFAULT 0;")
+            print("✅ Migrated: Added isolation_last_toggle to Users.")
         except aiosqlite.OperationalError: pass
         try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN role TEXT DEFAULT 'user';")
@@ -1455,7 +1465,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
     state_data = {
         'board_data': defaultdict(lambda: {
             'users': {'active': set(), 'banned': set()},
-            'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}),
+            'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'is_isolated': False, 'isolation_last_toggle': 0.0}),
             'shadow_mutes': {},
             'mutes': {},
             'threads_data': {},
@@ -1489,9 +1499,9 @@ async def load_state_from_db(thread_boards: set) -> dict:
 
             print("  > Загрузка пользователей...")
             try:
-                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media, disable_ai_roasts FROM Users WHERE user_id > 0") as cursor:
+                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media, disable_ai_roasts, COALESCE(is_isolated, 0), COALESCE(isolation_last_toggle, 0.0) FROM Users WHERE user_id > 0 AND user_id NOT IN (777000, 1087968824, 136817688)") as cursor:
                     async for row in cursor:
-                        user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media, s_lie, d_ai = row
+                        user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media, s_lie, d_ai, is_iso, iso_toggle = row
                         if status == 'active':
                             state_data['board_data'][board_id]['users']['active'].add(user_id)
                         elif status == 'banned':
@@ -1514,11 +1524,13 @@ async def load_state_from_db(thread_boards: set) -> dict:
                             'shadow_media': bool(s_media),
                             'lie_media': bool(s_lie),
                             'disable_ai_roasts': bool(d_ai),
-                            'hide_ai_slop': bool(d_ai)
+                            'hide_ai_slop': bool(d_ai),
+                            'is_isolated': bool(is_iso),
+                            'isolation_last_toggle': float(iso_toggle or 0.0)
                         }
             except Exception:
                 # Fallback для старой схемы (на всякий случай)
-                async with db.execute("SELECT user_id, board_id, status, location FROM Users WHERE user_id > 0") as cursor:
+                async with db.execute("SELECT user_id, board_id, status, location FROM Users WHERE user_id > 0 AND user_id NOT IN (777000, 1087968824, 136817688)") as cursor:
                      async for row in cursor:
                         user_id, board_id, status, location = row
                         if status == 'active':
@@ -1679,7 +1691,8 @@ async def load_state_from_db(thread_boards: set) -> dict:
     return state_data
 async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None, hidden_words: list = None,
                                   shadow_gif: int = None, shadow_sticker: int = None, shadow_media: int = None,
-                                  lie_media: int = None, disable_ai_roasts: int = None, hide_ai_slop: int = None):
+                                  lie_media: int = None, disable_ai_roasts: int = None, hide_ai_slop: int = None,
+                                  is_isolated: int = None, isolation_last_toggle: float = None):
     """
     Обновляет настройки пользователя.
     Использует явные транзакции и глобальный лок.
@@ -1714,6 +1727,10 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                     await db.execute("UPDATE Users SET lie_media = ? WHERE user_id = ? AND board_id = ?", (lie_media, user_id, board_id))
                 if disable_ai_roasts is not None:
                     await db.execute("UPDATE Users SET disable_ai_roasts = ? WHERE user_id = ? AND board_id = ?", (disable_ai_roasts, user_id, board_id))
+                if is_isolated is not None:
+                    await db.execute("UPDATE Users SET is_isolated = ? WHERE user_id = ? AND board_id = ?", (is_isolated, user_id, board_id))
+                if isolation_last_toggle is not None:
+                    await db.execute("UPDATE Users SET isolation_last_toggle = ? WHERE user_id = ? AND board_id = ?", (isolation_last_toggle, user_id, board_id))
 
                 await db.execute("COMMIT")
                 return
@@ -1779,11 +1796,16 @@ async def update_board_settings(board_id: str, updates: dict):
                 print(f"⛔ Ошибка обновления настроек доски {board_id}: {e}")
                 break
 
+TELEGRAM_SERVICE_BOT_IDS = {777000, 1087968824, 136817688}
+
 async def add_or_activate_user(user_id: int, board_id: str):
     """
     Добавляет нового пользователя или активирует существующего.
     Использует явные транзакции и глобальный лок.
     """
+    if user_id <= 0 or user_id in TELEGRAM_SERVICE_BOT_IDS:
+        return
+
     from common.db_pool import get_pool, db_lock
     from common.anon_identity import get_referral_code
 
@@ -2114,6 +2136,12 @@ async def create_post(
                             (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
                         ) as cursor:
                             post_num = cursor.lastrowid
+
+                        if author_id and author_id > 0:
+                            await db.execute(
+                                "UPDATE Users SET posts_count = posts_count + 1 WHERE user_id = ? AND board_id = ?",
+                                (author_id, board_id)
+                            )
 
                         if file_owners:
                             await db.executemany(

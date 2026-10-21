@@ -798,24 +798,49 @@ class MessageBroadcaster:
                 self.content_for_common.pop("voice_bytes", None)
 
     async def _remove_blocked_users(self):
-        if self.blocked_users:
-            users_to_remove_db = []
-            for uid in self.blocked_users:
-                if uid in self.b_data['users']['active']:
-                    self.b_data['users']['active'].discard(uid)
-                    users_to_remove_db.append(uid)
+        if not self.blocked_users:
+            return
 
-            purge_fn = getattr(main, "purge_users_from_board_ram", None)
-            freed = await purge_fn(self.board_id, users_to_remove_db) if purge_fn else 0
+        # CIRCUIT BREAKER & SAFETY GUARDS:
+        # 1. Bot identity check: verify this bot is actually authorized for this board
+        from common.board_config import BOARD_CONFIG
+        board_token = BOARD_CONFIG.get(self.board_id, {}).get("token") or BOARD_CONFIG.get("b", {}).get("token")
+        current_token = getattr(self.bot_instance, "token", None)
+        if board_token and current_token and current_token != board_token:
+            runtime_logger.critical(
+                f"🚨 [CIRCUIT BREAKER] Suppressed user removal on '{self.board_id}': "
+                f"bot token mismatch (broadcast used foreign bot). No users will be removed!"
+            )
+            return
 
-            if users_to_remove_db:
-                from common.database import remove_users_from_board_batch
-                await remove_users_from_board_batch(users_to_remove_db, self.board_id)
+        # 2. Anomaly limit: If more than 25 users or > 10% of active users are flagged as blocked in a single broadcast,
+        # it is almost certainly a Telegram API outage or network anomaly, NOT a genuine mass block.
+        active_count = len(self.b_data.get('users', {}).get('active', set()))
+        threshold = max(25, int(active_count * 0.10))
+        if len(self.blocked_users) > threshold:
+            runtime_logger.critical(
+                f"🚨 [CIRCUIT BREAKER] Suppressed mass removal of {len(self.blocked_users)} users on '{self.board_id}' "
+                f"(threshold: {threshold}, active: {active_count}). Potential network/token issue!"
+            )
+            return
 
-            if freed > 0:
-                runtime_logger.debug(
-                    f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} заблокировавших пользователей. Освобождено RAM: {freed}."
-                )
+        users_to_remove_db = []
+        for uid in self.blocked_users:
+            if uid in self.b_data['users']['active']:
+                self.b_data['users']['active'].discard(uid)
+                users_to_remove_db.append(uid)
+
+        purge_fn = getattr(main, "purge_users_from_board_ram", None)
+        freed = await purge_fn(self.board_id, users_to_remove_db) if purge_fn else 0
+
+        if users_to_remove_db:
+            from common.database import remove_users_from_board_batch
+            await remove_users_from_board_batch(users_to_remove_db, self.board_id)
+
+        if freed > 0:
+            runtime_logger.debug(
+                f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} заблокировавших пользователей. Освобождено RAM: {freed}."
+            )
 
     async def _send_one_guarded(self, uid: int, timeout_sec: float = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC):
         is_album = (self.content.get("type") == "media_group")
@@ -1340,27 +1365,31 @@ class MessageBroadcaster:
                                 self.content['file_id'] = fid
                                 self.content_for_common['file_id'] = fid
                         text_parts = split_text(full_text, 4096)
+                        sent_text_msgs = []
                         try:
                             for part in text_parts:
-                                await self.bot_instance.send_message(
+                                txt_m = await self.bot_instance.send_message(
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=media_msg.message_id,
                                     disable_notification=is_sage,
                                     link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
                                     request_timeout=request_timeout,
                                 )
+                                if txt_m:
+                                    sent_text_msgs.append(txt_m)
                         except TelegramBadRequest as e:
                             if _telegram_parse_error(e.message.lower()):
-                                await _send_plain_text_parts(
+                                fb_res = await _send_plain_text_parts(
                                     "telegram_rejected_html_after_media",
                                     _plain_delivery_text(),
                                     reply_to_id=media_msg.message_id,
                                     include_keyboard=False,
                                 )
-                                return media_msg
+                                fb_list = fb_res if isinstance(fb_res, list) else ([fb_res] if fb_res else [])
+                                return [media_msg] + fb_list
                             raise
                         self.stats['success'] += 1
-                        return media_msg
+                        return [media_msg] + sent_text_msgs
                     else:
                         common_kwargs['caption'] = full_text
                         common_kwargs['parse_mode'] = "HTML"
@@ -1626,7 +1655,7 @@ class MessageBroadcaster:
                 if "message to be replied not found" in err_low:
                     reply_to_mid = None
                     continue
-                elif "chat not found" in err_low or "user not found" in err_low or "blocked" in err_low:
+                elif "chat not found" in err_low or "user not found" in err_low or "bot was blocked by the user" in err_low or "user is deactivated" in err_low or "bot_to_bot" in err_low or "user_bot_to_bot_disabled" in err_low or "group chat was deactivated" in err_low:
                     raise TelegramForbiddenError(method=e.method, message=e.message)
                 elif "flood control" in err_low or "retry after" in err_low:
                     wait_sec = int(re.search(r'\d+', e.message).group()) if re.search(r'\d+', e.message) else 15
@@ -1772,16 +1801,19 @@ class MessageBroadcaster:
                                 except Exception:
                                     pass
                                 text_parts = split_text(full_text, 4096)
+                                sent_text_msgs = []
                                 for part in text_parts:
-                                    await self.bot_instance.send_message(
+                                    txt_m = await self.bot_instance.send_message(
                                         chat_id=uid, text=part, parse_mode="HTML",
                                         reply_to_message_id=media_msg.message_id,
                                         disable_notification=is_sage,
                                         link_preview_options=LinkPreviewOptions(is_disabled=True),
                                         request_timeout=request_timeout,
                                     )
+                                    if txt_m:
+                                        sent_text_msgs.append(txt_m)
                                 self.stats['success'] += 1
-                                return media_msg
+                                return [media_msg] + sent_text_msgs
                     except Exception as dl_err:
                         runtime_logger.warning(f"⚠️ Buffer download fallback failed: {dl_err}")
                     return await _send_plain_media_fallback("bad_file_id")

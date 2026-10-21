@@ -271,7 +271,7 @@ def get_votemute_callback_token(target_id: int, post_num: int) -> str:
     return f"{get_anon_id(target_id)}_{post_num}"
 
 
-def resolve_votemute_token(token: str) -> Optional[Tuple[int, int]]:
+async def resolve_votemute_token(token: str) -> Optional[Tuple[int, int]]:
     """
     Resolves callback token '<anon_tag>_<post_num>' back to (target_id, post_num)
     by scanning active_votemutes for a matching entry.
@@ -288,11 +288,36 @@ def resolve_votemute_token(token: str) -> Optional[Tuple[int, int]]:
     except (ValueError, IndexError):
         return None
 
-    for vm in active_votemutes.values():
+    for vm in list(active_votemutes.values()):
         t_id = vm.get("target_id")
         p_num = vm.get("post_num")
-        if p_num == post_num and t_id and get_anon_id(t_id) == anon_tag:
+        if p_num == post_num and t_id and (get_anon_id(t_id) == anon_tag or anon_tag in (get_anon_id(t_id, "ru"), get_anon_id(t_id, "en"))):
             return t_id, post_num
+
+    # 2. Resilient DB fallback: recover from Posts table if bot was restarted
+    try:
+        from common.database import get_post_by_num
+        db_post = await get_post_by_num(post_num)
+        if db_post:
+            t_id = db_post.get("author_id")
+            if t_id and (get_anon_id(t_id) == anon_tag or anon_tag in (get_anon_id(t_id, "ru"), get_anon_id(t_id, "en"))):
+                vm_key = generate_votemute_key(t_id, post_num)
+                async with votemute_lock:
+                    if vm_key not in active_votemutes:
+                        active_votemutes[vm_key] = {
+                            "key": vm_key,
+                            "board_id": db_post.get("board_id", "b"),
+                            "target_id": t_id,
+                            "post_num": post_num,
+                            "created_ts": db_post.get("timestamp", time.time()),
+                            "voters": set(),
+                            "executed": False,
+                            "broadcast_msgs": []
+                        }
+                return t_id, post_num
+    except Exception as e:
+        logger.warning(f"Error in DB fallback for resolve_votemute_token: {e}")
+
     return None
 
 
@@ -762,7 +787,7 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
     token = callback.data.split(":", 1)[1]
 
     # Resolve opaque token -> (target_id, post_num)
-    ids = resolve_votemute_token(token)
+    ids = await resolve_votemute_token(token)
     if not ids:
         await callback.answer("⏳ Срок действия этого голосования истек.", show_alert=True)
         return
@@ -795,9 +820,18 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
     new_kb = get_votemute_keyboard(target_id, post_num, current_votes, executed)
 
     try:
-        await callback.message.edit_text(new_text, reply_markup=new_kb, parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
+        if callback.message:
+            if callback.message.caption is not None or callback.message.photo:
+                await callback.message.edit_caption(caption=new_text, reply_markup=new_kb, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(text=new_text, reply_markup=new_kb, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                if callback.message:
+                    await callback.message.edit_reply_markup(reply_markup=new_kb)
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"Error updating votemute message card: {e}")
 
@@ -811,13 +845,22 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
                     if callback.message and chat_id == callback.message.chat.id and msg_id == callback.message.message_id:
                         continue
                     try:
-                        await callback.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=msg_id,
-                            text=new_text,
-                            reply_markup=new_kb,
-                            parse_mode="HTML"
-                        )
+                        try:
+                            await callback.bot.edit_message_caption(
+                                chat_id=chat_id,
+                                message_id=msg_id,
+                                caption=new_text,
+                                reply_markup=new_kb,
+                                parse_mode="HTML"
+                            )
+                        except TelegramBadRequest:
+                            await callback.bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=msg_id,
+                                text=new_text,
+                                reply_markup=new_kb,
+                                parse_mode="HTML"
+                            )
                     except Exception:
                         pass
             asyncio.create_task(_update_broadcast_cards())

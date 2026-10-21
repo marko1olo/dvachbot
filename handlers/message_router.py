@@ -779,9 +779,9 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         if content_to_save:
             await update_post_content(post_num, content_to_save)
 
-        # Публикация в канал «Лучшее» при достижении порога лайков (3+ для /b/, 2+ для малых досок)
+        # Публикация в канал «Лучшее» при достижении порога лайков (4+ для /b/, 3+ для малых досок)
         from shared_state import LIKES_THRESHOLD
-        best_threshold = 2 if board_id and board_id not in ('b',) else LIKES_THRESHOLD
+        best_threshold = 3 if board_id and board_id not in ('b',) else LIKES_THRESHOLD
         if current_positive_count >= best_threshold and not is_already_best:
             final_bot = bot_instance if bot_instance else reaction.bot
             if final_bot:

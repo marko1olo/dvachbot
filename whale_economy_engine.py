@@ -687,6 +687,12 @@ async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
 
             for row in rich_users:
                 uid = row[0]
+                # Режим самоизоляции: накопленный капитал заморожен/зарезервирован, налог не взимается
+                async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (uid,)) as iso_c:
+                    iso_row = await iso_c.fetchone()
+                    if iso_row and iso_row[0]:
+                        continue
+
                 wallet_bal = float(row[1] or 0.0)
                 bank_bal = float(row[2] or 0.0)
                 total_bal = float(row[3] or 0.0)
@@ -791,14 +797,23 @@ async def execute_oligarch_raid(
     qualified_voters = []
 
     for vid in unique_voters:
+        # Изолированные пользователи не могут участвовать в рейдах ОБЭП
+        async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (vid,)) as iso_c:
+            iso_row = await iso_c.fetchone()
+            if iso_row and iso_row[0]:
+                continue
         bal = await get_user_global_balance(db, vid)
-        # Check posts count from Users table
-        async with db.execute(
-            "SELECT COALESCE(MAX(posts_count), 0) FROM Users WHERE user_id = ?",
-            (vid,)
-        ) as c:
-            p_row = await c.fetchone()
-            posts = p_row[0] if p_row else 0
+        # Check posts count from Users table (summed across boards)
+        posts = 0
+        try:
+            async with db.execute(
+                "SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?",
+                (vid,)
+            ) as c:
+                p_row = await c.fetchone()
+                posts = p_row[0] if p_row else 0
+        except Exception:
+            posts = 0
 
         # Fallback to Posts table count if Users.posts_count is not populated
         if posts < 25:
@@ -846,6 +861,7 @@ async def execute_oligarch_raid(
                         FROM (SELECT user_id FROM Users UNION SELECT user_id FROM BankDeposits WHERE status = 'active') u
                         LEFT JOIN w ON u.user_id = w.user_id
                         LEFT JOIN b ON u.user_id = b.user_id
+                        WHERE u.user_id NOT IN (SELECT user_id FROM Users WHERE is_isolated = 1)
                         ORDER BY total_wealth DESC
                         LIMIT 1
                     """
@@ -853,6 +869,7 @@ async def execute_oligarch_raid(
                     query = """
                         SELECT user_id, SUM(balance) as total_wealth
                         FROM Users
+                        WHERE is_isolated = 0 OR is_isolated IS NULL
                         GROUP BY user_id
                         ORDER BY total_wealth DESC
                         LIMIT 1
@@ -877,6 +894,12 @@ async def execute_oligarch_raid(
             total_oligarch_wealth = round(oligarch_wallet + oligarch_bank, 2)
             if total_oligarch_wealth <= 5000:
                 return {"ok": False, "error": "Цель не является олигархом (суммарный капитал <= 5 000 ₪)."}
+
+            # Проверка режима самоизоляции цели
+            async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (target_id,)) as iso_c:
+                iso_row = await iso_c.fetchone()
+                if iso_row and iso_row[0]:
+                    return {"ok": False, "error": "Цель находится в режиме самоизоляции и защищена от раскулачивания."}
 
             # 3. Check target defensive gear in active_items
             async with db.execute(

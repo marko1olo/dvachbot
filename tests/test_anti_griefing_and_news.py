@@ -37,16 +37,16 @@ class TestAntiGriefingAndNews(unittest.IsolatedAsyncioTestCase):
     def test_escalating_combat_cooldown(self):
         attacker_id = 777222
         # 1st attack
-        cd1 = calculate_escalating_combat_cooldown(attacker_id, base_seconds=180)
-        self.assertEqual(cd1, 180)
+        cd1 = calculate_escalating_combat_cooldown(attacker_id, base_seconds=30)
+        self.assertEqual(cd1, 30)
 
-        # 2nd attack fast (< 3 min)
-        cd2 = calculate_escalating_combat_cooldown(attacker_id, base_seconds=180)
-        self.assertEqual(cd2, 360) # 2x
+        # 2nd attack fast (< 2 min)
+        cd2 = calculate_escalating_combat_cooldown(attacker_id, base_seconds=30)
+        self.assertEqual(cd2, 60) # 2x
 
         # 3rd attack fast
-        cd3 = calculate_escalating_combat_cooldown(attacker_id, base_seconds=180)
-        self.assertEqual(cd3, 720) # 4x
+        cd3 = calculate_escalating_combat_cooldown(attacker_id, base_seconds=30)
+        self.assertEqual(cd3, 90) # 3x
 
     def test_numerals_quad_and_milestones(self):
         # Normal post
