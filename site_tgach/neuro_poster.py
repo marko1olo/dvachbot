@@ -1,13 +1,14 @@
 import os
 import asyncio
-from common.http_utils import api_retry
 import logging
 import random
 import time
 import json
+import re
 import httpx
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool, google_pool
+from common.text_utils import clean_ai_thinking
 from common.database import (
     create_post,
     get_thread_by_op_post,
@@ -158,13 +159,13 @@ PERSONAS = {
     }
 }
 
-@api_retry
 async def _execute_completion(client, model, messages, max_tokens, temperature):
     return await client.chat.completions.create(
         model=model,
         messages=messages,
         max_tokens=max_tokens,
-        temperature=temperature
+        temperature=temperature,
+        timeout=30.0
     )
 
 async def _execute_groq_post(client, url: str, headers: dict, json_data: dict):
@@ -174,12 +175,23 @@ async def _execute_groq_post(client, url: str, headers: dict, json_data: dict):
 logger = logging.getLogger("neuro_poster")
 
 _PROVIDER_LAST_CALL = {"groq": 0.0, "gemini": 0.0}
-_PROVIDER_PACE_LOCK = asyncio.Lock()
+_PROVIDER_PACE_LOCK: asyncio.Lock | None = None
+
+def _get_poster_pace_lock() -> asyncio.Lock:
+    global _PROVIDER_PACE_LOCK
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _PROVIDER_PACE_LOCK is None or getattr(_PROVIDER_PACE_LOCK, "_loop", None) is not loop:
+        _PROVIDER_PACE_LOCK = asyncio.Lock()
+    return _PROVIDER_PACE_LOCK
 
 async def _throttle_poster_provider(provider: str, min_interval: float = 2.5) -> None:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return
-    async with _PROVIDER_PACE_LOCK:
+    lock = _get_poster_pace_lock()
+    async with lock:
         now = time.time()
         last = _PROVIDER_LAST_CALL.get(provider, 0.0)
         wait = min_interval - (now - last)
@@ -239,21 +251,20 @@ class NeuroManager:
                             ) as client:
                                  completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
                                  if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
-                                     content = completion.choices[0].message.content
-                                     if content:
-                                         import re
-                                         content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                         content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                         content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                         content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
-                                     return content
+                                     raw_content = completion.choices[0].message.content
+                                     if raw_content:
+                                         content = clean_ai_thinking(raw_content).strip()
+                                         if content:
+                                             return content
+                                         else:
+                                             logger.warning(f"⚠️ Groq model {target_model} returned empty text after stripping thinking.")
 
                     except Exception as e:
                         err_str = str(e)
                         if "429" in err_str or "rate limit" in err_str.lower():
                             logger.warning(f"⚠️ Groq Rate Limit via {strategy['name']}. Penalizing key...")
                             groq_pool.penalize_token(api_key, 120.0)
-                            await asyncio.sleep(2.5)
+                            await asyncio.sleep(0.01 if os.environ.get("PYTEST_CURRENT_TEST") else 2.5)
                             break
 
                         if (
@@ -284,23 +295,27 @@ class NeuroManager:
                             ) as g_client:
                                 completion = await _execute_completion(g_client, g_model, messages, max_tokens, temperature)
                                 if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
-                                    content = completion.choices[0].message.content
-                                    if content:
-                                        import re
-                                        content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                        content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                        content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
-                                        content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+                                    raw_content = completion.choices[0].message.content
+                                    if raw_content:
+                                        content = clean_ai_thinking(raw_content).strip()
                                         if content:
                                             logger.info(f"✅ Neuro-poster success via Gemini ({g_model})")
                                             return content
+                                        else:
+                                            logger.warning(f"⚠️ Gemini model {g_model} returned empty text after stripping thinking.")
                     except Exception as g_err:
                         err_str = str(g_err).lower()
-                        if "429" in err_str:
-                            google_pool.penalize_token(g_key, 60.0)
+                        if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
+                            google_pool.penalize_token(g_key, 120.0)
+                            await asyncio.sleep(0.01 if os.environ.get("PYTEST_CURRENT_TEST") else 2.5)
+                            logger.warning(f"⚠️ Gemini key rate limited (429) for {g_model}. Switching key.")
+                            break
                         elif "401" in err_str or "403" in err_str:
                             google_pool.ban_token(g_key)
-                        await asyncio.sleep(2.5)
+                            await asyncio.sleep(0.01 if os.environ.get("PYTEST_CURRENT_TEST") else 2.5)
+                            logger.warning(f"⚠️ Gemini key banned for {g_model}. Switching key.")
+                            break
+                        await asyncio.sleep(0.01 if os.environ.get("PYTEST_CURRENT_TEST") else 2.5)
                         logger.warning(f"⚠️ Gemini fallback failed for {g_model}: {g_err}")
                         continue
 
@@ -620,9 +635,13 @@ class NeuroManager:
         except Exception as e:
             logger.error(f"Fallback to summarize_text_with_hf failed: {e}", exc_info=True)
 
+        effective_dump = text_dump
+        if len(effective_dump) > 15000:
+            effective_dump = effective_dump[:3000] + "\n\n[...часть треда сокращена во избежание 413...]\n\n" + effective_dump[-12000:]
+
         messages = [
             {"role": "system", "content": system_msg},
-            {"role": "user", "content": text_dump}
+            {"role": "user", "content": effective_dump}
         ]
 
         result = await self._safe_api_call(

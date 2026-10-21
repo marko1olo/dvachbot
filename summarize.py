@@ -30,18 +30,33 @@ _IN_FLIGHT_REQUESTS: dict[str, asyncio.Future] = {}
 # Ограничиваем параллельные LLM-вызовы Персоны: строго 1 одновременно
 # Иначе 10+ конкурентных горутин дёргают все ключи одновременно и спамят 429
 _PERSONA_SEMAPHORE: asyncio.Semaphore | None = None
+_PERSONA_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
 
 def _get_persona_semaphore() -> asyncio.Semaphore:
-    global _PERSONA_SEMAPHORE
-    if _PERSONA_SEMAPHORE is None:
+    global _PERSONA_SEMAPHORE, _PERSONA_SEMAPHORE_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _PERSONA_SEMAPHORE is None or _PERSONA_SEMAPHORE_LOOP is not current_loop:
         _PERSONA_SEMAPHORE = asyncio.Semaphore(1)
+        _PERSONA_SEMAPHORE_LOOP = current_loop
     return _PERSONA_SEMAPHORE
 
 
 
 def get_shared_http_client() -> httpx.AsyncClient:
     global _SHARED_HTTP_CLIENT
-    if _SHARED_HTTP_CLIENT is None or getattr(_SHARED_HTTP_CLIENT, "is_closed", False):
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    client_loop = getattr(_SHARED_HTTP_CLIENT, "_loop", None) if _SHARED_HTTP_CLIENT is not None else None
+    if (
+        _SHARED_HTTP_CLIENT is None
+        or getattr(_SHARED_HTTP_CLIENT, "is_closed", False)
+        or (current_loop is not None and client_loop is not None and client_loop is not current_loop)
+    ):
         _SHARED_HTTP_CLIENT = httpx.AsyncClient(
             proxy=None,
             verify=False,
@@ -49,6 +64,7 @@ def get_shared_http_client() -> httpx.AsyncClient:
             trust_env=False,
             limits=httpx.Limits(max_keepalive_connections=50, max_connections=100)
         )
+        setattr(_SHARED_HTTP_CLIENT, "_loop", current_loop)
     return _SHARED_HTTP_CLIENT
 
 async def close_shared_http_client() -> None:
@@ -97,6 +113,7 @@ _CANNED_REFUSAL_MARKERS = (
 )
 
 _PROVIDER_LOCKS: dict[str, asyncio.Lock] = {}
+_PROVIDER_LOCKS_LOOP: asyncio.AbstractEventLoop | None = None
 _PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
 MIN_PROVIDER_INTERVAL: dict[str, float] = {
     "gemini": 2.5,
@@ -107,6 +124,14 @@ MIN_PROVIDER_INTERVAL: dict[str, float] = {
 }
 
 def _get_provider_lock(provider: str) -> asyncio.Lock:
+    global _PROVIDER_LOCKS, _PROVIDER_LOCKS_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _PROVIDER_LOCKS_LOOP is not current_loop:
+        _PROVIDER_LOCKS.clear()
+        _PROVIDER_LOCKS_LOOP = current_loop
     if provider not in _PROVIDER_LOCKS:
         _PROVIDER_LOCKS[provider] = asyncio.Lock()
     return _PROVIDER_LOCKS[provider]
@@ -198,7 +223,11 @@ async def _call_gemini_native_rest(
     elif last_resp.status_code != 200:
         raise RuntimeError(f"Gemini API Error {last_resp.status_code}: {last_resp.text[:150]}")
         
-    gdata = last_resp.json()
+    try:
+        gdata = last_resp.json()
+    except Exception as je:
+        raise RuntimeError(f"Gemini API returned invalid JSON: {je}")
+
     candidates = gdata.get("candidates") or []
     if not candidates:
         prompt_feedback = gdata.get("promptFeedback") or {}
@@ -215,6 +244,9 @@ async def _call_gemini_native_rest(
     text_content = ""
     for p in parts_resp:
         if isinstance(p, dict) and "text" in p:
+            # Skip Gemini internal thought/reasoning parts to prevent leaking internal CoT
+            if p.get("thought") is True:
+                continue
             text_content += p["text"]
     text_content = text_content.strip() or None
     
@@ -251,11 +283,17 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
         # If another concurrent coroutine is already generating this exact response, await its result
         in_flight_fut = _IN_FLIGHT_REQUESTS.get(cache_key)
         if in_flight_fut is not None and not in_flight_fut.done():
-            logger.info(f"⚡ [Single-Flight Coalesce] Awaiting in-flight request for {model_preference or 'default'} (key={cache_key[:8]}).")
             try:
-                return await asyncio.shield(in_flight_fut)
-            except Exception as e:
-                logger.debug(f"In-flight request join error: {e}")
+                fut_loop = in_flight_fut.get_loop()
+                cur_loop = asyncio.get_running_loop()
+            except Exception:
+                fut_loop, cur_loop = None, None
+            if fut_loop is cur_loop and fut_loop is not None:
+                logger.info(f"⚡ [Single-Flight Coalesce] Awaiting in-flight request for {model_preference or 'default'} (key={cache_key[:8]}).")
+                try:
+                    return await asyncio.shield(in_flight_fut)
+                except Exception as e:
+                    logger.debug(f"In-flight request join error: {e}")
 
     my_fut = None
     if cache_key and not in_test:
@@ -280,6 +318,23 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
                 raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
         else:
             raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
+
+        # Unwrap accidental JSON wrapper for standard summaries (not persona)
+        if raw_res and model_preference not in ("persona", "persona_gemini") and not raw_res.startswith("Нейронка сдохла"):
+            trimmed_res = raw_res.strip()
+            if trimmed_res.startswith("```"):
+                lines = trimmed_res.splitlines()
+                if len(lines) >= 2 and lines[-1].strip().startswith("```"):
+                    trimmed_res = "\n".join(lines[1:-1]).strip()
+            if trimmed_res.startswith("{") and trimmed_res.endswith("}"):
+                try:
+                    data = json.loads(trimmed_res)
+                    if isinstance(data, dict):
+                        extracted = data.get("text") or data.get("summary") or data.get("response") or data.get("content")
+                        if extracted and isinstance(extracted, str):
+                            raw_res = extracted
+                except Exception:
+                    pass
 
         # CASCADE FALLBACK: If LLMs failed completely or returned error
         if not raw_res or raw_res.startswith("Нейронка сдохла"):
@@ -1036,8 +1091,15 @@ def _create_telegraph_page_blocking(title: str, html_content: str, author: str =
     if not token:
         raise RuntimeError("API token is required")
 
-    # Defensive check: unwrap accidental raw JSON responses from model
+    if not html_content or not html_content.strip():
+        html_content = "<i>(Пустой текст)</i>"
+
+    # Defensive check: unwrap accidental raw JSON responses from model (including markdown fenced)
     trimmed = html_content.strip()
+    if trimmed.startswith("```"):
+        lines = trimmed.splitlines()
+        if len(lines) >= 2 and lines[-1].strip().startswith("```"):
+            trimmed = "\n".join(lines[1:-1]).strip()
     if trimmed.startswith("{") and trimmed.endswith("}"):
         try:
             data = json.loads(trimmed)

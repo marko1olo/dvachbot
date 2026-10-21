@@ -146,6 +146,25 @@ def is_audio_media(file_type: str = None, mime_type: str = None, filename: str =
 
     return False
 
+
+def is_safe_url(url: str) -> bool:
+    """Validates URL to protect against SSRF and intranet scans."""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower().strip()
+        if not hostname:
+            return False
+        if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"):
+            return False
+        if hostname.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")):
+            return False
+        return True
+    except Exception:
+        return False
+
 # Оптимизированные таймауты скачивания:
 # get_file — легкий JSON-запрос метаданных (до 6 секунд).
 # download_file — скачивание потока байт файла (до 15 секунд).
@@ -676,6 +695,9 @@ async def download_file_with_fallback(file_id: str, primary_bot=None) -> tuple[b
 
     # Если file_id это прямой HTTP URL
     if str(file_id).startswith(("http://", "https://")):
+        if not is_safe_url(str(file_id)):
+            logger.warning(f"🚨 [TAGGER] Blocked unsafe/SSRF URL: {str(file_id)[:40]}")
+            return None, None, "failed"
         try:
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
                 resp = await client.get(file_id)
@@ -767,17 +789,17 @@ async def download_file_with_fallback(file_id: str, primary_bot=None) -> tuple[b
         from common.database import get_file_mirrors
         mirrors = await get_file_mirrors(file_id)
         if mirrors and isinstance(mirrors, dict):
-            for m_type in ['catbox', 'pixhost', 'huggingface', '0x0', 'imgbb']:
-                m_url = mirrors.get(m_type)
-                if m_url and isinstance(m_url, str) and m_url.startswith(("http://", "https://")):
-                    try:
-                        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as http_c:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as http_c:
+                for m_type in ['catbox', 'pixhost', 'huggingface', '0x0', 'imgbb']:
+                    m_url = mirrors.get(m_type)
+                    if m_url and isinstance(m_url, str) and is_safe_url(m_url):
+                        try:
                             resp = await http_c.get(m_url)
                             if resp.status_code == 200 and resp.content:
                                 logger.info(f"🌐 [TAGGER] Recovered media {file_id[:15]} from mirror {m_type}")
                                 return resp.content, None, "ok"
-                    except Exception:
-                        continue
+                        except Exception:
+                            continue
     except Exception:
         pass
 
@@ -1136,20 +1158,33 @@ async def tagging_loop():
                         tags = None  # Force retry
                     elif ai_response == "error_file_invalid":
                         tags = "error_no_tags"  # Permanent failure
-                    elif ai_response and ai_response.startswith("{"):
+                    elif ai_response:
                         import json
-                        try:
-                            parsed = json.loads(ai_response)
-                            raw_t = parsed.get("tags", "")
-                            if isinstance(raw_t, list):
-                                tags = ", ".join(str(t).strip() for t in raw_t if t)
-                            else:
-                                tags = str(raw_t or "").strip()
-                            if tags == "parse_error":
-                                tags = "media, photo"
-                            description = str(parsed.get("description", "")).strip()
-                        except json.JSONDecodeError:
-                            tags = ai_response
+                        stripped = ai_response.strip()
+                        # Strip markdown fences if present
+                        if stripped.startswith("```"):
+                            lines = stripped.splitlines()
+                            if len(lines) >= 2 and lines[-1].strip().startswith("```"):
+                                stripped = "\n".join(lines[1:-1]).strip()
+                        # Extract and parse JSON object if present
+                        s_idx = stripped.find("{")
+                        e_idx = stripped.rfind("}")
+                        if s_idx != -1 and e_idx != -1 and e_idx > s_idx:
+                            try:
+                                parsed = json.loads(stripped[s_idx:e_idx+1])
+                                if isinstance(parsed, dict):
+                                    raw_t = parsed.get("tags", "")
+                                    if isinstance(raw_t, list):
+                                        tags = ", ".join(str(t).strip() for t in raw_t if t)
+                                    else:
+                                        tags = str(raw_t or "").strip()
+                                    if tags == "parse_error":
+                                        tags = "media, photo"
+                                    description = str(parsed.get("description", "")).strip()
+                            except Exception:
+                                tags = stripped
+                        else:
+                            tags = stripped
 
                 if tags is not None and file_id in TEMP_FAILED_FILES:
                     del TEMP_FAILED_FILES[file_id]
