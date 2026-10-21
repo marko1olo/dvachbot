@@ -84,7 +84,13 @@ def _queue_item_can_be_durable(item: dict) -> bool:
         return False
     if _contains_volatile_payload(content):
         return False
-    return bool(item.get("post_num")) and bool(_durable_recipients_from_item(item))
+    try:
+        p_num = int(item.get("post_num") or 0)
+        if p_num <= 0:
+            return False
+    except (ValueError, TypeError):
+        return False
+    return bool(_durable_recipients_from_item(item))
 
 
 
@@ -183,6 +189,24 @@ PASSIVE_MAX_PREEMPTIONS = BOT_PASSIVE_MAX_PREEMPTIONS
 cumulative_post_metrics = defaultdict(lambda: {
     'success': 0, 'priority': 0, 'passive': 0, 'errors': 0, 'blocks': 0, 'start_time': 0, 'total': 0
 })
+
+def prune_stale_cumulative_post_metrics(max_age_sec: float = 3600.0, max_keep: int = 500):
+    if len(cumulative_post_metrics) <= max_keep:
+        return
+    now = time.time()
+    stale = [
+        k for k, v in list(cumulative_post_metrics.items())
+        if now - v.get('start_time', now) > max_age_sec
+    ]
+    for k in stale:
+        cumulative_post_metrics.pop(k, None)
+    if len(cumulative_post_metrics) > max_keep:
+        sorted_keys = sorted(
+            cumulative_post_metrics.keys(),
+            key=lambda k: cumulative_post_metrics[k].get('start_time', 0)
+        )
+        for k in sorted_keys[:len(cumulative_post_metrics) - max_keep]:
+            cumulative_post_metrics.pop(k, None)
 # ENABLE_MULTILANG is canonical in shared_state.py (imported via *)
 RE_YOU_PATTERN = re.compile(r'>>(\d+)')
 
@@ -922,6 +946,7 @@ class MessageDeliveryTask:
         budget_deferred_count = 0
         delivered_now_count = 0
         # Initialize cumulative delivery metrics before send to accurately account for durable restore prior deliveries
+        prune_stale_cumulative_post_metrics()
         post_key = (self.board_id, self.post_num)
         cum = cumulative_post_metrics[post_key]
         if not cum['start_time']:

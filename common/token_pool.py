@@ -6,11 +6,13 @@ import asyncio
 from pathlib import Path
 
 
+import re
+
 def _clean_and_dedup_keys(*sources: str | list | tuple | set | None) -> list[str]:
     """
     Чистит, нормализует и строго дедуплицирует список API-ключей,
     сохраняя порядок первого появления.
-    Удаляет лишние пробелы, кавычки и комментарии.
+    Удаляет лишние пробелы, кавычки, переводы строк и комментарии.
     """
     seen = set()
     result = []
@@ -18,7 +20,7 @@ def _clean_and_dedup_keys(*sources: str | list | tuple | set | None) -> list[str
         if not src:
             continue
         if isinstance(src, str):
-            items = src.split(',')
+            items = re.split(r'[,;\n\r]+', src)
         elif isinstance(src, (list, tuple, set)):
             items = src
         else:
@@ -34,6 +36,7 @@ def _clean_and_dedup_keys(*sources: str | list | tuple | set | None) -> list[str
 def _load_env_keys(env_vars: list[str], extra_files: list[str] = None) -> list[str]:
     """
     Загружает ключи из указанных файлов и переменных окружения, дедуплицируя их.
+    Поддерживает синтаксис 'export VAR=...', 'VAR = ...', комментарии и переводы строк.
     """
     collected = []
     if extra_files:
@@ -44,10 +47,15 @@ def _load_env_keys(env_vars: list[str], extra_files: list[str] = None) -> list[s
                 try:
                     with open(fpath, "r", encoding="utf-8") as f:
                         for line in f:
-                            line = line.strip()
+                            raw_line = line.strip()
+                            if not raw_line or raw_line.startswith("#"):
+                                continue
+                            if raw_line.startswith("export "):
+                                raw_line = raw_line[7:].strip()
                             for var in env_vars:
-                                if line.startswith(f"{var}="):
-                                    val = line.split("=", 1)[1].strip()
+                                prefix = f"{var}="
+                                if raw_line.startswith(prefix) or (raw_line.startswith(var) and "=" in raw_line and raw_line.split("=", 1)[0].strip() == var):
+                                    val = raw_line.split("=", 1)[1].strip()
                                     collected.append(val)
                 except Exception:
                     pass
@@ -65,8 +73,9 @@ class TokenRotator:
     Потокобезопасный и асинхронный ротатор API-ключей (Round-Robin) с:
     - строгой дедупликацией
     - защитой от спама (минимальный интервал между вызовами одного и того же ключа)
-    - временным штрафом при ошибках (429 Rate Limit)
-    - перманентным баном при 401/403
+    - временным штрафом при ошибках (429 Rate Limit) с сортировкой по скорейшему выходу из кулдауна
+    - перманентным баном при 401/403 и возможностью явного разбана (unban_token)
+    - очисткой устаревшего состояния и автоматическим разбаном при явном обновлении set_tokens
     """
     def __init__(self, raw: str | list[str] = "", min_interval: float = 2.5, name: str = "TokenPool"):
         self.name = name
@@ -78,33 +87,66 @@ class TokenRotator:
         self._cooldown_until: dict[str, float] = {}
         self._banned: set[str] = set()
 
+    @staticmethod
+    def _clean_token_str(token: str) -> str:
+        return str(token or "").strip().strip('"\'')
+
     def set_tokens(self, raw: str | list[str]):
         with self._lock:
-            self.tokens = _clean_and_dedup_keys(raw)
+            new_tokens = _clean_and_dedup_keys(raw)
+            # Если ключи явно переданы заново (например, админ обновил .env), снимаем бан с переданных
+            for tok in new_tokens:
+                self._banned.discard(tok)
+            self.tokens = new_tokens
             if self._index >= len(self.tokens):
                 self._index = 0
+            # Очистка устаревших кулдаунов токенов, которых больше нет в пуле
+            valid_set = set(self.tokens)
+            self._cooldown_until = {k: v for k, v in self._cooldown_until.items() if k in valid_set}
+            self._last_used = {k: v for k, v in self._last_used.items() if k in valid_set}
 
     def add_token(self, token: str):
         with self._lock:
-            clean = token.strip().strip('"\'')
+            clean = self._clean_token_str(token)
             if clean and clean not in self.tokens and clean not in self._banned:
                 self.tokens.append(clean)
 
     def remove_token(self, token: str):
         with self._lock:
-            if token in self.tokens:
-                self.tokens.remove(token)
-            self._banned.add(token)
+            clean = self._clean_token_str(token)
+            if clean in self.tokens:
+                self.tokens.remove(clean)
+            self._banned.add(clean)
+            self._cooldown_until.pop(clean, None)
+            self._last_used.pop(clean, None)
             if self._index >= len(self.tokens):
                 self._index = 0
 
     def ban_token(self, token: str):
         self.remove_token(token)
 
+    def unban_token(self, token: str) -> bool:
+        """Снимает бан с токена и возвращает его в активный пул."""
+        with self._lock:
+            clean = self._clean_token_str(token)
+            was_banned = clean in self._banned
+            self._banned.discard(clean)
+            self._cooldown_until.pop(clean, None)
+            if clean and clean not in self.tokens:
+                self.tokens.append(clean)
+            return was_banned
+
+    def get_banned_tokens(self) -> set[str]:
+        with self._lock:
+            return set(self._banned)
+
     def penalize_token(self, token: str, duration: float = 60.0):
         """Накладывает штрафной кулдаун на ключ (например, при 429)."""
+        clean = self._clean_token_str(token)
+        if not clean:
+            return
         with self._lock:
-            self._cooldown_until[token] = time.time() + duration
+            self._cooldown_until[clean] = time.time() + float(duration)
 
     def get_token(self) -> str | None:
         """
@@ -138,7 +180,7 @@ class TokenRotator:
         Возвращает все активные дедуплицированные токены в порядке очереди.
         Автоматически сдвигает указатель (Round-Robin ротация) на каждом вызове,
         чтобы распределять нагрузку по всему пулу ключей равномерно, а не долбить первый ключ.
-        Приоритезирует токены, не находящиеся на штрафном кулдауне.
+        Приоритезирует готовые токены, а остывающие сортирует по времени скорейшего завершения кулдауна.
         """
         with self._lock:
             active = [t for t in self.tokens if t not in self._banned]
@@ -151,11 +193,12 @@ class TokenRotator:
             if ready:
                 idx = self._index % len(ready)
                 self._index = (self._index + 1) % len(ready)
-                return ready[idx:] + ready[:idx] + cooling
+                # Остывающие токены сортируем по времени до окончания кулдауна (скорейшие первыми)
+                sorted_cooling = sorted(cooling, key=lambda t: self._cooldown_until.get(t, 0.0))
+                return ready[idx:] + ready[:idx] + sorted_cooling
             else:
-                idx = self._index % len(active)
-                self._index = (self._index + 1) % len(active)
-                return active[idx:] + active[:idx]
+                # Если все в кулдауне, сортируем по времени скорейшего выхода
+                return sorted(active, key=lambda t: self._cooldown_until.get(t, 0.0))
 
     async def acquire_token_async(self, min_interval: float | None = None, max_wait: float = 15.0) -> tuple[str | None, float]:
         """
@@ -166,62 +209,60 @@ class TokenRotator:
         """
         interval = min_interval if min_interval is not None else self.min_interval
 
+        selected_token = None
+        wait_time = 0.0
+        now = time.time()
 
-        while True:
-            selected_token = None
-            wait_time = 0.0
-            now = time.time()
+        with self._lock:
+            active = [t for t in self.tokens if t not in self._banned]
+            if not active:
+                return None, 0.0
 
-            with self._lock:
-                active = [t for t in self.tokens if t not in self._banned]
-                if not active:
-                    return None, 0.0
+            # 1. Поиск готового токена без ожидания
+            for i in range(len(active)):
+                idx = (self._index + i) % len(active)
+                tok = active[idx]
+                cd = self._cooldown_until.get(tok, 0.0)
+                last_u = self._last_used.get(tok, 0.0)
 
-                # 1. Поиск готового токена без ожидания
+                if now >= cd and (now - last_u) >= interval:
+                    selected_token = tok
+                    self._index = (idx + 1) % len(active)
+                    self._last_used[tok] = now
+                    break
+
+            # 2. Если все заняты/остывают — находим токен с минимальным временем ожидания
+            if not selected_token:
+                min_delay = float('inf')
+                best_tok = None
+                best_idx = 0
                 for i in range(len(active)):
                     idx = (self._index + i) % len(active)
                     tok = active[idx]
                     cd = self._cooldown_until.get(tok, 0.0)
                     last_u = self._last_used.get(tok, 0.0)
 
-                    if now >= cd and (now - last_u) >= interval:
-                        selected_token = tok
-                        self._index = (idx + 1) % len(active)
-                        self._last_used[tok] = now
-                        break
+                    delay_cd = max(0.0, cd - now)
+                    delay_rate = max(0.0, (last_u + interval) - now)
+                    delay = max(delay_cd, delay_rate)
 
-                # 2. Если все заняты/остывают — находим токен с минимальным временем ожидания
-                if not selected_token:
-                    min_delay = float('inf')
-                    best_tok = None
-                    best_idx = 0
-                    for i in range(len(active)):
-                        idx = (self._index + i) % len(active)
-                        tok = active[idx]
-                        cd = self._cooldown_until.get(tok, 0.0)
-                        last_u = self._last_used.get(tok, 0.0)
+                    if delay < min_delay:
+                        min_delay = delay
+                        best_tok = tok
+                        best_idx = idx
 
-                        delay_cd = max(0.0, cd - now)
-                        delay_rate = max(0.0, (last_u + interval) - now)
-                        delay = max(delay_cd, delay_rate)
+                if best_tok and min_delay <= max_wait:
+                    selected_token = best_tok
+                    wait_time = min_delay
+                    self._index = (best_idx + 1) % len(active)
+                    self._last_used[best_tok] = now + wait_time
+                else:
+                    return None, 0.0
 
-                        if delay < min_delay:
-                            min_delay = delay
-                            best_tok = tok
-                            best_idx = idx
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
-                    if best_tok and min_delay <= max_wait:
-                        selected_token = best_tok
-                        wait_time = min_delay
-                        self._index = (best_idx + 1) % len(active)
-                        self._last_used[best_tok] = now + wait_time
-                    else:
-                        return None, 0.0
-
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-
-            return selected_token, wait_time
+        return selected_token, wait_time
 
 
 class HfPairRotator:

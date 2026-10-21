@@ -644,6 +644,22 @@ class MessageBroadcaster:
                         if _ids:
                             self.all_results.append((uid, _ids))
 
+            # Real-time Circuit Breaker:
+            # If blocked users exceed anomaly threshold mid-broadcast, trip immediately
+            # to protect against foreign bot tokens or widespread Telegram outages.
+            active_count = len(self.b_data.get('users', {}).get('active', set()))
+            cb_threshold = max(25, int(active_count * 0.10))
+            if len(self.blocked_users) >= cb_threshold:
+                runtime_logger.critical(
+                    f"🚨 [REAL-TIME CIRCUIT BREAKER] Broadcast on '{self.board_id}' tripped! "
+                    f"{len(self.blocked_users)} blocked users exceeded threshold {cb_threshold}. "
+                    f"Halting delivery queue immediately to protect subscribers!"
+                )
+                remaining_recipients_for_later.update(queue)
+                queue.clear()
+                interrupted_reason = "circuit_breaker_tripped"
+                break
+
             if flood_wait_seconds > 0:
                 wait_real = flood_wait_seconds + 1.0
                 if phase_deadline is not None and time.time() + wait_real + DELIVERY_PHASE_GUARD_SEC >= phase_deadline:
@@ -1652,6 +1668,11 @@ class MessageBroadcaster:
                     else:
                         runtime_logger.warning(f"⚠️ [Anti-Fat] Single media in post #{self.post_num} too big. Falling back to text.")
                         return await _send_text_fallback("file_too_big")
+                if "unauthorized" in err_low or "bot token is invalid" in err_low or "token is invalid" in err_low:
+                    runtime_logger.critical(
+                        f"🚨 [FATAL_TOKEN_ERROR] Telegram API 401 Unauthorized on '{self.board_id}'. Bot token is revoked or invalid!"
+                    )
+                    return "FATAL_ERROR_STOP"
                 if "message to be replied not found" in err_low:
                     reply_to_mid = None
                     continue
@@ -1844,7 +1865,13 @@ class MessageBroadcaster:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                if "flood" in str(e).lower() or "retry after" in str(e).lower():
+                err_s = str(e).lower()
+                if "unauthorized" in err_s or "bot token is invalid" in err_s or "token is invalid" in err_s:
+                    runtime_logger.critical(
+                        f"🚨 [FATAL_TOKEN_ERROR] Telegram API 401 Unauthorized on '{self.board_id}'. Bot token is revoked or invalid!"
+                    )
+                    return "FATAL_ERROR_STOP"
+                if "flood" in err_s or "retry after" in err_s:
                     wait_m = re.search(r'\d+', str(e))
                     wait_s = int(wait_m.group()) if wait_m else 15
                     raise TelegramRetryAfter(method="send", message=str(e), retry_after=wait_s)

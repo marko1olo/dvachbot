@@ -231,6 +231,11 @@ _user_posts_count_cache: Dict[int, Tuple[float, int]] = {}
 USER_POSTS_CACHE_TTL = 60.0
 
 def set_cached_user_posts(user_id: int, posts_count: int):
+    # Enforce upper bound on cache to prevent memory leaks from 50,000+ transient IDs
+    if len(_user_posts_count_cache) > 5000:
+        sorted_keys = sorted(_user_posts_count_cache.keys(), key=lambda k: _user_posts_count_cache[k][0])
+        for k in sorted_keys[:1000]:
+            _user_posts_count_cache.pop(k, None)
     _user_posts_count_cache[user_id] = (time.time(), int(posts_count or 0))
 
 def get_cached_user_posts(user_id: int) -> int:
@@ -1205,13 +1210,13 @@ def _check_repeats(
 
     last_items_deque = None
     if msg_type == 'text':
-        last_items_deque = b_data['last_texts'][user_id]
+        last_items_deque = b_data.setdefault('last_texts', defaultdict(deque))[user_id]
     elif msg_type == 'sticker':
-        last_items_deque = b_data['last_stickers'][user_id]
+        last_items_deque = b_data.setdefault('last_stickers', defaultdict(deque))[user_id]
     elif msg_type == 'animation':
-        last_items_deque = b_data['last_animations'][user_id]
+        last_items_deque = b_data.setdefault('last_animations', defaultdict(deque))[user_id]
     elif msg_type == 'audio':
-        last_items_deque = b_data['last_audios'][user_id]
+        last_items_deque = b_data.setdefault('last_audios', defaultdict(deque))[user_id]
 
     if last_items_deque is not None:
         now = time.time()
@@ -1284,9 +1289,11 @@ def _check_cross_board_spam(
     if not candidate_cb or candidate_cb[-1][1] != board_id:
         candidate_cb.append((now, board_id, content))
         if len(candidate_cb) >= 3:
-            boards = {b for t, b, c in candidate_cb}
-            if len(boards) >= 2 and candidate_cb[-1][0] - candidate_cb[0][0] <= CROSS_BOARD_WINDOW:
-                contents = [c for t, b, c in candidate_cb]
+            # Check the 3 most recent entries across boards (prevent bypass from older benign posts)
+            recent_3 = candidate_cb[-3:]
+            boards = {b for t, b, c in recent_3}
+            if len(boards) >= 2 and recent_3[-1][0] - recent_3[0][0] <= CROSS_BOARD_WINDOW:
+                contents = [c for t, b, c in recent_3]
                 is_duplicate = False
                 if raw_content_type == 'text' or (raw_content_type in ['photo', 'video', 'document'] and msg_type == 'text'):
                     def _fast_sim(s1, s2):
@@ -1394,8 +1401,10 @@ async def apply_shadow_mute(
     record_shadow_mute_applied(user_id)
     _user_media_burst_tracker.pop(user_id, None)
     _seen_media_groups.pop(user_id, None)
-    _user_repost_timestamps.pop(user_id, None)
-    _seen_repost_media_groups.pop(user_id, None)
+    reset_repost_tracker(user_id, board_id)
+    cross_board_spam_tracker.pop(user_id, None)
+    if board_id in _spam_trackers:
+        _spam_trackers[board_id].pop(user_id, None)
     try:
         _user_request_timestamps.pop(user_id, None)
         _user_request_timestamps.pop((user_id, board_id), None)
@@ -1806,6 +1815,30 @@ def prune_stale_spam_filter_state(now_ts: float | None = None) -> dict[str, int]
             v_map.pop(uid, None)
         clean_v_count += len(stale_v_users)
     pruned["_spam_violations"] = clean_v_count
+
+    # 12. _spam_trackers: {board_id: {user_id: [timestamps]}}
+    clean_st_count = 0
+    for b_id, u_map in list(_spam_trackers.items()):
+        stale_st_users = []
+        for uid, timestamps in list(u_map.items()):
+            u_map[uid] = [t for t in timestamps if now - t <= 60.0]
+            if not u_map[uid]:
+                stale_st_users.append(uid)
+        for uid in stale_st_users:
+            u_map.pop(uid, None)
+        clean_st_count += len(stale_st_users)
+    pruned["_spam_trackers"] = clean_st_count
+
+    # 13. cross_board_spam_tracker: {user_id: deque}
+    stale_cb_users = []
+    for uid, tracker in list(cross_board_spam_tracker.items()):
+        while tracker and (now - tracker[0][0] > CROSS_BOARD_WINDOW):
+            tracker.popleft()
+        if not tracker:
+            stale_cb_users.append(uid)
+    for uid in stale_cb_users:
+        cross_board_spam_tracker.pop(uid, None)
+    pruned["cross_board_spam_tracker"] = len(stale_cb_users)
 
     return pruned
 
