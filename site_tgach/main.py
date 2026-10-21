@@ -9474,13 +9474,16 @@ async def api_transcribe_voice(file_id: str, request: Request):
     mirrors = await get_file_mirrors(file_id)
     catbox = mirrors.get("catbox")
     if catbox:
-        try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-                resp = await client.get(catbox)
-                if resp.status_code == 200:
-                    audio_bytes = resp.content
-        except Exception as e:
-            logger.warning(f"Failed to download audio from catbox mirror: {e}")
+        if not is_safe_url(catbox):
+            logger.warning(f"🛡️ SSRF BLOCKED voice transcription mirror URL: {catbox}")
+        else:
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                    resp = await client.get(catbox)
+                    if resp.status_code == 200:
+                        audio_bytes = resp.content
+            except Exception as e:
+                logger.warning(f"Failed to download audio from catbox mirror: {e}")
 
     # Если не зазеркалено, скачиваем из телеграма
     if not audio_bytes:
@@ -10585,6 +10588,9 @@ async def _proxy_external_url(
     filename: str | None = None,
     request: Request | None = None,
 ):
+    if not is_safe_url(url):
+        logger.warning(f"🛡️ SSRF BLOCKED external proxy request: {url}")
+        raise HTTPException(status_code=400, detail="Unsafe URL")
     session = _get_shared_aiohttp_session()
     try:
         request_headers = {
@@ -10734,7 +10740,7 @@ async def get_telegram_file(
         elif full_url.startswith("https:/") and not full_url.startswith("https://"):
             full_url = "https://" + full_url[7:].lstrip("/")
         parsed = urlparse(full_url)
-        allowed_domains = {"files.catbox.moe", "i.catbox.moe", "catbox.moe", "i.ibb.co", "pixhost.to", "img.pixhost.to", "huggingface.co", "telegra.ph", "api.telegram.org"}
+        allowed_domains = {"files.catbox.moe", "i.catbox.moe", "catbox.moe", "i.ibb.co", "pixhost.to", "img.pixhost.to", "huggingface.co", "telegra.ph"}
         domain = (parsed.hostname or "").lower()
         if not any(domain == d or domain.endswith("." + d) for d in allowed_domains):
             raise HTTPException(status_code=403, detail="Redirect to untrusted external domain prohibited")

@@ -9,4 +9,7 @@ except ImportError:
     admin_env = os.getenv("ADMINS", "")
     ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()}
 
-IP_BAN_LIST = {}
+try:
+    from site_tgach.security import IP_BAN_LIST
+except ImportError:
+    IP_BAN_LIST = {}

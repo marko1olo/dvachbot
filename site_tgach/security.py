@@ -27,8 +27,12 @@ ALLOWED_IMPORT_DOMAINS = {
 DISALLOWED_HOSTNAMES = {
     "localhost",
     "metadata.google.internal",
+    "metadata",
     "instance-data",
     "169.254.169.254",
+    "127.0.0.1",
+    "::1",
+    "[::1]",
 }
 
 def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
@@ -57,6 +61,41 @@ def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
         if allowed_domains:
             if not any(hostname == d or hostname.endswith("." + d) for d in allowed_domains):
                 return False
+
+        # Numeric / Hex representation check (e.g. http://2130706433/ or http://0x7f000001/)
+        if hostname.isdigit():
+            try:
+                ip_int = int(hostname)
+                if 0 <= ip_int <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(ip_int)
+                    if (
+                        ip_obj.is_loopback
+                        or ip_obj.is_private
+                        or ip_obj.is_link_local
+                        or ip_obj.is_multicast
+                        or ip_obj.is_unspecified
+                        or ip_obj.is_reserved
+                    ):
+                        return False
+            except ValueError:
+                return False
+        elif hostname.startswith("0x"):
+            try:
+                ip_hex = int(hostname, 16)
+                if 0 <= ip_hex <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(ip_hex)
+                    if (
+                        ip_obj.is_loopback
+                        or ip_obj.is_private
+                        or ip_obj.is_link_local
+                        or ip_obj.is_multicast
+                        or ip_obj.is_unspecified
+                        or ip_obj.is_reserved
+                    ):
+                        return False
+            except ValueError:
+                return False
+
         try:
             ip_obj = ipaddress.ip_address(hostname)
             if (
@@ -132,20 +171,29 @@ def cleanup_ddos_history():
 
 
 def verify_pow(challenge: str, nonce: str, difficulty: int = DEFAULT_POW_DIFFICULTY) -> bool:
-    """Проверяет решение."""
-    if difficulty == 0: return True
+    """Проверяет решение с валидацией срока жизни и защиты от replay-атак."""
+    if difficulty == 0:
+        return True
 
-    # Проверяем, выдавали ли мы такой челлендж
-    if not challenge or not nonce or challenge not in POW_CACHE:
+    # Проверяем типы и наличие челленджа в кэше
+    if not challenge or not nonce or not isinstance(challenge, str) or not isinstance(nonce, str):
+        return False
+
+    now = time.time()
+    expiry = POW_CACHE.get(challenge)
+    if expiry is None:
+        return False
+    if expiry < now:
+        POW_CACHE.pop(challenge, None)
         return False
 
     target = "0" * difficulty
     text = f"{challenge}{nonce}"
     # Считаем хеш
-    res = hashlib.sha256(text.encode()).hexdigest()
+    res = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     if res.startswith(target):
-        del POW_CACHE[challenge]
+        POW_CACHE.pop(challenge, None)
         return True
     return False
 
@@ -159,6 +207,18 @@ MAX_REQUESTS_PER_WINDOW = 200
 BAN_TIME = 60
 
 def check_ddos(ip: str) -> bool:
+    if not ip or not isinstance(ip, str):
+        return False
+    ip = ip.strip()
+    if not ip:
+        return False
+
+    # Канонизируем IP-адрес для предотвращения обхода через разные форматы записи (IPv4/IPv6)
+    try:
+        ip = str(ipaddress.ip_address(ip))
+    except ValueError:
+        pass
+
     now = time.time()
 
     # 1. Вероятностная очистка старых записей (раз в ~100 вызовов)
@@ -177,7 +237,7 @@ def check_ddos(ip: str) -> bool:
     if ip in IP_BAN_LIST:
         if now < IP_BAN_LIST[ip]:
             return True
-        del IP_BAN_LIST[ip]
+        IP_BAN_LIST.pop(ip, None)
 
     record = REQUEST_HISTORY.get(ip)
 
@@ -190,8 +250,7 @@ def check_ddos(ip: str) -> bool:
     if record[0] > MAX_REQUESTS_PER_WINDOW:
         logger.warning(f"🛡️ DDoS DETECTED: Ban IP {ip} for {BAN_TIME}s")
         IP_BAN_LIST[ip] = now + BAN_TIME
-        if ip in REQUEST_HISTORY:
-            del REQUEST_HISTORY[ip]
+        REQUEST_HISTORY.pop(ip, None)
         return True
 
     return False

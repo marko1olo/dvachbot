@@ -219,15 +219,15 @@ class ThreadImporter:
             try:
                 # Используем временный клиент для каждого файла, чтобы избежать проблем с пулом соединений (RemoteProtocolError)
                 # Это чуть медленнее, но гораздо надежнее для 2ch/4chan
-                req_headers = {"User-Agent": self.client.headers.get("user-agent", "")}
+                req_headers = {"User-Agent": self.client.headers.get("user-agent", "Mozilla/5.0")} if self.client else {"User-Agent": "Mozilla/5.0"}
 
                 # Передаем куки только если это 2ch (для доступа к скрытым разделам, если есть пасскод)
-                req_cookies = self.client.cookies if "2ch" in url else {}
+                req_cookies = self.client.cookies if (self.client and "2ch" in url) else {}
 
                 async with httpx.AsyncClient(
                     verify=False,
                     http2=False,
-                    timeout=90.0,
+                    timeout=httpx.Timeout(timeout=30.0, connect=10.0, read=25.0, write=10.0),
                     cookies=req_cookies,
                     transport=httpx.AsyncHTTPTransport(
                         local_address=BIND_IPV4, retries=2, proxy=PROXY_URL
@@ -311,11 +311,12 @@ class ThreadImporter:
                     if len(data_accumulated) > MAX_JSON_SIZE:
                         raise Exception("JSON too large (Limit 10MB)")
                 return json.loads(data_accumulated)
+        except json.JSONDecodeError as jde:
+            logger.warning(f"Server returned non-JSON response from {target_url}: {jde}")
+            raise ValueError(f"Server returned non-JSON response from {target_url}") from jde
         except Exception as e:
             logger.error(f"Fetch error: {e}", exc_info=True)
             raise e
-        except json.JSONDecodeError:
-            raise Exception("Server returned non-JSON response")
 
     def extract_posts_data(self, json_data: Any) -> List[Dict]:
         if isinstance(json_data, dict):
@@ -433,19 +434,19 @@ class ThreadImporter:
                                 continue
                             downloaded_buffer = BytesIO(resp.content)
                             content_type = ct or "application/octet-stream"
-                            break
 
-                        # Warhammer Grimdark Filter (если нужно)
-                        if (
-                            board_id == "wh40k"
-                            and content_type
-                            and content_type.startswith("image/")
-                        ):
-                            raw_bytes = downloaded_buffer.getvalue()
-                            processed_bytes = await apply_grimdark_filter_async(
-                                raw_bytes
-                            )
-                            downloaded_buffer = BytesIO(processed_bytes)
+                            # Warhammer Grimdark Filter (если нужно)
+                            if (
+                                board_id == "wh40k"
+                                and content_type
+                                and content_type.startswith("image/")
+                            ):
+                                raw_bytes = downloaded_buffer.getvalue()
+                                processed_bytes = await apply_grimdark_filter_async(
+                                    raw_bytes
+                                )
+                                downloaded_buffer = BytesIO(processed_bytes)
+                            break
                     except Exception:
                         continue
 
@@ -616,7 +617,7 @@ class ThreadImporter:
             headers=headers,
             cookies=cookies,
             trust_env=True,
-            timeout=180.0,
+            timeout=httpx.Timeout(timeout=45.0, connect=10.0, read=35.0, write=10.0),
         ) as client:
             self.client = client
             self.created_post_ids.clear()
@@ -1052,6 +1053,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             op_threads_map[t_row[0]] = str(t_row[1])
 
                 processed_ids = []
+                failed_ids = []
 
                 # Pre-fetch all replacements for the current batch
                 task_refs = {}
@@ -1217,6 +1219,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             logger.critical(
                                 f"CRITICAL [DLQ]: Failed to create post for ImportQueue item {q_id} (task_id={task_id}, orig_num={orig_num})"
                             )
+                            failed_ids.append(q_id)
 
                     except Exception as e:
                         logger.error(
@@ -1226,14 +1229,16 @@ async def process_import_queue(app_state_broadcast_queue):
                         logger.critical(
                             f"CRITICAL [DLQ]: ImportQueue item {q_id} failed with exception: {e}"
                         )
+                        failed_ids.append(q_id)
 
-                if processed_ids:
+                all_done_ids = processed_ids + failed_ids
+                if all_done_ids:
                     try:
                         async with db_lock:
-                            placeholders = ",".join(["?"] * len(processed_ids))
+                            placeholders = ",".join(["?"] * len(all_done_ids))
                             await conn.execute(
                                 f"DELETE FROM ImportQueue WHERE id IN ({placeholders})",
-                                processed_ids,
+                                all_done_ids,
                             )
                             await conn.commit()
                     except Exception:
