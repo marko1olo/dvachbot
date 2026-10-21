@@ -81,7 +81,7 @@ def clean_combat_history():
     # Clean expired appeals
     cutoff_appeal = now - APPEAL_WINDOW_SEC
     for sid, sess in list(active_combat_appeals.items()):
-        if sess.created_ts <= cutoff_appeal and not sess.is_appealed and not sess.is_bailed:
+        if sess.created_ts <= cutoff_appeal:
             active_combat_appeals.pop(sid, None)
 
 
@@ -360,27 +360,36 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
     3 uninvolved anons with posts_count >= 10 can cancel the mute.
     """
     session_id = callback.data.split(":", 1)[1]
-    sess = active_combat_appeals.get(session_id)
-    if not sess:
-        await callback.answer("⏳ Время на опротестование этого мута истекло.", show_alert=True)
-        return
-
     voter_id = callback.from_user.id
 
-    # 1. Attacker cannot appeal own attack
-    if voter_id == sess.attacker_id:
-        await callback.answer("🚫 Доносчик не может голосовать за отмену собственного доноса!", show_alert=True)
-        return
+    async with _COMBAT_ENGINE_LOCK:
+        sess = active_combat_appeals.get(session_id)
+        if not sess:
+            await callback.answer("⏳ Время на опротестование этого мута истекло.", show_alert=True)
+            return
 
-    # 2. Target cannot self-vote
-    if voter_id == sess.target_id:
-        await callback.answer("🚫 Жертва не может голосовать сама за себя! Нужна поддержка других анонов треда.", show_alert=True)
-        return
+        if sess.is_appealed:
+            await callback.answer("⚖️ Этот мут уже был отменен общественным голосованием анонов.", show_alert=True)
+            return
 
-    # 3. Double-voting check
-    if voter_id in sess.voters:
-        await callback.answer("⚠️ Ты уже отдал свой голос за отмену этого мута!", show_alert=False)
-        return
+        if sess.is_bailed:
+            await callback.answer("💸 Этот мут уже был снят внесением залога (взятки).", show_alert=True)
+            return
+
+        # 1. Attacker cannot appeal own attack
+        if voter_id == sess.attacker_id:
+            await callback.answer("🚫 Доносчик не может голосовать за отмену собственного доноса!", show_alert=True)
+            return
+
+        # 2. Target cannot self-vote
+        if voter_id == sess.target_id:
+            await callback.answer("🚫 Жертва не может голосовать сама за себя! Нужна поддержка других анонов треда.", show_alert=True)
+            return
+
+        # 3. Double-voting check
+        if voter_id in sess.voters:
+            await callback.answer("⚠️ Ты уже отдал свой голос за отмену этого мута!", show_alert=False)
+            return
 
     # 4. Voter eligibility: minimum 10 posts to avoid burner bot brigades
     db = await get_pool()
@@ -390,29 +399,47 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
         await callback.answer("⛔ Голосовать за апелляцию могут только участники с 10+ постами на борде.", show_alert=True)
         return
 
-    # Add vote
-    sess.voters.add(voter_id)
-    current_votes = len(sess.voters)
+    async with _COMBAT_ENGINE_LOCK:
+        sess = active_combat_appeals.get(session_id)
+        if not sess:
+            await callback.answer("⏳ Время на опротестование этого мута истекло.", show_alert=True)
+            return
 
-    if current_votes < APPEAL_VOTES_REQUIRED:
-        await callback.answer(f"⚖️ Твой протест учтен ({current_votes}/{APPEAL_VOTES_REQUIRED})!", show_alert=False)
-        # Update button text
-        kb = get_combat_appeal_keyboard(session_id, current_votes, APPEAL_VOTES_REQUIRED)
-        try:
-            await callback.message.edit_reply_markup(reply_markup=kb)
-        except Exception:
-            pass
-        return
+        if sess.is_appealed:
+            await callback.answer("⚖️ Этот мут уже был отменен общественным голосованием анонов.", show_alert=True)
+            return
 
-    # 5. Overturn threshold reached!
-    sess.is_appealed = True
-    active_combat_appeals.pop(session_id, None)
+        if sess.is_bailed:
+            await callback.answer("💸 Этот мут уже был снят внесением залога (взятки).", show_alert=True)
+            return
 
-    # Immediately remove mute
+        if voter_id in sess.voters:
+            await callback.answer("⚠️ Ты уже отдал свой голос за отмену этого мута!", show_alert=False)
+            return
+
+        # Add vote
+        sess.voters.add(voter_id)
+        current_votes = len(sess.voters)
+
+        if current_votes < APPEAL_VOTES_REQUIRED:
+            await callback.answer(f"⚖️ Твой протест учтен ({current_votes}/{APPEAL_VOTES_REQUIRED})!", show_alert=False)
+            # Update button text
+            kb = get_combat_appeal_keyboard(session_id, current_votes, APPEAL_VOTES_REQUIRED)
+            try:
+                await callback.message.edit_reply_markup(reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        # 5. Overturn threshold reached!
+        sess.is_appealed = True
+        active_combat_appeals.pop(session_id, None)
+
+    # Immediately remove mute and set 1 hour immunity
     from common.bot_helpers import remove_regular_mute
     await remove_regular_mute(sess.target_id, sess.board_id)
     from shared_state import set_partyvan_victim_immunity
-    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 300)
+    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)
 
     # Fine the false accuser / abusive attacker
     try:
@@ -447,18 +474,32 @@ async def callback_combat_bail(callback: types.CallbackQuery):
     Allows the victim or any generous comrade to bail out the victim for shekels.
     """
     session_id = callback.data.split(":", 1)[1]
-    sess = active_combat_appeals.get(session_id)
-    if not sess:
-        await callback.answer("⏳ Время действия этого мута или залога истекло.", show_alert=True)
-        return
-
     payer_id = callback.from_user.id
+
+    async with _COMBAT_ENGINE_LOCK:
+        sess = active_combat_appeals.get(session_id)
+        if not sess:
+            await callback.answer("⏳ Время действия этого мута или залога истекло.", show_alert=True)
+            return
+
+        if sess.is_appealed:
+            await callback.answer("⚖️ Этот мут уже был отменен общественным голосованием анонов.", show_alert=True)
+            return
+
+        if sess.is_bailed or getattr(sess, "_is_processing_bail", False):
+            await callback.answer("💸 Этот мут уже был снят внесением залога (взятки).", show_alert=True)
+            return
+
+        sess._is_processing_bail = True
+
     db = await get_pool()
 
     # Determine bail price (using shop price of bribe or standard 500₪)
     try:
         from main import get_current_item_price
-        bail_cost = get_current_item_price("bribe")
+        bail_cost = float(get_current_item_price("bribe"))
+        if bail_cost <= 0:
+            bail_cost = 600.0
     except Exception:
         bail_cost = 600.0
 
@@ -471,6 +512,8 @@ async def callback_combat_bail(callback: types.CallbackQuery):
             payer_bal = row[0] if row and row[0] is not None else 0.0
 
     if payer_bal < bail_cost:
+        async with _COMBAT_ENGINE_LOCK:
+            sess._is_processing_bail = False
         await callback.answer(f"💸 Недостаточно шекелей! Для выкупа требуется {int(bail_cost)} ₪ (у тебя {int(payer_bal)} ₪).", show_alert=True)
         return
 
@@ -486,8 +529,16 @@ async def callback_combat_bail(callback: types.CallbackQuery):
         ok = True
 
     if not ok:
+        async with _COMBAT_ENGINE_LOCK:
+            sess._is_processing_bail = False
         await callback.answer("💸 Недостаточно шекелей для внесения залога!", show_alert=True)
         return
+
+    async with _COMBAT_ENGINE_LOCK:
+        sess.is_bailed = True
+        sess.bailed_by = payer_id
+        sess._is_processing_bail = False
+        active_combat_appeals.pop(session_id, None)
 
     # Record ledger transaction and Abu Fund contribution
     try:
@@ -504,11 +555,7 @@ async def callback_combat_bail(callback: types.CallbackQuery):
 
     await remove_regular_mute(sess.target_id, sess.board_id)
     from shared_state import set_partyvan_victim_immunity
-    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 300)
-
-    sess.is_bailed = True
-    sess.bailed_by = payer_id
-    active_combat_appeals.pop(session_id, None)
+    set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)
 
     payer_tag = "Жертва лично внесла" if payer_id == sess.target_id else f"Благородный анон [ID:{payer_id}] внес"
     await callback.answer("💸 Залог успешно принят! Анон освобожден из-под ареста!", show_alert=True)

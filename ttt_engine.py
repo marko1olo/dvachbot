@@ -911,10 +911,6 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
                 db, winner_id, net_win, "ttt",
                 f"Техническая победа (таймаут) в КН против [{get_anon_id(loser_id)}]"
             )
-            await record_user_transaction(
-                db, loser_id, -game.bet, "ttt",
-                f"Техническое поражение (таймаут 120с) в КН против [{get_anon_id(winner_id)}]"
-            )
 
         # Update message in chats for BOTH players
         if game.bot_instance:
@@ -1062,7 +1058,10 @@ async def accept_ttt_challenge(
         _ttt_rollback()
         return False, "🔇 Замученным нельзя принимать игры в крестики-нолики.", None
     if await check_db_shadow_muted(game.challenger_id, game.board_id, db=db) or await check_user_is_muted(db, game.challenger_id, game.board_id):
-        game.status = "cancelled"
+        game.status = "finished"
+        game.finish_reason = "cancelled"
+        game.finished_at = time.time()
+        active_ttt_games.pop(game_id, None)
         user_active_ttt_session.pop(game.challenger_id, None)
         return False, "❌ Создатель вызова был замучен. Вызов отменён.", None
 
@@ -1074,8 +1073,11 @@ async def accept_ttt_challenge(
             op_bal = await get_user_global_balance(db, opponent_id)
 
             if ch_bal < game.bet:
-                # Challenger can no longer pay — cancel cleanly without nuking game object
-                game.status = "cancelled"
+                # Challenger can no longer pay — cancel cleanly
+                game.status = "finished"
+                game.finish_reason = "cancelled"
+                game.finished_at = time.time()
+                active_ttt_games.pop(game_id, None)
                 user_active_ttt_session.pop(game.challenger_id, None)
                 return False, f"❌ У создателя вызова [{get_anon_id(game.challenger_id)}] изменился баланс. Вызов отменен.", None
 
@@ -1206,10 +1208,6 @@ async def finish_ttt_game(
                 db, game.winner_id, net_win, "ttt",
                 f"Победа в КН против [{get_anon_id(loser_id)}]"
             )
-            await record_user_transaction(
-                db, loser_id, -game.bet, "ttt",
-                f"Поражение в КН против [{get_anon_id(game.winner_id)}]"
-            )
 
         # 2ch board announcement
         winner_anon = get_anon_id(game.winner_id)
@@ -1312,7 +1310,6 @@ async def surrender_ttt_game(
         await add_user_global_balance(db, winner_id, game.board_id, net_win)
         await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк при сдаче в КН")
         await record_user_transaction(db, winner_id, net_win, "ttt", f"Победа (сдача) в КН против [{get_anon_id(loser_id)}]")
-        await record_user_transaction(db, loser_id, -game.bet, "ttt", f"Капитуляция в КН против [{get_anon_id(winner_id)}]")
 
     # 2ch announcement
     winner_anon = get_anon_id(winner_id)
@@ -1838,6 +1835,7 @@ async def ttt_watchdog_step(bot=None):
     now = time.time()
     expired_pending = []
     live_tick_games = []
+    timeout_active_games = []
     async with ttt_lock:
         for gid, game in list(active_ttt_games.items()):
             if game.status == "finished":
@@ -1846,16 +1844,49 @@ async def ttt_watchdog_step(bot=None):
                     active_ttt_games.pop(gid, None)
                 continue
             if game.status == "active":
-                last_tick = getattr(game, 'last_tick_ts', 0.0) or game.turn_start_time
-                if now - last_tick >= 15.0:
-                    game.last_tick_ts = now
-                    live_tick_games.append(gid)
+                if (now - game.turn_start_time) > TURN_TIMEOUT_SECONDS:
+                    timeout_active_games.append(gid)
+                else:
+                    last_tick = getattr(game, 'last_tick_ts', 0.0) or game.turn_start_time
+                    if now - last_tick >= 15.0:
+                        game.last_tick_ts = now
+                        live_tick_games.append(gid)
             elif game.status == "waiting" and (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
                 game.status = "finished"
                 game.finished_at = now
                 game.finish_reason = "cancelled"
                 user_active_ttt_session.pop(game.challenger_id, None)
                 expired_pending.append(gid)
+
+    # 0. Handle timed-out active games (fail-safe watchdog)
+    for gid in timeout_active_games:
+        async with ttt_lock:
+            game = active_ttt_games.get(gid)
+            if not game or game.status != "active":
+                continue
+            loser_id = game.current_turn
+            winner_id = game.opponent_id if loser_id == game.challenger_id else game.challenger_id
+            game.status = "finished"
+            game.finished_at = now
+            game.winner_id = winner_id
+            game.finish_reason = "timeout"
+            user_active_ttt_session.pop(game.challenger_id, None)
+            if game.opponent_id:
+                user_active_ttt_session.pop(game.opponent_id, None)
+
+        db = await get_pool()
+        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        net_win = game.pot - rake
+        async with db_lock:
+            await add_user_global_balance(db, winner_id, game.board_id, net_win)
+            await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк с таймаута в КН")
+            await record_user_transaction(
+                db, winner_id, net_win, "ttt",
+                f"Техническая победа (таймаут) в КН против [{get_anon_id(loser_id)}]"
+            )
+        bot_to_use = bot or game.bot_instance
+        if bot_to_use:
+            await sync_ttt_screens(bot_to_use, game)
 
     # 1. Live countdown updates (active)
     for gid in live_tick_games:

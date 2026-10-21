@@ -526,10 +526,18 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
         tot_san += s.get("bonus_sanity", s.get("sanity", 0))
 
     # 4. Robbery formulas
-    # P_deflect = min(0.35, Def * 0.0025)
-    rob_deflect = min(0.35, round(tot_def * 0.0025, 4))
-    # stolen_reduction = min(0.60, Def / 200.0)
-    rob_stolen_red = min(0.60, round(tot_def / 200.0, 4))
+    has_padishah = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_padishah_mantle")
+    has_golden_foil = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_foil")
+
+    # P_deflect = min(0.35, max(0.0, Def * 0.0025))
+    rob_deflect = min(0.35, max(0.0, round(tot_def * 0.0025, 4)))
+    if has_golden_foil:
+        rob_deflect = max(rob_deflect, 0.25)
+    if has_padishah:
+        rob_deflect = max(rob_deflect, 0.50)
+
+    # stolen_reduction = min(0.60, max(0.0, Def / 200.0))
+    rob_stolen_red = min(0.60, max(0.0, round(tot_def / 200.0, 4)))
     # fear chance: 40% for set_gop_skuf, 25% for body_tracksuit
     has_skuf_set = bool(primary_set and primary_set.get("id") in ("set_gop_skuf", "set_skuf"))
     has_tracksuit = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_tracksuit")
@@ -623,7 +631,7 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
         compact_icon = head_icons[equipped["face"]["id"]]
 
     has_anon_mask = bool(equipped.get("face") and equipped["face"]["id"] == "face_anon_mask")
-    has_mantle = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_dva_ch_mantle")
+    has_mantle = bool(equipped.get("torso") and equipped["torso"]["id"] in ("body_dva_ch_mantle", "body_padishah_mantle"))
     stealth = bool(has_anon_mask or has_neo or has_mantle)
 
     eq_summary_parts = [item["name"] for item in equipped.values()]
@@ -722,7 +730,7 @@ def equip_item(active_items: Dict[str, Any], item_id: str) -> Tuple[bool, str]:
     if not is_perm and expires > 0 and expires <= now:
         return False, "Срок действия этого предмета истек! Продли его в Бутике одежды."
 
-    if not active_items.get(f"owned_{item_id}") and not is_perm and expires <= now:
+    if not active_items.get(f"owned_{item_id}") and not is_perm:
         return False, "У тебя нет этого предмета в гардеробе."
 
     active_items[f"equipped_{slot}"] = item_id

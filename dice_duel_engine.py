@@ -511,6 +511,16 @@ async def accept_dice_challenge(
         if g and g.get("state") == "accepting":
             g["state"] = "pending"
 
+    def _cancel_game():
+        g = active_dice_games.get(game_id)
+        if g:
+            g["state"] = "cancelled"
+            g["finished"] = True
+            g["finished_ts"] = time.time()
+            user_active_dice_game.pop(g.get("player_1"), None)
+            if g.get("target_id"):
+                user_active_dice_game.pop(g.get("target_id"), None)
+
     db = await get_pool()
     from common.database import is_shadow_muted as check_db_shadow_muted
     from common.bot_helpers import check_user_is_muted
@@ -518,7 +528,7 @@ async def accept_dice_challenge(
         async with dice_engine_lock: _rollback_state()
         return False, "🔇 Замученным нельзя принимать дайс-дуэли.", None
     if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
-        async with dice_engine_lock: _rollback_state()
+        async with dice_engine_lock: _cancel_game()
         return False, "🔇 Создатель дуэли находится в муте. Игра отменена.", None
 
     async with db_lock:
@@ -527,8 +537,8 @@ async def accept_dice_challenge(
             bal_a = await get_user_global_balance(db, acceptor_id)
 
             if bal_c < bet:
-                async with dice_engine_lock: _rollback_state()
-                return False, "❌ У создателя вызова уже не хватает шекелей на балансе!", None
+                async with dice_engine_lock: _cancel_game()
+                return False, "❌ У создателя вызова уже не хватает шекелей на балансе! Вызов отменен.", None
             if bal_a < bet:
                 async with dice_engine_lock: _rollback_state()
                 return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, твой баланс: <b>{int(bal_a):,} ₪</b>.", None
@@ -542,7 +552,11 @@ async def accept_dice_challenge(
                     await add_user_global_balance(db, challenger_id, board_id, bet)
                 if ok_a:
                     await add_user_global_balance(db, acceptor_id, board_id, bet)
-                async with dice_engine_lock: _rollback_state()
+                async with dice_engine_lock:
+                    if not ok_c:
+                        _cancel_game()
+                    else:
+                        _rollback_state()
                 return False, "❌ Ошибка списания средств. У одного из игроков изменился баланс.", None
 
             await record_user_transaction(db, challenger_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')

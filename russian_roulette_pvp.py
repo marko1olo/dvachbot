@@ -27,7 +27,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
-from common.db_pool import get_pool, db_lock
+from common.db_pool import get_pool, db_lock, db_transaction
 from common.database import (
     get_user_global_balance,
     add_user_global_balance,
@@ -894,6 +894,17 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         if g and g.get("state") == "accepting":
             g["state"] = "pending"
 
+    def _rr_cancel():
+        g = active_rr_games.get(game_id)
+        if g:
+            g["finished"] = True
+            g["state"] = "cancelled"
+            g["finished_ts"] = time.time()
+            active_rr_games.pop(game_id, None)
+            user_active_rr_game.pop(g.get("challenger_id"), None)
+            if g.get("target_id"):
+                user_active_rr_game.pop(g.get("target_id"), None)
+
     # Escrow deduction
     db = await get_pool()
     from common.database import is_shadow_muted as check_db_shadow_muted
@@ -902,32 +913,33 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         async with rr_lock: _rr_rollback()
         return False, "🔇 Замученным нельзя принимать дуэли в Русскую Рулетку.", None
     if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
-        async with rr_lock: _rr_rollback()
+        async with rr_lock: _rr_cancel()
         return False, "🔇 Создатель дуэли находится в муте. Игра отменена.", None
 
     async with db_lock:
-        bal_c = await get_user_global_balance(db, challenger_id)
-        bal_a = await get_user_global_balance(db, acceptor_id)
-        if bal_c < bet:
-            async with rr_lock: _rr_rollback()
-            return False, "❌ У создателя вызова не хватает шекелей на балансе!", None
-        if bal_a < bet:
-            async with rr_lock: _rr_rollback()
-            return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, баланс: <b>{int(bal_a):,} ₪</b>.", None
+        async with db_transaction(db):
+            bal_c = await get_user_global_balance(db, challenger_id)
+            bal_a = await get_user_global_balance(db, acceptor_id)
+            if bal_c < bet:
+                async with rr_lock: _rr_rollback()
+                return False, "❌ У создателя вызова не хватает шекелей на балансе!", None
+            if bal_a < bet:
+                async with rr_lock: _rr_rollback()
+                return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, баланс: <b>{int(bal_a):,} ₪</b>.", None
 
-        ok_c, _ = await deduct_user_global_balance(db, challenger_id, board_id, bet)
-        ok_a, _ = await deduct_user_global_balance(db, acceptor_id, board_id, bet)
-        if not ok_c or not ok_a:
-            # Refund if partial failure
-            if ok_c:
-                await add_user_global_balance(db, challenger_id, board_id, bet)
-            if ok_a:
-                await add_user_global_balance(db, acceptor_id, board_id, bet)
-            async with rr_lock: _rr_rollback()
-            return False, "❌ Ошибка списания ставки. Баланс изменился.", None
+            ok_c, _ = await deduct_user_global_balance(db, challenger_id, board_id, bet)
+            ok_a, _ = await deduct_user_global_balance(db, acceptor_id, board_id, bet)
+            if not ok_c or not ok_a:
+                # Refund if partial failure
+                if ok_c:
+                    await add_user_global_balance(db, challenger_id, board_id, bet)
+                if ok_a:
+                    await add_user_global_balance(db, acceptor_id, board_id, bet)
+                async with rr_lock: _rr_rollback()
+                return False, "❌ Ошибка списания ставки. Баланс изменился.", None
 
-        await record_user_transaction(db, challenger_id, -bet, 'rr_pvp', f'Ставка в Русской Рулетке #{game_id}')
-        await record_user_transaction(db, acceptor_id, -bet, 'rr_pvp', f'Ставка в Русской Рулетке #{game_id}')
+            await record_user_transaction(db, challenger_id, -bet, 'rr_pvp', f'Ставка в Русской Рулетке #{game_id}')
+            await record_user_transaction(db, acceptor_id, -bet, 'rr_pvp', f'Ставка в Русской Рулетке #{game_id}')
 
     async with rr_lock:
         game["acceptor_id"] = acceptor_id
@@ -983,6 +995,7 @@ async def pull_rr_trigger(game_id: str, user_id: int, bot=None) -> Tuple[bool, s
     Pulls the revolver trigger for current player on turn.
     Returns: (is_success, action_message, game_dict)
     """
+    finish_args = None
     async with rr_lock:
         game = active_rr_games.get(game_id)
         if not game:
@@ -998,26 +1011,27 @@ async def pull_rr_trigger(game_id: str, user_id: int, bot=None) -> Tuple[bool, s
         # Check turn timeout
         if now > game["turn_deadline_ts"]:
             opponent = game["acceptor_id"] if user_id == game["challenger_id"] else game["challenger_id"]
-            return await _finish_rr_game(game_id, winner_id=opponent, loser_id=user_id, reason="timeout", bot=bot)
+            finish_args = (game_id, opponent, user_id, "timeout", bot)
+        elif game["current_chamber"] == game["bullet_chamber"]:
+            opponent_id = game["acceptor_id"] if user_id == game["challenger_id"] else game["challenger_id"]
+            finish_args = (game_id, opponent_id, user_id, "shot", bot)
+        else:
+            cur_chamber = game["current_chamber"]
+            user_anon = get_anon_id(user_id)
+            opponent_id = game["acceptor_id"] if user_id == game["challenger_id"] else game["challenger_id"]
 
-        cur_chamber = game["current_chamber"]
-        bullet_chamber = game["bullet_chamber"]
-        user_anon = get_anon_id(user_id)
-        opponent_id = game["acceptor_id"] if user_id == game["challenger_id"] else game["challenger_id"]
+            # EMPTY CHAMBER - SURVIVED
+            game["history"].append({"user_id": user_id, "chamber": cur_chamber, "outcome": "click"})
+            game["current_chamber"] += 1
+            game["turn"] = opponent_id
+            game["turn_deadline_ts"] = now + RR_TURN_TIMEOUT_SEC
+            game["last_action_ts"] = now
 
-        # LIVE BULLET DETONATION
-        if cur_chamber == bullet_chamber:
-            return await _finish_rr_game(game_id, winner_id=opponent_id, loser_id=user_id, reason="shot", bot=bot)
+            click_msg = random.choice(RR_CLICK_PHRASES).format(cur_ch=cur_chamber + 1, user_anon=user_anon)
+            return True, click_msg, game
 
-        # EMPTY CHAMBER - SURVIVED
-        game["history"].append({"user_id": user_id, "chamber": cur_chamber, "outcome": "click"})
-        game["current_chamber"] += 1
-        game["turn"] = opponent_id
-        game["turn_deadline_ts"] = now + RR_TURN_TIMEOUT_SEC
-        game["last_action_ts"] = now
-
-        click_msg = random.choice(RR_CLICK_PHRASES).format(cur_ch=cur_chamber + 1, user_anon=user_anon)
-        return True, click_msg, game
+    if finish_args:
+        return await _finish_rr_game(*finish_args)
 
 
 async def surrender_rr_game(game_id: str, user_id: int, bot=None) -> Tuple[bool, str, Dict[str, Any]]:
@@ -1034,7 +1048,8 @@ async def surrender_rr_game(game_id: str, user_id: int, bot=None) -> Tuple[bool,
             return False, "❌ Ты не участник этой дуэли!", game
 
         opponent_id = game["acceptor_id"] if user_id == game["challenger_id"] else game["challenger_id"]
-        return await _finish_rr_game(game_id, winner_id=opponent_id, loser_id=user_id, reason="surrender", bot=bot)
+
+    return await _finish_rr_game(game_id, winner_id=opponent_id, loser_id=user_id, reason="surrender", bot=bot)
 
 
 async def _finish_rr_game(
@@ -1052,49 +1067,57 @@ async def _finish_rr_game(
     - Checks achievements.
     - Broadcasts public verdict to chat.
     """
-    game = active_rr_games[game_id]
-    game["finished"] = True
-    game["state"] = "finished"
-    game["finished_ts"] = time.time()
-    game["outcome"] = reason
-    game["winner_id"] = winner_id
-    game["loser_id"] = loser_id
+    async with rr_lock:
+        game = active_rr_games.get(game_id)
+        if not game:
+            return False, "❌ Игра не найдена.", {}
+        if game.get("payout_completed") or (game.get("finished") and game.get("state") == "finished"):
+            return False, "❌ Дуэль уже завершена.", game
 
-    bet = game["bet"]
-    pot = bet * 2
-    board_id = game["board_id"]
-    p1 = game["challenger_id"]
-    p2 = game["acceptor_id"]
+        game["payout_completed"] = True
+        game["finished"] = True
+        game["state"] = "finished"
+        game["finished_ts"] = time.time()
+        game["outcome"] = reason
+        game["winner_id"] = winner_id
+        game["loser_id"] = loser_id
 
-    # Clear active user mappings
-    user_active_rr_game.pop(p1, None)
-    if p2:
-        user_active_rr_game.pop(p2, None)
+        bet = game["bet"]
+        pot = bet * 2
+        board_id = game["board_id"]
+        p1 = game["challenger_id"]
+        p2 = game["acceptor_id"]
 
-    is_burn_rake = pot > 50000
-    if is_burn_rake:
-        rake = max(5, int(pot * 0.10))
-        rake_label = f"🔥 <b>Сжигаемый рейк (10%):</b> <code>{rake:,} ₪</code> навсегда выведены из экономики!"
-        rake_short = f"сожжено {rake:,} ₪ (10% антиинфляционный рейк)"
-    else:
-        rake = max(5, int(pot * RR_RAKE_PERCENT))
-        rake_label = f"🐒 <b>Налог Абу (5%):</b> <code>{rake:,} ₪</code>"
-        rake_short = f"{rake:,} ₪ в Казну Абу"
+        # Clear active user mappings
+        user_active_rr_game.pop(p1, None)
+        if p2:
+            user_active_rr_game.pop(p2, None)
 
-    win_payout = pot - rake
-    game["payout"] = win_payout
+        is_burn_rake = pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(pot * 0.10))
+            rake_label = f"🔥 <b>Сжигаемый рейк (10%):</b> <code>{rake:,} ₪</code> навсегда выведены из экономики!"
+            rake_short = f"сожжено {rake:,} ₪ (10% антиинфляционный рейк)"
+        else:
+            rake = max(5, int(pot * RR_RAKE_PERCENT))
+            rake_label = f"🐒 <b>Налог Абу (5%):</b> <code>{rake:,} ₪</code>"
+            rake_short = f"{rake:,} ₪ в Казну Абу"
+
+        win_payout = pot - rake
+        game["payout"] = win_payout
 
     win_anon = get_anon_id(winner_id)
     lose_anon = get_anon_id(loser_id)
 
     db = await get_pool()
     async with db_lock:
-        # Payout to winner
-        await add_user_global_balance(db, winner_id, board_id, win_payout)
-        if not is_burn_rake:
-            await add_to_abu_fund(db, rake)
-        tx_desc = f'Победа в Русской Рулетке #{game_id} против [{lose_anon}]' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
-        await record_user_transaction(db, winner_id, win_payout, 'rr_pvp', tx_desc)
+        async with db_transaction(db):
+            # Payout to winner
+            await add_user_global_balance(db, winner_id, board_id, win_payout)
+            if not is_burn_rake:
+                await add_to_abu_fund(db, rake)
+            tx_desc = f'Победа в Русской Рулетке #{game_id} против [{lose_anon}]' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
+            await record_user_transaction(db, winner_id, win_payout, 'rr_pvp', tx_desc)
 
         # Check PvP achievement for winner
         try:
@@ -1122,8 +1145,8 @@ async def _finish_rr_game(
     try:
         import shared_state
         async with shared_state.storage_lock:
-            if board_id in shared_state.board_data and 'mutes' in shared_state.board_data[board_id]:
-                shared_state.board_data[board_id]['mutes'][loser_id] = datetime.now(timezone.utc) + timedelta(seconds=RR_MUTE_DURATION_SEC)
+            if board_id in shared_state.board_data:
+                shared_state.board_data[board_id].setdefault('mutes', {})[loser_id] = datetime.now(timezone.utc) + timedelta(seconds=RR_MUTE_DURATION_SEC)
     except Exception as e:
         logger.error(f"Error updating in-memory mute for user {loser_id}: {e}")
 
@@ -1251,7 +1274,7 @@ async def rr_watchdog_step(bot=None):
         loser_id = game["turn"]
         winner_id = game["acceptor_id"] if loser_id == game["challenger_id"] else game["challenger_id"]
         _, _, fin_game = await _finish_rr_game(gid, winner_id, loser_id, reason="timeout", bot=bot)
-        if bot:
+        if bot and fin_game:
             await sync_rr_screens(bot, fin_game)
 
     # 3. Clean and edit expired pending challenges
