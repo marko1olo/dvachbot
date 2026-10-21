@@ -130,11 +130,18 @@ PENDING_DEPOSIT_TTL_SEC: float = 300.0  # 5 минут ожидание ввод
 
 def set_user_pending_deposit(user_id: int, tier_id: str, chat_id: int = 0, board_id: str = "b") -> None:
     """Запоминает выбранный пользователем тариф для ввода произвольной суммы из чата."""
+    now = time.time()
+    # Prune expired entries to prevent unbounded memory growth
+    if len(USER_PENDING_BANK_DEPOSIT) > 50:
+        expired = [uid for uid, data in USER_PENDING_BANK_DEPOSIT.items() if now > data.get("expires_at", 0)]
+        for uid in expired:
+            USER_PENDING_BANK_DEPOSIT.pop(uid, None)
+
     USER_PENDING_BANK_DEPOSIT[user_id] = {
         "tier_id": normalize_tier_id(tier_id) or "sych",
         "chat_id": chat_id,
         "board_id": board_id or "b",
-        "expires_at": time.time() + PENDING_DEPOSIT_TTL_SEC,
+        "expires_at": now + PENDING_DEPOSIT_TTL_SEC,
     }
 
 
@@ -273,6 +280,11 @@ class PendingBankDepositFilter(BaseFilter):
         if not pending:
             return False
 
+        # Prevent cross-chat interception: only intercept in the chat where deposit wizard was opened
+        target_chat_id = pending.get("chat_id")
+        if target_chat_id and message.chat.id != target_chat_id:
+            return False
+
         parsed = parse_amount_and_tier(message.text, default_tier=pending.get("tier_id", "sych"))
         if parsed is None:
             return False
@@ -387,6 +399,8 @@ async def create_bank_deposit(
     """
     if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount <= 0:
         return False, None, "Сумма депозита должна быть положительным числом больше 0 ₪."
+    if amount > 1_000_000_000:
+        return False, None, "Максимальная сумма разового вклада — 1 000 000 000 ₪."
 
     canon_tier = normalize_tier_id(tier_id)
     if not canon_tier or canon_tier not in BANK_TIERS:
@@ -1419,7 +1433,11 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
     """Обработка выбора депозита для вывода (проверка блокировки и штрафов)."""
     b_id = board_id or "b"
     user_id = callback.from_user.id
-    dep_id = int(callback.data.split(":", 1)[1])
+    raw_id = callback.data.split(":", 1)[1] if ":" in callback.data else ""
+    if not raw_id.isdigit():
+        await callback.answer("❌ Некорректный номер вклада.", show_alert=True)
+        return
+    dep_id = int(raw_id)
 
     db = await get_pool()
     total_p, total_a, deposits = await get_user_bank_summary(db, user_id)
@@ -1480,7 +1498,11 @@ async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str 
     """Подтвержденное досрочное снятие депозита со штрафом."""
     b_id = board_id or "b"
     user_id = callback.from_user.id
-    dep_id = int(callback.data.split(":", 1)[1])
+    raw_id = callback.data.split(":", 1)[1] if ":" in callback.data else ""
+    if not raw_id.isdigit():
+        await callback.answer("❌ Некорректный номер вклада.", show_alert=True)
+        return
+    dep_id = int(raw_id)
 
     db = await get_pool()
     ok, payout, principal, interest, penalty, is_default, err = await withdraw_bank_deposit(

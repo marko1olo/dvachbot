@@ -379,6 +379,7 @@ async def place_auction_bid(
         return {"ok": False, "error": "Некорректная сумма ставки."}
     if math.isnan(bid_amount) or math.isinf(bid_amount) or bid_amount <= 0:
         return {"ok": False, "error": "Ставка должна быть положительным конечным числом."}
+    bid_amount = round(float(bid_amount), 2)
     if bid_amount > 10_000_000_000:
         return {"ok": False, "error": "Ставка превышает максимальный лимит аукциона (10 млрд ₪)."}
 
@@ -509,6 +510,21 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                         await db.execute("""
                             UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?
                         """, (prefix_title, exp, winner_id))
+                        async with db.execute(
+                            "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
+                            (winner_id, board_id)
+                        ) as sc:
+                            srow = await sc.fetchone()
+                            ai = json.loads(srow[0]) if (srow and srow[0]) else {}
+                        ai["custom_title"] = prefix_title
+                        ai["title_expires_at"] = exp
+                        await db.execute(
+                            """
+                            INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?)
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                            """,
+                            (winner_id, board_id, json.dumps(ai, ensure_ascii=False))
+                        )
 
                     elif lot_type == "board_pin":
                         # Award VIP pin voucher in active_items
@@ -555,6 +571,49 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                     })
 
     return finished_list
+
+
+async def cancel_auction(db: Any, auction_id: int) -> Dict[str, Any]:
+    """
+    Cancels an active auction and refunds 100% of the current highest bid
+    to current_winner_id if any bid was placed.
+    """
+    await ensure_auction_schema(db)
+    now = time.time()
+    async with db_lock:
+        async with db_transaction(db):
+            async with db.execute(
+                "SELECT id, title, current_bid, current_winner_id, board_id, status FROM Auctions WHERE id = ?",
+                (auction_id,)
+            ) as c:
+                row = await c.fetchone()
+            if not row:
+                return {"ok": False, "error": "Аукцион не найден."}
+            auc_id, title, cur_bid, cur_winner, board_id, status = row
+            if status != "active":
+                return {"ok": False, "error": f"Аукцион уже не активен (статус: {status})."}
+
+            await db.execute(
+                "UPDATE Auctions SET status = 'cancelled', finished_at = ? WHERE id = ?",
+                (now, auction_id)
+            )
+
+            refunded = 0.0
+            if cur_winner is not None and cur_bid > 0:
+                await add_user_global_balance(db, cur_winner, board_id, cur_bid)
+                await record_user_transaction(
+                    db, cur_winner, cur_bid, 'auction_refund',
+                    f'Возврат ставки при отмене аукциона #{auction_id} ({title})'
+                )
+                refunded = cur_bid
+
+            return {
+                "ok": True,
+                "auction_id": auction_id,
+                "status": "cancelled",
+                "refunded_to": cur_winner,
+                "refunded_amount": refunded
+            }
 
 
 async def get_active_auctions(db: Any, board_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -729,7 +788,7 @@ async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
 
                 if rem_tax > 0.001 and bank_bal > 0 and has_bank:
                     async with db.execute("""
-                        SELECT id, principal, accrued_interest FROM BankDeposits
+                        SELECT id, principal, accrued_interest, daily_rate, last_accrual_at, created_at FROM BankDeposits
                         WHERE user_id = ? AND status = 'active'
                         ORDER BY principal DESC, id ASC
                     """, (uid,)) as dc:
@@ -737,21 +796,28 @@ async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
                     for drow in deps:
                         if rem_tax <= 0.001:
                             break
-                        dep_id, d_princ, d_accr = drow[0], float(drow[1] or 0.0), float(drow[2] or 0.0)
-                        d_tot = d_princ + d_accr
+                        dep_id = drow[0]
+                        d_princ = float(drow[1] or 0.0)
+                        d_accr = float(drow[2] or 0.0)
+                        d_rate = float(drow[3]) if drow[3] is not None else 0.005
+                        last_accr = float(drow[4] or drow[5] or now)
+                        elapsed = max(0.0, now - last_accr)
+                        instant = d_princ * (d_rate / 86400.0) * elapsed
+                        curr_accr = round(d_accr + instant, 2)
+                        d_tot = d_princ + curr_accr
                         if d_tot <= 0:
                             continue
                         cut = min(d_tot, rem_tax)
                         if d_princ >= cut:
                             new_princ = round(d_princ - cut, 2)
-                            new_accr = round(d_accr, 2)
+                            new_accr = round(curr_accr, 2)
                         else:
                             new_princ = 0.0
                             rem_c = cut - d_princ
-                            new_accr = max(0.0, round(d_accr - rem_c, 2))
+                            new_accr = max(0.0, round(curr_accr - rem_c, 2))
                         await db.execute("""
-                            UPDATE BankDeposits SET principal = ?, accrued_interest = ? WHERE id = ?
-                        """, (new_princ, new_accr, dep_id))
+                            UPDATE BankDeposits SET principal = ?, accrued_interest = ?, last_accrual_at = ? WHERE id = ?
+                        """, (new_princ, new_accr, now, dep_id))
                         rem_tax -= cut
                         bank_cut += cut
 
@@ -796,6 +862,11 @@ async def execute_oligarch_raid(
     unique_voters = list(dict.fromkeys(voter_ids))
     qualified_voters = []
 
+    has_bank = False
+    async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
+        if await tc.fetchone():
+            has_bank = True
+
     for vid in unique_voters:
         # Изолированные пользователи не могут участвовать в рейдах ОБЭП
         async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (vid,)) as iso_c:
@@ -803,6 +874,17 @@ async def execute_oligarch_raid(
             if iso_row and iso_row[0]:
                 continue
         bal = await get_user_global_balance(db, vid)
+        bank_tot = 0.0
+        if has_bank:
+            async with db.execute(
+                "SELECT COALESCE(SUM(principal + accrued_interest), 0.0) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
+                (vid,)
+            ) as bc:
+                brow = await bc.fetchone()
+                if brow and brow[0]:
+                    bank_tot = float(brow[0])
+        total_voter_wealth = bal + bank_tot
+
         # Check posts count from Users table (summed across boards)
         posts = 0
         try:
@@ -827,29 +909,31 @@ async def execute_oligarch_raid(
             except Exception:
                 pass
 
-        if bal < 5000 and posts >= 25:
+        if total_voter_wealth < 5000 and posts >= 25:
             qualified_voters.append(vid)
 
     if len(qualified_voters) < 5:
         return {
             "ok": False,
-            "error": f"Недостаточно квалифицированных рабочих! Требуется 5 пролетариев (баланс < 5,000 ₪, постов >= 25), собрано: {len(qualified_voters)}."
+            "error": f"Недостаточно квалифицированных рабочих! Требуется 5 пролетариев (капитал < 5,000 ₪, постов >= 25), собрано: {len(qualified_voters)}."
         }
 
     # Select exactly 5 qualified voters
     selected_5_workers = qualified_voters[:5]
 
+    if target_id is not None and target_id in selected_5_workers:
+        return {
+            "ok": False,
+            "error": "Олигарх не может участвовать в рейде против самого себя!"
+        }
+
     async with db_lock:
         async with db_transaction(db):
             # 2. Identify target oligarch
-            has_bank = False
-            async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
-                if await tc.fetchone():
-                    has_bank = True
-
             if target_id is None:
+                worker_placeholders = ",".join("?" for _ in selected_5_workers)
                 if has_bank:
-                    query = """
+                    query = f"""
                         WITH w AS (
                             SELECT user_id, SUM(balance) as wallet_bal FROM Users GROUP BY user_id
                         ),
@@ -862,19 +946,23 @@ async def execute_oligarch_raid(
                         LEFT JOIN w ON u.user_id = w.user_id
                         LEFT JOIN b ON u.user_id = b.user_id
                         WHERE u.user_id NOT IN (SELECT user_id FROM Users WHERE is_isolated = 1)
+                          AND u.user_id NOT IN ({worker_placeholders})
                         ORDER BY total_wealth DESC
                         LIMIT 1
                     """
+                    query_params = tuple(selected_5_workers)
                 else:
-                    query = """
+                    query = f"""
                         SELECT user_id, SUM(balance) as total_wealth
                         FROM Users
-                        WHERE is_isolated = 0 OR is_isolated IS NULL
+                        WHERE (is_isolated = 0 OR is_isolated IS NULL)
+                          AND user_id NOT IN ({worker_placeholders})
                         GROUP BY user_id
                         ORDER BY total_wealth DESC
                         LIMIT 1
                     """
-                async with db.execute(query) as c:
+                    query_params = tuple(selected_5_workers)
+                async with db.execute(query, query_params) as c:
                     top_row = await c.fetchone()
                     if not top_row or (top_row[1] or 0.0) <= 5000:
                         return {"ok": False, "error": "На борде нет олигархов для раскулачивания!"}
@@ -953,7 +1041,7 @@ async def execute_oligarch_raid(
 
             if rem_to_deduct > 0.001 and oligarch_bank > 0 and has_bank:
                 async with db.execute("""
-                    SELECT id, principal, accrued_interest FROM BankDeposits
+                    SELECT id, principal, accrued_interest, daily_rate, last_accrual_at, created_at FROM BankDeposits
                     WHERE user_id = ? AND status = 'active'
                     ORDER BY principal DESC, id ASC
                 """, (target_id,)) as dc:
@@ -965,22 +1053,27 @@ async def execute_oligarch_raid(
                     dep_id = drow[0]
                     d_princ = float(drow[1] or 0.0)
                     d_accr = float(drow[2] or 0.0)
-                    d_total = d_princ + d_accr
+                    d_rate = float(drow[3]) if drow[3] is not None else 0.005
+                    last_accr = float(drow[4] or drow[5] or now)
+                    elapsed = max(0.0, now - last_accr)
+                    instant = d_princ * (d_rate / 86400.0) * elapsed
+                    curr_accr = round(d_accr + instant, 2)
+                    d_total = d_princ + curr_accr
                     if d_total <= 0:
                         continue
 
                     cut = min(d_total, rem_to_deduct)
                     if d_princ >= cut:
                         new_princ = round(d_princ - cut, 2)
-                        new_accr = round(d_accr, 2)
+                        new_accr = round(curr_accr, 2)
                     else:
                         new_princ = 0.0
                         rem_cut = cut - d_princ
-                        new_accr = max(0.0, round(d_accr - rem_cut, 2))
+                        new_accr = max(0.0, round(curr_accr - rem_cut, 2))
 
                     await db.execute("""
-                        UPDATE BankDeposits SET principal = ?, accrued_interest = ? WHERE id = ?
-                    """, (new_princ, new_accr, dep_id))
+                        UPDATE BankDeposits SET principal = ?, accrued_interest = ?, last_accrual_at = ? WHERE id = ?
+                    """, (new_princ, new_accr, now, dep_id))
 
                     rem_to_deduct -= cut
                     bank_deducted += cut

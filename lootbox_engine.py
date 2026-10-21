@@ -497,21 +497,46 @@ def apply_lootbox_reward(
                     active_items[wk] = True
 
         # 4. Protection and individual weapons/consumables
+        # Handle paired protective buffs first to prevent duplicate notifications
+        has_tinfoil = any(k in payload for k in ("tinfoil_hat", "tinfoil_until"))
+        if has_tinfoil:
+            added_sec = 6 * 3600
+            for tk in ("tinfoil_hat", "tinfoil_until"):
+                if tk in payload and isinstance(payload[tk], (int, float)) and payload[tk] > now:
+                    added_sec = max(added_sec, int(payload[tk] - now))
+            cur_exp = max(active_items.get("tinfoil_hat", 0), active_items.get("tinfoil_until", 0))
+            base = cur_exp if cur_exp > now else now
+            new_exp = min(base + added_sec, max_protection_cap)
+            active_items["tinfoil_hat"] = new_exp
+            active_items["tinfoil_until"] = new_exp
+            active_items["owned_hat_tinfoil"] = True
+            active_items["equipped_head"] = "hat_tinfoil"
+            hours_added = added_sec // 3600
+            note = f"👽 <b>Шапочка из фольги:</b> +{hours_added} часов к длительности защиты!"
+            recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
+
+        has_shield = any(k in payload for k in ("reflect_shield_until", "shield_until"))
+        if has_shield:
+            added_sec = 6 * 3600
+            for sk in ("reflect_shield_until", "shield_until"):
+                if sk in payload and isinstance(payload[sk], (int, float)) and payload[sk] > now:
+                    added_sec = max(added_sec, int(payload[sk] - now))
+            cur_exp = max(active_items.get("reflect_shield_until", 0), active_items.get("shield_until", 0))
+            base = cur_exp if cur_exp > now else now
+            new_exp = min(base + added_sec, max_protection_cap)
+            active_items["reflect_shield_until"] = new_exp
+            active_items["shield_until"] = new_exp
+            active_items["shield_gun"] = True
+            active_items["shield"] = True
+            hours_added = added_sec // 3600
+            note = f"🛡️ <b>Зеркальный Щит:</b> +{hours_added} часов к длительности защиты!"
+            recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
+
         for k, v in payload.items():
-            if k in ("tinfoil_hat", "tinfoil_until"):
-                current_exp = active_items.get(k, 0)
-                base = current_exp if current_exp > now else now
-                active_items[k] = min(base + 6 * 3600, max_protection_cap)
-                active_items["owned_hat_tinfoil"] = True
-                active_items["equipped_head"] = "hat_tinfoil"
-                note = "👽 <b>Шапочка из фольги:</b> +6 часов к длительности защиты!"
-                recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
-            elif k in ("reflect_shield_until", "shield_until"):
-                current_exp = active_items.get(k, 0)
-                base = current_exp if current_exp > now else now
-                active_items[k] = min(base + 6 * 3600, max_protection_cap)
-                note = "🛡️ <b>Зеркальный Щит:</b> +6 часов к длительности защиты!"
-                recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
+            if k in ("tinfoil_hat", "tinfoil_until", "reflect_shield_until", "shield_until", "owned_hat_tinfoil"):
+                continue
+            if k == "equipped_head" and v == "hat_tinfoil":
+                continue
             elif k == "janitor_until":
                 current_exp = active_items.get("janitor_until", 0)
                 base = current_exp if current_exp > now else now

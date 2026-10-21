@@ -296,15 +296,17 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
             return True, item_data, ""
 
         elif clean_id in ("shield", "shield_gun"):
-            exp_ts = active_items.get("shield_until")
+            exp_ts = active_items.get("shield_until") or active_items.get("reflect_shield_until")
             if exp_ts:
                 rem_sec = max(0, int(exp_ts - now))
                 if rem_sec <= 0:
                     active_items.pop("shield_until", None)
+                    active_items.pop("reflect_shield_until", None)
                     active_items.pop("shield_gun", None)
                     active_items.pop("shield", None)
                     return False, {}, "Срок действия щита уже истёк."
                 active_items.pop("shield_until", None)
+                active_items.pop("reflect_shield_until", None)
                 active_items.pop("shield_gun", None)
                 active_items.pop("shield", None)
                 item_data["remaining_seconds"] = rem_sec
@@ -312,6 +314,8 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
             elif active_items.get("shield_gun") or active_items.get("shield"):
                 active_items.pop("shield_gun", None)
                 active_items.pop("shield", None)
+                active_items.pop("shield_until", None)
+                active_items.pop("reflect_shield_until", None)
                 item_data["remaining_seconds"] = 86400
                 return True, item_data, ""
             return False, {}, "У вас нет Зеркального Щита."
@@ -337,13 +341,22 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
                 if rem_sec <= 0:
                     active_items.pop("tinfoil_until", None)
                     active_items.pop("tinfoil_hat", None)
+                    active_items.pop("owned_hat_tinfoil", None)
+                    if active_items.get("equipped_head") == "hat_tinfoil":
+                        active_items["equipped_head"] = None
                     return False, {}, "Срок действия шапочки из фольги истёк."
                 active_items.pop("tinfoil_until", None)
                 active_items.pop("tinfoil_hat", None)
+                active_items.pop("owned_hat_tinfoil", None)
+                if active_items.get("equipped_head") == "hat_tinfoil":
+                    active_items["equipped_head"] = None
                 item_data["remaining_seconds"] = rem_sec
                 return True, item_data, ""
             elif active_items.get("tinfoil"):
                 active_items.pop("tinfoil", None)
+                active_items.pop("owned_hat_tinfoil", None)
+                if active_items.get("equipped_head") == "hat_tinfoil":
+                    active_items["equipped_head"] = None
                 item_data["remaining_seconds"] = 21600
                 return True, item_data, ""
             return False, {}, "У вас нет Шапочки из фольги."
@@ -354,18 +367,34 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
         return False, {}, "У вас нет этого предмета."
 
     elif item_type == "lootbox":
-        canonical_key = "lootbox_trash" if clean_id in ("lootbox_trash", "trash_lootbox") else "lootbox_gold"
-        val = active_items.get(canonical_key) or active_items.get(clean_id)
-        if isinstance(val, int) and val > 1:
-            active_items[canonical_key] = val - 1
-        elif isinstance(val, int) and val == 1:
-            active_items.pop(canonical_key, None)
-            active_items.pop(clean_id, None)
-        elif val:
-            active_items.pop(canonical_key, None)
-            active_items.pop(clean_id, None)
+        # Resolve all aliases and unify into canonical key to prevent dupe exploits
+        if clean_id in ("lootbox_trash", "trash_lootbox"):
+            canonical_key = "lootbox_trash"
+            alias_keys = ["lootbox_trash", "trash_lootbox"]
+        elif clean_id in ("lootbox_gold", "gold_safe"):
+            canonical_key = "lootbox_gold"
+            alias_keys = ["lootbox_gold", "gold_safe"]
+        elif clean_id in ("lootbox_whale", "whale_safe"):
+            canonical_key = "lootbox_whale"
+            alias_keys = ["lootbox_whale", "whale_safe"]
         else:
+            canonical_key = clean_id
+            alias_keys = [clean_id]
+
+        total_cnt = 0
+        for ak in alias_keys:
+            v = active_items.pop(ak, None)
+            if isinstance(v, int):
+                total_cnt += max(0, v)
+            elif v:
+                total_cnt += 1
+
+        if total_cnt <= 0:
             return False, {}, "У вас нет этого кейса в инвентаре."
+
+        if total_cnt > 1:
+            active_items[canonical_key] = total_cnt - 1
+
         item_data["canonical_id"] = canonical_key
         item_data["count"] = 1
         return True, item_data, ""
@@ -407,9 +436,10 @@ def restore_item_to_active_items(active_items: Dict[str, Any], item_id: str, ite
             active_items["pills_gun"] = True
         elif clean_id in ("shield", "shield_gun"):
             rem_sec = item_data.get("remaining_seconds", 86400)
-            cur_exp = active_items.get("shield_until", 0)
+            cur_exp = max(active_items.get("shield_until", 0), active_items.get("reflect_shield_until", 0))
             base = max(cur_exp, now)
             active_items["shield_until"] = base + rem_sec
+            active_items["reflect_shield_until"] = base + rem_sec
             active_items["shield_gun"] = True
             active_items["shield"] = True
         elif clean_id in ("bribe", "bribe_count"):
@@ -421,6 +451,7 @@ def restore_item_to_active_items(active_items: Dict[str, Any], item_id: str, ite
             base = max(cur_exp, now)
             active_items["tinfoil_until"] = base + rem_sec
             active_items["tinfoil_hat"] = base + rem_sec
+            active_items["owned_hat_tinfoil"] = True
         else:
             active_items[clean_id] = True
 
