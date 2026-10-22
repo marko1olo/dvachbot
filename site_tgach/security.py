@@ -29,11 +29,36 @@ DISALLOWED_HOSTNAMES = {
     "metadata.google.internal",
     "metadata",
     "instance-data",
+    "instance-data.ec2.internal",
     "169.254.169.254",
+    "169.254.170.2",
     "127.0.0.1",
     "::1",
     "[::1]",
 }
+
+def _is_ip_safe(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if (
+        ip_obj.is_loopback
+        or ip_obj.is_private
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_unspecified
+        or ip_obj.is_reserved
+    ):
+        return False
+    if hasattr(ip_obj, "ipv4_mapped") and ip_obj.ipv4_mapped:
+        mapped = ip_obj.ipv4_mapped
+        if (
+            mapped.is_loopback
+            or mapped.is_private
+            or mapped.is_link_local
+            or mapped.is_multicast
+            or mapped.is_unspecified
+            or mapped.is_reserved
+        ):
+            return False
+    return True
 
 def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
     """Validates that a URL is safe to fetch (protects against SSRF attacks).
@@ -41,8 +66,9 @@ def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
     Checks:
     - Scheme must be http or https
     - Hostname must be present and not in known metadata/internal hostnames
+    - Ports must be standard web ports (80, 443, 8080, 8443) or omitted
     - Resolved IP addresses must not be private, loopback, link-local (e.g. 169.254.169.254),
-      multicast, unspecified, or reserved.
+      multicast, unspecified, or reserved. Handles IPv4-mapped IPv6 addresses.
     - If allowed_domains is provided, hostname must match or be a subdomain of one of them.
     """
     if not url or not isinstance(url, str):
@@ -58,6 +84,8 @@ def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
             return False
         if hostname in DISALLOWED_HOSTNAMES:
             return False
+        if parsed.port is not None and parsed.port not in (80, 443, 8080, 8443):
+            return False
         if allowed_domains:
             if not any(hostname == d or hostname.endswith("." + d) for d in allowed_domains):
                 return False
@@ -68,14 +96,7 @@ def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
                 ip_int = int(hostname)
                 if 0 <= ip_int <= 0xFFFFFFFF:
                     ip_obj = ipaddress.ip_address(ip_int)
-                    if (
-                        ip_obj.is_loopback
-                        or ip_obj.is_private
-                        or ip_obj.is_link_local
-                        or ip_obj.is_multicast
-                        or ip_obj.is_unspecified
-                        or ip_obj.is_reserved
-                    ):
+                    if not _is_ip_safe(ip_obj):
                         return False
             except ValueError:
                 return False
@@ -84,28 +105,14 @@ def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
                 ip_hex = int(hostname, 16)
                 if 0 <= ip_hex <= 0xFFFFFFFF:
                     ip_obj = ipaddress.ip_address(ip_hex)
-                    if (
-                        ip_obj.is_loopback
-                        or ip_obj.is_private
-                        or ip_obj.is_link_local
-                        or ip_obj.is_multicast
-                        or ip_obj.is_unspecified
-                        or ip_obj.is_reserved
-                    ):
+                    if not _is_ip_safe(ip_obj):
                         return False
             except ValueError:
                 return False
 
         try:
             ip_obj = ipaddress.ip_address(hostname)
-            if (
-                ip_obj.is_loopback
-                or ip_obj.is_private
-                or ip_obj.is_link_local
-                or ip_obj.is_multicast
-                or ip_obj.is_unspecified
-                or ip_obj.is_reserved
-            ):
+            if not _is_ip_safe(ip_obj):
                 return False
         except ValueError:
             try:
@@ -114,14 +121,7 @@ def is_safe_url(url: str, allowed_domains: set[str] | None = None) -> bool:
                     sockaddr = item[4]
                     ip_str = sockaddr[0]
                     ip_obj = ipaddress.ip_address(ip_str)
-                    if (
-                        ip_obj.is_loopback
-                        or ip_obj.is_private
-                        or ip_obj.is_link_local
-                        or ip_obj.is_multicast
-                        or ip_obj.is_unspecified
-                        or ip_obj.is_reserved
-                    ):
+                    if not _is_ip_safe(ip_obj):
                         return False
             except (socket.gaierror, socket.herror, ValueError):
                 return False
@@ -164,14 +164,31 @@ def get_pow_challenge_data(difficulty: int = DEFAULT_POW_DIFFICULTY) -> dict:
         "difficulty": difficulty
     }
 def cleanup_ddos_history():
+    """
+    Периодическая полная очистка просроченных IP из истории запросов, банов и PoW кэша.
+    Предотвращает утечки памяти при распределенных атаках.
+    """
     now = time.time()
-    dead_ips = [ip for ip, history in REQUEST_HISTORY.items() if not history or history[-1] < now - 600]
-    for ip in dead_ips:
-        del REQUEST_HISTORY[ip]
+    # 1. Prune REQUEST_HISTORY
+    expired_history = [ip for ip, data in list(REQUEST_HISTORY.items()) if not data or now - data[1] > RATE_LIMIT_WINDOW * 2]
+    for ip in expired_history:
+        REQUEST_HISTORY.pop(ip, None)
+
+    # 2. Prune IP_BAN_LIST
+    expired_bans = [ip for ip, expiry in list(IP_BAN_LIST.items()) if now >= expiry]
+    for ip in expired_bans:
+        IP_BAN_LIST.pop(ip, None)
+
+    # 3. Prune POW_CACHE
+    expired_pow = [ch for ch, exp in list(POW_CACHE.items()) if now >= exp]
+    for ch in expired_pow:
+        POW_CACHE.pop(ch, None)
 
 
 def verify_pow(challenge: str, nonce: str, difficulty: int = DEFAULT_POW_DIFFICULTY) -> bool:
     """Проверяет решение с валидацией срока жизни и защиты от replay-атак."""
+    if not isinstance(difficulty, int) or difficulty < 0:
+        return False
     if difficulty == 0:
         return True
 
@@ -201,6 +218,7 @@ IP_BAN_LIST = {}
 # REQUEST_HISTORY теперь хранит { ip: [count, window_start_ts] }
 REQUEST_HISTORY = {}
 MAX_HISTORY_SIZE = 10000 # Максимальное кол-во IP в памяти
+MAX_BAN_LIST_SIZE = 10000
 
 RATE_LIMIT_WINDOW = 5
 MAX_REQUESTS_PER_WINDOW = 200
@@ -221,18 +239,28 @@ def check_ddos(ip: str) -> bool:
 
     now = time.time()
 
-    # 1. Вероятностная очистка старых записей (раз в ~100 вызовов)
-    if random.random() < 0.01 or len(REQUEST_HISTORY) > MAX_HISTORY_SIZE:
-        # Удаляем все записи, где окно времени (5 сек) уже давно истекло
-        expired_ips = [k for k, v in REQUEST_HISTORY.items() if now - v[1] > RATE_LIMIT_WINDOW * 2]
+    # 1. Вероятностная очистка старых записей (раз в ~100 вызовов) или при превышении лимита
+    if random.random() < 0.01 or len(REQUEST_HISTORY) > MAX_HISTORY_SIZE or len(IP_BAN_LIST) > MAX_BAN_LIST_SIZE:
+        # Удаляем все записи истории, где окно времени (5 сек) уже давно истекло
+        expired_ips = [k for k, v in list(REQUEST_HISTORY.items()) if now - v[1] > RATE_LIMIT_WINDOW * 2]
         for k in expired_ips:
             REQUEST_HISTORY.pop(k, None)
+
+        # Удаляем все истекшие баны из IP_BAN_LIST
+        expired_bans = [k for k, exp in list(IP_BAN_LIST.items()) if now >= exp]
+        for k in expired_bans:
+            IP_BAN_LIST.pop(k, None)
 
         # Если всё еще перебор (агрессивный флуд новыми IP), чистим 20% самых старых
         if len(REQUEST_HISTORY) > MAX_HISTORY_SIZE:
             keys = list(REQUEST_HISTORY.keys())
             for k in keys[:len(keys)//5]:
                 REQUEST_HISTORY.pop(k, None)
+
+        if len(IP_BAN_LIST) > MAX_BAN_LIST_SIZE:
+            b_keys = list(IP_BAN_LIST.keys())
+            for k in b_keys[:len(b_keys)//5]:
+                IP_BAN_LIST.pop(k, None)
 
     if ip in IP_BAN_LIST:
         if now < IP_BAN_LIST[ip]:

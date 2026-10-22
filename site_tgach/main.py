@@ -231,9 +231,20 @@ def _is_trusted_proxy(ip: str | None) -> bool:
         return False
 
 
-def get_real_ip(request: Request) -> str:
+def get_real_ip(request: Union[Request, WebSocket]) -> str:
     client_host = getattr(request.client, "host", None) if getattr(request, "client", None) else None
     if _is_trusted_proxy(client_host):
+        # 1. Cloudflare header (if behind Cloudflare)
+        cf_ip = request.headers.get("cf-connecting-ip")
+        if cf_ip:
+            candidate = cf_ip.strip()
+            try:
+                import ipaddress
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                pass
+        # 2. X-Real-IP
         real_ip = request.headers.get("x-real-ip")
         if real_ip:
             candidate = real_ip.strip()
@@ -243,6 +254,7 @@ def get_real_ip(request: Request) -> str:
                 return candidate
             except ValueError:
                 pass
+        # 3. X-Forwarded-For (evaluated right-to-left to prevent client-controlled leftmost spoofing)
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             parts = [p.strip() for p in forwarded.split(",") if p.strip()]
@@ -1618,18 +1630,14 @@ class ConnectionManager:
     async def connect(
         self, websocket: WebSocket, board_id: str, mode: str, stream: str
     ):
-        client_host = websocket.client.host if websocket.client else "127.0.0.1"
-        client_ip = client_host
-        if client_host in ("127.0.0.1", "::1", "localhost"):
-            if websocket.headers.get("x-real-ip"):
-                client_ip = websocket.headers.get("x-real-ip").strip()
-            elif websocket.headers.get("x-forwarded-for"):
-                client_ip = websocket.headers.get("x-forwarded-for").split(",")[0].strip()
+        client_ip = get_real_ip(websocket)
 
         self.ip_counts[client_ip] += 1
 
         if self.ip_counts[client_ip] > 20:
             self.ip_counts[client_ip] -= 1
+            if self.ip_counts[client_ip] <= 0:
+                self.ip_counts.pop(client_ip, None)
             logger.warning(f"⛔ WS Limit Reached for {client_ip}")
             try:
                 await websocket.close(code=1008)
@@ -1641,6 +1649,8 @@ class ConnectionManager:
             await websocket.accept()
         except Exception:
             self.ip_counts[client_ip] -= 1
+            if self.ip_counts[client_ip] <= 0:
+                self.ip_counts.pop(client_ip, None)
             try:
                 await websocket.close()
             except Exception:
@@ -6032,20 +6042,15 @@ async def api_makaba_posting(
             )
     if (await get_system_setting("pow_enabled")) == "true" and not is_trusted:
         if not verify_pow(pow_challenge, pow_nonce, DEFAULT_POW_DIFFICULTY):
-            if len(POST_RATE_LIMITER) > 50:
-                return JSONResponse(
-                    {
-                        "Error": t(
-                            "pow_failed", "Ошибка защиты PoW. Попробуйте еще раз."
-                        ),
-                        "Status": "Error",
-                    },
-                    status_code=403,
-                )
-            else:
-                local_logger.info(
-                    f"🛡️ POW MERCY (Makaba): User {author_id} passed (Low load)"
-                )
+            return JSONResponse(
+                {
+                    "Error": t(
+                        "pow_failed", "Ошибка защиты PoW. Попробуйте еще раз."
+                    ),
+                    "Status": "Error",
+                },
+                status_code=403,
+            )
 
     if (await get_system_setting("captcha_enabled")) == "true" and not is_trusted:
         if not captcha_id or not CAPTCHA_SESSIONS.get(captcha_id):
@@ -7814,19 +7819,14 @@ async def api_create_post(
                 await backend.set(nonce_key, "1", expire=600)
 
         if not is_pow_valid:
-            if len(POST_RATE_LIMITER) > 50:
-                logger.warning(f"🛡️ POW BLOCK: User {author_id} (High load mode)")
-                raise HTTPException(
-                    403,
-                    t(
-                        "pow_failed",
-                        "Ошибка защиты (PoW). Включите JavaScript или обновите страницу.",
-                    ),
-                )
-            else:
-                logger.info(
-                    f"🛡️ POW MERCY: User {author_id} passed without valid PoW (Low load)"
-                )
+            logger.warning(f"🛡️ POW BLOCK: User {author_id}")
+            raise HTTPException(
+                403,
+                t(
+                    "pow_failed",
+                    "Ошибка защиты (PoW). Включите JavaScript или обновите страницу.",
+                ),
+            )
     captcha_verified = False
     global_captcha = (await get_system_setting("captcha_enabled")) == "true"
     if global_captcha or (captcha_id and captcha_id.strip()):

@@ -35,6 +35,9 @@ async def prepare_image_for_analysis(file_path: str, timeout: int = 45):
                 return buf.getvalue()
         data = await loop.run_in_executor(None, _load_and_resize)
         return data, None
+    except Image.DecompressionBombError:
+        logger.warning("💣 Decompression bomb detected in prepare_image_for_analysis")
+        return None, "Decompression bomb detected"
     except Exception as e:
         return None, str(e)
 
@@ -80,7 +83,7 @@ def prepare_image_for_groq(file_path_or_bytes, max_size: int = 640):
     """
     img = None
     try:
-        Image.MAX_IMAGE_PIXELS = 49_000_000
+        Image.MAX_IMAGE_PIXELS = 16_000_000
         if file_path_or_bytes is None:
             return None, "Пустой файл"
 
@@ -99,6 +102,9 @@ def prepare_image_for_groq(file_path_or_bytes, max_size: int = 640):
                     img = source.convert('RGB') if source.mode != 'RGB' else source.copy()
             else:
                 return None, "Неподдерживаемый тип входных данных"
+        except Image.DecompressionBombError:
+            logger.warning("💣 Decompression bomb detected in prepare_image_for_groq")
+            return None, "Decompression bomb detected"
         except Exception as e:
             return None, f"Невалидный файл изображения: {e}"
 
@@ -109,6 +115,9 @@ def prepare_image_for_groq(file_path_or_bytes, max_size: int = 640):
             img.save(buffer, format="JPEG", quality=70, optimize=True)
             return buffer.getvalue(), None
 
+    except Image.DecompressionBombError:
+        logger.warning("💣 Decompression bomb detected in prepare_image_for_groq")
+        return None, "Decompression bomb detected"
     except Exception as e:
         return None, f"Ошибка CPU обработки: {e}"
     finally:

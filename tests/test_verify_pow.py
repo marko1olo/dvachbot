@@ -2,6 +2,7 @@ import sys
 import os
 import unittest
 import hashlib
+import time
 from unittest.mock import patch
 import importlib.util
 
@@ -50,7 +51,7 @@ class TestVerifyPow(unittest.TestCase):
     def test_invalid_nonce(self):
         for module_name, module in self.modules:
             with self.subTest(module=module_name):
-                with patch.dict(module.POW_CACHE, {"test_challenge": 1234567890}, clear=True):
+                with patch.dict(module.POW_CACHE, {"test_challenge": time.time() + 600}, clear=True):
                     self.assertFalse(module.verify_pow(self.challenge, "wrong_nonce", self.difficulty))
 
     def test_valid_nonce(self):
@@ -68,7 +69,7 @@ class TestVerifyPow(unittest.TestCase):
 
         for module_name, module in self.modules:
             with self.subTest(module=module_name):
-                with patch.dict(module.POW_CACHE, {challenge: 1234567890}, clear=True):
+                with patch.dict(module.POW_CACHE, {challenge: time.time() + 600}, clear=True):
                     self.assertTrue(module.verify_pow(challenge, nonce, self.difficulty))
                     self.assertNotIn(challenge, module.POW_CACHE)
 

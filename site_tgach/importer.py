@@ -38,6 +38,7 @@ from site_tgach.security import is_safe_url, ALLOWED_IMPORT_DOMAINS
 from site_tgach.image_processing import (
     apply_grimdark_filter_async,
     process_and_upload_image,
+    is_valid_media_magic,
 )
 from common.bot_pool import global_bot_pool
 from common.async_file_io import read_json_file_async
@@ -95,13 +96,28 @@ class MemoryUploadFile:
 
 class ThreadImporter:
     MEDIA_CONCURRENCY_LIMIT = 5
+    MAX_MEDIA_DOWNLOAD_SIZE = 50 * 1024 * 1024  # 50 MB (Telegram limit & 1GB VPS RAM safety)
+    BLOCKED_MIME_TYPES = {
+        "text/html", "application/json", "text/plain", "text/xml",
+        "image/svg+xml", "application/xml", "application/javascript",
+        "text/javascript", "application/x-sh", "application/x-msdownload",
+    }
 
     def __init__(self, bot, file_storage_channel_id: int):
         self.bot = bot
         self.channel_id = file_storage_channel_id
         self.client: Optional[httpx.AsyncClient] = None
-        self._cpu_executor = ThreadPoolExecutor(max_workers=4)
+        self._cpu_executor: Optional[ThreadPoolExecutor] = None
         self.created_post_ids: List[int] = []
+
+    def _ensure_cpu_executor(self):
+        if self._cpu_executor is None or getattr(self._cpu_executor, "_shutdown", False):
+            self._cpu_executor = ThreadPoolExecutor(max_workers=4)
+
+    def close(self):
+        if self._cpu_executor and not getattr(self._cpu_executor, "_shutdown", False):
+            self._cpu_executor.shutdown(wait=False, cancel_futures=True)
+        self._cpu_executor = None
 
     async def _cleanup(self) -> None:
         """
@@ -202,6 +218,7 @@ class ThreadImporter:
         return clean_text.strip()
 
     async def normalize_html(self, raw_html: str) -> str:
+        self._ensure_cpu_executor()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._cpu_executor, self._normalize_html_sync, raw_html
@@ -233,21 +250,49 @@ class ThreadImporter:
                         local_address=BIND_IPV4, retries=2, proxy=PROXY_URL
                     ),
                 ) as media_client:
-                    resp = await media_client.get(url, headers=req_headers)
+                    async with media_client.stream("GET", url, headers=req_headers) as resp:
+                        if resp.status_code == 200:
+                            # 1. Content-Length header validation
+                            cl_header = resp.headers.get("content-length")
+                            if cl_header:
+                                try:
+                                    if int(cl_header) > self.MAX_MEDIA_DOWNLOAD_SIZE:
+                                        logger.warning(f"⚠️ Media file too large ({cl_header} bytes > {self.MAX_MEDIA_DOWNLOAD_SIZE}): {url}")
+                                        return None
+                                except ValueError:
+                                    pass
 
-                if resp.status_code == 200:
-                    return resp
-                if resp.status_code == 404:
-                    logger.warning(f"⚠️ 404 Not Found: {url}")
-                    return None
-                if resp.status_code in [403, 503, 429]:
-                    logger.warning(
-                        f"⚠️ Server returned {resp.status_code}. Retrying..."
-                    )
-                    await asyncio.sleep(2 * (i + 1))
-                    continue
-                resp.raise_for_status()
-                return resp
+                            # 2. Content-Type header validation
+                            ct = (resp.headers.get("content-type") or "").lower().split(";")[0].strip()
+                            if ct in self.BLOCKED_MIME_TYPES or any(b in ct for b in ("html", "javascript", "svg", "xml")):
+                                logger.warning(f"⚠️ Blocked MIME type ({ct}) from {url}")
+                                return None
+
+                            # 3. Stream chunks with size cap to prevent OOM / decompression bomb
+                            accumulated = bytearray()
+                            async for chunk in resp.aiter_bytes():
+                                accumulated.extend(chunk)
+                                if len(accumulated) > self.MAX_MEDIA_DOWNLOAD_SIZE:
+                                    logger.warning(f"⚠️ Stream exceeded {self.MAX_MEDIA_DOWNLOAD_SIZE} bytes: {url}")
+                                    return None
+
+                            return httpx.Response(
+                                status_code=200,
+                                content=bytes(accumulated),
+                                headers=resp.headers,
+                                request=resp.request,
+                            )
+                        if resp.status_code == 404:
+                            logger.warning(f"⚠️ 404 Not Found: {url}")
+                            return None
+                        if resp.status_code in [403, 503, 429]:
+                            logger.warning(
+                                f"⚠️ Server returned {resp.status_code}. Retrying..."
+                            )
+                            await asyncio.sleep(2 * (i + 1))
+                            continue
+                        resp.raise_for_status()
+                        return None
             except (
                 httpx.TimeoutException,
                 httpx.RemoteProtocolError,
@@ -426,12 +471,12 @@ class ThreadImporter:
                     try:
                         resp = await self._safe_request(media_url, retries=2)
                         if resp and resp.status_code == 200:
-                            ct = resp.headers.get("content-type", "")
-                            if "text/html" in ct:
+                            if not is_valid_media_magic(resp.content):
                                 logger.warning(
-                                    f"⚠️ Got HTML instead of image from {media_url}"
+                                    f"⚠️ Disallowed or corrupted media content from {media_url}"
                                 )
                                 continue
+                            ct = resp.headers.get("content-type", "")
                             downloaded_buffer = BytesIO(resp.content)
                             content_type = ct or "application/octet-stream"
 
@@ -750,7 +795,12 @@ class ThreadImporter:
             finally:
                 self.client = None
                 self.created_post_ids.clear()
-                self._cpu_executor.shutdown(wait=False, cancel_futures=True)
+                if self._cpu_executor:
+                    try:
+                        self._cpu_executor.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        pass
+                    self._cpu_executor = None
 
     async def _queue_posts_for_simulation(
         self,

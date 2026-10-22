@@ -69,9 +69,60 @@ logging.basicConfig(level=logging.INFO)
 install_logging_redaction()
 logger = logging.getLogger("uploader")
 THUMBNAIL_SIZE = (320, 320)
-Image.MAX_IMAGE_PIXELS = 45_000_000
+Image.MAX_IMAGE_PIXELS = 16_000_000
 TELEGRAM_PHOTO_LIMIT = 10 * 1024 * 1024  # 10 MB
 TELEGRAM_DOCUMENT_LIMIT = 50 * 1024 * 1024 # 50 MB
+
+def is_valid_media_magic(data: bytes, ext: str = "") -> bool:
+    """
+    Проверяет соответствие содержимого файла реальным медиа-форматам по magic bytes.
+    Блокирует SVG, HTML, XML-бомбы, shell-скрипты, PE/ELF исполняемые файлы и zip-архивы.
+    """
+    if not data or len(data) < 4:
+        return False
+    # SVG / HTML / XML checks
+    prefix_lower = data[:512].lower()
+    if (
+        b"<html" in prefix_lower
+        or b"<!doctype html" in prefix_lower
+        or b"<svg" in prefix_lower
+        or b"<?xml" in prefix_lower
+        or b"<script" in prefix_lower
+        or b"<!entity" in prefix_lower
+    ):
+        return False
+    # Executable / Archive checks
+    if data[:2] == b"MZ" or data[:4] == b"\x7fELF" or data[:4] == b"PK\x03\x04":
+        return False
+    # Known magic headers
+    # JPEG: \xff\xd8\xff
+    if data[:3] == b"\xff\xd8\xff":
+        return True
+    # PNG: \x89PNG\r\n\x1a\n
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    # GIF: GIF87a, GIF89a
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return True
+    # WEBP: RIFF....WEBP
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+        return True
+    # MP4 / MOV / M4V (ISO Base Media): ....ftyp
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return True
+    # Matroska / WebM: \x1a\x45\xdf\xa3
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return True
+    # OGG: OggS
+    if data[:4] == b"OggS":
+        return True
+    # MP3: ID3 or MPEG sync frame
+    if data[:3] == b"ID3" or (data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
+        return True
+    # WAV: RIFF....WAVE
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WAVE":
+        return True
+    return False
 def clean_tags_string(text: str | None) -> str | None:
     if not text: return None
     cleaned = " ".join(text.split())
@@ -226,6 +277,9 @@ async def process_and_upload_image(
     if len(contents) > max_size_bytes:
         raise HTTPException(status_code=413, detail="File too large")
 
+    if not is_valid_media_magic(contents, ext):
+        raise HTTPException(status_code=400, detail="Corrupted or disallowed media format")
+
     HASH_LIMIT = 50 * 1024 * 1024
     is_image_mime = ct_clean.startswith("image/")
     sha256_hash = None
@@ -283,11 +337,15 @@ async def process_and_upload_image(
     if is_image:
         try:
             def _validate_and_phash():
-                with Image.open(BytesIO(contents)) as img:
-                    if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
-                    if max(img.size) > 128:
-                        img.thumbnail((128, 128))
-                    return str(imagehash.phash(img))
+                try:
+                    with Image.open(BytesIO(contents)) as img:
+                        if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
+                        if max(img.size) > 128:
+                            img.thumbnail((128, 128))
+                        return str(imagehash.phash(img))
+                except Image.DecompressionBombError:
+                    logger.warning("💣 Decompression bomb detected in _validate_and_phash")
+                    return None
 
             thumbnail_bytes, phash_str = await asyncio.gather(
                 create_thumbnail_in_memory(contents),
