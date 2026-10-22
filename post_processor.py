@@ -8,7 +8,7 @@ import json
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
@@ -438,6 +438,22 @@ class NewPostProcessor:
                     break
                 else:
                     print("    -> Отправка байтов также не удалась. Пробую следующий источник.")
+            except TelegramRetryAfter as tra:
+                wait_t = float(getattr(tra, "retry_after", 1) or 1)
+                await asyncio.sleep(min(wait_t + 0.2, 4.0))
+                try:
+                    self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
+                        bot_instance=self.bot_instance, board_id=self.board_id, recipients={self.user_id},
+                        content=fallback_content, reply_info=self.reply_info_for_author
+                    ))
+                    if self.author_results:
+                        self.final_content.pop('image_url', None)
+                        self.final_content['image_bytes'] = processed_bytes
+                        fallback_succeeded = True
+                        print(f"✅ 'Спасательный Цикл' для поста #{self.current_post_num} успешен после TelegramRetryAfter.")
+                        break
+                except Exception:
+                    pass
             except Exception as ex:
                 print(f"    -> Ошибка в цикле спасения: {type(ex).__name__}: {ex}")
                 continue
@@ -448,14 +464,33 @@ class NewPostProcessor:
         if self.user_id <= 0:
             return
         try:
-            self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
-                bot_instance=self.bot_instance,
-                board_id=self.board_id,
-                recipients={self.user_id},
-                content=self.author_content,
-                reply_info=self.reply_info_for_author,
-                verbose=False
-            ))
+            async with asyncio.timeout(15.0):
+                self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
+                    bot_instance=self.bot_instance,
+                    board_id=self.board_id,
+                    recipients={self.user_id},
+                    content=self.author_content,
+                    reply_info=self.reply_info_for_author,
+                    verbose=False
+                ))
+        except TelegramRetryAfter as e:
+            retry_delay = float(getattr(e, "retry_after", 1) or 1)
+            if retry_delay <= 4.0:
+                await asyncio.sleep(retry_delay + 0.2)
+                try:
+                    async with asyncio.timeout(10.0):
+                        self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
+                            bot_instance=self.bot_instance,
+                            board_id=self.board_id,
+                            recipients={self.user_id},
+                            content=self.author_content,
+                            reply_info=self.reply_info_for_author,
+                            verbose=False
+                        ))
+                except Exception as ex:
+                    logger.warning(f"Retry after TelegramRetryAfter failed for user {self.user_id}: {ex}")
+            else:
+                logger.warning(f"TelegramRetryAfter too long ({retry_delay}s) for author {self.user_id}. Falling back to delivery queue.")
         except TelegramBadRequest as e:
             if 'image_url' in self.final_content:
                 await self._execute_fallback_rescue(e)
@@ -534,10 +569,14 @@ class NewPostProcessor:
                         v_attr = getattr(msg, 'video', None)
                         d_attr = getattr(msg, 'document', None)
                         a_attr = getattr(msg, 'audio', None)
-                        if p_attr: item = {'type': 'photo', 'file_id': p_attr[-1].file_id}
-                        elif v_attr: item = {'type': 'video', 'file_id': v_attr.file_id}
-                        elif d_attr: item = {'type': 'document', 'file_id': d_attr.file_id}
-                        elif a_attr: item = {'type': 'audio', 'file_id': a_attr.file_id}
+                        if p_attr and hasattr(p_attr[-1], 'file_id') and isinstance(p_attr[-1].file_id, str):
+                            item = {'type': 'photo', 'file_id': p_attr[-1].file_id}
+                        elif v_attr and hasattr(v_attr, 'file_id') and isinstance(v_attr.file_id, str):
+                            item = {'type': 'video', 'file_id': v_attr.file_id}
+                        elif d_attr and hasattr(d_attr, 'file_id') and isinstance(d_attr.file_id, str):
+                            item = {'type': 'document', 'file_id': d_attr.file_id}
+                        elif a_attr and hasattr(a_attr, 'file_id') and isinstance(a_attr.file_id, str):
+                            item = {'type': 'audio', 'file_id': a_attr.file_id}
                         if item: new_media_items.append(item)
                     if new_media_items:
                         self.final_content['media'] = new_media_items
@@ -557,11 +596,16 @@ class NewPostProcessor:
                     anim_attr = getattr(msg, 'animation', None)
                     voice_attr = getattr(msg, 'voice', None)
                     a_attr = getattr(msg, 'audio', None)
-                    if p_attr: file_id_to_persist = p_attr[-1].file_id
-                    elif v_attr: file_id_to_persist = v_attr.file_id
-                    elif anim_attr: file_id_to_persist = anim_attr.file_id
-                    elif voice_attr: file_id_to_persist = voice_attr.file_id
-                    elif a_attr: file_id_to_persist = a_attr.file_id
+                    if p_attr and hasattr(p_attr[-1], 'file_id') and isinstance(p_attr[-1].file_id, str):
+                        file_id_to_persist = p_attr[-1].file_id
+                    elif v_attr and hasattr(v_attr, 'file_id') and isinstance(v_attr.file_id, str):
+                        file_id_to_persist = v_attr.file_id
+                    elif anim_attr and hasattr(anim_attr, 'file_id') and isinstance(anim_attr.file_id, str):
+                        file_id_to_persist = anim_attr.file_id
+                    elif voice_attr and hasattr(voice_attr, 'file_id') and isinstance(voice_attr.file_id, str):
+                        file_id_to_persist = voice_attr.file_id
+                    elif a_attr and hasattr(a_attr, 'file_id') and isinstance(a_attr.file_id, str):
+                        file_id_to_persist = a_attr.file_id
                     if file_id_to_persist:
                         self.final_content['file_id'] = file_id_to_persist
                         self.final_content.pop('image_url', None)
@@ -681,14 +725,14 @@ class NewPostProcessor:
                     print(f"⚠️ Ошибка при форматировании заголовков для поста #{self.current_post_num}: {e}")
 
                 try:
-                    await self._save_to_memory(now_dt)
-                except Exception as e:
-                    print(f"⚠️ Ошибка при сохранении в память поста #{self.current_post_num}: {e}")
-
-                try:
                     await self._send_to_author_with_fallback()
                 except Exception as e:
                     print(f"⚠️ Ошибка при отправке подтверждения автору поста #{self.current_post_num}: {e}")
+
+                try:
+                    await self._save_to_memory(now_dt)
+                except Exception as e:
+                    print(f"⚠️ Ошибка при сохранении в память поста #{self.current_post_num}: {e}")
 
                 try:
                     await self._enqueue_and_notify()

@@ -1931,8 +1931,8 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
     media_group_key = _media_group_state_key(message.chat.id, media_group_id)
     try:
         await message.delete()
-    except TelegramBadRequest:
-        pass  # Race condition: another message in the media group already deleted it
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        pass  # Race condition or API error: message already handled or deleted
 
     if media_group_key in sent_media_groups:
         return

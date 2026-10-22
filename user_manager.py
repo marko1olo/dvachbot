@@ -11,6 +11,7 @@ from aiogram.types import Message, WebAppInfo
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
 from deanonymizer import generate_deanon_info
 from common.database import get_post_info_by_copy, get_pool, update_user_settings_db
+from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from thread_texts import thread_messages
 from text_assets import INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP, DEANON_COOLDOWN_PHRASES
@@ -284,15 +285,15 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
             help_text = (
                 "<b>NGワード管理:</b>\n"
                 "/hide list - リストを表示\n"
-                "/hide add <単語> - 追加\n"
-                "/hide remove <単語> - 削除"
+                "/hide add &lt;単語&gt; - 追加\n"
+                "/hide remove &lt;単語&gt; - 削除"
             )
         else:
             help_text = (
                 "<b>Управление скрытием слов:</b>\n"
                 "/hide list - Список скрытых слов\n"
-                "/hide add <слово> - Добавить слово\n"
-                "/hide remove <слово> - Убрать слово"
+                "/hide add &lt;слово&gt; - Добавить слово\n"
+                "/hide remove &lt;слово&gt; - Убрать слово"
             )
         await message.answer(help_text, parse_mode="HTML")
         return
@@ -987,7 +988,7 @@ async def cmd_global_top(message: types.Message, board_id: str | None, stream: s
     def format_table(data_list, value_suffix=""):
         lines = []
         for i, (uid, val) in enumerate(data_list, 1):
-            name = generate_anon_name(uid)
+            name = escape_html(generate_anon_name(uid))
             val_str = f"{int(val)}{value_suffix}"
             lines.append(f"{i:2}. {name:<25} | {val_str:>8}")
         return "\n".join(lines) if lines else "Empty"
@@ -1882,10 +1883,13 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     builder.adjust(1, 2, 1)
 
     admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
+    rep_raw = reported_msg.text or reported_msg.caption or '<медиа>'
+    if len(rep_raw) > 1000:
+        rep_raw = rep_raw[:1000] + "..."
     report_text = f"🚨 <b>Новый РЕПОРТ в /{board_id}/</b>\n"
     report_text += f"От кого: <code>{message.from_user.id}</code>\n"
     report_text += f"На кого: <code>{author_id}</code>\n"
-    report_text += f"Текст: <i>{escape_html(reported_msg.text or reported_msg.caption or '<медиа>')}</i>"
+    report_text += f"Текст: <i>{escape_html(rep_raw)}</i>"
 
     for admin_id in admins:
         try:
@@ -1911,18 +1915,39 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
     msg_id = parts[4]
 
     admin_id = callback.from_user.id
+    msg_base = callback.message.html_text or callback.message.caption_html_text or (callback.message.text or "")
+    if not msg_base:
+        msg_base = f"🚨 <b>РЕПОРТ в /{board_id}/</b>\nНа кого: <code>{author_id}</code>"
 
     if action == "ign":
-        await callback.message.edit_text(callback.message.html_text + "\n\n<i>❌ Проигнорировано модератором.</i>", parse_mode="HTML")
+        try:
+            await callback.message.edit_text(msg_base + "\n\n<i>❌ Проигнорировано модератором.</i>", parse_mode="HTML")
+        except Exception:
+            pass
         await callback.answer("Жалоба отклонена")
         return
 
     if action == "del":
+        c_id = int(chat_id)
+        m_id = int(msg_id)
+        post_num = message_to_post.get((c_id, m_id))
+        if not post_num:
+            info = await get_post_info_by_copy(c_id, m_id)
+            if info:
+                post_num = info[0]
+
+        if post_num:
+            from post_helpers import delete_single_post
+            await delete_single_post(post_num, callback.bot)
+        else:
+            try:
+                await callback.bot.delete_message(chat_id=c_id, message_id=m_id)
+            except Exception:
+                pass
         try:
-            await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
+            await callback.message.edit_text(msg_base + "\n\n<i>🗑 Пост удален модератором.</i>", parse_mode="HTML")
         except Exception:
-            import traceback; traceback.print_exc()
-        await callback.message.edit_text(callback.message.html_text + "\n\n<i>🗑 Пост удален модератором.</i>", parse_mode="HTML")
+            pass
         await callback.answer("Пост удален")
         return
 
@@ -1938,16 +1963,19 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
             b_data = board_data[board_id]
             b_data.setdefault('bans', {})[target_id] = time.time() + (duration_hours * 3600)
 
-        deleted_posts = await delete_user_posts(callback.bot, target_id, 10, board_id)
-        await log_global_event('bot', f"🚨 BAN: Мод {admin_id} забанил по репорту {target_id} на {duration_hours}ч в /{board_id}/ (удалено {deleted_posts} копий)")
+        deleted_posts = await delete_user_posts(callback.bot, target_id, 1440, board_id)
+        await log_global_event('bot', f"🚨 BAN: Мод {admin_id} забанил по репорту {target_id} на {duration_hours}ч в /{board_id}/ (удалено {deleted_posts} постов)")
 
         # Also try to delete the specific reported message just in case
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
-        await callback.message.edit_text(callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
+        try:
+            await callback.message.edit_text(msg_base + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
+        except Exception:
+            pass
         await callback.answer(f"Пользователь забанен на {duration_hours}ч")
 
 @router.callback_query(F.data.startswith("help:"))

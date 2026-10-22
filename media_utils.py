@@ -86,12 +86,20 @@ async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) ->
                 except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError) as e:
                     if current_proxy:
                         logger.debug(f'⚠️ [DEBUG_DL] Сбой прокси ({e}). Пробую DIRECT...')
-                        async with session.get(url, allow_redirects=True, proxy=None) as response:
-                            if response.status == 200:
-                                data = await response.read()
-                                if len(data) > 0 and (not (data.strip().startswith(b'<') and b'<html' in data[:200].lower())):
-                                    logger.debug('✅ [DEBUG_DL] Успех через DIRECT.')
-                                    return (data, len(data))
+                        try:
+                            async with session.get(url, allow_redirects=True, proxy=None) as response:
+                                if response.status == 200:
+                                    content_type = response.headers.get('Content-Type', '').lower()
+                                    data = await response.read()
+                                    if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and (b'<html' in data[:500].lower())):
+                                        return None
+                                    if len(data) > 49.5 * 1024 * 1024:
+                                        return None
+                                    if len(data) > 0:
+                                        logger.debug('✅ [DEBUG_DL] Успех через DIRECT.')
+                                        return (data, len(data))
+                        except Exception as direct_err:
+                            logger.debug(f'⚠️ [DEBUG_DL] DIRECT fallback failed: {direct_err}')
                     raise e
         except asyncio.TimeoutError:
             if attempt == 0:

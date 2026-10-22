@@ -1,4 +1,5 @@
 from common.anon_identity import get_anon_id
+from common.html_utils import escape_html
 import asyncio
 import time
 import re
@@ -186,8 +187,15 @@ def extract_post_num_from_message(message: Any) -> int | None:
 
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru', global_post_num: int | None = None) -> str:
 
-    b_data = board_data[board_id]
-    op_marker = " (OP)" if author_id != 0 and author_id == thread_info.get('op_id') else ""
+    b_data = board_data.get(board_id, {})
+    is_isolated = False
+    if author_id > 0:
+        is_isolated = bool(b_data.get('user_settings', {}).get(author_id, {}).get('is_isolated'))
+
+    op_marker = ""
+    if not is_isolated and author_id != 0 and author_id == thread_info.get('op_id'):
+        op_marker = " (OP)"
+
     post_num_formatted = f"{local_post_num}/{MAX_POSTS_PER_THREAD}{op_marker}"
     msk_now = datetime.now(UTC) + timedelta(hours=3)
     hour = msk_now.hour
@@ -210,21 +218,6 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
         elif rand < 0.018: circle = "⭐ "
 
     author_prefix = ""
-    if author_id > 0:
-        try:
-            from common.db_pool import get_pool
-            import json
-            from wardrobe_engine import get_wardrobe_total_stats
-            db = await get_pool()
-            async with db.execute("SELECT active_items FROM Users WHERE user_id = ?", (author_id,)) as c:
-                row = await c.fetchone()
-                if row and row[0]:
-                    items = json.loads(row[0])
-                    w_stats = get_wardrobe_total_stats(items)
-                    author_prefix = ""  # wardrobe icons disabled in post headers
-        except Exception:
-            pass
-
     zw_prefix = encode_post_num_zw(global_post_num) if global_post_num else ""
 
     if b_data.get('slavaukraine_mode'): return zw_prefix + f"{author_prefix}💙💛 Пост №{post_num_formatted}"
@@ -305,7 +298,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                     p_val = row[1]
                     if "[👑 Золотой Анон]" in p_val or "Золотой Анон" in p_val:
                         p_val = "👑👑"
-                    prefix_str = f"{p_val} "
+                    prefix_str = f"{escape_html(p_val)} "
 
         debuff_icons = ("💩 " if has_poop else "") + ("🤮 " if has_vomit else "") + ("🇺🇦 " if has_flag_ua else "") + ("🇷🇺 " if has_flag_ru else "")
         custom_prefix = badge_emoji + debuff_icons + prefix_str
@@ -736,13 +729,20 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             try:
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
 
-    tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in messages_to_delete_info]
-    results = await asyncio.gather(*tasks)
-    deleted_count = sum(1 for res in results if res is True)
+    CHUNK_SIZE = 47
+    DELAY_BETWEEN_CHUNKS = 0.08
+    deleted_count = 0
+    for i in range(0, len(messages_to_delete_info), CHUNK_SIZE):
+        chunk = messages_to_delete_info[i:i + CHUNK_SIZE]
+        tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in chunk]
+        results = await asyncio.gather(*tasks)
+        deleted_count += sum(1 for res in results if res is True)
+        if i + CHUNK_SIZE < len(messages_to_delete_info):
+            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
     return deleted_count
 
 async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
@@ -952,7 +952,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
                 continue
 
 async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
-    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
     import aiohttp
     deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
     if not deleter:
@@ -968,6 +968,14 @@ async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: s
             except Exception:
                 pass
         return False
+    except TelegramRetryAfter as e:
+        wait_s = float(getattr(e, "retry_after", 1) or 1)
+        await asyncio.sleep(min(wait_s + 0.2, 5.0))
+        try:
+            await deleter.delete_message(uid, mid)
+            return True
+        except Exception:
+            return False
     except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
         await asyncio.sleep(0.5)
         try:
