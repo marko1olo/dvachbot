@@ -86,7 +86,7 @@ class TestBannerManager(unittest.TestCase):
         from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
         all_banners = set(_CATEGORIZED_BANNERS["all"])
         self.assertGreaterEqual(len(all_banners), 1441)
-        self.assertEqual(len(all_banners), 2995)
+        self.assertEqual(len(all_banners), 3325)
 
         all_reached = set()
         for subsection, cats in SUBSECTION_CATEGORIES.items():
