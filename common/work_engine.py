@@ -9,6 +9,10 @@ import time
 import random
 import re
 from typing import Dict, Any, Tuple, Optional
+import threading
+
+_WORK_ENGINE_LOCK = threading.RLock()
+_GLOBAL_JOB_TIMERS: Dict[Tuple[int, str], int] = {}
 
 # -----------------------------------------------------------------------------
 # 9 Career Tiers (Authentic Dvach Lore & High-Stakes Progression)
@@ -1675,222 +1679,280 @@ def is_night_shift_active(current_time: Optional[int] = None) -> bool:
     return 0 <= msk_hour < 7
 
 
-def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str, Optional[str]]:
+def execute_job_action(
+    job_id: str,
+    current_items: dict,
+    user_id: Optional[int] = None
+) -> Tuple[bool, int, str, Optional[str]]:
     """
     Executes job outcome with full RPG gear multipliers, set bonuses, milestones, and drops.
     Returns: (is_success, amount_change, text_message, item_dropped_key_or_none)
+    Thread-safe, anti-race, cross-board synchronized.
     """
+    if not isinstance(current_items, dict):
+        return False, 0, "❌ Ошибка данных инвентаря.", None
+
     if job_id not in WORK_VACANCIES:
         return False, 0, "❌ Неизвестная вакансия.", None
 
-    job = WORK_VACANCIES[job_id]
-    now = int(time.time())
-    work_timers = current_items.setdefault("work_cooldowns", {})
-    last_time = work_timers.get(job_id, 0)
-    passed = now - last_time
+    with _WORK_ENGINE_LOCK:
+        job = WORK_VACANCIES[job_id]
+        now = int(time.time())
 
-    # Resolve equipped items with durability / expiration validation
-    try:
-        from wardrobe_engine import get_equipped_gear
-        equipped = get_equipped_gear(current_items, current_time=now)
-    except Exception:
-        equipped = {}
+        # Resolve user_id if passed or stored inside current_items
+        effective_uid = user_id
+        if effective_uid is None:
+            raw_uid = current_items.get("user_id") or current_items.get("uid")
+            if isinstance(raw_uid, (int, float)):
+                effective_uid = int(raw_uid)
 
-    def resolve_slot(slot: str) -> Optional[str]:
-        eq_item = equipped.get(slot)
-        if eq_item:
-            return eq_item["id"]
-        raw = current_items.get(f"equipped_{slot}")
-        if raw:
-            perm = current_items.get(f"{raw}_is_permanent", False)
-            if perm:
+        # Ensure work_cooldowns is a valid dict
+        work_timers = current_items.get("work_cooldowns")
+        if not isinstance(work_timers, dict):
+            work_timers = {}
+            current_items["work_cooldowns"] = work_timers
+
+        # Synchronize with shared_state and global timer registry to prevent multi-board/parallel dupes
+        shared_ts = 0
+        if effective_uid is not None:
+            try:
+                from shared_state import get_user_work_cooldowns
+                shared_ts = get_user_work_cooldowns(effective_uid).get(job_id, 0)
+            except Exception:
+                shared_ts = 0
+            mem_ts = _GLOBAL_JOB_TIMERS.get((effective_uid, job_id), 0)
+            shared_ts = max(shared_ts, mem_ts)
+
+        try:
+            local_ts = int(work_timers.get(job_id, 0))
+        except (ValueError, TypeError):
+            local_ts = 0
+
+        last_time = max(local_ts, shared_ts)
+        passed = max(0, now - last_time) if last_time <= now else 0
+
+        # Resolve equipped items with durability / expiration validation
+        try:
+            from wardrobe_engine import get_equipped_gear
+            equipped = get_equipped_gear(current_items, current_time=now)
+        except Exception:
+            equipped = {}
+
+        def resolve_slot(slot: str) -> Optional[str]:
+            eq_item = equipped.get(slot)
+            if eq_item and isinstance(eq_item, dict) and eq_item.get("id"):
+                return eq_item["id"]
+            raw = current_items.get(f"equipped_{slot}")
+            if raw and isinstance(raw, str):
+                perm = bool(current_items.get(f"{raw}_is_permanent", False))
+                if perm:
+                    return raw
+                exp = current_items.get(f"{raw}_expires")
+                if exp is not None:
+                    try:
+                        return raw if float(exp) > now else None
+                    except (ValueError, TypeError):
+                        return None
                 return raw
-            exp = current_items.get(f"{raw}_expires")
-            if exp is not None:
-                return raw if exp > now else None
-            return raw
-        return None
+            return None
 
-    feet = resolve_slot("feet")
-    torso = resolve_slot("torso")
-    head = resolve_slot("head")
-    face = resolve_slot("face")
+        feet = resolve_slot("feet")
+        torso = resolve_slot("torso")
+        head = resolve_slot("head")
+        face = resolve_slot("face")
 
-    # Cooldown Buffs: Slippers reduce cooldown by 20%
-    base_cd = job["cooldown_sec"]
-    if feet == "feet_slippers":
-        base_cd = int(base_cd * 0.8)
+        # Cooldown Buffs: Slippers reduce cooldown by 20%
+        base_cd = job["cooldown_sec"]
+        if feet == "feet_slippers":
+            base_cd = int(base_cd * 0.8)
 
-    if passed < base_cd:
-        left_sec = base_cd - passed
-        if left_sec >= 3600:
-            h = left_sec // 3600
-            m = (left_sec % 3600) // 60
-            cd_str = f"{h} ч {m} мин"
-        elif left_sec >= 60:
-            cd_str = f"{left_sec // 60} мин"
-        else:
-            cd_str = f"{left_sec} сек"
-        return False, 0, f"⏳ Кулдаун! Эта смена будет доступна через {cd_str}.", None
+        if passed < base_cd and last_time > 0:
+            left_sec = base_cd - passed
+            if left_sec >= 3600:
+                h = left_sec // 3600
+                m = (left_sec % 3600) // 60
+                cd_str = f"{h} ч {m} мин"
+            elif left_sec >= 60:
+                cd_str = f"{left_sec // 60} мин"
+            else:
+                cd_str = f"{left_sec} сек"
+            return False, 0, f"⏳ Кулдаун! Эта смена будет доступна через {cd_str}.", None
 
-    # Check Requirements (Progressive shifts unlock)
-    total_shifts = current_items.get("work_shifts", 0)
-    req_shifts = job.get("required_shifts", 0)
-    if total_shifts < req_shifts:
-        return False, 0, f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}).", None
+        # Check Requirements (Progressive shifts unlock)
+        try:
+            total_shifts = max(0, int(current_items.get("work_shifts", 0)))
+        except (ValueError, TypeError):
+            total_shifts = 0
+        current_items["work_shifts"] = total_shifts
 
-    # Calculate Salary Multiplier from Gear & Sets
-    salary_mult = 1.0
-    buff_notes = []
+        req_shifts = job.get("required_shifts", 0)
+        if total_shifts < req_shifts:
+            return False, 0, f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}).", None
 
-    # Individual Gear Buffs
-    if torso == "body_wasserman":
-        salary_mult += 0.25
-        buff_notes.append("🦺 Жилетка Вассермана: +25% ЗП")
-    if head == "hat_crown" and job_id in ["courier", "deputy", "scam", "escort_sugar", "abu_consigliere", "shadow_oligarch", "cam_model", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
-        salary_mult += 0.20
-        buff_notes.append("👑 Корона: +20% чаевых")
-    if face in ["face_wasserman_glasses", "face_thug_glasses"] and job_id in ["captcha", "it_freelance", "spy", "crypto_wiper", "crypto_cartel", "propaganda_troll", "matrix_architect", "mod_b", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
-        salary_mult += 0.15
-        buff_notes.append("👓 Очки Интеллекта: +15% ЗП")
-
-    # Set Bonuses
-    try:
-        from wardrobe_engine import get_active_set_bonus
-        active_set = get_active_set_bonus(current_items)
-        if active_set:
-            if active_set.get("id") in ["set_wasserman", "set_onotole"]:
-                salary_mult += 0.40
-                buff_notes.append("🦺 Сет Онотоле: +40% ЗП")
-            elif active_set.get("id") in ["set_gop_skuf", "set_skuf"]:
-                salary_mult += 0.35
-                buff_notes.append("🍺 Сет Сыча: +35% получки")
-            elif active_set.get("id") == "set_neo":
-                salary_mult += 0.25
-                buff_notes.append("😎 Сет Нео: +25% ЗП")
-    except Exception:
-        active_set = None
-
-    # Night Shift Multiplier (x1.5 from 00:00 to 07:00 MSK)
-    if is_night_shift_active(now):
-        salary_mult *= 1.5
-        buff_notes.append("🌙 Ночной тариф x1.5")
-
-    salary_mult = round(salary_mult, 2)
-
-    # Progressive Daily Fatigue System (Unique per Vacancy)
-    # Each subsequent shift on the SAME vacancy completed within the last 24h yields 15% less reward (down to a 20% floor).
-    # Multiplier = max(0.20, 0.85 ** shifts_today)
-    raw_recent = current_items.get("recent_shifts")
-    if isinstance(raw_recent, dict):
-        recent_job_shifts = [ts for ts in raw_recent.get(job_id, []) if isinstance(ts, (int, float)) and (now - ts) < 86400]
-    elif isinstance(raw_recent, list):
-        # Graceful migration for legacy list format: treat previous timestamps as belonging to this job
-        recent_job_shifts = [ts for ts in raw_recent if isinstance(ts, (int, float)) and (now - ts) < 86400]
-        current_items["recent_shifts"] = {job_id: list(recent_job_shifts)}
-    else:
-        recent_job_shifts = []
-
-    shifts_today = len(recent_job_shifts)
-    fatigue_mult = max(0.20, 0.85 ** shifts_today)
-    if shifts_today > 0:
-        fatigue_pct = int(round((1.0 - fatigue_mult) * 100))
-        buff_notes.append(f"⚡ Усталость по вакансии: -{fatigue_pct}% (смена #{shifts_today + 1})")
-
-    def _record_shift_completion(jid: str):
-        work_timers[jid] = now
-        shifts_dict = current_items.get("recent_shifts")
-        if not isinstance(shifts_dict, dict):
-            shifts_dict = {}
-        cleaned_shifts = {}
-        for k, v in shifts_dict.items():
-            if isinstance(v, list):
-                valid = [ts for ts in v if isinstance(ts, (int, float)) and (now - ts) < 86400]
-                if valid:
-                    cleaned_shifts[k] = valid
-        cleaned_shifts.setdefault(jid, []).append(now)
-        current_items["recent_shifts"] = cleaned_shifts
-
-    # Failure & Risk Calculation
-    risk_pct = job.get("risk_pct", 0.0)
-    if (active_set and active_set.get("id") in ["set_riot_police", "set_omon"]) or head == "hat_helmet":
-        risk_pct = 0.0  # Riot police or helmet immunity to work fines
-        buff_notes.append("🪖 Шлем ОМОНа: 0% штрафов" if head == "hat_helmet" else "🪖 Спецназ: 0% штрафов")
-
-    is_fail = (risk_pct > 0.0 and random.random() < risk_pct)
-    if is_fail:
-        penalty = job.get("penalty", 30)
+        # Atomic cooldown reservation: prevent any concurrent request from passing the gate
         work_timers[job_id] = now
-        fail_list = list(job.get("fail_phrases", [])) + UNIVERSAL_WORK_FAIL_PHRASES
-        if not fail_list:
-            fail_list = ["🚨 Штраф за косяк на смене: -{penalty} ₪!"]
-        raw_fail = random.choice(fail_list).format(penalty=penalty, reward=0)
-        clean_fail = re.sub(r'<[^>]+>', '', raw_fail)
-        return False, penalty, clean_fail, None
+        if effective_uid is not None:
+            _GLOBAL_JOB_TIMERS[(effective_uid, job_id)] = now
+            try:
+                from shared_state import set_user_work_cooldown
+                set_user_work_cooldown(effective_uid, job_id, now)
+            except Exception:
+                pass
 
-    # Success & Reward Calculation
-    base_reward = random.randint(job["reward_range"][0], job["reward_range"][1])
-    is_jackpot = random.random() < 0.04 and bool(job.get("jackpot_phrases"))
+        # Calculate Salary Multiplier from Gear & Sets
+        salary_mult = 1.0
+        buff_notes = []
 
-    if is_jackpot:
-        mult = random.randint(2, 3)
-        reward = max(1, int(round(base_reward * mult * salary_mult * fatigue_mult)))
-        _record_shift_completion(job_id)
-        jp_tmpl = random.choice(job["jackpot_phrases"]).format(reward=reward, penalty=0)
-        clean_msg = re.sub(r'<[^>]+>', '', jp_tmpl)
-    else:
-        reward = max(1, int(round(base_reward * salary_mult * fatigue_mult)))
-        _record_shift_completion(job_id)
-        succ_list = list(job.get("phrases", [])) + UNIVERSAL_WORK_SUCCESS_PHRASES
-        if not succ_list:
-            succ_list = ["✅ Успешно отработал смену: +{reward} ₪!"]
-        raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
-        clean_msg = re.sub(r'<[^>]+>', '', raw_succ)
+        # Individual Gear Buffs
+        if torso == "body_wasserman":
+            salary_mult += 0.25
+            buff_notes.append("🦺 Жилетка Вассермана: +25% ЗП")
+        if head == "hat_crown" and job_id in ["courier", "deputy", "scam", "escort_sugar", "abu_consigliere", "shadow_oligarch", "cam_model", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
+            salary_mult += 0.20
+            buff_notes.append("👑 Корона: +20% чаевых")
+        if face in ["face_wasserman_glasses", "face_thug_glasses"] and job_id in ["captcha", "it_freelance", "spy", "crypto_wiper", "crypto_cartel", "propaganda_troll", "matrix_architect", "mod_b", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
+            salary_mult += 0.15
+            buff_notes.append("👓 Очки Интеллекта: +15% ЗП")
 
-    # Track Completed Shifts & Check Milestone Achievements
-    total_shifts += 1
-    current_items["work_shifts"] = total_shifts
-    ach_note = ""
-    try:
-        from achievements_engine import check_and_unlock_achievement
-        for req, ach_key in [
-            (1, "ach_first_work"),
-            (10, "ach_work_10"),
-            (50, "ach_work_50"),
-            (100, "ach_work_100"),
-            (150, "ach_work_150"),
-            (250, "ach_work_250"),
-            (400, "ach_work_400"),
-            (600, "ach_work_600"),
-            (800, "ach_work_800"),
-            (1000, "ach_work_1000"),
-            (1337, "ach_work_1337"),
-        ]:
-            if total_shifts >= req:
-                unlocked, ach_info = check_and_unlock_achievement(current_items, ach_key)
-                if unlocked and ach_info:
-                    reward += ach_info.get('reward_cash', 0)
-                    ach_note += f" | 🏆 Ачивка: {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
-    except Exception:
-        pass
+        # Set Bonuses
+        try:
+            from wardrobe_engine import get_active_set_bonus
+            active_set = get_active_set_bonus(current_items)
+            if active_set:
+                if active_set.get("id") in ["set_wasserman", "set_onotole"]:
+                    salary_mult += 0.40
+                    buff_notes.append("🦺 Сет Онотоле: +40% ЗП")
+                elif active_set.get("id") in ["set_gop_skuf", "set_skuf"]:
+                    salary_mult += 0.35
+                    buff_notes.append("🍺 Сет Сыча: +35% получки")
+                elif active_set.get("id") == "set_neo":
+                    salary_mult += 0.25
+                    buff_notes.append("😎 Сет Нео: +25% ЗП")
+        except Exception:
+            active_set = None
 
-    # Check Random Item Drop (Anime set 2x, Tracksuit 2x, Bag 1.5x / 8% flat)
-    drop_rate_mult = 2.0 if (active_set and active_set.get("id") in ["set_anime", "set_anime_hikka"]) else 1.0
-    if head == "hat_bag":
-        drop_rate_mult *= 1.5
-    if torso == "body_tracksuit":
-        drop_rate_mult *= 2.0
+        # Night Shift Multiplier (x1.5 from 00:00 to 07:00 MSK)
+        if is_night_shift_active(now):
+            salary_mult *= 1.5
+            buff_notes.append("🌙 Ночной тариф x1.5")
 
-    dropped_item = None
-    if job.get("item_drop"):
-        if random.random() < (job.get("item_drop_chance", 0.0) * drop_rate_mult):
-            dropped_item = job["item_drop"]
+        salary_mult = round(salary_mult, 2)
+
+        # Progressive Daily Fatigue System (Unique per Vacancy)
+        # Each subsequent shift on the SAME vacancy completed within the last 24h yields 15% less reward (down to a 20% floor).
+        # Multiplier = max(0.20, 0.85 ** shifts_today)
+        raw_recent = current_items.get("recent_shifts")
+        if isinstance(raw_recent, dict):
+            recent_job_shifts = [ts for ts in raw_recent.get(job_id, []) if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+        elif isinstance(raw_recent, list):
+            # Graceful migration for legacy list format: treat previous timestamps as belonging to this job
+            recent_job_shifts = [ts for ts in raw_recent if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+            current_items["recent_shifts"] = {job_id: list(recent_job_shifts)}
+        else:
+            recent_job_shifts = []
+
+        shifts_today = len(recent_job_shifts)
+        fatigue_mult = max(0.20, 0.85 ** shifts_today)
+        if shifts_today > 0:
+            fatigue_pct = int(round((1.0 - fatigue_mult) * 100))
+            buff_notes.append(f"⚡ Усталость по вакансии: -{fatigue_pct}% (смена #{shifts_today + 1})")
+
+        def _record_shift_completion(jid: str):
+            work_timers[jid] = now
+            shifts_dict = current_items.get("recent_shifts")
+            if not isinstance(shifts_dict, dict):
+                shifts_dict = {}
+            cleaned_shifts = {}
+            for k, v in shifts_dict.items():
+                if isinstance(v, list):
+                    valid = [ts for ts in v if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+                    if valid:
+                        cleaned_shifts[k] = valid
+            cleaned_shifts.setdefault(jid, []).append(now)
+            current_items["recent_shifts"] = cleaned_shifts
+
+        # Failure & Risk Calculation
+        risk_pct = max(0.0, float(job.get("risk_pct", 0.0)))
+        if (active_set and active_set.get("id") in ["set_riot_police", "set_omon"]) or head == "hat_helmet":
+            risk_pct = 0.0  # Riot police or helmet immunity to work fines
+            buff_notes.append("🪖 Шлем ОМОНа: 0% штрафов" if head == "hat_helmet" else "🪖 Спецназ: 0% штрафов")
+
+        is_fail = (risk_pct > 0.0 and random.random() < risk_pct)
+        if is_fail:
+            penalty = max(0, int(job.get("penalty", 30)))
+            _record_shift_completion(job_id)
+            fail_list = list(job.get("fail_phrases", [])) + UNIVERSAL_WORK_FAIL_PHRASES
+            if not fail_list:
+                fail_list = ["🚨 Штраф за косяк на смене: -{penalty} ₪!"]
+            raw_fail = random.choice(fail_list).format(penalty=penalty, reward=0)
+            clean_fail = re.sub(r'<[^>]+>', '', raw_fail)
+            return False, penalty, clean_fail, None
+
+        # Success & Reward Calculation
+        base_reward = random.randint(job["reward_range"][0], job["reward_range"][1])
+        is_jackpot = random.random() < 0.04 and bool(job.get("jackpot_phrases"))
+
+        if is_jackpot:
+            mult = random.randint(2, 3)
+            reward = max(1, int(round(base_reward * mult * salary_mult * fatigue_mult)))
+            _record_shift_completion(job_id)
+            jp_tmpl = random.choice(job["jackpot_phrases"]).format(reward=reward, penalty=0)
+            clean_msg = re.sub(r'<[^>]+>', '', jp_tmpl)
+        else:
+            reward = max(1, int(round(base_reward * salary_mult * fatigue_mult)))
+            _record_shift_completion(job_id)
+            succ_list = list(job.get("phrases", [])) + UNIVERSAL_WORK_SUCCESS_PHRASES
+            if not succ_list:
+                succ_list = ["✅ Успешно отработал смену: +{reward} ₪!"]
+            raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
+            clean_msg = re.sub(r'<[^>]+>', '', raw_succ)
+
+        # Track Completed Shifts & Check Milestone Achievements
+        total_shifts += 1
+        current_items["work_shifts"] = total_shifts
+        ach_note = ""
+        try:
+            from achievements_engine import check_and_unlock_achievement
+            for req, ach_key in [
+                (1, "ach_first_work"),
+                (10, "ach_work_10"),
+                (50, "ach_work_50"),
+                (100, "ach_work_100"),
+                (150, "ach_work_150"),
+                (250, "ach_work_250"),
+                (400, "ach_work_400"),
+                (600, "ach_work_600"),
+                (800, "ach_work_800"),
+                (1000, "ach_work_1000"),
+                (1337, "ach_work_1337"),
+            ]:
+                if total_shifts >= req:
+                    unlocked, ach_info = check_and_unlock_achievement(current_items, ach_key)
+                    if unlocked and ach_info:
+                        ach_cash = max(0, int(ach_info.get('reward_cash', 0)))
+                        reward += ach_cash
+                        ach_note += f" | 🏆 Ачивка: {ach_info['name']} (+{ach_cash} ₪)!"
+        except Exception:
+            pass
+
+        # Check Random Item Drop (Anime set 2x, Tracksuit 2x, Bag 1.5x / 8% flat)
+        drop_rate_mult = 2.0 if (active_set and active_set.get("id") in ["set_anime", "set_anime_hikka"]) else 1.0
+        if head == "hat_bag":
+            drop_rate_mult *= 1.5
+        if torso == "body_tracksuit":
+            drop_rate_mult *= 2.0
+
+        dropped_item = None
+        if job.get("item_drop"):
+            if random.random() < (job.get("item_drop_chance", 0.0) * drop_rate_mult):
+                dropped_item = job["item_drop"]
+            elif head == "hat_bag" and random.random() < 0.08:
+                dropped_item = "trash_lootbox"
         elif head == "hat_bag" and random.random() < 0.08:
             dropped_item = "trash_lootbox"
-    elif head == "hat_bag" and random.random() < 0.08:
-        dropped_item = "trash_lootbox"
 
-    buff_suffix = f" (Шмот: {', '.join(buff_notes)})" if buff_notes else ""
-    final_text = f"{clean_msg}{ach_note}{buff_suffix}"
+        buff_suffix = f" (Шмот: {', '.join(buff_notes)})" if buff_notes else ""
+        final_text = f"{clean_msg}{ach_note}{buff_suffix}"
 
-    return True, reward, final_text, dropped_item
+        return True, reward, final_text, dropped_item
+

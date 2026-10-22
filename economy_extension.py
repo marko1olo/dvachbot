@@ -88,27 +88,43 @@ def apply_tinfoil_damage(
     burn_chance: float = 0.0
 ) -> tuple[bool, int, int, int]:
     """
-    Применяет урон по прочности Шапочки из фольги (tinfoil_hat).
+    Применяет урон по прочности Шапочки из фольги (tinfoil_hat / tinfoil_until).
     - target_items: dict активных предметов цели (мутируется на месте).
     - now: текущее unix-время (int).
-    - hours_damage: сколько часов прочности срезается за удар.
+    - hours_damage: сколько часов прочности срезается за удар (гарантированно >= 0).
     - burn_chance: вероятность (0.0..1.0) мгновенного сгорания/разрушения шапочки.
     
     Возвращает кортеж: (destroyed: bool, left_hours: int, left_mins: int, remaining_seconds: int)
     """
-    hat_until = target_items.get("tinfoil_hat", 0)
+    if not isinstance(target_items, dict):
+        return True, 0, 0, 0
+
+    # Permanent Mythic Golden Foil Hat immunity
+    if (
+        target_items.get("equipped_head") == "hat_golden_foil"
+        or target_items.get("hat_golden_foil_is_permanent")
+        or target_items.get("owned_hat_golden_foil")
+    ):
+        return False, 999, 59, 86400 * 365
+
+    hat_until = max(
+        int(target_items.get("tinfoil_hat", 0) or 0),
+        int(target_items.get("tinfoil_until", 0) or 0)
+    )
+
     if hat_until <= now:
         target_items.pop("tinfoil_hat", None)
         target_items.pop("tinfoil_until", None)
         if target_items.get("equipped_head") == "hat_tinfoil":
             target_items.pop("equipped_head", None)
+            target_items["hat_tinfoil_expires"] = 0
         return True, 0, 0, 0
 
     current_remaining = hat_until - now
-    damage_sec = int(hours_damage * 3600)
+    damage_sec = max(0, int(max(0.0, float(hours_damage)) * 3600))
 
     is_burned = False
-    if burn_chance > 0.0 and random.random() < burn_chance:
+    if burn_chance > 0.0 and random.random() < min(1.0, max(0.0, float(burn_chance))):
         is_burned = True
 
     new_remaining = current_remaining - damage_sec
@@ -117,9 +133,14 @@ def apply_tinfoil_damage(
         target_items.pop("tinfoil_until", None)
         if target_items.get("equipped_head") == "hat_tinfoil":
             target_items.pop("equipped_head", None)
+            target_items["hat_tinfoil_expires"] = 0
         return True, 0, 0, 0
     else:
-        target_items["tinfoil_hat"] = now + new_remaining
+        new_until = now + new_remaining
+        target_items["tinfoil_hat"] = new_until
+        target_items["tinfoil_until"] = new_until
+        if target_items.get("equipped_head") == "hat_tinfoil":
+            target_items["hat_tinfoil_expires"] = new_until
         left_h = new_remaining // 3600
         left_m = (new_remaining % 3600) // 60
         return False, left_h, left_m, new_remaining
@@ -143,27 +164,45 @@ async def cmd_work_menu(message: types.Message, board_id: str | None = None):
         pass
 
 
-def check_flash_ultra_limit(active_items: dict, now: float = None) -> Tuple[bool, str]:
+def check_flash_ultra_limit(active_items: dict, now: float = None, user_id: int | None = None) -> Tuple[bool, str]:
     """
     Checks Flash Ultra daily usage limit (max 2 per day, min 30 min cooldown between cans).
     Returns (can_use: bool, error_msg: str)
+    Cross-board and shared-state synchronized.
     """
     from datetime import datetime, timezone
     if now is None:
         now = time.time()
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_int = int(today_str.replace("-", ""))
+
+    # Sync with shared_state if user_id is provided
+    shared_uses = 0
+    shared_last_ot = 0
+    if user_id:
+        try:
+            from shared_state import get_user_work_cooldowns
+            scd = get_user_work_cooldowns(user_id)
+            if scd.get("overtime_day") == today_int:
+                shared_uses = scd.get("overtime_uses_today", 0)
+            shared_last_ot = scd.get("last_overtime", 0)
+        except Exception:
+            pass
+
     stored_day = active_items.get("overtime_day")
     if stored_day != today_str:
         active_items["overtime_day"] = today_str
-        active_items["overtime_uses_today"] = 0
+        active_items["overtime_uses_today"] = shared_uses
+    else:
+        active_items["overtime_uses_today"] = max(active_items.get("overtime_uses_today", 0), shared_uses)
 
     uses_today = active_items.get("overtime_uses_today", 0)
     if uses_today >= 2:
         return False, "❌ <b>Сердце не выдержит, долбоёб!</b> Лимит Flash Ultra исчерпан (максимум 2 банки в сутки, использовано 2/2). Приходи завтра!"
 
-    last_ot = active_items.get("last_overtime", 0)
+    last_ot = max(active_items.get("last_overtime", 0), shared_last_ot)
     min_cd = 1800  # 30 минут между банками
-    if now - last_ot < min_cd:
+    if 0 <= (now - last_ot) < min_cd and last_ot > 0:
         left = min_cd - (now - last_ot)
         mins = max(1, int(left // 60))
         return False, f"⏳ Пульс зашкаливает после прошлой банки! Вторую банку Flash Ultra можно въебать через {mins} мин."
@@ -171,14 +210,29 @@ def check_flash_ultra_limit(active_items: dict, now: float = None) -> Tuple[bool
     return True, ""
 
 
-def record_flash_ultra_use(active_items: dict, now: float = None) -> int:
+def record_flash_ultra_use(active_items: dict, now: float = None, user_id: int | None = None) -> int:
     """Records one Flash Ultra usage today. Returns remaining uses today."""
+    from datetime import datetime, timezone
     if now is None:
         now = time.time()
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_int = int(today_str.replace("-", ""))
     uses_today = active_items.get("overtime_uses_today", 0)
-    active_items["last_overtime"] = now
-    active_items["overtime_uses_today"] = uses_today + 1
-    return 2 - (uses_today + 1)
+    new_uses = uses_today + 1
+    active_items["overtime_day"] = today_str
+    active_items["last_overtime"] = int(now)
+    active_items["overtime_uses_today"] = new_uses
+
+    if user_id:
+        try:
+            from shared_state import set_user_work_cooldown
+            set_user_work_cooldown(user_id, "overtime_day", today_int)
+            set_user_work_cooldown(user_id, "overtime_uses_today", new_uses)
+            set_user_work_cooldown(user_id, "last_overtime", int(now))
+        except Exception:
+            pass
+
+    return max(0, 2 - new_uses)
 
 
 @economy_router.callback_query(F.data.in_({
@@ -195,21 +249,24 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
 
     from common.work_engine import is_night_shift_active, WORK_VACANCIES
     from common.daily_quests_engine import record_quest_progress
+    from shared_state import get_user_work_cooldowns, set_user_work_cooldown
     night_mult = 1.5 if is_night_shift_active(now) else 1.0
 
     async with db_lock:
         from common.bot_helpers import _get_user_active_items
         active_items = await _get_user_active_items(db, user_id, board_id)
+        shared_cooldowns = get_user_work_cooldowns(user_id)
 
         # Gear buffs calculation
         slippers = active_items.get("equipped_feet") == "feet_slippers"
         cd_mult = 0.8 if slippers else 1.0
+        should_persist = False
 
         if action == "bottles":
-            last_bottles = active_items.get("last_bottles", 0)
+            last_bottles = max(active_items.get("last_bottles", 0), shared_cooldowns.get("last_bottles", 0))
             base_cd = int(10800 * cd_mult)  # 3 hours base
-            passed = now - last_bottles
-            if passed < base_cd:
+            passed = max(0, now - last_bottles) if last_bottles > 0 else base_cd
+            if passed < base_cd and last_bottles > 0:
                 left = base_cd - passed
                 hours = left // 3600
                 mins = (left % 3600) // 60
@@ -218,31 +275,28 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 base_earned = random.randint(150, 500)
                 earned = int(base_earned * night_mult)
                 active_items["last_bottles"] = now
+                set_user_work_cooldown(user_id, "last_bottles", now)
                 record_quest_progress(active_items, "side_hustle", now=now)
 
                 await add_user_global_balance(db, user_id, board_id, earned)
                 await record_user_transaction(db, user_id, earned, 'work', 'Сдал стеклотару у теплотрассы')
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                    (user_id, board_id, json.dumps(active_items))
-                )
-                await db.commit()
+                should_persist = True
                 night_note = " <i>(Ночной тариф x1.5!)</i>" if night_mult > 1.0 else ""
                 ans_text = f"🍾 Ты сдал 2 мешка стеклотары у теплотрассы и залутал +{earned} ₪!{night_note}"
 
         elif action == "dumpster":
-            last_dumpster = active_items.get("last_dumpster", 0)
+            last_dumpster = max(active_items.get("last_dumpster", 0), shared_cooldowns.get("last_dumpster", 0))
             base_cd = int(7200 * cd_mult)  # 2 hours base
-            passed = now - last_dumpster
-            if passed < base_cd:
+            passed = max(0, now - last_dumpster) if last_dumpster > 0 else base_cd
+            if passed < base_cd and last_dumpster > 0:
                 left = base_cd - passed
-                mins = left // 60
+                mins = max(1, left // 60)
                 ans_text = f"⏳ Баки уже обчистили местные бомжи! Новые отходы через {mins} мин."
             else:
                 base_earned = random.randint(100, 800)
                 earned = int(base_earned * night_mult)
                 active_items["last_dumpster"] = now
+                set_user_work_cooldown(user_id, "last_dumpster", now)
                 record_quest_progress(active_items, "risk_action", now=now)
 
                 drop_note = ""
@@ -260,62 +314,41 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
 
                 await add_user_global_balance(db, user_id, board_id, earned)
                 await record_user_transaction(db, user_id, earned, 'work', 'Порылся в помойке у элитного ЖК')
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                    (user_id, board_id, json.dumps(active_items))
-                )
-                await db.commit()
+                should_persist = True
                 night_note = " <i>(Ночной тариф x1.5!)</i>" if night_mult > 1.0 else ""
                 ans_text = f"🗑 Порылся в контейнерах у ЖК «Алые Паруса»: нашел в кармане выброшенной куртки +{earned} ₪!{night_note}{drop_note}"
 
         elif action == "flyers":
-            last_flyers = active_items.get("last_flyers", 0)
+            last_flyers = max(active_items.get("last_flyers", 0), shared_cooldowns.get("last_flyers", 0))
             base_cd = int(14400 * cd_mult)  # 4 hours base
-            passed = now - last_flyers
-            if passed < base_cd:
+            passed = max(0, now - last_flyers) if last_flyers > 0 else base_cd
+            if passed < base_cd and last_flyers > 0:
                 left = base_cd - passed
                 hours = left // 3600
                 mins = (left % 3600) // 60
-                ans_text = f"⏳ Клей еще не высох! Следующая партия стикеров через {hours}ч {mins}м."
+                ans_text = f"⏳ Все столбы и остановки уже заклеены рекламой соли! Новая партия листовок через {hours}ч {mins}м."
             else:
                 active_items["last_flyers"] = now
-                record_quest_progress(active_items, "risk_action", now=now)
+                set_user_work_cooldown(user_id, "last_flyers", now)
+                record_quest_progress(active_items, "side_hustle", now=now)
+                should_persist = True
 
-                # 15% risk of getting caught by police patrol
-                if random.random() < 0.15:
-                    fine = 3000
-                    balance = await get_user_global_balance(db, user_id)
-                    deducted = min(int(balance), fine)
-                    if deducted > 0:
-                        await deduct_user_global_balance(db, user_id, board_id, deducted)
-                        await record_user_transaction(db, user_id, -deducted, 'work', 'Штраф ППС за расклейку солей')
-                    await db.execute(
-                        "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                        "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                        (user_id, board_id, json.dumps(active_items))
-                    )
-                    await db.commit()
-                    ans_text = f"🚨 <b>ОБЛАВА ППС!</b> Тебя прижали к теплотрассе за расклейку солей! Отобрали клей и выписали штраф: -{deducted} ₪!"
+                # 20% risk of cop ambush
+                if random.random() < 0.20:
+                    ans_text = "🚨 <b>ПРИЕМУЩЕСТВО!</b> Тебя повязали ППСники за расклейку рекламы наркошопа на двери подъезда майора! Листовки отобрали, дали пизды дубинкой."
                 else:
                     base_earned = random.randint(1500, 4500)
                     earned = int(base_earned * night_mult)
                     await add_user_global_balance(db, user_id, board_id, earned)
                     await record_user_transaction(db, user_id, earned, 'work', 'Расклейка солевых стикеров на подъездах')
-                    await db.execute(
-                        "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                        "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                        (user_id, board_id, json.dumps(active_items))
-                    )
-                    await db.commit()
                     night_note = " <i>(Ночной тариф x1.5!)</i>" if night_mult > 1.0 else ""
                     ans_text = f"🚪 Оклеил 10 подъездов солевой рекламой: заказчик скинул на криптокошелек +{earned} ₪!{night_note}"
 
         elif action == "microloan":
-            last_loan = active_items.get("last_microloan", 0)
+            last_loan = max(active_items.get("last_microloan", 0), shared_cooldowns.get("last_microloan", 0))
             base_cd = 43200  # 12 hours
-            passed = now - last_loan
-            if passed < base_cd:
+            passed = max(0, now - last_loan) if last_loan > 0 else base_cd
+            if passed < base_cd and last_loan > 0:
                 left = base_cd - passed
                 hours = left // 3600
                 mins = (left % 3600) // 60
@@ -323,26 +356,22 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
             else:
                 earned = random.randint(5000, 15000)
                 active_items["last_microloan"] = now
-                current_debt = active_items.get("microloan_debt", 0)
+                set_user_work_cooldown(user_id, "last_microloan", now)
+                current_debt = max(int(active_items.get("microloan_debt", 0)), int(shared_cooldowns.get("microloan_debt", 0)))
                 new_debt = current_debt + int(earned * 1.3)
                 active_items["microloan_debt"] = new_debt
+                set_user_work_cooldown(user_id, "microloan_debt", new_debt)
 
                 await add_user_global_balance(db, user_id, board_id, earned)
                 await record_user_transaction(db, user_id, earned, 'work', 'Оформил микрозайм на паспорт бомжа')
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                    (user_id, board_id, json.dumps(active_items))
-                )
-                await db.commit()
+                should_persist = True
                 ans_text = f"👵 Ты оформил онлайн-займ на паспорт бомжа Михалыча и залутал +{earned:,} ₪! (Долг коллекторам: {new_debt:,} ₪). Прячь шекели в банк!"
 
         elif action == "overtime":
-            can_use, limit_err = check_flash_ultra_limit(active_items, now=now)
+            can_use, limit_err = check_flash_ultra_limit(active_items, now=now, user_id=user_id)
             if not can_use:
                 ans_text = limit_err
             else:
-                from shared_state import get_user_work_cooldowns, set_user_work_cooldown
                 work_timers = active_items.setdefault("work_cooldowns", {})
                 for _job, _ts in get_user_work_cooldowns(user_id).items():
                     if _ts > work_timers.get(_job, 0):
@@ -367,32 +396,52 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                     target_jid, target_title = best_job
                     work_timers[target_jid] = 0
                     set_user_work_cooldown(user_id, target_jid, 0)
-                    remaining_today = record_flash_ultra_use(active_items, now=now)
-                    await db.execute(
-                        "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                        "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                        (user_id, board_id, json.dumps(active_items))
-                    )
-                    await db.commit()
+                    remaining_today = record_flash_ultra_use(active_items, now=now, user_id=user_id)
+                    should_persist = True
                     ans_text = (
                         f"⚡ Ты залпом въебал банку Flash Ultra с таурином! Кулдаун с вакансии «{target_title}» мгновенно сброшен! Бегом на смену! "
                         f"<i>(Осталось банок на сегодня: {remaining_today}/2)</i>"
                     )
 
         elif action == "sell_mother":
-            if active_items.get("mother_sold"):
+            if active_items.get("mother_sold") or shared_cooldowns.get("mother_sold", 0) > 0:
                 ans_text = "❌ Ты уже продал мать. Второй раз не получится."
             else:
                 active_items["mother_sold"] = True
+                set_user_work_cooldown(user_id, "mother_sold", 1)
                 await add_user_global_balance(db, user_id, board_id, 8000)
                 await record_user_transaction(db, user_id, 8000, 'work', 'Продал мать на органы')
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                    (user_id, board_id, json.dumps(active_items))
-                )
-                await db.commit()
+                should_persist = True
                 ans_text = "💸 Сделка века! Ты продал мать и получил 8000 Шекелей! Клеймо занесено в твоё Личное Дело и Паспорт."
+
+        if should_persist:
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
+            )
+            try:
+                async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (user_id,)) as cur:
+                    all_b_rows = await cur.fetchall()
+                for other_b_id, other_a_str in all_b_rows:
+                    if other_b_id != board_id:
+                        try:
+                            other_data = json.loads(other_a_str) if other_a_str else {}
+                        except Exception:
+                            other_data = {}
+                        updated = False
+                        for sync_k in ("last_bottles", "last_dumpster", "last_flyers", "last_microloan", "microloan_debt", "mother_sold", "overtime_day", "overtime_uses_today", "last_overtime"):
+                            if sync_k in active_items and other_data.get(sync_k) != active_items[sync_k]:
+                                other_data[sync_k] = active_items[sync_k]
+                                updated = True
+                        if updated:
+                            await db.execute(
+                                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                (json.dumps(other_data), user_id, other_b_id)
+                            )
+            except Exception:
+                pass
+            await db.commit()
 
     if ans_text:
         clean_toast = re.sub(r'<[^>]+>', '', ans_text)
@@ -414,6 +463,7 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
             await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         pass
+
 
 
 @economy_router.callback_query(F.data == "work_quests")
