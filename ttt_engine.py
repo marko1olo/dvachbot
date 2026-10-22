@@ -14,6 +14,7 @@ Features:
 
 import time
 import re
+import math
 import asyncio
 import random
 import logging
@@ -25,7 +26,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
-from common.db_pool import get_pool, db_lock
+from common.db_pool import get_pool, db_lock, db_transaction
 from common.database import (
     get_user_global_balance,
     add_user_global_balance,
@@ -341,6 +342,50 @@ user_active_ttt_session: Dict[int, str] = {}  # user_id -> game_id
 ttt_lock = asyncio.Lock()
 
 
+def check_user_active_in_any_game(user_id: int, current_game_id: Optional[str] = None) -> Optional[str]:
+    """
+    Checks if a user is currently in any active PvP game (TTT, Dice, RR).
+    Cleans up stale entries if the game was already finished or purged.
+    Returns string description of the active game, or None if free.
+    """
+    # 1. Check Tic-Tac-Toe
+    gid = user_active_ttt_session.get(user_id)
+    if gid and gid != current_game_id:
+        g = active_ttt_games.get(gid)
+        if g and getattr(g, "status", None) in ("waiting", "active", "accepting"):
+            return "в крестиках-ноликах"
+        else:
+            user_active_ttt_session.pop(user_id, None)
+
+    # 2. Check Dice Duel
+    try:
+        from dice_duel_engine import user_active_dice_game, active_dice_games
+        gid = user_active_dice_game.get(user_id)
+        if gid:
+            g = active_dice_games.get(gid)
+            if g and not g.get("finished") and g.get("state") not in ("finished", "expired", "cancelled"):
+                return "в дайс-дуэли"
+            else:
+                user_active_dice_game.pop(user_id, None)
+    except Exception:
+        pass
+
+    # 3. Check Russian Roulette
+    try:
+        from russian_roulette_pvp import user_active_rr_game, active_rr_games
+        gid = user_active_rr_game.get(user_id)
+        if gid:
+            g = active_rr_games.get(gid)
+            if g and not g.get("finished") and g.get("state") not in ("finished", "expired", "cancelled"):
+                return "в русской рулетке"
+            else:
+                user_active_rr_game.pop(user_id, None)
+    except Exception:
+        pass
+
+    return None
+
+
 # ============================================================================
 # HELPER FORMATTERS & KEYBOARDS
 # ============================================================================
@@ -500,14 +545,20 @@ def render_game_text(game: TicTacToeGame) -> str:
         winner_emoji = game.get_user_emoji(game.winner_id) if game.winner_id else "👑"
         loser_id = game.opponent_id if game.winner_id == game.challenger_id else game.challenger_id
         loser_anon = get_anon_id(loser_id) if loser_id else "?"
-        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        is_burn_rake = game.pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(game.pot * 0.10))
+            rake_label = f"Сожжён антиинфляционный рейк 10%: {rake:,} ₪"
+        else:
+            rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+            rake_label = f"Рейк Абу 5%: {rake:,} ₪"
         net_win = game.pot - rake
 
         return (
             f"🏆 <b>ИГРА ЗАВЕРШЕНА: ПОБЕДА!</b>\n\n"
             f"👑 Победитель: {winner_emoji} <b>Анон [{winner_anon}]</b>\n"
             f"💀 Проигравший: <b>Анон [{loser_anon}]</b>\n\n"
-            f"💰 Выигрыш: <code>+{net_win:,} ₪</code> <i>(Рейк Абу 5%: {rake:,} ₪)</i>\n"
+            f"💰 Выигрыш: <code>+{net_win:,} ₪</code> <i>({rake_label})</i>\n"
             f"<i>«{random.choice(TTT_WIN_PUNCHLINES)}»</i>"
         )
     elif game.finish_reason == "draw":
@@ -525,24 +576,36 @@ def render_game_text(game: TicTacToeGame) -> str:
         winner_anon = get_anon_id(game.winner_id) if game.winner_id else "?"
         loser_id = game.opponent_id if game.winner_id == game.challenger_id else game.challenger_id
         loser_anon = get_anon_id(loser_id) if loser_id else "?"
-        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        is_burn_rake = game.pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(game.pot * 0.10))
+            rake_label = f"Сожжён антиинфляционный рейк 10%: {rake:,} ₪"
+        else:
+            rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+            rake_label = f"Рейк Абу 5%: {rake:,} ₪"
         net_win = game.pot - rake
         return (
             f"⏰ <b>ИГРА ЗАВЕРШЕНА: ТАЙМАУТ (120 сек)!</b>\n\n"
             f"💤 <b>Анон [{loser_anon}]</b> пропустил время хода и получает тех-луз!\n"
-            f"🏆 Техническая победа: <b>Анон [{winner_anon}]</b> (<code>+{net_win:,} ₪</code>)\n\n"
+            f"🏆 Техническая победа: <b>Анон [{winner_anon}]</b> (<code>+{net_win:,} ₪</code>, {rake_label})\n\n"
             f"<i>«{random.choice(TTT_TIMEOUT_PUNCHLINES)}»</i>"
         )
     elif game.finish_reason == "surrender":
         winner_anon = get_anon_id(game.winner_id) if game.winner_id else "?"
         loser_id = game.opponent_id if game.winner_id == game.challenger_id else game.challenger_id
         loser_anon = get_anon_id(loser_id) if loser_id else "?"
-        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        is_burn_rake = game.pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(game.pot * 0.10))
+            rake_label = f"Сожжён антиинфляционный рейк 10%: {rake:,} ₪"
+        else:
+            rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+            rake_label = f"Рейк Абу 5%: {rake:,} ₪"
         net_win = game.pot - rake
         return (
             f"🏳️ <b>ИГРА ЗАВЕРШЕНА: КАПИТУЛЯЦИЯ!</b>\n\n"
             f"<b>Анон [{loser_anon}]</b> выбросил белый флаг!\n"
-            f"🏆 Победитель: <b>Анон [{winner_anon}]</b> (<code>+{net_win:,} ₪</code>)\n\n"
+            f"🏆 Победитель: <b>Анон [{winner_anon}]</b> (<code>+{net_win:,} ₪</code>, {rake_label})\n\n"
             f"<i>«{random.choice(TTT_SURRENDER_PUNCHLINES)}»</i>"
         )
     elif game.finish_reason == "cancelled":
@@ -895,22 +958,31 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
             game.finish_reason = "timeout"
 
             # Clean user sessions
-            user_active_ttt_session.pop(game.challenger_id, None)
-            if game.opponent_id:
+            if user_active_ttt_session.get(game.challenger_id) == game_id:
+                user_active_ttt_session.pop(game.challenger_id, None)
+            if game.opponent_id and user_active_ttt_session.get(game.opponent_id) == game_id:
                 user_active_ttt_session.pop(game.opponent_id, None)
 
-        # Payout logic under db_lock
+        # Payout logic under db_lock + db_transaction
         db = await get_pool()
-        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        is_burn_rake = game.pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(game.pot * 0.10))
+            rake_desc = f" (сожжён рейк 10%: -{rake:,} ₪)"
+        else:
+            rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+            rake_desc = ""
         net_win = game.pot - rake
 
         async with db_lock:
-            await add_user_global_balance(db, winner_id, game.board_id, net_win)
-            await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк с таймаута в КН")
-            await record_user_transaction(
-                db, winner_id, net_win, "ttt",
-                f"Техническая победа (таймаут) в КН против [{get_anon_id(loser_id)}]"
-            )
+            async with db_transaction(db):
+                await add_user_global_balance(db, winner_id, game.board_id, net_win)
+                if not is_burn_rake:
+                    await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк с таймаута в КН")
+                await record_user_transaction(
+                    db, winner_id, net_win, "ttt",
+                    f"Техническая победа (таймаут) в КН против [{get_anon_id(loser_id)}]{rake_desc}"
+                )
 
         # Update message in chats for BOTH players
         if game.bot_instance:
@@ -973,6 +1045,14 @@ async def create_ttt_challenge(
     stream: str = "ru"
 ) -> Tuple[bool, str, Optional[TicTacToeGame]]:
     """Creates a new Tic-Tac-Toe challenge and checks balance."""
+    try:
+        bet_val = float(bet)
+        if math.isnan(bet_val) or math.isinf(bet_val):
+            return False, "❌ Некорректная сумма ставки.", None
+        bet = int(bet_val)
+    except (ValueError, TypeError, OverflowError):
+        return False, "❌ Некорректная сумма ставки.", None
+
     if bet < MIN_TTT_BET:
         return False, f"❌ Минимальная ставка: {MIN_TTT_BET:,} ₪", None
     if bet > MAX_TTT_BET:
@@ -991,12 +1071,9 @@ async def create_ttt_challenge(
         return False, f"❌ Недостаточно шекелей! Ставка {bet:,} ₪, твой баланс: {int(bal):,} ₪.", None
 
     async with ttt_lock:
-        # Check if user already has an active session
-        existing_id = user_active_ttt_session.get(challenger_id)
-        if existing_id:
-            existing_game = active_ttt_games.get(existing_id)
-            if existing_game and existing_game.status in ("waiting", "active"):
-                return False, "⚠️ У тебя уже есть активная игра или открытый вызов в крестики-нолики!", None
+        busy = check_user_active_in_any_game(challenger_id)
+        if busy:
+            return False, f"⚠️ У тебя уже есть активная партия или вызов {busy}! Заверши её или дождись окончания.", None
 
         import uuid
         game_id = uuid.uuid4().hex[:10]
@@ -1035,54 +1112,62 @@ async def accept_ttt_challenge(
         if game.target_user_id and game.target_user_id != opponent_id:
             return False, f"❌ Этот вызов предназначен только для Анона [{get_anon_id(game.target_user_id)}]!", None
 
-        # Check if opponent is already in game
-        opp_existing = user_active_ttt_session.get(opponent_id)
-        if opp_existing and opp_existing != game_id:
-            existing_g = active_ttt_games.get(opp_existing)
-            if existing_g and existing_g.status in ("waiting", "active"):
-                return False, "⚠️ У тебя уже есть другая активная игра в крестики-нолики!", None
+        busy = check_user_active_in_any_game(opponent_id, current_game_id=game_id)
+        if busy:
+            return False, f"⚠️ У тебя уже есть активная партия или вызов {busy}! Заверши её или дождись окончания.", None
 
-        # Mark state to prevent double-accept race condition
+        # Mark state and reserve session immediately to prevent double-accept race condition
         game.status = "accepting"
-
+        user_active_ttt_session[opponent_id] = game_id
 
     def _ttt_rollback():
         g = active_ttt_games.get(game_id)
         if g and g.status == "accepting":
             g.status = "waiting"
+        if user_active_ttt_session.get(opponent_id) == game_id:
+            user_active_ttt_session.pop(opponent_id, None)
 
     # Mute guard: check opponent and challenger before committing escrow
     from common.database import is_shadow_muted as check_db_shadow_muted
     from common.bot_helpers import check_user_is_muted
     if await check_db_shadow_muted(opponent_id, game.board_id, db=db) or await check_user_is_muted(db, opponent_id, game.board_id):
-        _ttt_rollback()
+        async with ttt_lock:
+            _ttt_rollback()
         return False, "🔇 Замученным нельзя принимать игры в крестики-нолики.", None
     if await check_db_shadow_muted(game.challenger_id, game.board_id, db=db) or await check_user_is_muted(db, game.challenger_id, game.board_id):
-        game.status = "finished"
-        game.finish_reason = "cancelled"
-        game.finished_at = time.time()
-        active_ttt_games.pop(game_id, None)
-        user_active_ttt_session.pop(game.challenger_id, None)
+        async with ttt_lock:
+            game.status = "finished"
+            game.finish_reason = "cancelled"
+            game.finished_at = time.time()
+            active_ttt_games.pop(game_id, None)
+            if user_active_ttt_session.get(game.challenger_id) == game_id:
+                user_active_ttt_session.pop(game.challenger_id, None)
+            if user_active_ttt_session.get(opponent_id) == game_id:
+                user_active_ttt_session.pop(opponent_id, None)
         return False, "❌ Создатель вызова был замучен. Вызов отменён.", None
 
-    async with ttt_lock:
-
-        # Escrow verification under db_lock
-        async with db_lock:
+    # Escrow verification under db_lock + db_transaction
+    async with db_lock:
+        async with db_transaction(db):
             ch_bal = await get_user_global_balance(db, game.challenger_id)
             op_bal = await get_user_global_balance(db, opponent_id)
 
             if ch_bal < game.bet:
                 # Challenger can no longer pay — cancel cleanly
-                game.status = "finished"
-                game.finish_reason = "cancelled"
-                game.finished_at = time.time()
-                active_ttt_games.pop(game_id, None)
-                user_active_ttt_session.pop(game.challenger_id, None)
+                async with ttt_lock:
+                    game.status = "finished"
+                    game.finish_reason = "cancelled"
+                    game.finished_at = time.time()
+                    active_ttt_games.pop(game_id, None)
+                    if user_active_ttt_session.get(game.challenger_id) == game_id:
+                        user_active_ttt_session.pop(game.challenger_id, None)
+                    if user_active_ttt_session.get(opponent_id) == game_id:
+                        user_active_ttt_session.pop(opponent_id, None)
                 return False, f"❌ У создателя вызова [{get_anon_id(game.challenger_id)}] изменился баланс. Вызов отменен.", None
 
             if op_bal < game.bet:
-                _ttt_rollback()
+                async with ttt_lock:
+                    _ttt_rollback()
                 return False, f"❌ Недостаточно шекелей. Нужно {game.bet:,} ₪, у тебя {int(op_bal):,} ₪.", None
 
             # Deduct escrow from both players
@@ -1095,13 +1180,15 @@ async def accept_ttt_challenge(
                     await add_user_global_balance(db, game.challenger_id, game.board_id, game.bet)
                 if ok_op:
                     await add_user_global_balance(db, opponent_id, game.board_id, game.bet)
-                _ttt_rollback()
+                async with ttt_lock:
+                    _ttt_rollback()
                 return False, "❌ Ошибка списания средств. Попробуй снова.", None
 
             await record_user_transaction(db, game.challenger_id, -game.bet, "ttt", f"Ставка в КН против [{get_anon_id(opponent_id)}]")
             await record_user_transaction(db, opponent_id, -game.bet, "ttt", f"Ставка в КН против [{get_anon_id(game.challenger_id)}]")
 
-        # Launch Game
+    # Launch Game
+    async with ttt_lock:
         game.opponent_id = opponent_id
         game.status = "active"
         game.current_turn = game.challenger_id  # ❌ starts first
@@ -1153,8 +1240,9 @@ async def process_ttt_move(
             if game.timeout_task and not game.timeout_task.done():
                 game.timeout_task.cancel()
 
-            user_active_ttt_session.pop(game.challenger_id, None)
-            if game.opponent_id:
+            if user_active_ttt_session.get(game.challenger_id) == game_id:
+                user_active_ttt_session.pop(game.challenger_id, None)
+            if game.opponent_id and user_active_ttt_session.get(game.opponent_id) == game_id:
                 user_active_ttt_session.pop(game.opponent_id, None)
 
             is_win = True
@@ -1168,8 +1256,9 @@ async def process_ttt_move(
             if game.timeout_task and not game.timeout_task.done():
                 game.timeout_task.cancel()
 
-            user_active_ttt_session.pop(game.challenger_id, None)
-            if game.opponent_id:
+            if user_active_ttt_session.get(game.challenger_id) == game_id:
+                user_active_ttt_session.pop(game.challenger_id, None)
+            if game.opponent_id and user_active_ttt_session.get(game.opponent_id) == game_id:
                 user_active_ttt_session.pop(game.opponent_id, None)
 
             is_win = False
@@ -1197,17 +1286,26 @@ async def finish_ttt_game(
     """Handles financial settlement, broadcast announcements, and private DMs for finished TTT game."""
     db = await get_pool()
     if is_win:
-        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        is_burn_rake = game.pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(game.pot * 0.10))
+            rake_desc = f" (сожжён рейк 10%: -{rake:,} ₪)"
+        else:
+            rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+            rake_desc = ""
+
         net_win = game.pot - rake
         loser_id = game.opponent_id if game.winner_id == game.challenger_id else game.challenger_id
 
         async with db_lock:
-            await add_user_global_balance(db, game.winner_id, game.board_id, net_win)
-            await add_to_abu_fund(db, rake, donor_id=game.winner_id, reason="Рейк с победы в КН")
-            await record_user_transaction(
-                db, game.winner_id, net_win, "ttt",
-                f"Победа в КН против [{get_anon_id(loser_id)}]"
-            )
+            async with db_transaction(db):
+                await add_user_global_balance(db, game.winner_id, game.board_id, net_win)
+                if not is_burn_rake:
+                    await add_to_abu_fund(db, rake, donor_id=game.winner_id, reason="Рейк с победы в КН")
+                await record_user_transaction(
+                    db, game.winner_id, net_win, "ttt",
+                    f"Победа в КН против [{get_anon_id(loser_id)}]{rake_desc}"
+                )
 
         # 2ch board announcement
         winner_anon = get_anon_id(game.winner_id)
@@ -1242,11 +1340,12 @@ async def finish_ttt_game(
         refund = game.bet - fee
 
         async with db_lock:
-            await add_user_global_balance(db, game.challenger_id, game.board_id, refund)
-            await add_user_global_balance(db, game.opponent_id, game.board_id, refund)
-            await add_to_abu_fund(db, fee * 2, reason="Микрокомиссия 2% за ничью в КН")
-            await record_user_transaction(db, game.challenger_id, refund - game.bet, "ttt", "Возврат ставки (ничья КН)")
-            await record_user_transaction(db, game.opponent_id, refund - game.bet, "ttt", "Возврат ставки (ничья КН)")
+            async with db_transaction(db):
+                await add_user_global_balance(db, game.challenger_id, game.board_id, refund)
+                await add_user_global_balance(db, game.opponent_id, game.board_id, refund)
+                await add_to_abu_fund(db, fee * 2, donor_id=game.challenger_id, reason="Микрокомиссия 2% за ничью в КН")
+                await record_user_transaction(db, game.challenger_id, refund, "ttt", "Возврат ставки (ничья КН)")
+                await record_user_transaction(db, game.opponent_id, refund, "ttt", "Возврат ставки (ничья КН)")
 
         # 2ch board announcement
         anon_x = get_anon_id(game.challenger_id)
@@ -1297,19 +1396,28 @@ async def surrender_ttt_game(
         if game.timeout_task and not game.timeout_task.done():
             game.timeout_task.cancel()
 
-        user_active_ttt_session.pop(game.challenger_id, None)
-        if game.opponent_id:
+        if user_active_ttt_session.get(game.challenger_id) == game_id:
+            user_active_ttt_session.pop(game.challenger_id, None)
+        if game.opponent_id and user_active_ttt_session.get(game.opponent_id) == game_id:
             user_active_ttt_session.pop(game.opponent_id, None)
 
     # Financial settlement
     db = await get_pool()
-    rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+    is_burn_rake = game.pot > 50000
+    if is_burn_rake:
+        rake = max(5, int(game.pot * 0.10))
+        rake_desc = f" (сожжён рейк 10%: -{rake:,} ₪)"
+    else:
+        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        rake_desc = ""
     net_win = game.pot - rake
 
     async with db_lock:
-        await add_user_global_balance(db, winner_id, game.board_id, net_win)
-        await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк при сдаче в КН")
-        await record_user_transaction(db, winner_id, net_win, "ttt", f"Победа (сдача) в КН против [{get_anon_id(loser_id)}]")
+        async with db_transaction(db):
+            await add_user_global_balance(db, winner_id, game.board_id, net_win)
+            if not is_burn_rake:
+                await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк при сдаче в КН")
+            await record_user_transaction(db, winner_id, net_win, "ttt", f"Победа (сдача) в КН против [{get_anon_id(loser_id)}]{rake_desc}")
 
     # 2ch announcement
     winner_anon = get_anon_id(winner_id)
@@ -1342,23 +1450,46 @@ async def surrender_ttt_game(
 
 async def cancel_ttt_challenge(
     game_id: str,
-    user_id: int
+    user_id: int,
+    bot: Optional[Bot] = None
 ) -> Tuple[bool, str]:
-    """Cancels a pending challenge before anyone joins."""
+    """Cancels a pending challenge before anyone joins (by creator or target)."""
     async with ttt_lock:
         game = active_ttt_games.get(game_id)
         if not game:
+            if user_active_ttt_session.get(user_id) == game_id:
+                user_active_ttt_session.pop(user_id, None)
             return False, "❌ Вызов не найден или уже завершен."
         if game.status != "waiting":
             return False, "❌ Нельзя отменить уже начатую игру!"
-        if game.challenger_id != user_id:
-            return False, "❌ Только создатель вызова может его отменить!"
+
+        is_creator = (game.challenger_id == user_id)
+        is_target = (game.target_user_id and game.target_user_id == user_id)
+        if not is_creator and not is_target:
+            return False, "❌ Только участники вызова могут его отменить!"
+
+        ch_id = game.challenger_id
+        tgt_id = game.target_user_id
 
         game.status = "finished"
         game.finish_reason = "cancelled"
+        game.finished_at = time.time()
         active_ttt_games.pop(game_id, None)
-        user_active_ttt_session.pop(user_id, None)
-        return True, "✅ Вызов успешно отменен."
+        if user_active_ttt_session.get(ch_id) == game_id:
+            user_active_ttt_session.pop(ch_id, None)
+        if tgt_id and user_active_ttt_session.get(tgt_id) == game_id:
+            user_active_ttt_session.pop(tgt_id, None)
+
+        if is_creator:
+            return True, "✅ Вызов успешно отменен."
+        else:
+            if bot and ch_id:
+                dec_dm = (
+                    f"⚔️ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ОТКЛОНЕН</b>\n\n"
+                    f"Анон [ID:{get_anon_id(user_id)}] отклонил твой вызов на партию."
+                )
+                spawn_task(send_pvp_direct_notification(bot, ch_id, dec_dm), name="pvp_notify_ttt_declined")
+            return True, f"❌ Вызов на партию отклонен Аноном [ID:{get_anon_id(user_id)}]."
 
 
 # ============================================================================
@@ -1769,19 +1900,23 @@ async def cb_ttt_surrender(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("ttt:cancel:"))
 async def cb_ttt_cancel(callback: CallbackQuery):
-    """Challenger clicks Cancel Challenge."""
+    """Challenger or target clicks Cancel / Decline Challenge."""
     user_id = callback.from_user.id
     game_id = callback.data.split(":")[2]
 
     game = active_ttt_games.get(game_id)
     broadcast_msgs = list(getattr(game, "broadcast_msgs", [])) if game else []
+    is_target = bool(game and game.target_user_id and game.target_user_id == user_id)
 
-    ok, msg = await cancel_ttt_challenge(game_id, user_id)
+    ok, msg = await cancel_ttt_challenge(game_id, user_id, bot=callback.bot)
     if not ok:
         await callback.answer(msg, show_alert=True)
         return
 
-    cancel_text = "❌ <b>Вызов в крестики-нолики отменен создателем.</b>"
+    if is_target:
+        cancel_text = f"❌ <b>Вызов в крестики-нолики отклонен Аноном [ID:{get_anon_id(user_id)}].</b>"
+    else:
+        cancel_text = "❌ <b>Вызов в крестики-нолики отменен создателем.</b>"
     await safe_edit_callback_message(callback, cancel_text, reply_markup=None)
 
     for chat_id, msg_id in broadcast_msgs:
@@ -1855,7 +1990,10 @@ async def ttt_watchdog_step(bot=None):
                 game.status = "finished"
                 game.finished_at = now
                 game.finish_reason = "cancelled"
-                user_active_ttt_session.pop(game.challenger_id, None)
+                if user_active_ttt_session.get(game.challenger_id) == gid:
+                    user_active_ttt_session.pop(game.challenger_id, None)
+                if game.target_user_id and user_active_ttt_session.get(game.target_user_id) == gid:
+                    user_active_ttt_session.pop(game.target_user_id, None)
                 expired_pending.append(gid)
 
     # 0. Handle timed-out active games (fail-safe watchdog)
@@ -1870,20 +2008,29 @@ async def ttt_watchdog_step(bot=None):
             game.finished_at = now
             game.winner_id = winner_id
             game.finish_reason = "timeout"
-            user_active_ttt_session.pop(game.challenger_id, None)
-            if game.opponent_id:
+            if user_active_ttt_session.get(game.challenger_id) == gid:
+                user_active_ttt_session.pop(game.challenger_id, None)
+            if game.opponent_id and user_active_ttt_session.get(game.opponent_id) == gid:
                 user_active_ttt_session.pop(game.opponent_id, None)
 
         db = await get_pool()
-        rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+        is_burn_rake = game.pot > 50000
+        if is_burn_rake:
+            rake = max(5, int(game.pot * 0.10))
+            rake_desc = f" (сожжён рейк 10%: -{rake:,} ₪)"
+        else:
+            rake = max(1, int(game.pot * ABU_WIN_RAKE_PERCENT))
+            rake_desc = ""
         net_win = game.pot - rake
         async with db_lock:
-            await add_user_global_balance(db, winner_id, game.board_id, net_win)
-            await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк с таймаута в КН")
-            await record_user_transaction(
-                db, winner_id, net_win, "ttt",
-                f"Техническая победа (таймаут) в КН против [{get_anon_id(loser_id)}]"
-            )
+            async with db_transaction(db):
+                await add_user_global_balance(db, winner_id, game.board_id, net_win)
+                if not is_burn_rake:
+                    await add_to_abu_fund(db, rake, donor_id=winner_id, reason="Рейк с таймаута в КН")
+                await record_user_transaction(
+                    db, winner_id, net_win, "ttt",
+                    f"Техническая победа (таймаут) в КН против [{get_anon_id(loser_id)}]{rake_desc}"
+                )
         bot_to_use = bot or game.bot_instance
         if bot_to_use:
             await sync_ttt_screens(bot_to_use, game)

@@ -62,6 +62,50 @@ active_dice_games: Dict[str, Dict[str, Any]] = {}
 user_active_dice_game: Dict[int, str] = {}
 dice_engine_lock = asyncio.Lock()
 
+
+def check_user_active_in_any_game(user_id: int, current_game_id: Optional[str] = None) -> Optional[str]:
+    """
+    Checks if a user is currently in any active PvP game (Dice, RR, TTT).
+    Cleans up stale entries if the game was already finished or purged.
+    Returns string description of the active game, or None if free.
+    """
+    # 1. Check Dice Duel
+    gid = user_active_dice_game.get(user_id)
+    if gid and gid != current_game_id:
+        g = active_dice_games.get(gid)
+        if g and not g.get("finished") and g.get("state") not in ("finished", "expired", "cancelled"):
+            return "в дайс-дуэли"
+        else:
+            user_active_dice_game.pop(user_id, None)
+
+    # 2. Check Russian Roulette
+    try:
+        from russian_roulette_pvp import user_active_rr_game, active_rr_games
+        gid = user_active_rr_game.get(user_id)
+        if gid:
+            g = active_rr_games.get(gid)
+            if g and not g.get("finished") and g.get("state") not in ("finished", "expired", "cancelled"):
+                return "в русской рулетке"
+            else:
+                user_active_rr_game.pop(user_id, None)
+    except Exception:
+        pass
+
+    # 3. Check Tic-Tac-Toe
+    try:
+        from ttt_engine import user_active_ttt_session, active_ttt_games as active_ttt_games_dict
+        gid = user_active_ttt_session.get(user_id)
+        if gid:
+            g = active_ttt_games_dict.get(gid)
+            if g and getattr(g, "status", None) in ("waiting", "active"):
+                return "в крестиках-ноликах"
+            else:
+                user_active_ttt_session.pop(user_id, None)
+    except Exception:
+        pass
+
+    return None
+
 # -----------------------------------------------------------------------------
 # Phrase Pools — финальные объявления дайс-дуэлей
 # -----------------------------------------------------------------------------
@@ -445,10 +489,9 @@ async def create_dice_challenge(
         return False, f"❌ Недостаточно шекелей! Ставка: <b>{bet:,} ₪</b>, на балансе: <b>{int(bal):,} ₪</b>.", None
 
     async with dice_engine_lock:
-        if challenger_id in user_active_dice_game:
-            old_gid = user_active_dice_game[challenger_id]
-            if old_gid in active_dice_games and not active_dice_games[old_gid].get("finished"):
-                return False, "⚠️ У тебя уже есть активная партия в кости! Заверши её или дождись таймаута.", None
+        busy = check_user_active_in_any_game(challenger_id)
+        if busy:
+            return False, f"⚠️ У тебя уже есть активная партия или вызов {busy}! Заверши её или дождись окончания.", None
 
         game_id = generate_game_id()
         active_dice_games[game_id] = {
@@ -495,21 +538,24 @@ async def accept_dice_challenge(
             return False, "❌ Нельзя играть в кости с самим собой, шизофреник.", None
         if game.get("target_id") and game["target_id"] != acceptor_id:
             return False, "❌ Этот вызов адресован персонально другому анону!", None
-        # Prevent acceptor from joining two games simultaneously
-        existing_gid = user_active_dice_game.get(acceptor_id)
-        if existing_gid and existing_gid in active_dice_games and not active_dice_games[existing_gid].get("finished"):
-            return False, "⚠️ У тебя уже есть активная партия в кости! Заверши её или дождись таймаута.", None
+        # Prevent acceptor from joining two games simultaneously across all PvP engines
+        busy = check_user_active_in_any_game(acceptor_id, current_game_id=game_id)
+        if busy:
+            return False, f"⚠️ У тебя уже есть активная партия или вызов {busy}! Заверши её или дождись окончания.", None
 
         bet = game["bet"]
         board_id = game["board_id"]
         challenger_id = game["player_1"]
-        # Mark 'accepting' immediately to prevent double-accept race condition
+        # Mark 'accepting' and immediately register in user_active_dice_game to prevent concurrent multi-accept races
         game["state"] = "accepting"
+        user_active_dice_game[acceptor_id] = game_id
 
     def _rollback_state():
         g = active_dice_games.get(game_id)
         if g and g.get("state") == "accepting":
             g["state"] = "pending"
+        if user_active_dice_game.get(acceptor_id) == game_id:
+            user_active_dice_game.pop(acceptor_id, None)
 
     def _cancel_game():
         g = active_dice_games.get(game_id)
@@ -517,9 +563,12 @@ async def accept_dice_challenge(
             g["state"] = "cancelled"
             g["finished"] = True
             g["finished_ts"] = time.time()
-            user_active_dice_game.pop(g.get("player_1"), None)
-            if g.get("target_id"):
+            if user_active_dice_game.get(g.get("player_1")) == game_id:
+                user_active_dice_game.pop(g.get("player_1"), None)
+            if g.get("target_id") and user_active_dice_game.get(g.get("target_id")) == game_id:
                 user_active_dice_game.pop(g.get("target_id"), None)
+            if user_active_dice_game.get(acceptor_id) == game_id:
+                user_active_dice_game.pop(acceptor_id, None)
 
     db = await get_pool()
     from common.database import is_shadow_muted as check_db_shadow_muted
@@ -582,6 +631,8 @@ async def cancel_dice_challenge(
     async with dice_engine_lock:
         game = active_dice_games.get(game_id)
         if not game:
+            if user_active_dice_game.get(user_id) == game_id:
+                user_active_dice_game.pop(user_id, None)
             return False, "❌ Вызов не найден."
         if game["state"] != "pending":
             return False, "❌ Нельзя отменить уже начавшуюся дуэль!"
@@ -589,12 +640,14 @@ async def cancel_dice_challenge(
             return False, "❌ Только участники вызова могут его отменить."
 
         p1 = game["player_1"]
+        tgt = game.get("target_id")
         game["state"] = "cancelled"
         game["finished"] = True
         game["finished_ts"] = time.time()
-        user_active_dice_game.pop(game["player_1"], None)
-        if game.get("target_id"):
-            user_active_dice_game.pop(game["target_id"], None)
+        if user_active_dice_game.get(p1) == game_id:
+            user_active_dice_game.pop(p1, None)
+        if tgt and user_active_dice_game.get(tgt) == game_id:
+            user_active_dice_game.pop(tgt, None)
 
     if user_id == p1:
         return True, "🗑 Вызов успешно отменен."
@@ -635,8 +688,12 @@ async def execute_player_roll(
         if game["state"] not in ("playing", "rolling"):
             return False, "❌ Игра не готова к броску.", game
         if user_id not in (game["player_1"], game["player_2"]):
+            if game.get("state") == "rolling":
+                game["state"] = "playing"
             return False, "❌ Ты не участвуешь в этой дуэли!", game
         if user_id != game.get("current_turn"):
+            if game.get("state") == "rolling":
+                game["state"] = "playing"
             return False, "⏳ Сейчас ход твоего соперника! Жди броска.", game
 
         current_round = game["round"]
@@ -705,7 +762,9 @@ async def _evaluate_and_finish_round(
                 game["current_turn"] = p1 if secrets.randbelow(2) == 0 else p2
                 game["turn_deadline_ts"] = time.time() + DICE_TURN_TIMEOUT_SEC
                 game["state"] = "playing"
-                return True, f"⚖️ <b>НИЧЬЯ В РАУНДЕ {round_num} ({score1}:{score2})!</b> Назначается овертайм (Раунд {next_round})!", game
+                overtime_msg = f"⚖️ <b>Ничья в раунде {round_num} ({score1}:{score2})!</b> Назначается овертайм (Раунд {next_round})!"
+                game["last_action_text"] = overtime_msg
+                return True, overtime_msg, game
             else:
                 # Absolute max rounds tie -> Refund minus nominal tie rake
                 winner_id = None
@@ -745,8 +804,9 @@ async def _finish_dice_game(
         p1 = game["player_1"]
         p2 = game["player_2"]
 
-        user_active_dice_game.pop(p1, None)
-        if p2:
+        if user_active_dice_game.get(p1) == game_id:
+            user_active_dice_game.pop(p1, None)
+        if p2 and user_active_dice_game.get(p2) == game_id:
             user_active_dice_game.pop(p2, None)
 
     db = await get_pool()
@@ -759,7 +819,7 @@ async def _finish_dice_game(
                 await add_user_global_balance(db, p1, board_id, refund_amt)
                 if p2:
                     await add_user_global_balance(db, p2, board_id, refund_amt)
-                await add_to_abu_fund(db, rake * 2)
+                await add_to_abu_fund(db, rake * 2, reason=f'Рейк с ничьей в Кости #{game_id}')
                 await record_user_transaction(db, p1, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
                 if p2:
                     await record_user_transaction(db, p2, refund_amt, 'dice_duel', f'Возврат ничьей в Кости #{game_id}')
@@ -805,7 +865,7 @@ async def _finish_dice_game(
                     tx_desc = f'Выигрыш в Дайс-Дуэль #{game_id}' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
                     await record_user_transaction(db, winner_id, win_payout, 'dice_duel', tx_desc)
                 if not is_burn_rake:
-                    await add_to_abu_fund(db, rake)
+                    await add_to_abu_fund(db, rake, donor_id=winner_id or 0, reason=f'Рейк с Дайс-Дуэли #{game_id}')
 
         game["outcome"] = "win"
         game["winner"] = winner_id
@@ -924,11 +984,14 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
     turn_anon = get_anon_id(turn_user) if turn_user else "???"
     turn_rem = max(0, int(game["turn_deadline_ts"] - time.time()))
 
+    action_block = f"<i>{game['last_action_text']}</i>\n\n" if game.get("last_action_text") else ""
+
     header = f"🎲 <b>PvP ДАЙС-ДУЭЛЬ ({mode}) — РАУНД {round_num}</b>\n\n"
     body = (
         f"💰 <b>Банк:</b> <code>{bet*2:,} ₪</code> (Ставка: <code>{bet:,} ₪</code>)\n\n"
         f"🔴 <b>Игрок 1 [ID:{p1_anon}]:</b> {p1_status}\n"
         f"🔵 <b>Игрок 2 [ID:{p2_anon}]:</b> {p2_status}\n\n"
+        f"{action_block}"
     )
 
     if game.get("finished"):
@@ -1246,6 +1309,12 @@ async def dice_watchdog_step(bot=None):
                     game["finished_ts"] = now
                 elif now - fin_ts > 60:
                     active_dice_games.pop(gid, None)
+                    p1 = game.get("player_1")
+                    p2 = game.get("player_2")
+                    if p1 and user_active_dice_game.get(p1) == gid:
+                        user_active_dice_game.pop(p1, None)
+                    if p2 and user_active_dice_game.get(p2) == gid:
+                        user_active_dice_game.pop(p2, None)
                 continue
             if game["state"] in ("playing", "rolling"):
                 if now > game["turn_deadline_ts"]:
@@ -1263,8 +1332,9 @@ async def dice_watchdog_step(bot=None):
                     game["state"] = "expired"
                     game["finished_ts"] = now
                     ch_id = game["player_1"]
-                    user_active_dice_game.pop(ch_id, None)
-                    if game.get("target_id"):
+                    if user_active_dice_game.get(ch_id) == gid:
+                        user_active_dice_game.pop(ch_id, None)
+                    if game.get("target_id") and user_active_dice_game.get(game["target_id"]) == gid:
                         user_active_dice_game.pop(game["target_id"], None)
                     expired_pending.append(gid)
 
@@ -1661,8 +1731,22 @@ def register_dice_duel_handlers(dp: Any):
             except Exception:
                 pass
 
-        ok, msg_text, updated_game = await execute_player_roll(game_id, user_id, callback.bot)
+        try:
+            ok, msg_text, updated_game = await execute_player_roll(game_id, user_id, callback.bot)
+        except Exception as e:
+            async with dice_engine_lock:
+                g = active_dice_games.get(game_id)
+                if g and g.get("state") == "rolling":
+                    g["state"] = "playing"
+            shared_state.runtime_logger.error(f"[DiceDuel] execute_player_roll crashed: {e}")
+            await callback.answer("❌ Ошибка при броске костей. Попробуй ещё раз.", show_alert=True)
+            return
+
         if not ok:
+            async with dice_engine_lock:
+                g = active_dice_games.get(game_id)
+                if g and g.get("state") == "rolling":
+                    g["state"] = "playing"
             await callback.answer(msg_text, show_alert=True)
             return
 

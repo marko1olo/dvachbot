@@ -16,6 +16,7 @@ Features & Mechanics:
 import re
 import time
 import json
+import math
 import random
 import asyncio
 import logging
@@ -57,6 +58,50 @@ RR_RAKE_PERCENT = 0.05  # 5% to Abu's Fund
 active_rr_games: Dict[str, Dict[str, Any]] = {}
 user_active_rr_game: Dict[int, str] = {}
 rr_lock = asyncio.Lock()
+
+
+def check_user_active_in_any_game(user_id: int, current_game_id: Optional[str] = None) -> Optional[str]:
+    """
+    Checks if a user is currently in any active PvP game (RR, Dice, TTT).
+    Cleans up stale entries if the game was already finished or purged.
+    Returns string description of the active game, or None if free.
+    """
+    # 1. Check Russian Roulette
+    gid = user_active_rr_game.get(user_id)
+    if gid and gid != current_game_id:
+        g = active_rr_games.get(gid)
+        if g and not g.get("finished") and g.get("state") not in ("finished", "expired", "cancelled"):
+            return "в русской рулетке"
+        else:
+            user_active_rr_game.pop(user_id, None)
+
+    # 2. Check Dice Duel
+    try:
+        from dice_duel_engine import user_active_dice_game, active_dice_games
+        gid = user_active_dice_game.get(user_id)
+        if gid:
+            g = active_dice_games.get(gid)
+            if g and not g.get("finished") and g.get("state") not in ("finished", "expired", "cancelled"):
+                return "в дайс-дуэли"
+            else:
+                user_active_dice_game.pop(user_id, None)
+    except Exception:
+        pass
+
+    # 3. Check Tic-Tac-Toe
+    try:
+        from ttt_engine import user_active_ttt_session, active_ttt_games as active_ttt_games_dict
+        gid = user_active_ttt_session.get(user_id)
+        if gid:
+            g = active_ttt_games_dict.get(gid)
+            if g and getattr(g, "status", None) in ("waiting", "active"):
+                return "в крестиках-ноликах"
+            else:
+                user_active_ttt_session.pop(user_id, None)
+    except Exception:
+        pass
+
+    return None
 
 # Router instance
 rr_router = Router(name="russian_roulette_pvp")
@@ -810,6 +855,14 @@ async def create_rr_challenge(
     """
     Creates a new pending PvP Russian Roulette challenge.
     """
+    try:
+        bet_val = float(bet)
+        if math.isnan(bet_val) or math.isinf(bet_val):
+            return False, "❌ Некорректная сумма ставки.", None
+        bet = int(bet_val)
+    except (ValueError, TypeError, OverflowError):
+        return False, "❌ Некорректная сумма ставки.", None
+
     if bet < MIN_RR_BET:
         return False, f"❌ Минимальная ставка в Русскую Рулетку: <b>{MIN_RR_BET} ₪</b>.", None
     if bet > MAX_RR_BET:
@@ -827,10 +880,9 @@ async def create_rr_challenge(
         return False, f"❌ Недостаточно шекелей! Ставка: <b>{bet:,} ₪</b>, на балансе: <b>{int(bal):,} ₪</b>.", None
 
     async with rr_lock:
-        if challenger_id in user_active_rr_game:
-            old_gid = user_active_rr_game[challenger_id]
-            if old_gid in active_rr_games and not active_rr_games[old_gid].get("finished"):
-                return False, "⚠️ У тебя уже есть активная дуэль в Русскую Рулетку!", None
+        busy = check_user_active_in_any_game(challenger_id)
+        if busy:
+            return False, f"⚠️ У тебя уже есть активная партия или вызов {busy}! Заверши её или дождись окончания.", None
 
         game_id = generate_game_id()
         active_rr_games[game_id] = {
@@ -878,21 +930,23 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         if game.get("target_id") and game["target_id"] != acceptor_id:
             return False, "❌ Этот вызов адресован другому анону!", None
 
-        if acceptor_id in user_active_rr_game:
-            old_gid = user_active_rr_game[acceptor_id]
-            if old_gid in active_rr_games and not active_rr_games[old_gid].get("finished") and old_gid != game_id:
-                return False, "⚠️ У тебя уже есть другая незавершенная дуэль!", None
+        busy = check_user_active_in_any_game(acceptor_id, current_game_id=game_id)
+        if busy:
+            return False, f"⚠️ У тебя уже есть активная партия или вызов {busy}! Заверши её или дождись окончания.", None
 
         bet = game["bet"]
         board_id = game["board_id"]
         challenger_id = game["challenger_id"]
-        # Mark 'accepting' immediately to prevent double-accept race condition
+        # Mark 'accepting' immediately and register in user_active_rr_game to prevent concurrent multi-accept races
         game["state"] = "accepting"
+        user_active_rr_game[acceptor_id] = game_id
 
     def _rr_rollback():
         g = active_rr_games.get(game_id)
         if g and g.get("state") == "accepting":
             g["state"] = "pending"
+        if user_active_rr_game.get(acceptor_id) == game_id:
+            user_active_rr_game.pop(acceptor_id, None)
 
     def _rr_cancel():
         g = active_rr_games.get(game_id)
@@ -901,9 +955,12 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
             g["state"] = "cancelled"
             g["finished_ts"] = time.time()
             active_rr_games.pop(game_id, None)
-            user_active_rr_game.pop(g.get("challenger_id"), None)
-            if g.get("target_id"):
+            if user_active_rr_game.get(g.get("challenger_id")) == game_id:
+                user_active_rr_game.pop(g.get("challenger_id"), None)
+            if g.get("target_id") and user_active_rr_game.get(g.get("target_id")) == game_id:
                 user_active_rr_game.pop(g.get("target_id"), None)
+            if user_active_rr_game.get(acceptor_id) == game_id:
+                user_active_rr_game.pop(acceptor_id, None)
 
     # Escrow deduction
     db = await get_pool()
@@ -961,6 +1018,8 @@ async def decline_or_cancel_rr_challenge(game_id: str, user_id: int, bot=None) -
     async with rr_lock:
         game = active_rr_games.get(game_id)
         if not game:
+            if user_active_rr_game.get(user_id) == game_id:
+                user_active_rr_game.pop(user_id, None)
             return False, "❌ Вызов не найден."
         if game["state"] != "pending":
             return False, "❌ Нельзя отменить уже начавшуюся дуэль."
@@ -968,14 +1027,16 @@ async def decline_or_cancel_rr_challenge(game_id: str, user_id: int, bot=None) -
         ch_id = game["challenger_id"]
         tgt_id = game.get("target_id")
 
-        if user_id != ch_id and (tgt_id and user_id != tgt_id):
-            return False, "❌ Ты не участник этого вызова."
+        if user_id != ch_id and (not tgt_id or user_id != tgt_id):
+            return False, "❌ Только участники вызова могут его отменить."
 
         game["finished"] = True
         game["state"] = "cancelled"
+        game["finished_ts"] = time.time()
         active_rr_games.pop(game_id, None)
-        user_active_rr_game.pop(ch_id, None)
-        if tgt_id:
+        if user_active_rr_game.get(ch_id) == game_id:
+            user_active_rr_game.pop(ch_id, None)
+        if tgt_id and user_active_rr_game.get(tgt_id) == game_id:
             user_active_rr_game.pop(tgt_id, None)
 
     if user_id == ch_id:
@@ -1089,8 +1150,9 @@ async def _finish_rr_game(
         p2 = game["acceptor_id"]
 
         # Clear active user mappings
-        user_active_rr_game.pop(p1, None)
-        if p2:
+        if user_active_rr_game.get(p1) == game_id:
+            user_active_rr_game.pop(p1, None)
+        if p2 and user_active_rr_game.get(p2) == game_id:
             user_active_rr_game.pop(p2, None)
 
         is_burn_rake = pot > 50000
@@ -1115,7 +1177,7 @@ async def _finish_rr_game(
             # Payout to winner
             await add_user_global_balance(db, winner_id, board_id, win_payout)
             if not is_burn_rake:
-                await add_to_abu_fund(db, rake)
+                await add_to_abu_fund(db, rake, donor_id=winner_id, reason=f"Рейк Русской Рулетки #{game_id}")
             tx_desc = f'Победа в Русской Рулетке #{game_id} против [{lose_anon}]' + (f' (сожжён рейк 10%: -{rake:,} ₪)' if is_burn_rake else '')
             await record_user_transaction(db, winner_id, win_payout, 'rr_pvp', tx_desc)
 
@@ -1255,7 +1317,11 @@ async def rr_watchdog_step(bot=None):
                 game["state"] = "expired"
                 game["finished_ts"] = now
                 ch_id = game["challenger_id"]
-                user_active_rr_game.pop(ch_id, None)
+                tgt_id = game.get("target_id")
+                if user_active_rr_game.get(ch_id) == gid:
+                    user_active_rr_game.pop(ch_id, None)
+                if tgt_id and user_active_rr_game.get(tgt_id) == gid:
+                    user_active_rr_game.pop(tgt_id, None)
                 expired_pending.append(gid)
 
     # 1. Update live countdown timer in playing games for BOTH players
