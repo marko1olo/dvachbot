@@ -51,7 +51,7 @@ _GLOBAL_GEMINI_LAST_CALL = 0.0
 _GLOBAL_GROQ_LAST_CALL = 0.0
 _KEY_RATE_LOCK = asyncio.Lock()
 VISION_MODEL_FALLBACKS: dict[str, str] = {
-    "gemini-3.8-flash": "gemini-2.5-flash",
+    "gemini-3.8-flash": "gemini-3.5-flash",
 }
 _MODEL_503_COOLDOWN: dict[str, float] = {}  # model_name -> cooldown timestamp
 _MODEL_404_COOLDOWN: dict[str, float] = {}  # model_name -> cooldown timestamp
@@ -287,13 +287,13 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 models_cascade = [
                     ("qwen/qwen3.8-27b", "groq"),
                     ("gemini-3.1-flash-lite", "gemini"),
-                    ("gemini-2.5-flash", "gemini"),
+                    ("gemini-3.5-flash", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
                 ]
             else:
                 models_cascade = [
                     ("gemini-3.1-flash-lite", "gemini"),
-                    ("gemini-2.5-flash", "gemini"),
+                    ("gemini-3.5-flash", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("qwen/qwen3.8-27b", "groq"),
                 ]

@@ -1202,8 +1202,17 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            if is_shutting_down or drain_shutdown_requested:
+            if is_shutting_down:
                 break
+            if drain_shutdown_requested:
+                runtime_logger.warning(
+                    f"{worker_name} | ⚠️ Ошибка при дренаже поста #{msg_data.get('post_num')}: {e}. Сохраняю в durable storage и продолжаю разгребать очередь."
+                )
+                try:
+                    await _persist_durable_delivery_item(board_id, msg_data, "drain_error_persisted")
+                except Exception as save_err:
+                    runtime_logger.error(f"{worker_name} | Не удалось сохранить durable item при дренаже: {save_err}")
+                continue
             # 'closed database' раньше означал break, то есть тихую смерть воркера
             # доски навсегда. Ошибка восстановимая: get_pool() переподключается
             # сам, поэтому ждём чуть дольше и продолжаем разгребать очередь.

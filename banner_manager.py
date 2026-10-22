@@ -414,6 +414,27 @@ def resolve_category_candidates(
     return ["start"]
 
 
+MAX_TELEGRAM_PHOTO_SIZE = 10485760  # 10 MB limit for sendPhoto
+
+def _get_safe_fs_input_file(path: Path) -> FSInputFile:
+    if not path.exists():
+        return FSInputFile(str(path))
+    try:
+        if path.stat().st_size > MAX_TELEGRAM_PHOTO_SIZE and path.suffix.lower() in ('.jpg', '.jpeg', '.png'):
+            compressed_dir = path.parent / ".compressed"
+            compressed_dir.mkdir(exist_ok=True)
+            compressed_file = compressed_dir / path.name
+            if not compressed_file.exists() or compressed_file.stat().st_mtime < path.stat().st_mtime:
+                from PIL import Image
+                with Image.open(path) as img:
+                    img.save(compressed_file, "JPEG", quality=88, optimize=True)
+            if compressed_file.exists() and compressed_file.stat().st_size <= MAX_TELEGRAM_PHOTO_SIZE:
+                return FSInputFile(str(compressed_file))
+    except Exception as e:
+        logger.warning(f"[banner_manager] Failed to compress oversized banner {path.name}: {e}")
+    return FSInputFile(str(path))
+
+
 def get_banner_file(
     category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = None,
     banner_name: Optional[str] = None,
@@ -496,7 +517,7 @@ def get_banner_file(
     # Fallback to local FSInputFile
     local_path = BANNERS_DIR / chosen_file
     if local_path.exists():
-        return chosen_file, FSInputFile(str(local_path))
+        return chosen_file, _get_safe_fs_input_file(local_path)
     return chosen_file, ""
 
 
@@ -637,7 +658,7 @@ async def send_banner_message(
                     if is_vid:
                         media_msg = await bot.send_video(chat_id=chat_id, video=FSInputFile(str(local_path)), supports_streaming=True)
                     else:
-                        media_msg = await bot.send_photo(chat_id=chat_id, photo=FSInputFile(str(local_path)))
+                        media_msg = await bot.send_photo(chat_id=chat_id, photo=_get_safe_fs_input_file(local_path))
                     fid = _extract_media_file_id(media_msg)
                     if fid and bot_id:
                         _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
@@ -763,7 +784,7 @@ async def send_banner_message(
                     else:
                         msg = await bot.send_photo(
                             chat_id=chat_id,
-                            photo=FSInputFile(str(local_path)),
+                            photo=_get_safe_fs_input_file(local_path),
                             caption=caption,
                             reply_markup=reply_markup,
                             parse_mode=parse_mode

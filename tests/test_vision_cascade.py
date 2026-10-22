@@ -32,6 +32,7 @@ class TestVisionCascade:
     VALID_VISION_MODELS = {
         "gemini-3.1-flash-lite",
         "gemini-2.5-flash",
+        "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.8-flash",
         "qwen/qwen3.6-27b",
@@ -182,7 +183,7 @@ class TestVisionCascade:
         assert "cat" in parsed["tags"]
         assert mock_gemini_call.call_count == 2
         models_called = [c[1]["model_name"] for c in mock_gemini_call.call_args_list]
-        assert models_called == ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
+        assert models_called == ["gemini-3.1-flash-lite", "gemini-3.5-flash"]
         assert mock_openai_cls.call_count == 0
 
     @pytest.mark.asyncio
