@@ -277,6 +277,7 @@ async def resolve_votemute_token(token: str) -> Optional[Tuple[int, int]]:
     by scanning active_votemutes for a matching entry.
     Returns None if not found or session expired.
     """
+    clean_expired_votemutes()
     # Token format: '<anon_tag>_<post_num>'  e.g. 'Шолтер5_12345'
     try:
         # Split from right once to get post_num
@@ -323,11 +324,14 @@ async def resolve_votemute_token(token: str) -> Optional[Tuple[int, int]]:
 
 
 def clean_expired_votemutes():
-    """Removes unexecuted votemute sessions older than VOTE_WINDOW_SEC from memory."""
+    """Removes expired votemute sessions from memory to prevent memory leaks."""
     now = time.time()
+    cutoff_unexecuted = now - VOTE_WINDOW_SEC
+    cutoff_executed = now - (VOTE_WINDOW_SEC + MUTE_DURATION_SEC)
     expired_keys = [
         k for k, vm in active_votemutes.items()
-        if (now - vm.get("created_ts", 0)) > VOTE_WINDOW_SEC and not vm.get("executed", False)
+        if (vm.get("executed") and vm.get("created_ts", 0) <= cutoff_executed)
+        or (not vm.get("executed") and vm.get("created_ts", 0) <= cutoff_unexecuted)
     ]
     for k in expired_keys:
         active_votemutes.pop(k, None)
@@ -464,14 +468,22 @@ async def start_or_add_vote(
     Starts a new votemute session or casts a vote in an existing one.
     Returns: (ok: bool, message: str, current_votes: int, is_executed: bool)
     """
+    clean_expired_votemutes()
+
     if not post_num or post_num <= 0:
         return False, "❌ Некорректный номер поста.", 0, False
 
     if not target_id or target_id <= 0:
         return False, "❌ Нельзя объявить вотум системному аккаунту.", 0, False
 
+    if not voter_id or voter_id <= 0:
+        return False, "❌ Некорректный ID голосующего.", 0, False
+
     if voter_id == target_id:
         return False, "❌ Нельзя голосовать за мут самого себя, шизик.", 0, False
+
+    if bot and target_id == getattr(bot, "id", None):
+        return False, "❌ Ты пытаешься замутить бота? У меня нет голосовых связок.", 0, False
 
     vm_key = generate_votemute_key(target_id, post_num)
     now = time.time()
@@ -540,16 +552,34 @@ async def _apply_unbribable_iron_mute(board_id: str, target_id: int, post_num: i
     db = await get_pool()
     try:
         async with db_transaction(db):
-            # Update user's active_items with unbribable_votemute_until and cursed_until
-            await db.execute(
-                """
-                UPDATE Users 
-                SET cursed_until = ?, 
-                    active_items = json_set(COALESCE(NULLIF(active_items, ''), '{}'), '$.unbribable_votemute_until', ?) 
-                WHERE user_id = ? AND board_id = ?
-                """,
-                (mute_until, mute_until, target_id, board_id)
-            )
+            async with db.execute(
+                "SELECT cursed_until, active_items FROM Users WHERE user_id = ? AND board_id = ?",
+                (target_id, board_id)
+            ) as cur:
+                row = await cur.fetchone()
+
+            if row:
+                current_cursed = row[0] or 0
+                new_cursed = max(current_cursed, mute_until)
+                raw_items = row[1]
+                items_dict = {}
+                if raw_items:
+                    try:
+                        items_dict = json.loads(raw_items) if isinstance(raw_items, str) else dict(raw_items)
+                    except Exception:
+                        items_dict = {}
+                items_dict[UNBRIBABLE_FLAG_KEY] = mute_until
+                await db.execute(
+                    "UPDATE Users SET cursed_until = ?, active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (new_cursed, json.dumps(items_dict), target_id, board_id)
+                )
+            else:
+                items_dict = {UNBRIBABLE_FLAG_KEY: mute_until}
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, cursed_until, active_items) VALUES (?, ?, ?, ?)",
+                    (target_id, board_id, mute_until, json.dumps(items_dict))
+                )
+
             # Insert / update Mutes table
             await db.execute(
                 "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
@@ -671,6 +701,15 @@ async def cmd_votemute(message: types.Message, board_id: Optional[str] = None):
 
     if target_id <= 0:
         await message.answer("❌ Нельзя объявить вотум системному сообщению.", parse_mode="HTML")
+        return
+
+    if message.bot and target_id == getattr(message.bot, "id", None):
+        reject_text = random.choice([
+            "💀 Ты пытаешься замутить бота? Мразь, у меня нет голосовых связок, я не могу молчать сильнее.",
+            "🔇 Замутить меня? Хуй тебе в рот. Я сервер, я работаю пока ты спишь.",
+            "🤖 Попытка вотума на бота зафиксирована. Анон записан в чёрный список шизов."
+        ])
+        await message.answer(reject_text, parse_mode="HTML")
         return
 
     from common.database import is_shadow_muted as check_db_shadow_muted

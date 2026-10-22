@@ -17,7 +17,7 @@ import random
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Set, Tuple, Any, Union
 
 from aiogram import Router, F, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -183,7 +183,7 @@ def calculate_combat_duration_and_backfire(
     target_id: int,
     weapon_type: str,
     target_posts: int,
-    target_items: Optional[Dict[str, Any]] = None
+    target_items: Optional[Union[Dict[str, Any], str]] = None
 ) -> Tuple[int, bool, float]:
     """
     Calculates:
@@ -196,10 +196,11 @@ def calculate_combat_duration_and_backfire(
       (final_duration_sec: int, is_backfire: bool, backfire_chance: float)
     """
     clean_combat_history()
-    attacks_24h = get_attacker_24h_usage_count(attacker_id, weapon_type)
+    w_type = str(weapon_type or "").lower().strip()
+    attacks_24h = get_attacker_24h_usage_count(attacker_id, w_type)
 
     # 1. Base duration & backfire scaling by attack count
-    if weapon_type == "partyvan":
+    if w_type == "partyvan":
         # Partyvan base durations: 3h -> 1.5h -> 45m -> 20m
         if attacks_24h == 0:
             base_duration = 10800  # 3 hours
@@ -237,9 +238,14 @@ def calculate_combat_duration_and_backfire(
     # - posts_count < 50: полный отлёт атаки (рикошет / иммунитет новичка) -> 0 сек
     # - 50 <= posts_count < 250: сокращение длительности на -30% (множитель 0.70)
     # - posts_count >= 250: стандартное время без поблажек (множитель 1.00)
-    if target_posts < 50:
+    try:
+        t_posts = int(target_posts) if target_posts is not None else 0
+    except (ValueError, TypeError):
+        t_posts = 0
+
+    if t_posts < 50:
         multiplier = 0.0
-    elif target_posts < 250:
+    elif t_posts < 250:
         multiplier = 0.70
     else:
         multiplier = 1.00
@@ -372,7 +378,7 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
             await callback.answer("⚖️ Этот мут уже был отменен общественным голосованием анонов.", show_alert=True)
             return
 
-        if sess.is_bailed:
+        if sess.is_bailed or getattr(sess, "_is_processing_bail", False):
             await callback.answer("💸 Этот мут уже был снят внесением залога (взятки).", show_alert=True)
             return
 
@@ -409,7 +415,7 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
             await callback.answer("⚖️ Этот мут уже был отменен общественным голосованием анонов.", show_alert=True)
             return
 
-        if sess.is_bailed:
+        if sess.is_bailed or getattr(sess, "_is_processing_bail", False):
             await callback.answer("💸 Этот мут уже был снят внесением залога (взятки).", show_alert=True)
             return
 
@@ -535,6 +541,17 @@ async def callback_combat_bail(callback: types.CallbackQuery):
         return
 
     async with _COMBAT_ENGINE_LOCK:
+        if sess.is_appealed:
+            sess._is_processing_bail = False
+            # Refund payer if appeal passed while bail deduction was processing
+            try:
+                from main import add_user_global_balance
+                await add_user_global_balance(db, payer_id, sess.board_id, bail_cost)
+            except Exception as e:
+                logger.error(f"Failed to refund bail to {payer_id}: {e}")
+            await callback.answer("⚖️ Этот мут уже был аннулирован общественным голосованием! Шекели возвращены.", show_alert=True)
+            return
+
         sess.is_bailed = True
         sess.bailed_by = payer_id
         sess._is_processing_bail = False

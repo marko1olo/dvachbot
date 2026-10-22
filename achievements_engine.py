@@ -4,8 +4,16 @@ achievements_engine.py — Dvach Achievements, Quests & Trophy System
 Tracks board milestones, gear sets, work progress, PvP victories, and awards cash & titles.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+import asyncio
+import json
+import logging
+from typing import Dict, Any, List, Optional, Tuple, Set, Union
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+logger = logging.getLogger("runtime")
+
+_ACHIEVEMENT_LOCK = asyncio.Lock()
+_IN_FLIGHT_ACHIEVEMENT_CLAIMS: Set[Tuple[int, str]] = set()
 
 ACHIEVEMENTS_CATALOG = {
     "ach_work_10": {
@@ -268,29 +276,135 @@ ACHIEVEMENTS_CATALOG = {
 
 
 def check_and_unlock_achievement(
-    active_items: Dict[str, Any],
+    active_items: Optional[Dict[str, Any]],
     ach_id: str
 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """
     Unlocks an achievement if not already unlocked.
+    Includes anti-exploit protection against duplicate reward claims,
+    and handles malformed unlocked_achievements types cleanly.
     Returns: (was_unlocked_now, achievement_info)
     """
-    if ach_id not in ACHIEVEMENTS_CATALOG:
+    if not isinstance(active_items, dict):
         return False, None
 
-    unlocked_list = active_items.setdefault("unlocked_achievements", [])
+    if not ach_id or ach_id not in ACHIEVEMENTS_CATALOG:
+        return False, None
+
+    raw_unlocked = active_items.get("unlocked_achievements")
+    if not isinstance(raw_unlocked, list):
+        if isinstance(raw_unlocked, (set, tuple)):
+            unlocked_list = list(raw_unlocked)
+        elif isinstance(raw_unlocked, str):
+            unlocked_list = [raw_unlocked] if raw_unlocked else []
+        else:
+            unlocked_list = []
+        active_items["unlocked_achievements"] = unlocked_list
+    else:
+        unlocked_list = raw_unlocked
+
+    # Anti-exploit: check claimed rewards registry in active_items
+    claimed_list = active_items.get("claimed_achievement_rewards")
+    if isinstance(claimed_list, (list, set, tuple)) and ach_id in claimed_list:
+        if ach_id not in unlocked_list:
+            unlocked_list.append(ach_id)
+        return False, None
+
     if ach_id in unlocked_list:
         return False, None  # Already unlocked
 
     unlocked_list.append(ach_id)
+
+    # Persist in claimed rewards list to prevent double-claiming even if unlocked_achievements is wiped
+    if not isinstance(active_items.get("claimed_achievement_rewards"), list):
+        active_items["claimed_achievement_rewards"] = list(unlocked_list)
+    else:
+        if ach_id not in active_items["claimed_achievement_rewards"]:
+            active_items["claimed_achievement_rewards"].append(ach_id)
+
     return True, ACHIEVEMENTS_CATALOG[ach_id]
 
 
-def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def atomic_claim_achievement_reward(
+    db,
+    user_id: int,
+    board_id: str,
+    ach_id: str
+) -> Tuple[bool, int, Optional[Dict[str, Any]]]:
+    """
+    Safely and atomically verifies eligibility, marks achievement as claimed,
+    and credits reward_cash to the user balance in SQLite inside a transaction.
+    Guarantees zero double-payouts under concurrent requests.
+    Returns: (was_claimed_now: bool, reward_amount: int, ach_info: Optional[Dict])
+    """
+    if not ach_id or ach_id not in ACHIEVEMENTS_CATALOG:
+        return False, 0, None
+    if not user_id or user_id <= 0:
+        return False, 0, None
+
+    claim_key = (user_id, ach_id)
+    async with _ACHIEVEMENT_LOCK:
+        if claim_key in _IN_FLIGHT_ACHIEVEMENT_CLAIMS:
+            return False, 0, None
+        _IN_FLIGHT_ACHIEVEMENT_CLAIMS.add(claim_key)
+
+    try:
+        from common.db_pool import db_transaction
+        async with db_transaction(db):
+            async with db.execute(
+                "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
+                (user_id, board_id)
+            ) as cur:
+                row = await cur.fetchone()
+
+            if not row:
+                return False, 0, None
+
+            raw_items = row[0]
+            items = {}
+            if raw_items:
+                try:
+                    items = json.loads(raw_items) if isinstance(raw_items, str) else dict(raw_items)
+                except Exception:
+                    items = {}
+
+            unlocked, ach_info = check_and_unlock_achievement(items, ach_id)
+            if not unlocked or not ach_info:
+                return False, 0, None
+
+            reward = int(ach_info.get("reward_cash", 0))
+
+            # Atomic DB update: save active_items and credit reward_cash
+            await db.execute(
+                "UPDATE Users SET active_items = ?, balance = balance + ? WHERE user_id = ? AND board_id = ?",
+                (json.dumps(items), reward, user_id, board_id)
+            )
+
+            # Record ledger transaction if reward > 0
+            if reward > 0:
+                try:
+                    from common.database import record_user_transaction
+                    await record_user_transaction(
+                        db, user_id, reward, 'achievement',
+                        f"Награда за ачивку: {ach_info.get('name', ach_id)}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to record achievement tx: {e}")
+
+            return True, reward, ach_info
+    finally:
+        async with _ACHIEVEMENT_LOCK:
+            _IN_FLIGHT_ACHIEVEMENT_CLAIMS.discard(claim_key)
+
+
+def get_user_achievements(active_items: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Returns list of all achievements with their unlocked status.
     Auto-checks any equipped wardrobe sets to retroactively award trophies.
     """
+    if not isinstance(active_items, dict):
+        active_items = {}
+
     try:
         import wardrobe_engine
         wardrobe_engine.check_wardrobe_set_achievements(active_items)
@@ -298,7 +412,16 @@ def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
     except Exception:
         pass
 
-    unlocked_list = active_items.get("unlocked_achievements", [])
+    raw_unlocked = active_items.get("unlocked_achievements", [])
+    if isinstance(raw_unlocked, list):
+        unlocked_list = set(raw_unlocked)
+    elif isinstance(raw_unlocked, (set, tuple)):
+        unlocked_list = set(raw_unlocked)
+    elif isinstance(raw_unlocked, str):
+        unlocked_list = {raw_unlocked} if raw_unlocked else set()
+    else:
+        unlocked_list = set()
+
     result = []
     for ach_id, ach_info in ACHIEVEMENTS_CATALOG.items():
         info = dict(ach_info)
@@ -307,7 +430,7 @@ def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
-def build_achievements_content(user_id: int, active_items: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
+def build_achievements_content(user_id: int, active_items: Optional[Dict[str, Any]]) -> Tuple[str, InlineKeyboardMarkup]:
     """
     Renders achievements view text and keyboard within Telegram photo caption limits.
     """

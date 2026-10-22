@@ -10,7 +10,8 @@ Includes dynamic duration stacking, set bonuses, stats and dressing room UI.
 """
 
 import time
-from typing import Dict, Any, List, Optional, Tuple
+import json
+from typing import Dict, Any, List, Optional, Tuple, Union
 
 # -----------------------------------------------------------------------------
 # Apparel & Wardrobe Catalog
@@ -432,79 +433,103 @@ def add_item_duration(active_items: Dict[str, Any], item_id: str, dur_hours: int
     active_items[f"{item_id}_expires"] = base_start + dur_hours * 3600
 
 
-def get_equipped_gear(active_items: Dict[str, Any], current_time: Optional[int] = None) -> Dict[str, Optional[Dict[str, Any]]]:
+def _safe_dict_payload(payload: Any) -> Optional[Dict[str, Any]]:
+    """Safely extracts a mutable dictionary from dict or JSON string payload, or returns None."""
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def get_equipped_gear(active_items: Any, current_time: Optional[int] = None) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Extracts currently equipped wardrobe items from active_items dictionary across all slots.
     """
-    now = int(time.time()) if current_time is None else int(current_time)
     equipped = {
         "head": None,
         "torso": None,
         "face": None,
         "feet": None
     }
+    items_dict = _safe_dict_payload(active_items)
+    if not items_dict:
+        return equipped
+
+    now = int(time.time()) if current_time is None else int(current_time)
 
     for slot in equipped.keys():
-        eq_id = active_items.get(f"equipped_{slot}")
+        eq_id = items_dict.get(f"equipped_{slot}")
         if eq_id and isinstance(eq_id, str) and eq_id in CLOTHING_CATALOG:
-            is_perm = active_items.get(f"{eq_id}_is_permanent", False)
-            expires = active_items.get(f"{eq_id}_expires", 0)
-            has_exp = f"{eq_id}_expires" in active_items
+            is_perm = items_dict.get(f"{eq_id}_is_permanent", False)
+            expires = items_dict.get(f"{eq_id}_expires", 0)
+            has_exp = f"{eq_id}_expires" in items_dict
             if is_perm or (expires > now if has_exp else True):
                 equipped[slot] = CLOTHING_CATALOG[eq_id]
             else:
-                active_items.pop(f"equipped_{slot}", None)
+                items_dict.pop(f"equipped_{slot}", None)
 
     return equipped
 
 
-def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_time: Optional[int] = None) -> Dict[str, Any]:
+def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional[int] = None) -> Dict[str, Any]:
     """
     Единый авторитетный расчет всех боевых, экономических и социальных характеристик
     экипированного гардероба с обязательной валидацией срока годности (is_permanent or expires > now).
     """
-    if not active_items or not isinstance(active_items, dict):
-        return {
-            "total_defense": 0,
-            "total_toxicity": 0,
-            "total_sanity": 0,
-            "rob_deflect_chance": 0.0,
-            "rob_stolen_reduction_pct": 0.0,
-            "rob_fear_chance": 0.0,
-            "evasion_chance": 0.0,
-            "mute_reduction_pct": 0,
-            "debuff_reduction_pct": 0.0,
-            "shit_immunity": False,
-            "laxative_immunity": False,
-            "schizo_immunity": False,
-            "work_fine_immunity": False,
-            "salary_mult": 1.0,
-            "tips_mult": 1.0,
-            "cooldown_mult": 1.0,
-            "lootbox_flat_chance": 0.0,
-            "lootbox_drop_mult": 1.0,
-            "casino_bonus_pct": 0,
-            "compact_post_icon": "",
-            "stealth_profile": False,
-            "active_set_name": None,
-            "active_set_desc": None,
-            "equipped_items_summary": "(Ничего не надето)"
-        }
+    default_stats = {
+        "total_defense": 0,
+        "total_toxicity": 0,
+        "total_sanity": 0,
+        "rob_deflect_chance": 0.0,
+        "rob_stolen_reduction_pct": 0.0,
+        "rob_fear_chance": 0.0,
+        "evasion_chance": 0.0,
+        "mute_reduction_pct": 0,
+        "debuff_reduction_pct": 0.0,
+        "shit_immunity": False,
+        "laxative_immunity": False,
+        "schizo_immunity": False,
+        "work_fine_immunity": False,
+        "salary_mult": 1.0,
+        "tips_mult": 1.0,
+        "cooldown_mult": 1.0,
+        "lootbox_flat_chance": 0.0,
+        "lootbox_drop_mult": 1.0,
+        "casino_bonus_pct": 0,
+        "compact_post_icon": "",
+        "stealth_profile": False,
+        "active_set_name": None,
+        "active_set_desc": None,
+        "equipped_items_summary": "(Ничего не надето)"
+    }
+
+    items_dict = _safe_dict_payload(active_items)
+    if not items_dict:
+        return default_stats
 
     now = int(time.time()) if current_time is None else int(current_time)
 
     # 1. Determine active equipped items (TTL validation: is_permanent or expires > now)
     equipped: Dict[str, Dict[str, Any]] = {}
     for slot in ("head", "torso", "face", "feet"):
-        item_id = active_items.get(f"equipped_{slot}")
+        item_id = items_dict.get(f"equipped_{slot}")
         if item_id and isinstance(item_id, str) and item_id in CLOTHING_CATALOG:
-            is_perm = active_items.get(f"{item_id}_is_permanent", False)
-            expires = active_items.get(f"{item_id}_expires", 0)
-            has_exp = f"{item_id}_expires" in active_items
+            is_perm = items_dict.get(f"{item_id}_is_permanent", False)
+            expires = items_dict.get(f"{item_id}_expires", 0)
+            has_exp = f"{item_id}_expires" in items_dict
             if is_perm or (expires > now if has_exp else True):
                 equipped[slot] = CLOTHING_CATALOG[item_id]
             else:
-                active_items.pop(f"equipped_{slot}", None)
+                items_dict.pop(f"equipped_{slot}", None)
 
 
     # 2. Identify active sets
@@ -515,6 +540,7 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
             active_sets.append(set_info)
 
     primary_set = active_sets[0] if active_sets else None
+    active_set_ids = {s.get("id") for s in active_sets}
 
     # 3. Sum RPG Stats
     tot_def = sum(item.get("defense", 0) for item in equipped.values())
@@ -539,7 +565,7 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
     # stolen_reduction = min(0.60, max(0.0, Def / 200.0))
     rob_stolen_red = min(0.60, max(0.0, round(tot_def / 200.0, 4)))
     # fear chance: 40% for set_gop_skuf, 25% for body_tracksuit
-    has_skuf_set = bool(primary_set and primary_set.get("id") in ("set_gop_skuf", "set_skuf"))
+    has_skuf_set = bool("set_gop_skuf" in active_set_ids or "set_skuf" in active_set_ids)
     has_tracksuit = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_tracksuit")
     rob_fear = 0.40 if has_skuf_set else (0.25 if has_tracksuit else 0.0)
 
@@ -547,7 +573,7 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
     has_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_sneakers")
     evasion = 0.30 if has_sneakers else 0.0
 
-    has_riot_set = bool(primary_set and primary_set.get("id") in ("set_riot_police", "set_omon"))
+    has_riot_set = bool("set_riot_police" in active_set_ids or "set_omon" in active_set_ids)
     has_helmet = bool(equipped.get("head") and equipped["head"]["id"] == "hat_helmet")
     mute_red = 70 if has_riot_set else (50 if has_helmet else 0)
 
@@ -558,14 +584,14 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
     has_golden_foil = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_foil")
     shit_imm = bool(has_boots or has_riot_set or has_golden_foil)
 
-    has_ward6 = bool(primary_set and primary_set.get("id") == "set_ward6")
-    has_wasserman = bool(primary_set and primary_set.get("id") in ("set_wasserman", "set_onotole"))
+    has_ward6 = bool("set_ward6" in active_set_ids)
+    has_wasserman = bool("set_wasserman" in active_set_ids or "set_onotole" in active_set_ids)
     lax_imm = bool(has_ward6)
     schizo_imm = bool(has_ward6 or has_wasserman or has_golden_foil)
     work_fine_imm = bool(has_helmet or has_riot_set)
 
     # 7. Work bonuses
-    has_neo = bool(primary_set and primary_set.get("id") == "set_neo")
+    has_neo = bool("set_neo" in active_set_ids)
     if has_wasserman:
         sal_mult = 1.40
     else:
@@ -592,11 +618,10 @@ def get_wardrobe_total_stats(active_items: Optional[Dict[str, Any]], current_tim
     has_bag = bool(equipped.get("head") and equipped["head"]["id"] == "hat_bag")
     loot_flat = 0.08 if has_bag else 0.0
 
-    has_hikka = bool(primary_set and primary_set.get("id") in ("set_anime_hikka", "set_anime"))
+    has_hikka = bool("set_anime_hikka" in active_set_ids or "set_anime" in active_set_ids)
     loot_mult = 2.0 if has_hikka else 1.0
 
     has_thug = bool(equipped.get("face") and equipped["face"]["id"] == "face_thug_glasses")
-    has_neo = bool(primary_set and primary_set.get("id") == "set_neo")
     casino_bonus = 20 if has_neo else (5 if has_thug else 0)
 
     # 8. Social visibility icon
@@ -679,22 +704,26 @@ def get_active_set_bonuses(active_items: Dict[str, Any]) -> List[Dict[str, Any]]
     return active_sets
 
 
-def get_owned_wardrobe_items(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+def get_owned_wardrobe_items(active_items: Any) -> List[Dict[str, Any]]:
     """
     Returns a list of all unexpired/permanent clothing items owned by the user.
     """
+    items_dict = _safe_dict_payload(active_items)
+    if not items_dict:
+        return []
+
     now = int(time.time())
     owned = []
     for item_id, item_info in CLOTHING_CATALOG.items():
-        is_owned = active_items.get(f"owned_{item_id}", False)
-        is_perm = active_items.get(f"{item_id}_is_permanent", False)
-        expires = active_items.get(f"{item_id}_expires", 0)
+        is_owned = items_dict.get(f"owned_{item_id}", False)
+        is_perm = items_dict.get(f"{item_id}_is_permanent", False)
+        expires = items_dict.get(f"{item_id}_expires", 0)
 
         # Check active ownership
         if is_owned and (is_perm or expires > now):
             info = dict(item_info)
             info["is_equipped"] = (
-                active_items.get(f"equipped_{item_info['slot']}") == item_id
+                items_dict.get(f"equipped_{item_info['slot']}") == item_id
             )
             info["is_permanent"] = is_perm
             if is_perm:
@@ -714,21 +743,28 @@ def get_owned_wardrobe_items(active_items: Dict[str, Any]) -> List[Dict[str, Any
     return owned
 
 
-def equip_item(active_items: Dict[str, Any], item_id: str) -> Tuple[bool, str]:
+def equip_item(active_items: Any, item_id: str) -> Tuple[bool, str]:
     """
     Equips an owned item into its respective slot.
     """
+    if not isinstance(active_items, dict):
+        return False, "Неверный формат инвентаря."
+
     item = CLOTHING_CATALOG.get(item_id)
     if not item:
         return False, "Предмет не найден в каталоге."
 
     slot = item["slot"]
     now = int(time.time())
-    is_perm = active_items.get(f"{item_id}_is_permanent", False)
+    is_perm = bool(active_items.get(f"{item_id}_is_permanent", False))
     expires = active_items.get(f"{item_id}_expires", 0)
+    has_exp = f"{item_id}_expires" in active_items
 
-    if not is_perm and expires > 0 and expires <= now:
-        return False, "Срок действия этого предмета истек! Продли его в Бутике одежды."
+    if not is_perm:
+        if has_exp and expires <= now:
+            return False, "Срок действия этого предмета истек! Продли его в Бутике одежды."
+        if not has_exp and item.get("duration_hours", 0) > 0 and not active_items.get(f"owned_{item_id}"):
+            return False, "У тебя нет этого предмета в гардеробе."
 
     if not active_items.get(f"owned_{item_id}") and not is_perm:
         return False, "У тебя нет этого предмета в гардеробе."
@@ -753,10 +789,12 @@ def equip_item(active_items: Dict[str, Any], item_id: str) -> Tuple[bool, str]:
     return True, f"Ты успешно надел <b>{item['name']}</b>!{set_note}"
 
 
-def unequip_slot(active_items: Dict[str, Any], slot: str) -> Tuple[bool, str]:
+def unequip_slot(active_items: Any, slot: str) -> Tuple[bool, str]:
     """
     Unequips whatever is in the specified slot ('head', 'torso', 'face', 'feet').
     """
+    if not isinstance(active_items, dict):
+        return False, "Неверный формат инвентаря."
     if slot not in ("head", "torso", "face", "feet"):
         return False, "Неверный слот экипировки."
 
@@ -766,11 +804,13 @@ def unequip_slot(active_items: Dict[str, Any], slot: str) -> Tuple[bool, str]:
     return True, "Слот очищен."
 
 
-def check_wardrobe_set_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+def check_wardrobe_set_achievements(active_items: Any) -> List[Dict[str, Any]]:
     """
     Checks all active set bonuses and unlocks corresponding wardrobe achievements.
     Returns list of newly unlocked achievements.
     """
+    if not isinstance(active_items, dict):
+        return []
     sets = get_active_set_bonuses(active_items)
     unlocked_achievements = []
     import achievements_engine
@@ -783,13 +823,15 @@ def check_wardrobe_set_achievements(active_items: Dict[str, Any]) -> List[Dict[s
     return unlocked_achievements
 
 
-def check_wardrobe_collection_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+def check_wardrobe_collection_achievements(active_items: Any) -> List[Dict[str, Any]]:
     """
     Checks wardrobe collection size (5+, 15+, 30+ items) and awards trophies:
     - ach_wardrobe_enthusiast (5+ items)
     - ach_wardrobe_collector (15+ items)
     - ach_fashion_demon (30+ items)
     """
+    if not isinstance(active_items, dict):
+        return []
     owned = get_owned_wardrobe_items(active_items)
     count = len(owned)
     unlocked_achievements = []
