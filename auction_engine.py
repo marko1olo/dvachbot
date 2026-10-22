@@ -23,6 +23,7 @@ from common.database import get_user_global_balance
 from whale_economy_engine import (
     ensure_auction_schema,
     create_auction,
+    cancel_auction,
     place_auction_bid,
     finish_active_auctions,
     get_active_auctions,
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "ensure_auction_schema",
     "create_auction",
+    "cancel_auction",
     "place_auction_bid",
     "finish_active_auctions",
     "get_active_auctions",
@@ -62,9 +64,35 @@ async def cmd_auction(message: types.Message):
     parts = text_val.split(maxsplit=5)
     db = await get_pool()
 
+    # /auction cancel <auction_id>
+    if len(parts) >= 3 and parts[1].lower() in ("cancel", "отмена", "отменить"):
+        from common.config import ADMIN_IDS
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id not in ADMIN_IDS:
+            await message.reply("❌ Отменять аукционы могут только администраторы.")
+            return
+        try:
+            auc_id = int(parts[2])
+        except ValueError:
+            await message.reply("❌ Неверный ID аукциона.")
+            return
+        res = await cancel_auction(db, auc_id)
+        if not res.get("ok"):
+            await message.reply(f"❌ Ошибка отмены аукциона: {res.get('error')}")
+            return
+        ref_txt = f"\nЛидеру #{res.get('refunded_to')} возвращено {res.get('refunded_amount'):,.0f} ₪ из эскроу." if res.get("refunded_to") else ""
+        await message.reply(f"🛑 <b>Аукцион #{auc_id} успешно отменен!</b>{ref_txt}")
+        return
+
     # /auction create <lot_type> <start_price> <min_step> <duration_hours> <title>
     if len(parts) >= 6 and parts[1].lower() == "create":
-        lot_type = parts[2]
+        lot_type = parts[2].lower().strip()
+        if lot_type not in ("custom_role", "board_pin", "custom_badge"):
+            await message.reply(
+                "❌ Недопустимый тип лота.\n"
+                "Доступные типы: <code>custom_role</code>, <code>board_pin</code>, <code>custom_badge</code>."
+            )
+            return
         try:
             start_price = float(parts[3])
             min_step = float(parts[4])
@@ -72,16 +100,23 @@ async def cmd_auction(message: types.Message):
             duration_hours = float(raw_hours)
             title = " ".join(parts[5].split()[1:]) if len(parts[5].split()) > 1 else f"Лот {lot_type}"
             duration_sec = duration_hours * 3600.0
-        except ValueError:
+            if start_price < 1.0 or min_step < 1.0 or duration_sec < 60.0 or duration_sec > 30 * 86400:
+                raise ValueError("Параметры вне допустимого диапазона (мин. цена 1 ₪, мин. шаг 1 ₪, длительность от 0.02 до 720 ч).")
+        except ValueError as err_val:
             await message.reply(
-                "❌ Неверные параметры.\n"
+                f"❌ Неверные параметры: {err_val}\n"
                 "Формат: <code>/auction create &lt;lot_type&gt; &lt;start_price&gt; &lt;min_step&gt; &lt;duration_hours&gt; &lt;title&gt;</code>"
             )
             return
 
-        auc_id = await create_auction(
-            db, lot_type, title, f"Аукционный лот: {title}", start_price, min_step, duration_sec, board_id
-        )
+        try:
+            auc_id = await create_auction(
+                db, lot_type, title, f"Аукционный лот: {title}", start_price, min_step, duration_sec, board_id
+            )
+        except ValueError as err_create:
+            await message.reply(f"❌ Ошибка создания аукциона: {err_create}")
+            return
+
         await message.reply(
             f"🏛️ <b>Аукцион #{auc_id} успешно создан!</b>\n\n"
             f"📦 <b>Лот:</b> {title} ({lot_type})\n"
@@ -321,15 +356,26 @@ async def cb_raid_join(callback: types.CallbackQuery):
     """
     Handles joining an active raid lobby.
     Thread-safe, resilient against caption/photo cards and detailed feedback.
+    Prunes stale lobbies and guards against oligarch self-sabotage and bank deposit evasion.
     """
     raid_id = callback.data.replace("raid_join_", "")
+    now_ts = time.time()
     async with _raid_lock:
+        # Prune stale raids older than 3600 seconds to prevent unbounded memory growth
+        stale_keys = [k for k, v in _ACTIVE_RAIDS.items() if now_ts - v.get("created_at", now_ts) > 3600]
+        for k in stale_keys:
+            _ACTIVE_RAIDS.pop(k, None)
+
         raid = _ACTIVE_RAIDS.get(raid_id)
         if not raid:
             await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
             return
 
         user_id = callback.from_user.id
+        if raid.get("target_id") and user_id == raid["target_id"]:
+            await callback.answer("❌ Олигарх не может участвовать в рейде против самого себя!", show_alert=True)
+            return
+
         if user_id in raid["voters"]:
             await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
             return
@@ -346,6 +392,21 @@ async def cb_raid_join(callback: types.CallbackQuery):
         pass
 
     bal = await get_user_global_balance(db, user_id)
+    bank_tot = 0.0
+    try:
+        async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
+            if await tc.fetchone():
+                async with db.execute(
+                    "SELECT COALESCE(SUM(principal + accrued_interest), 0.0) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
+                    (user_id,)
+                ) as bc:
+                    brow = await bc.fetchone()
+                    if brow and brow[0]:
+                        bank_tot = float(brow[0])
+    except Exception:
+        bank_tot = 0.0
+
+    total_wealth = bal + bank_tot
     posts = 0
     try:
         async with db.execute("SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as c:
@@ -362,10 +423,10 @@ async def cb_raid_join(callback: types.CallbackQuery):
         except Exception:
             pass
 
-    if bal >= 5000 or posts < 25:
+    if total_wealth >= 5000 or posts < 25:
         reasons = []
-        if bal >= 5000:
-            reasons.append(f"баланс {bal:,.0f} ₪ ≥ 5,000 ₪")
+        if total_wealth >= 5000:
+            reasons.append(f"баланс {total_wealth:,.0f} ₪ ≥ 5,000 ₪")
         if posts < 25:
             reasons.append(f"постов {posts} < 25")
         await callback.answer(f"❌ Ты не подходишь для рейда! Нужно: баланс < 5,000 ₪ и ≥ 25 постов ({', '.join(reasons)}).", show_alert=True)
@@ -376,6 +437,9 @@ async def cb_raid_join(callback: types.CallbackQuery):
             await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
             return
         raid = _ACTIVE_RAIDS[raid_id]
+        if raid.get("target_id") and user_id == raid["target_id"]:
+            await callback.answer("❌ Олигарх не может участвовать в рейде против самого себя!", show_alert=True)
+            return
         if user_id in raid["voters"]:
             await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
             return

@@ -31,6 +31,64 @@ logger = logging.getLogger("market_engine")
 market_router = Router(name="market_router")
 router = market_router  # Alias for backward compatibility
 
+
+async def ensure_market_schema(db: Any):
+    """Initializes MarketListings table and indices idempotently under db_transaction."""
+    if getattr(db, "_market_schema_ensured", False):
+        return
+    async with db_transaction(db):
+        if getattr(db, "_market_schema_ensured", False):
+            return
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS MarketListings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL,
+                seller_board_id TEXT NOT NULL DEFAULT 'b',
+                item_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                item_data TEXT,
+                price REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at REAL NOT NULL,
+                buyer_id INTEGER,
+                buyer_board_id TEXT,
+                sold_at REAL,
+                cancelled_at REAL
+            );
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_market_status_price ON MarketListings(status, price);
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_market_status_created ON MarketListings(status, created_at);
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_market_seller_status ON MarketListings(seller_id, status);
+        """)
+        try:
+            setattr(db, "_market_schema_ensured", True)
+        except Exception:
+            pass
+
+
+__all__ = [
+    "market_router",
+    "router",
+    "ensure_market_schema",
+    "create_market_listing",
+    "cancel_market_listing",
+    "buy_market_listing",
+    "get_market_catalog",
+    "get_user_listings",
+    "get_market_listing",
+    "classify_item",
+    "find_item_by_name_or_id",
+    "get_user_sellable_items_list",
+    "extract_item_for_escrow",
+    "restore_item_to_active_items",
+]
+
 # -----------------------------------------------------------------------------
 # Item Metacatalog & Categories
 # -----------------------------------------------------------------------------
@@ -60,6 +118,8 @@ WEAPONS_CATALOG: Dict[str, Dict[str, Any]] = {
     "megaphone_gun": {"id": "megaphone", "name": "📢 Мегафон", "gun_key": "megaphone_gun"},
     "janitor": {"id": "janitor", "name": "🧹 Метла Дворника", "gun_key": "janitor_broom"},
     "janitor_broom": {"id": "janitor", "name": "🧹 Метла Дворника", "gun_key": "janitor_broom"},
+    "extinguisher_obep": {"id": "extinguisher_obep", "name": "🧯 Огнетушитель ОБЭП", "gun_key": "extinguisher_obep"},
+    "extinguisher": {"id": "extinguisher_obep", "name": "🧯 Огнетушитель ОБЭП", "gun_key": "extinguisher_obep"},
 }
 
 PHARMA_CATALOG: Dict[str, Dict[str, Any]] = {
@@ -70,6 +130,7 @@ PHARMA_CATALOG: Dict[str, Dict[str, Any]] = {
     "bribe": {"id": "bribe", "name": "📜 Взятка", "desc": "Индульгенция от пативэна и бана."},
     "tinfoil": {"id": "tinfoil", "name": "👽 Шапочка из фольги", "desc": "Защита от 5G и грабежа."},
     "tinfoil_hat": {"id": "tinfoil", "name": "👽 Шапочка из фольги", "desc": "Защита от 5G и грабежа."},
+    "extinguisher_obep": {"id": "extinguisher_obep", "name": "🧯 Огнетушитель ОБЭП", "desc": "Защита от раскулачивания ОБЭП."},
 }
 
 LOOTBOXES_CATALOG: Dict[str, Dict[str, Any]] = {
@@ -77,6 +138,8 @@ LOOTBOXES_CATALOG: Dict[str, Dict[str, Any]] = {
     "trash_lootbox": {"id": "lootbox_trash", "name": "🗑️ Мусорный Лутбокс", "desc": "Бюджетный кейс со случайным лутом."},
     "lootbox_gold": {"id": "lootbox_gold", "name": "👑 Золотой Сейф", "desc": "Элитный кейс с шансом на вечный шмот."},
     "gold_safe": {"id": "lootbox_gold", "name": "👑 Золотой Сейф", "desc": "Элитный кейс с шансом на вечный шмот."},
+    "lootbox_whale": {"id": "lootbox_whale", "name": "🐋 Сейф Олигарха", "desc": "Ультра-элитный кейс с мифическим дропом."},
+    "whale_safe": {"id": "lootbox_whale", "name": "🐋 Сейф Олигарха", "desc": "Ультра-элитный кейс с мифическим дропом."},
 }
 
 MARKET_CATEGORIES: Dict[str, str] = {
@@ -186,6 +249,11 @@ def find_item_by_name_or_id(query: str) -> Optional[Tuple[str, str, str]]:
         "голд": ("lootbox_gold", "lootbox", "👑 Золотой Сейф"),
         "метла": ("janitor", "weapon", "🧹 Метла Дворника"),
         "дворник": ("janitor", "weapon", "🧹 Метла Дворника"),
+        "огнетушитель": ("extinguisher_obep", "weapon", "🧯 Огнетушитель ОБЭП"),
+        "обэп": ("extinguisher_obep", "weapon", "🧯 Огнетушитель ОБЭП"),
+        "кит": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
+        "олигарх": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
+        "whale": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
     }
     for alias, entry in fuzzy_map.items():
         if alias in clean:
@@ -255,15 +323,26 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
                 return False, {}, "Срок действия этого предмета уже истёк."
             item_data["remaining_seconds"] = rem_sec
             item_data["original_duration_hours"] = int(rem_sec / 3600)
+            item_data["expires_at"] = exp_ts
         else:
             cat_dur = CLOTHING_CATALOG.get(clean_id, {}).get("duration_hours", 168)
             item_data["remaining_seconds"] = cat_dur * 3600
+            item_data["expires_at"] = now + cat_dur * 3600
 
         active_items.pop(f"owned_{clean_id}", None)
         active_items.pop(clean_id, None)
         return True, item_data, ""
 
     elif item_type == "weapon":
+        if clean_id in ("extinguisher_obep", "extinguisher"):
+            if not active_items.get("extinguisher_obep"):
+                return False, {}, "У вас нет Огнетушителя ОБЭП."
+            charges = active_items.pop("extinguisher_obep_charges", 1)
+            active_items.pop("extinguisher_obep", None)
+            item_data["canonical_id"] = "extinguisher_obep"
+            item_data["charges"] = max(1, int(charges or 1))
+            return True, item_data, ""
+
         gun_info = WEAPONS_CATALOG.get(clean_id, {})
         gun_key = gun_info.get("gun_key", f"{clean_id}_gun")
         raw_key = gun_info.get("id", clean_id)
@@ -279,7 +358,16 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
         return True, item_data, ""
 
     elif item_type == "pharma":
-        if clean_id in ("pills", "pills_gun"):
+        if clean_id in ("extinguisher_obep", "extinguisher"):
+            if not active_items.get("extinguisher_obep"):
+                return False, {}, "У вас нет Огнетушителя ОБЭП."
+            charges = active_items.pop("extinguisher_obep_charges", 1)
+            active_items.pop("extinguisher_obep", None)
+            item_data["canonical_id"] = "extinguisher_obep"
+            item_data["charges"] = max(1, int(charges or 1))
+            return True, item_data, ""
+
+        elif clean_id in ("pills", "pills_gun"):
             cnt = active_items.get("pills_count", 0)
             if cnt > 1:
                 active_items["pills_count"] = cnt - 1
@@ -310,6 +398,7 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
                 active_items.pop("shield_gun", None)
                 active_items.pop("shield", None)
                 item_data["remaining_seconds"] = rem_sec
+                item_data["expires_at"] = exp_ts
                 return True, item_data, ""
             elif active_items.get("shield_gun") or active_items.get("shield"):
                 active_items.pop("shield_gun", None)
@@ -317,6 +406,7 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
                 active_items.pop("shield_until", None)
                 active_items.pop("reflect_shield_until", None)
                 item_data["remaining_seconds"] = 86400
+                item_data["expires_at"] = now + 86400
                 return True, item_data, ""
             return False, {}, "У вас нет Зеркального Щита."
 
@@ -351,6 +441,7 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
                 if active_items.get("equipped_head") == "hat_tinfoil":
                     active_items["equipped_head"] = None
                 item_data["remaining_seconds"] = rem_sec
+                item_data["expires_at"] = exp_ts
                 return True, item_data, ""
             elif active_items.get("tinfoil"):
                 active_items.pop("tinfoil", None)
@@ -358,6 +449,7 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
                 if active_items.get("equipped_head") == "hat_tinfoil":
                     active_items["equipped_head"] = None
                 item_data["remaining_seconds"] = 21600
+                item_data["expires_at"] = now + 21600
                 return True, item_data, ""
             return False, {}, "У вас нет Шапочки из фольги."
 
@@ -406,59 +498,94 @@ def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_typ
     return False, {}, "Предмет не найден в вашем инвентаре."
 
 
-def restore_item_to_active_items(active_items: Dict[str, Any], item_id: str, item_type: str, item_data: Dict[str, Any]) -> Dict[str, Any]:
+def restore_item_to_active_items(active_items: Dict[str, Any], item_id: str, item_type: str, item_data: Dict[str, Any], is_seller_cancel: bool = False) -> Dict[str, Any]:
     """
     Восстанавливает (или начисляет покупателю) предмет в active_items.
+    Учитывает точное время истечения (expires_at), предотвращая заморозку/дюп таймеров.
     """
     clean_id = item_id.lower().strip()
     now = int(time.time())
 
     if item_type == "clothing":
-        active_items[f"owned_{clean_id}"] = True
         if item_data.get("is_permanent"):
+            active_items[f"owned_{clean_id}"] = True
             active_items[f"{clean_id}_is_permanent"] = True
         else:
-            rem_sec = item_data.get("remaining_seconds", 168 * 3600)
-            cur_exp = active_items.get(f"{clean_id}_expires")
-            if cur_exp and cur_exp > now:
-                active_items[f"{clean_id}_expires"] = cur_exp + rem_sec
+            exp_ts = item_data.get("expires_at")
+            if exp_ts is not None:
+                if now < exp_ts:
+                    active_items[f"owned_{clean_id}"] = True
+                    active_items[f"{clean_id}_expires"] = exp_ts
+                else:
+                    # Expired while on the market
+                    pass
             else:
-                active_items[f"{clean_id}_expires"] = now + rem_sec
+                rem_sec = item_data.get("remaining_seconds", 168 * 3600)
+                cur_exp = active_items.get(f"{clean_id}_expires")
+                if cur_exp and cur_exp > now:
+                    active_items[f"{clean_id}_expires"] = cur_exp + rem_sec
+                else:
+                    active_items[f"{clean_id}_expires"] = now + rem_sec
+                active_items[f"owned_{clean_id}"] = True
 
     elif item_type == "weapon":
-        gun_info = WEAPONS_CATALOG.get(clean_id, {})
-        gun_key = gun_info.get("gun_key", f"{clean_id}_gun")
-        active_items[gun_key] = True
+        if clean_id in ("extinguisher_obep", "extinguisher"):
+            charges = item_data.get("charges", 1)
+            active_items["extinguisher_obep"] = True
+            active_items["extinguisher_obep_charges"] = active_items.get("extinguisher_obep_charges", 0) + max(1, int(charges or 1))
+        else:
+            gun_info = WEAPONS_CATALOG.get(clean_id, {})
+            gun_key = gun_info.get("gun_key", f"{clean_id}_gun")
+            active_items[gun_key] = True
 
     elif item_type == "pharma":
-        if clean_id in ("pills", "pills_gun"):
+        if clean_id in ("extinguisher_obep", "extinguisher"):
+            charges = item_data.get("charges", 1)
+            active_items["extinguisher_obep"] = True
+            active_items["extinguisher_obep_charges"] = active_items.get("extinguisher_obep_charges", 0) + max(1, int(charges or 1))
+        elif clean_id in ("pills", "pills_gun"):
             active_items["pills_count"] = active_items.get("pills_count", 0) + item_data.get("count", 1)
             active_items["pills_gun"] = True
         elif clean_id in ("shield", "shield_gun"):
-            rem_sec = item_data.get("remaining_seconds", 86400)
-            cur_exp = max(active_items.get("shield_until", 0), active_items.get("reflect_shield_until", 0))
-            base = max(cur_exp, now)
-            active_items["shield_until"] = base + rem_sec
-            active_items["reflect_shield_until"] = base + rem_sec
-            active_items["shield_gun"] = True
-            active_items["shield"] = True
+            exp_ts = item_data.get("expires_at")
+            if exp_ts is not None:
+                if now < exp_ts:
+                    active_items["shield_until"] = exp_ts
+                    active_items["reflect_shield_until"] = exp_ts
+                    active_items["shield_gun"] = True
+                    active_items["shield"] = True
+            else:
+                rem_sec = item_data.get("remaining_seconds", 86400)
+                cur_exp = max(active_items.get("shield_until", 0), active_items.get("reflect_shield_until", 0))
+                base = max(cur_exp, now)
+                active_items["shield_until"] = base + rem_sec
+                active_items["reflect_shield_until"] = base + rem_sec
+                active_items["shield_gun"] = True
+                active_items["shield"] = True
         elif clean_id in ("bribe", "bribe_count"):
             active_items["bribes_count"] = active_items.get("bribes_count", 0) + item_data.get("count", 1)
             active_items["bribe"] = True
         elif clean_id in ("tinfoil", "tinfoil_hat"):
-            rem_sec = item_data.get("remaining_seconds", 21600)
-            cur_exp = max(active_items.get("tinfoil_until", 0), active_items.get("tinfoil_hat", 0))
-            base = max(cur_exp, now)
-            active_items["tinfoil_until"] = base + rem_sec
-            active_items["tinfoil_hat"] = base + rem_sec
-            active_items["owned_hat_tinfoil"] = True
+            exp_ts = item_data.get("expires_at")
+            if exp_ts is not None:
+                if now < exp_ts:
+                    active_items["tinfoil_until"] = exp_ts
+                    active_items["tinfoil_hat"] = exp_ts
+                    active_items["owned_hat_tinfoil"] = True
+            else:
+                rem_sec = item_data.get("remaining_seconds", 21600)
+                cur_exp = max(active_items.get("tinfoil_until", 0), active_items.get("tinfoil_hat", 0))
+                base = max(cur_exp, now)
+                active_items["tinfoil_until"] = base + rem_sec
+                active_items["tinfoil_hat"] = base + rem_sec
+                active_items["owned_hat_tinfoil"] = True
         else:
             active_items[clean_id] = True
 
     elif item_type == "lootbox":
         canonical_key = item_data.get("canonical_id", "lootbox_trash" if "trash" in clean_id else "lootbox_gold")
         curr = active_items.get(canonical_key, 0)
-        if isinstance(curr, int):
+        if isinstance(curr, int) and not isinstance(curr, bool):
             active_items[canonical_key] = curr + item_data.get("count", 1)
         else:
             active_items[canonical_key] = 1
@@ -493,6 +620,7 @@ async def create_market_listing(
     if price > 100_000_000:
         return False, None, "Максимальная цена предмета на Базаре — 100 000 000 ₪."
 
+    await ensure_market_schema(db)
     board_id = seller_board_id or "b"
     price = round(float(price), 2)
 
@@ -557,6 +685,7 @@ async def cancel_market_listing(
     Отменяет активный лот на Базаре и возвращает предмет продавцу в active_items.
     Возвращает (success: bool, item_dict: Optional[dict], error_msg: str).
     """
+    await ensure_market_schema(db)
     b_id = board_id or "b"
 
     async with db_transaction(db):
@@ -585,11 +714,33 @@ async def cancel_market_listing(
             except Exception:
                 pass
 
+        now = time.time()
+        # Check if item expired while listed on Bazar
+        is_expired = False
+        if item_data.get("expires_at") and not item_data.get("is_permanent"):
+            if now >= item_data["expires_at"]:
+                is_expired = True
+
+        if is_expired:
+            await db.execute(
+                "UPDATE MarketListings SET status = 'expired', cancelled_at = ? WHERE id = ?",
+                (now, lot_id)
+            )
+            item_dict = {
+                "lot_id": lot_id,
+                "item_id": item_id,
+                "item_type": item_type,
+                "item_name": item_name,
+                "item_data": item_data,
+                "price": price,
+                "expired": True,
+            }
+            return True, item_dict, "Срок действия предмета истёк, пока он находился на Базаре."
+
         active_items = await _load_user_active_items_for_update(db, user_id, s_board or b_id)
-        active_items = restore_item_to_active_items(active_items, item_id, item_type, item_data)
+        active_items = restore_item_to_active_items(active_items, item_id, item_type, item_data, is_seller_cancel=True)
         await _save_user_active_items(db, user_id, s_board or b_id, active_items)
 
-        now = time.time()
         await db.execute(
             "UPDATE MarketListings SET status = 'cancelled', cancelled_at = ? WHERE id = ?",
             (now, lot_id)
@@ -623,6 +774,7 @@ async def buy_market_listing(
     6. Записывает транзакции в леджер UserTransactions.
     Возвращает (success: bool, seller_id: int, price: float, payout: float, fee: float, item: Optional[dict], error_msg: str).
     """
+    await ensure_market_schema(db)
     b_id = buyer_board_id or "b"
 
     async with db_transaction(db):
@@ -644,6 +796,20 @@ async def buy_market_listing(
         if seller_id == buyer_id:
             return False, 0, 0.0, 0.0, 0.0, None, "Нельзя покупать свой собственный лот, хитрец."
 
+        item_data = {}
+        if raw_data:
+            try:
+                item_data = json.loads(raw_data)
+            except Exception:
+                pass
+
+        now = time.time()
+        # Verify item has not expired while sitting on the shelf
+        if item_data.get("expires_at") and not item_data.get("is_permanent"):
+            if now >= item_data["expires_at"]:
+                await db.execute("UPDATE MarketListings SET status = 'expired' WHERE id = ?", (lot_id,))
+                return False, 0, 0.0, 0.0, 0.0, None, "Срок действия этого предмета уже истёк. Лот снят с продажи."
+
         price = float(price)
 
         ok, _ = await deduct_user_global_balance(db, buyer_id, b_id, price)
@@ -660,18 +826,10 @@ async def buy_market_listing(
         if fee > 0:
             await add_to_abu_fund(db, fee, donor_id=buyer_id, reason=f"Комиссия Базара: лот #{lot_id} ({item_name})")
 
-        item_data = {}
-        if raw_data:
-            try:
-                item_data = json.loads(raw_data)
-            except Exception:
-                pass
-
         buyer_items = await _load_user_active_items_for_update(db, buyer_id, b_id)
         buyer_items = restore_item_to_active_items(buyer_items, item_id, item_type, item_data)
         await _save_user_active_items(db, buyer_id, b_id, buyer_items)
 
-        now = time.time()
         await db.execute(
             "UPDATE MarketListings SET status = 'sold', buyer_id = ?, buyer_board_id = ?, sold_at = ? WHERE id = ?",
             (buyer_id, b_id, now, lot_id)
@@ -711,8 +869,33 @@ async def get_market_catalog(
     - sort_order: 'price_asc', 'price_desc', 'newest'
     - page: номер страницы (1-indexed)
     - per_page: количество лотов на странице
+    Автоматически отсекает/деактивирует лоты с истекшим сроком годности.
     Возвращает (items: list[dict], total_pages: int, total_count: int).
     """
+    await ensure_market_schema(db)
+    now = time.time()
+
+    # Auto-delist expired temporary lots from active view
+    try:
+        async with db.execute(
+            "SELECT id, item_data FROM MarketListings WHERE status = 'active' AND item_data LIKE '%expires_at%'"
+        ) as c:
+            exp_candidates = await c.fetchall()
+        expired_ids = []
+        for cand_id, raw_m in exp_candidates:
+            if raw_m:
+                try:
+                    m = json.loads(raw_m)
+                    if not m.get("is_permanent") and m.get("expires_at", 0) <= now:
+                        expired_ids.append(cand_id)
+                except Exception:
+                    pass
+        if expired_ids:
+            placeholders = ",".join("?" for _ in expired_ids)
+            await db.execute(f"UPDATE MarketListings SET status = 'expired' WHERE id IN ({placeholders})", tuple(expired_ids))
+    except Exception:
+        pass
+
     page = max(1, page)
     per_page = max(1, min(per_page, 20))
     offset = (page - 1) * per_page
@@ -791,6 +974,7 @@ async def get_user_listings(db, user_id: int, status: str = "active") -> List[Di
     """
     Возвращает список лотов конкретного пользователя.
     """
+    await ensure_market_schema(db)
     query = """
         SELECT id, seller_id, seller_board_id, item_id, item_type, item_name, item_data, price, status, created_at
         FROM MarketListings
@@ -826,6 +1010,7 @@ async def get_market_listing(db, lot_id: int) -> Optional[Dict[str, Any]]:
     """
     Возвращает информацию по конкретному лоту.
     """
+    await ensure_market_schema(db)
     query = """
         SELECT id, seller_id, seller_board_id, item_id, item_type, item_name, item_data, price, status, created_at, buyer_id, sold_at
         FROM MarketListings
@@ -1071,6 +1256,14 @@ def get_user_sellable_items_list(active_items: Dict[str, Any]) -> List[Tuple[str
         if active_items.get(cid, 0) or active_items.get(key, 0):
             found.append((cid, "lootbox", info["name"]))
             seen.add(cid)
+
+    # 5. Elite Relics & Special Gear
+    if active_items.get("extinguisher_obep") and "extinguisher_obep" not in seen:
+        found.append(("extinguisher_obep", "weapon", "🧯 Огнетушитель ОБЭП"))
+        seen.add("extinguisher_obep")
+    if (active_items.get("lootbox_whale", 0) or active_items.get("whale_safe", 0)) and "lootbox_whale" not in seen:
+        found.append(("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"))
+        seen.add("lootbox_whale")
 
     return found
 

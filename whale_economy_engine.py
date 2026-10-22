@@ -273,16 +273,15 @@ async def buy_whale_safe(db: Any, user_id: int, board_id: str = "b") -> Dict[str
 # PART 2: ATOMIC AUCTION SYSTEM (F3.2)
 # =============================================================================
 
-_ENSURED_AUCTION_DBS = set()
+ALLOWED_AUCTION_LOT_TYPES = {"custom_role", "board_pin", "custom_badge"}
 
 
 async def ensure_auction_schema(db: Any):
-    """Initializes auction tables and indices idempotently (once per db instance under lock)."""
-    db_id = id(db)
-    if db_id in _ENSURED_AUCTION_DBS:
+    """Initializes auction tables and indices idempotently under db_lock."""
+    if getattr(db, "_auction_schema_ensured", False):
         return
     async with db_lock:
-        if db_id in _ENSURED_AUCTION_DBS:
+        if getattr(db, "_auction_schema_ensured", False):
             return
         await db.execute("""
         CREATE TABLE IF NOT EXISTS Auctions (
@@ -320,7 +319,10 @@ async def ensure_auction_schema(db: Any):
         await db.execute("""
         CREATE INDEX IF NOT EXISTS idx_auction_bids_auc_time ON AuctionBids(auction_id, placed_at DESC);
         """)
-        _ENSURED_AUCTION_DBS.add(db_id)
+        try:
+            setattr(db, "_auction_schema_ensured", True)
+        except Exception:
+            pass
 
 
 async def create_auction(
@@ -334,9 +336,25 @@ async def create_auction(
     board_id: str = "b"
 ) -> int:
     """
-    Creates a new active auction.
+    Creates a new active auction with strict validation.
     Returns auction_id.
     """
+    norm_type = (lot_type or "").strip().lower()
+    if norm_type not in ALLOWED_AUCTION_LOT_TYPES:
+        raise ValueError(f"Недопустимый тип лота: {lot_type}. Разрешены: {', '.join(sorted(ALLOWED_AUCTION_LOT_TYPES))}")
+
+    if not isinstance(start_price, (int, float)) or math.isnan(start_price) or math.isinf(start_price) or start_price < 1.0:
+        raise ValueError("Стартовая цена должна быть положительным числом не менее 1.0 ₪.")
+
+    if not isinstance(min_bid_step, (int, float)) or math.isnan(min_bid_step) or math.isinf(min_bid_step) or min_bid_step < 1.0:
+        raise ValueError("Минимальный шаг должен быть положительным числом не менее 1.0 ₪.")
+
+    if not isinstance(duration_sec, (int, float)) or math.isnan(duration_sec) or math.isinf(duration_sec) or duration_sec <= 0:
+        raise ValueError("Длительность аукциона должна быть положительным числом больше 0 секунд.")
+
+    if duration_sec > 30 * 86400:
+        raise ValueError("Длительность аукциона не может превышать 30 дней.")
+
     await ensure_auction_schema(db)
     now = time.time()
     ends_at = now + duration_sec
@@ -350,7 +368,7 @@ async def create_auction(
                     board_id, status, starts_at, ends_at, anti_snipe_sec, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'active', ?, ?, 300, ?)
             """, (
-                lot_type, title, description, float(start_price), float(min_bid_step),
+                norm_type, title, description, float(start_price), float(min_bid_step),
                 float(start_price), board_id, now, ends_at, now
             )) as cur:
                 return cur.lastrowid
@@ -447,8 +465,9 @@ async def place_auction_bid(
 
             # 5. Anti-sniping extension
             new_ends_at = ends_at
-            if ends_at - now < anti_snipe_sec:
-                new_ends_at = now + anti_snipe_sec
+            effective_anti_snipe = max(60, int(anti_snipe_sec or 300))
+            if ends_at - now < effective_anti_snipe:
+                new_ends_at = now + effective_anti_snipe
 
             # 6. Update Auctions and insert AuctionBids
             await db.execute("""
@@ -493,6 +512,7 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
 
             for row in ended_auctions:
                 auc_id, lot_type, title, desc, winning_bid, winner_id, winner_name, board_id = row
+                norm_lot_type = (lot_type or "").strip().lower()
 
                 await db.execute("""
                     UPDATE Auctions SET status = 'finished', finished_at = ? WHERE id = ?
@@ -503,7 +523,7 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                     await add_to_abu_fund(db, winning_bid)
 
                     # 2. Award Reward
-                    if lot_type == "custom_role":
+                    if norm_lot_type == "custom_role":
                         # Award custom title prefix for 30 days
                         exp = int(now + 30 * 86400)
                         prefix_title = desc.strip() if desc.startswith("[") else f"[{desc.strip()}]"
@@ -526,7 +546,7 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                             (winner_id, board_id, json.dumps(ai, ensure_ascii=False))
                         )
 
-                    elif lot_type == "board_pin":
+                    elif norm_lot_type == "board_pin":
                         # Award VIP pin voucher in active_items
                         async with db.execute(
                             "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
@@ -544,7 +564,7 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                             (winner_id, board_id, json.dumps(ai, ensure_ascii=False))
                         )
 
-                    elif lot_type == "custom_badge":
+                    elif norm_lot_type == "custom_badge":
                         # Award custom badge in active_items
                         async with db.execute(
                             "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
