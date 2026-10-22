@@ -1913,11 +1913,9 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
     except Exception:
         pass
 
-    async with db_lock:
-        try:
-            db = await get_pool()
-            await db.execute("BEGIN IMMEDIATE")
-
+    db = await get_pool()
+    try:
+        async with db_transaction(db):
             if expires_at and expires_at > datetime.now(UTC).timestamp():
                 try:
                     await db.execute(
@@ -1953,11 +1951,14 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'shadow'",
                     (user_id, board_id)
                 )
-
-            await db.execute("COMMIT")
-        except Exception as e:
-            try: await db.execute("ROLLBACK")
-            except: pass
+    except Exception as e:
+        logger.debug(f"ℹ️ Error updating shadow mute: {e}")
+        try:
+            from shared_state import board_data
+            if board_id in board_data:
+                board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
+        except Exception:
+            pass
             try:
                 from shared_state import board_data
                 if board_id in board_data:
@@ -3232,13 +3233,16 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
 async def get_user_posts_from_list(user_id: int, post_nums: List[int]) -> List[int]:
     if not post_nums: return []
     db = await get_pool()
+    result = []
     try:
-        placeholders = ','.join('?' for _ in post_nums)
-        query = f"SELECT post_num FROM Posts WHERE author_id = ? AND post_num IN ({placeholders})"
-        params = [user_id] + post_nums
-        async with db.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+        for chunk in iter_sql_chunks(post_nums, SQL_VAR_CHUNK - 1):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT post_num FROM Posts WHERE author_id = ? AND post_num IN ({placeholders})"
+            params = [user_id] + list(chunk)
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                result.extend(row[0] for row in rows)
+        return result
     except Exception:
         return []
 async def delete_post_by_num(post_num: int) -> bool:
@@ -4821,20 +4825,21 @@ async def update_thread_last_updated(thread_op_num: int, timestamp: float):
                 break
 async def get_thread_ids_for_posts(post_nums: List[int]) -> Dict[int, int]:
     """
-    Для списка номеров постов возвращает словарь {post_num: thread_id}.
+    Для списка номеров постов возвращает словарь {post_num: thread_id} с безопасным чанкованием.
     """
     if not post_nums:
         return {}
     db = await get_pool()
-    placeholders = ','.join('?' for _ in post_nums)
-    query = f"SELECT post_num, thread_id FROM Posts WHERE post_num IN ({placeholders})"
     thread_map = {}
     try:
-        async with db.execute(query, post_nums) as cursor:
-            async for row in cursor:
-                post_num, thread_id = row
-                if thread_id:
-                    thread_map[post_num] = thread_id
+        for chunk in iter_sql_chunks(post_nums, SQL_VAR_CHUNK):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT post_num, thread_id FROM Posts WHERE post_num IN ({placeholders})"
+            async with db.execute(query, list(chunk)) as cursor:
+                async for row in cursor:
+                    post_num, thread_id = row
+                    if thread_id:
+                        thread_map[post_num] = thread_id
         return thread_map
     except Exception as e:
         print(f"⛔ ОШИБКА в get_thread_ids_for_posts: {e}")
@@ -5131,191 +5136,91 @@ async def get_shadow_muted_users(board_id: str) -> list[dict]:
         return [{"user_id": row[0], "expires_at": row[1]} for row in rows]
 async def lift_ban(user_id: int, board_id: str):
     """Снимает обычный бан (ставит статус active)."""
-    from common.db_pool import get_pool, db_lock
-
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-
-                await db.execute("UPDATE Users SET status = 'active' WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-
-                await db.execute("COMMIT")
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                print(f"⛔ Error lifting ban: {e}")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"⛔ Error lifting ban: {e}")
-                break
+    from common.db_pool import get_pool, db_transaction
+    db = await get_pool()
+    async with db_transaction(db):
+        await db.execute("UPDATE Users SET status = 'active' WHERE user_id = ? AND board_id = ?", (user_id, board_id))
 
 async def lift_shadow_ban(user_id: int, board_id: str):
     """Снимает теневой бан."""
-    from common.db_pool import get_pool, db_lock
-
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-
-                await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL')", (user_id, board_id))
-
-                await db.execute("COMMIT")
-                try:
-                    from shared_state import board_data
-                    for b_name in list(board_data.keys()):
-                        board_data[b_name].get('shadow_mutes', {}).pop(user_id, None)
-                except Exception:
-                    pass
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                print(f"⛔ Error lifting shadow ban: {e}")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"⛔ Error lifting shadow ban: {e}")
-                break
+    from common.db_pool import get_pool, db_transaction
+    db = await get_pool()
+    async with db_transaction(db):
+        await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL')", (user_id, board_id))
+    try:
+        from shared_state import board_data
+        for b_name in list(board_data.keys()):
+            board_data[b_name].get('shadow_mutes', {}).pop(user_id, None)
+    except Exception:
+        pass
 
 async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int, reason: str | None = None):
     """
     Применяет обычный мут пользователю на конкретной доске.
     """
     expires_at = time.time() + duration_seconds
-    from common.db_pool import get_pool, db_lock
-
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-
+    from common.db_pool import get_pool, db_transaction
+    db = await get_pool()
+    async with db_transaction(db):
+        await db.execute(
+            "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
+            (user_id, board_id)
+        )
+        try:
+            await db.execute(
+                "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at, reason) VALUES (?, ?, 'mute', ?, ?)",
+                (user_id, board_id, expires_at, reason)
+            )
+        except sqlite3.OperationalError as col_err:
+            if "no column named reason" in str(col_err).lower():
                 await db.execute(
-                    "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
-                    (user_id, board_id)
+                    "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
+                    (user_id, board_id, expires_at)
                 )
-                try:
-                    await db.execute(
-                        "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at, reason) VALUES (?, ?, 'mute', ?, ?)",
-                        (user_id, board_id, expires_at, reason)
-                    )
-                except sqlite3.OperationalError as col_err:
-                    if "no column named reason" in str(col_err).lower():
-                        await db.execute(
-                            "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
-                            (user_id, board_id, expires_at)
-                        )
-                    else:
-                        raise
-
-                await db.execute("COMMIT")
-                return True
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                try:
-                    print(f"⛔ DB Error applying regular mute: {e}")
-                except Exception:
-                    pass
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                try:
-                    print(f"⛔ DB Error applying regular mute: {e}")
-                except Exception:
-                    pass
-                break
-    return False
+            else:
+                raise
+    return True
 
 async def remove_regular_mute(user_id: int, board_id: str):
     """
     Удаляет обычный мут из базы данных на конкретной доске.
     """
-    from common.db_pool import get_pool, db_lock
-
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-
-                await db.execute(
-                    "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
-                    (user_id, board_id)
-                )
-
-                await db.execute("COMMIT")
-                try:
-                    from shared_state import board_data
-                    if board_id in board_data:
-                        board_data[board_id].get('mutes', {}).pop(user_id, None)
-                except Exception:
-                    pass
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                print(f"⛔ DB Error removing regular mute: {e}")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"⛔ DB Error removing regular mute: {e}")
-                break
+    from common.db_pool import get_pool, db_transaction
+    db = await get_pool()
+    async with db_transaction(db):
+        await db.execute(
+            "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
+            (user_id, board_id)
+        )
+    try:
+        from shared_state import board_data
+        if board_id in board_data:
+            board_data[board_id].get('mutes', {}).pop(user_id, None)
+    except Exception:
+        pass
 
 async def remove_global_mute(user_id: int, mute_type: str | None = None):
     """
     Снимает глобальный мут (board_id = 'ALL') и муты со всех досок для указанного пользователя.
     Используется исключительно глобальными админскими командами (/gunban, /global_unmute, /gunmute).
     """
-    from common.db_pool import get_pool, db_lock
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                if mute_type:
-                    await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = 'ALL' OR mute_type = ?)", (user_id, mute_type))
-                else:
-                    await db.execute("DELETE FROM Mutes WHERE user_id = ?", (user_id,))
-                await db.execute("COMMIT")
-                break
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                break
+    from common.db_pool import get_pool, db_transaction
+    db = await get_pool()
+    async with db_transaction(db):
+        if mute_type:
+            await db.execute("DELETE FROM Mutes WHERE user_id = ? AND (board_id = 'ALL' OR mute_type = ?)", (user_id, mute_type))
+        else:
+            await db.execute("DELETE FROM Mutes WHERE user_id = ?", (user_id,))
+    try:
+        from shared_state import board_data, BOARDS
+        for b in list(BOARDS) + ['ALL']:
+            if b in board_data:
+                if mute_type == 'mute' or mute_type is None:
+                    board_data[b].get('mutes', {}).pop(user_id, None)
+                if mute_type == 'shadow' or mute_type is None:
+                    board_data[b].get('shadow_mutes', {}).pop(user_id, None)
+    except Exception:
+        pass
     try:
         from shared_state import board_data, BOARDS
         for b in list(BOARDS) + ['ALL']:
@@ -6924,42 +6829,24 @@ async def get_full_user_info(user_id: int) -> Optional[Dict[str, Any]]:
             return None
 async def remove_users_from_board_batch(user_ids: list[int], board_id: str):
     """
-    Массово удаляет список пользователей с доски с защитой от блокировок.
+    Массово удаляет список пользователей с доски с защитой от блокировок и безопасным чанкованием.
     """
     if not user_ids: return
 
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_transaction
 
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
+    db = await get_pool()
+    total_deleted = 0
+    async with db_transaction(db):
+        for chunk in iter_sql_chunks(user_ids, SQL_VAR_CHUNK):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"DELETE FROM Users WHERE board_id = ? AND user_id IN ({placeholders})"
+            params = [board_id] + list(chunk)
+            async with db.execute(query, params) as cursor:
+                total_deleted += cursor.rowcount
 
-                placeholders = ','.join('?' for _ in user_ids)
-                query = f"DELETE FROM Users WHERE board_id = ? AND user_id IN ({placeholders})"
-                params = [board_id] + list(user_ids)
-
-                async with db.execute(query, params) as cursor:
-                    count = cursor.rowcount
-
-                await db.execute("COMMIT")
-
-                if count > 0:
-                    print(f"  > DB: Удалено {count} пользователей с доски '{board_id}'.")
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                break
+    if total_deleted > 0:
+        print(f"  > DB: Удалено {total_deleted} пользователей с доски '{board_id}'.")
 async def ban_hash(value: str, type: str, reason: str):
     from common.db_pool import get_pool, db_lock
     # При сбросе кэша в глобальной области видимости может потребоваться импорт или доступ к переменной модуля
@@ -7814,70 +7701,73 @@ async def get_mod_queue() -> list[dict]:
         db.row_factory = None
 async def get_file_details_batch(file_ids: list[str]) -> dict:
     """
-    По списку file_id возвращает словарь с деталями.
+    По списку file_id возвращает словарь с деталями с безопасным чанкованием.
     """
     if not file_ids:
         return {}
 
     from common.db_pool import get_pool, db_lock
 
-    placeholders = ','.join('?' for _ in file_ids)
-    query = f"SELECT file_id, file_type, sha256 FROM FileRegistry WHERE file_id IN ({placeholders})"
     details_map = {}
+    db = await get_pool()
 
     async with db_lock:
-        for attempt in range(5):
-            try:
-                db = await get_pool()
-                async with db.execute(query, file_ids) as cursor:
-                    async for row in cursor:
-                        fid, ftype, sha = row
-                        ext = 'dat'
-                        if ftype in ['image', 'photo', 'sticker']:
-                            ext = 'jpg'
-                        elif ftype in ['video', 'gif', 'animation', 'video_note']:
-                            ext = 'mp4'
-                        elif ftype in ['audio', 'voice']:
-                            ext = 'ogg'
+        for chunk in iter_sql_chunks(file_ids, SQL_VAR_CHUNK):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT file_id, file_type, sha256 FROM FileRegistry WHERE file_id IN ({placeholders})"
+            for attempt in range(5):
+                try:
+                    async with db.execute(query, list(chunk)) as cursor:
+                        async for row in cursor:
+                            fid, ftype, sha = row
+                            ext = 'dat'
+                            if ftype in ['image', 'photo', 'sticker']:
+                                ext = 'jpg'
+                            elif ftype in ['video', 'gif', 'animation', 'video_note']:
+                                ext = 'mp4'
+                            elif ftype in ['audio', 'voice']:
+                                ext = 'ogg'
 
-                        details_map[fid] = {
-                            "type": ftype,
-                            "filename": f"{sha[:16]}.{ext}" if sha else f"{fid}.{ext}"
-                        }
-                return details_map
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower():
-                    await db_sleep(0.2 * (attempt + 1))
-                    continue
-                break
-            except Exception as e:
-                logger.error(f"Error in get_file_details_batch: {e}", exc_info=True)
-                break
-    return {}
+                            details_map[fid] = {
+                                "type": ftype,
+                                "filename": f"{sha[:16]}.{ext}" if sha else f"{fid}.{ext}"
+                            }
+                    break
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e).lower() and attempt < 4:
+                        await db_sleep(0.2 * (attempt + 1))
+                        continue
+                    break
+                except Exception as e:
+                    logger.error(f"Error in get_file_details_batch: {e}", exc_info=True)
+                    break
+    return details_map
 async def get_blurhashes_batch(file_ids: list[str]) -> dict:
     """
-    Возвращает {file_id: blurhash}.
+    Возвращает {file_id: blurhash} с безопасным чанкованием.
     """
     if not file_ids: return {}
     from common.db_pool import get_pool, db_lock
 
-    placeholders = ','.join('?' for _ in file_ids)
-    query = f"SELECT file_id, blurhash FROM FileRegistry WHERE file_id IN ({placeholders}) AND blurhash IS NOT NULL"
     res = {}
+    db = await get_pool()
 
     async with db_lock:
         try:
-            db = await get_pool()
-            async with db.execute(query, file_ids) as cursor:
-                async for row in cursor:
-                    if row[1]: res[row[0]] = row[1]
-        except: pass
+            for chunk in iter_sql_chunks(file_ids, SQL_VAR_CHUNK):
+                placeholders = ','.join('?' for _ in chunk)
+                query = f"SELECT file_id, blurhash FROM FileRegistry WHERE file_id IN ({placeholders}) AND blurhash IS NOT NULL"
+                async with db.execute(query, list(chunk)) as cursor:
+                    async for row in cursor:
+                        if row[1]: res[row[0]] = row[1]
+        except Exception:
+            pass
     return res
 
 async def get_media_descriptions_batch(file_ids: list[str]) -> dict[str, dict[str, str]]:
     """
     По списку file_id возвращает словарь {file_id: {'tags': str, 'description': str}}.
-    Использует in-memory кэш и выполняет 1 батч-запрос для недостающих id.
+    Использует in-memory кэш и выполняет батч-запросы с безопасным чанкованием для недостающих id.
     """
     if not file_ids:
         return {}
@@ -7902,19 +7792,20 @@ async def get_media_descriptions_batch(file_ids: list[str]) -> dict[str, dict[st
         return res
 
     from common.db_pool import get_pool, db_lock
-    placeholders = ','.join('?' for _ in missing)
-    query = f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})"
+    db = await get_pool()
 
     async with db_lock:
         try:
-            db = await get_pool()
-            async with db.execute(query, missing) as cursor:
-                async for row in cursor:
-                    fid, tags, desc = row[0], row[1] or '', row[2] or ''
-                    item = {'tags': tags, 'description': desc}
-                    _format_media_context(item)
-                    _MEDIA_DESC_CACHE[fid] = item
-                    res[fid] = item
+            for chunk in iter_sql_chunks(missing, SQL_VAR_CHUNK):
+                placeholders = ','.join('?' for _ in chunk)
+                query = f"SELECT file_id, tags, description FROM FileRegistry WHERE file_id IN ({placeholders})"
+                async with db.execute(query, list(chunk)) as cursor:
+                    async for row in cursor:
+                        fid, tags, desc = row[0], row[1] or '', row[2] or ''
+                        item = {'tags': tags, 'description': desc}
+                        _format_media_context(item)
+                        _MEDIA_DESC_CACHE[fid] = item
+                        res[fid] = item
         except Exception as e:
             logger.debug(f"Error in get_media_descriptions_batch: {e}")
 
@@ -8699,19 +8590,20 @@ async def get_poll_results(post_num: int) -> dict:
     return results
 
 async def get_poll_results_batch(post_nums: list[int]) -> dict[int, dict[str, int]]:
-    """Собирает результаты голосований для списка постов одним пакетным запросом."""
+    """Собирает результаты голосований для списка постов одним пакетным запросом с безопасным чанкованием."""
     if not post_nums:
         return {}
     db = await get_pool()
     results: dict[int, dict[str, int]] = {p: {} for p in post_nums}
     try:
-        placeholders = ",".join("?" for _ in post_nums)
-        query = f"SELECT post_num, option_index, COUNT(*) FROM PollVotes WHERE post_num IN ({placeholders}) GROUP BY post_num, option_index"
-        async with db.execute(query, post_nums) as cursor:
-            async for row in cursor:
-                p_num, opt_idx, cnt = row[0], str(row[1]), row[2]
-                if p_num in results:
-                    results[p_num][opt_idx] = cnt
+        for chunk in iter_sql_chunks(post_nums, SQL_VAR_CHUNK):
+            placeholders = ",".join("?" for _ in chunk)
+            query = f"SELECT post_num, option_index, COUNT(*) FROM PollVotes WHERE post_num IN ({placeholders}) GROUP BY post_num, option_index"
+            async with db.execute(query, list(chunk)) as cursor:
+                async for row in cursor:
+                    p_num, opt_idx, cnt = row[0], str(row[1]), row[2]
+                    if p_num in results:
+                        results[p_num][opt_idx] = cnt
     except Exception:
         pass
     return results
@@ -8781,13 +8673,14 @@ async def search_files_by_tags(tags: list[str], limit: int = 50, offset: int = 0
 async def get_mirrors_batch(file_ids: list[str]) -> dict:
     if not file_ids: return {}
     db = await get_pool()
-    placeholders = ','.join('?' for _ in file_ids)
-    query = f"SELECT file_id, mirror_type, url FROM FileMirrors WHERE file_id IN ({placeholders})"
     res = defaultdict(dict)
     try:
-        async with db.execute(query, file_ids) as cursor:
-            async for row in cursor:
-                res[row[0]][row[1]] = row[2]
+        for chunk in iter_sql_chunks(file_ids, SQL_VAR_CHUNK):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT file_id, mirror_type, url FROM FileMirrors WHERE file_id IN ({placeholders})"
+            async with db.execute(query, list(chunk)) as cursor:
+                async for row in cursor:
+                    res[row[0]][row[1]] = row[2]
     except Exception:
         pass
     return res
@@ -8796,21 +8689,23 @@ async def get_failed_files_batch(file_ids: list[str]) -> set[str]:
     if not file_ids:
         return set()
     db = await get_pool()
-    placeholders = ','.join('?' for _ in file_ids)
-    query = f"""
-        SELECT file_id, thumbnail_id 
-        FROM FileRegistry 
-        WHERE (tags IN ('download_failed', 'error', 'error_too_large', 'format_unsupported', 'dead') OR (tags LIKE 'error%' AND tags != 'error_no_tags') OR tags LIKE '%download_failed%') 
-          AND (file_id IN ({placeholders}) OR thumbnail_id IN ({placeholders}))
-    """
     failed_set = set()
     try:
-        async with db.execute(query, file_ids + file_ids) as cursor:
-            async for row in cursor:
-                if row[0]:
-                    failed_set.add(row[0])
-                if row[1]:
-                    failed_set.add(row[1])
+        for chunk in iter_sql_chunks(file_ids, SQL_VAR_CHUNK // 2):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"""
+                SELECT file_id, thumbnail_id 
+                FROM FileRegistry 
+                WHERE (tags IN ('download_failed', 'error', 'error_too_large', 'format_unsupported', 'dead') OR (tags LIKE 'error%' AND tags != 'error_no_tags') OR tags LIKE '%download_failed%') 
+                  AND (file_id IN ({placeholders}) OR thumbnail_id IN ({placeholders}))
+            """
+            c_list = list(chunk)
+            async with db.execute(query, c_list + c_list) as cursor:
+                async for row in cursor:
+                    if row[0]:
+                        failed_set.add(row[0])
+                    if row[1]:
+                        failed_set.add(row[1])
     except Exception as e:
         logger = logging.getLogger("database")
         logger.error(f"Error fetching failed files batch: {e}")
@@ -8836,42 +8731,39 @@ async def is_file_permanently_failed(file_id: str) -> bool:
 
 async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
     """
-    Находит посты, содержащие указанные файлы.
+    Находит посты, содержащие указанные файлы с безопасным чанкованием.
     """
     if not file_ids:
         return []
 
     from common.db_pool import get_pool, db_lock
 
-    clauses = []
-    params = []
-
-    placeholders = ",".join(["?"] * len(file_ids))
-    # We query PostFiles to quickly find post_num for the given file IDs
-    query = f"""
-        SELECT * FROM Posts 
-        WHERE post_num IN (
-            SELECT post_num FROM PostFiles 
-            WHERE original_file_id IN ({placeholders}) 
-               OR thumbnail_file_id IN ({placeholders})
-        ) AND IFNULL(is_shadow, 0) = 0
-    """
-    params = file_ids + file_ids
-
+    results = []
     async with db_lock:
         try:
             db = await get_pool()
             db.row_factory = aiosqlite.Row
-            async with db.execute(query, params) as cursor:
-                rows = await cursor.fetchall()
-                cols = [d[0] for d in cursor.description]
-                results = []
-                for r in rows:
-                    if hasattr(r, 'keys'):
-                        results.append(dict(r))
-                    else:
-                        results.append(dict(zip(cols, r)))
-                return results
+            for chunk in iter_sql_chunks(file_ids, SQL_VAR_CHUNK // 2):
+                c_list = list(chunk)
+                placeholders = ",".join(["?"] * len(c_list))
+                query = f"""
+                    SELECT * FROM Posts 
+                    WHERE post_num IN (
+                        SELECT post_num FROM PostFiles 
+                        WHERE original_file_id IN ({placeholders}) 
+                           OR thumbnail_file_id IN ({placeholders})
+                    ) AND IFNULL(is_shadow, 0) = 0
+                """
+                params = c_list + c_list
+                async with db.execute(query, params) as cursor:
+                    rows = await cursor.fetchall()
+                    cols = [d[0] for d in cursor.description]
+                    for r in rows:
+                        if hasattr(r, 'keys'):
+                            results.append(dict(r))
+                        else:
+                            results.append(dict(zip(cols, r)))
+            return results
         except Exception as e:
             print(f"Error in get_posts_by_file_ids: {e}")
             return []
@@ -8969,21 +8861,16 @@ async def get_user_replies(user_id: int, limit: int = 20, offset: int = 0) -> li
         return []
 
 async def mark_replies_read(user_id: int, reply_ids: list[int] = None):
-    """Помечает ответы как прочитанные. Если ids не передан - все."""
-    from common.db_pool import get_pool, db_lock
-    async with db_lock:
-        try:
-            db = await get_pool()
-            await db.execute("BEGIN IMMEDIATE")
-            if reply_ids:
-                placeholders = ','.join('?' for _ in reply_ids)
-                await db.execute(f"UPDATE UserReplies SET is_read = 1 WHERE user_id = ? AND id IN ({placeholders})", [user_id] + reply_ids)
-            else:
-                await db.execute("UPDATE UserReplies SET is_read = 1 WHERE user_id = ?", (user_id,))
-            await db.execute("COMMIT")
-        except Exception:
-            try: await db.execute("ROLLBACK")
-            except: pass
+    """Помечает ответы как прочитанные с безопасным чанкованием. Если ids не передан - все."""
+    from common.db_pool import get_pool, db_transaction
+    db = await get_pool()
+    async with db_transaction(db):
+        if reply_ids:
+            for chunk in iter_sql_chunks(reply_ids, SQL_VAR_CHUNK - 1):
+                placeholders = ','.join('?' for _ in chunk)
+                await db.execute(f"UPDATE UserReplies SET is_read = 1 WHERE user_id = ? AND id IN ({placeholders})", [user_id] + list(chunk))
+        else:
+            await db.execute("UPDATE UserReplies SET is_read = 1 WHERE user_id = ?", (user_id,))
 async def get_posts_batch(post_nums: List[int]) -> List[dict]:
     """
     Возвращает полные данные постов по списку ID.
@@ -9032,67 +8919,46 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
 
 async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
     """
-    Переключает флаг цензуры (блюра) для списка постов.
+    Переключает флаг цензуры (блюра) для списка постов с безопасным чанкованием.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_transaction
 
     if not post_nums:
         return {}
 
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
+    db = await get_pool()
+    results = {}
+    async with db_transaction(db):
+        for chunk in iter_sql_chunks(post_nums, SQL_VAR_CHUNK):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})"
 
-                placeholders = ','.join('?' for _ in post_nums)
-                query = f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})"
+            async with db.execute(query, list(chunk)) as cursor:
+                rows = await cursor.fetchall()
 
-                async with db.execute(query, post_nums) as cursor:
-                    rows = await cursor.fetchall()
+            if not rows:
+                continue
 
-                if not rows:
-                    await db.execute("COMMIT")
-                    return {}
+            updates = []
+            for row in rows:
+                p_num, content_str = row[0], row[1]
+                try:
+                    content_dict = json.loads(content_str)
+                except Exception:
+                    content_dict = {"text": "", "type": "text"}
 
-                updates = []
-                results = {}
-                for row in rows:
-                    p_num, content_str = row[0], row[1]
-                    try:
-                        content_dict = json.loads(content_str)
-                    except:
-                        content_dict = {"text": "", "type": "text"}
+                current_state = content_dict.get('is_censored', False)
+                new_state = not current_state
+                content_dict['is_censored'] = new_state
 
-                    # Переключение флага
-                    current_state = content_dict.get('is_censored', False)
-                    new_state = not current_state
-                    content_dict['is_censored'] = new_state
+                new_json = json.dumps(content_dict, default=_json_serializer)
+                updates.append((new_json, p_num))
+                results[p_num] = new_state
 
-                    new_json = json.dumps(content_dict, default=_json_serializer)
-                    updates.append((new_json, p_num))
-                    results[p_num] = new_state
+            if updates:
+                await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
 
-                if updates:
-                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
-
-                await db.execute("COMMIT")
-                return results
-
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"Error toggling censorship: {e}")
-                break
-    return {}
+    return results
 
 def get_db_connection():
     """
@@ -9408,6 +9274,8 @@ async def add_user_global_balance(db, user_id: int, board_id: str | None, amount
     Атомарно начисляет шекели на запись пользователя текущей доски (или создает её).
     Возвращает новый единый глобальный баланс.
     """
+    if not isinstance(user_id, int) or user_id <= 0:
+        return 0.0
     if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount <= 0:
         return await get_user_global_balance(db, user_id)
     b_id = board_id or "b"
@@ -9430,7 +9298,10 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
     Атомарно списывает шекели с глобального баланса пользователя.
     Сначала списывает с текущей доски, а если не хватает — остаток списывает с других досок.
     Возвращает (успех, новый_глобальный_баланс).
+    Гарантирует полный откат транзакции при невозможности списать требуемую сумму целиком.
     """
+    if not isinstance(user_id, int) or user_id <= 0:
+        return False, 0.0
     if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount < 0:
         return False, await get_user_global_balance(db, user_id)
     if amount == 0:
@@ -9480,13 +9351,88 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
                 await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ? AND balance >= ?", (to_sub, rowid, to_sub))
                 remaining -= to_sub
 
+            if remaining > 1e-5:
+                # Прерываем операцию для полного отката
+                raise RuntimeError(f"Incomplete balance deduction for user {user_id}: remaining={remaining}")
+
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_new:
             row_new = await c_new.fetchone()
             new_total = float(row_new[0] or 0.0) if row_new and row_new[0] is not None else 0.0
         return True, new_total
 
+    try:
+        async with db_transaction(db):
+            return await _do_deduction()
+    except RuntimeError as re_err:
+        logger.warning(f"⚠️ [DEDUCT_BALANCE] Откат транзакции списания: {re_err}")
+        return False, await get_user_global_balance(db, user_id)
+
+
+async def transfer_user_balance(
+    db,
+    sender_id: int,
+    receiver_id: int,
+    amount: float,
+    board_id: str | None = None,
+    fee: float = 0.0,
+    category: str = "pay",
+    description: str = "",
+) -> tuple[bool, str, float, float]:
+    """
+    Атомарно переводит средства от sender_id к receiver_id с опциональной комиссией в фонд Абу.
+    Полная валидация:
+    - sender_id > 0, receiver_id > 0
+    - sender_id != receiver_id (запрет самопереводов)
+    - amount > 0, fee >= 0 (защита от NaN, Inf, отрицательных значений)
+    - Атомарное списание (amount + fee) со счетов отправителя
+    - Атомарное зачисление amount на счет получателя
+    - Пополнение фонда Абу на величину fee
+    - Внесение записей в UserTransactions
+    - Полный откат всех изменений через db_transaction при любой ошибке
+    Возвращает (success: bool, reason: str, sender_new_balance: float, receiver_new_balance: float).
+    """
+    if not isinstance(sender_id, int) or sender_id <= 0:
+        return False, "invalid_sender", 0.0, 0.0
+    if not isinstance(receiver_id, int) or receiver_id <= 0:
+        return False, "invalid_receiver", await get_user_global_balance(db, sender_id), 0.0
+    if sender_id == receiver_id:
+        curr = await get_user_global_balance(db, sender_id)
+        return False, "self_transfer_forbidden", curr, curr
+
+    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount <= 0:
+        return False, "invalid_amount", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+
+    if not isinstance(fee, (int, float)) or math.isnan(fee) or math.isinf(fee) or fee < 0:
+        return False, "invalid_fee", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+
+    clean_amount = round(float(amount), 2)
+    clean_fee = round(float(fee), 2)
+    total_deduct = round(clean_amount + clean_fee, 2)
+    b_id = board_id or "b"
+
     async with db_transaction(db):
-        return await _do_deduction()
+        sender_bal = await get_user_global_balance(db, sender_id)
+        if sender_bal < total_deduct:
+            return False, "insufficient_funds", sender_bal, await get_user_global_balance(db, receiver_id)
+
+        ok, new_sender_bal = await deduct_user_global_balance(db, sender_id, b_id, total_deduct)
+        if not ok:
+            raise RuntimeError(f"Transfer deduction failed for sender {sender_id}")
+
+        new_receiver_bal = await add_user_global_balance(db, receiver_id, b_id, clean_amount)
+
+        if clean_fee > 0:
+            await add_to_abu_fund(db, clean_fee, sender_id, f"Налог за перевод от {sender_id} к {receiver_id}")
+
+        desc_sender = description or f"Перевод анону {receiver_id}"
+        if clean_fee > 0:
+            desc_sender += f" (Налог Абу: {clean_fee} ₪)"
+        desc_receiver = description or f"Перевод от анона {sender_id}"
+
+        await record_user_transaction(db, sender_id, -total_deduct, category, desc_sender)
+        await record_user_transaction(db, receiver_id, clean_amount, category, desc_receiver)
+
+        return True, "success", new_sender_bal, new_receiver_bal
 
 
 async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:
@@ -9841,24 +9787,11 @@ async def record_user_transaction(
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
         return await _do_insert()
 
-    async with db_lock:
-        tx_started = False
-        try:
-            await db.execute("BEGIN IMMEDIATE")
-            tx_started = True
-        except Exception:
-            tx_started = False
-
-        try:
-            last_id = await _do_insert()
-            if tx_started:
-                await db.execute("COMMIT")
-            return last_id
-        except Exception:
-            if tx_started:
-                try: await db.execute("ROLLBACK")
-                except Exception: pass
-            return None
+    try:
+        async with db_transaction(db):
+            return await _do_insert()
+    except Exception:
+        return None
 
 async def get_user_recent_transactions(
     db,
@@ -10036,13 +9969,8 @@ async def add_music_roast(
     """
     params = (user_id, board_id, post_num, str(artist or "")[:120], str(title or "")[:120], int(score), str(rating_text or "")[:200], str(roast_text or "")[:2000], float(timestamp))
     try:
-        if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        async with db_transaction(db):
             await db.execute(query, params)
-            await db.commit()
-        else:
-            async with db_lock:
-                await db.execute(query, params)
-                await db.commit()
     except Exception as e:
         logger.debug(f"ℹ️ Error saving music roast record: {e}")
 
@@ -10077,19 +10005,16 @@ async def record_user_daily_limit(
                 count = UserDailyLimits.count + excluded.count,
                 updated_at = excluded.updated_at
         """
-        await db.execute(query, (user_id, item, day_date, increment, now_ts))
-        await db.commit()
-        async with db.execute(
-            "SELECT count FROM UserDailyLimits WHERE user_id = ? AND item = ? AND day_date = ?",
-            (user_id, item, day_date)
-        ) as c:
-            row = await c.fetchone()
-            return int(row[0]) if row else increment
+        async with db_transaction(db):
+            await db.execute(query, (user_id, item, day_date, increment, now_ts))
+            async with db.execute(
+                "SELECT count FROM UserDailyLimits WHERE user_id = ? AND item = ? AND day_date = ?",
+                (user_id, item, day_date)
+            ) as c:
+                row = await c.fetchone()
+                return int(row[0]) if row else increment
 
-    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
-        return await _do_record()
-    async with db_lock:
-        return await _do_record()
+    return await _do_record()
 
 
 async def get_user_daily_limit(
@@ -10189,40 +10114,33 @@ async def cleanup_old_user_daily_limits(db, keep_days: int = 7) -> int:
         db = await get_pool()
 
     async def _do_clean():
-        async with db.execute(
-            "DELETE FROM UserDailyLimits WHERE day_date < date('now', ?)",
-            (f"-{keep_days} days",)
-        ) as c:
-            deleted = c.rowcount
-        await db.commit()
-        return deleted
+        async with db_transaction(db):
+            async with db.execute(
+                "DELETE FROM UserDailyLimits WHERE day_date < date('now', ?)",
+                (f"-{keep_days} days",)
+            ) as c:
+                deleted = c.rowcount
+            return deleted
 
-    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
-        return await _do_clean()
-    async with db_lock:
-        return await _do_clean()
+    return await _do_clean()
 
 
 async def record_user_immunity(db, user_id: int, immunity_type: str, expires_at: float):
     """
     Персистентно записывает иммунитет пользователя в SQLite (UserImmunity).
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_transaction
     if db is None:
         db = await get_pool()
 
     async def _do_record():
-        await db.execute(
-            "REPLACE INTO UserImmunity (user_id, immunity_type, expires_at) VALUES (?, ?, ?)",
-            (user_id, immunity_type, float(expires_at))
-        )
-        await db.commit()
+        async with db_transaction(db):
+            await db.execute(
+                "REPLACE INTO UserImmunity (user_id, immunity_type, expires_at) VALUES (?, ?, ?)",
+                (user_id, immunity_type, float(expires_at))
+            )
 
-    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
-        await _do_record()
-    else:
-        async with db_lock:
-            await _do_record()
+    await _do_record()
 
 
 async def sync_user_immunity_from_db(db) -> int:

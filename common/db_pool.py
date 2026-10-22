@@ -552,76 +552,80 @@ async def safe_begin_immediate(db) -> bool:
     """
     Безопасно начинает транзакцию BEGIN IMMEDIATE, если транзакция еще не активна.
     Возвращает True, если транзакция была начата этим вызовом, иначе False.
+    Гарантирует владение db_lock текущей задачей и отслеживает глубину через _task_tx_depth.
     """
     if db is None:
         db = await get_pool()
+
+    is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+    if not (callable(is_owned_fn) and is_owned_fn()):
+        await db_lock.acquire()
+
+    depth = _task_tx_depth.get()
+    if depth > 0:
+        return False
+
     in_tx = getattr(db, "in_transaction", False)
     if not in_tx:
         conn = getattr(db, "_conn", None)
         if conn:
             in_tx = getattr(conn, "in_transaction", False)
     if in_tx:
-        if _task_tx_depth.get() == 0:
-            logger.warning("⚠️ [DB_POOL] safe_begin_immediate: обнаружена осиротевшая транзакция, сбрасываем...")
-            await reset_orphaned_transaction(db)
-        else:
-            return False
+        logger.warning("⚠️ [DB_POOL] safe_begin_immediate: обнаружена осиротевшая транзакция, сбрасываем...")
+        await reset_orphaned_transaction(db)
+
     try:
         await db.execute("BEGIN IMMEDIATE")
+        _task_tx_depth.set(depth + 1)
         return True
     except Exception as e:
         err_str = str(e).lower()
         if "cannot start a transaction within a transaction" in err_str:
-            try:
-                await db.execute("ROLLBACK")
-                await db.execute("BEGIN IMMEDIATE")
-                return True
-            except Exception:
-                return False
+            return False
         raise
 
 
 async def safe_commit(db, started_by_caller: bool = True):
     """
     Безопасно фиксирует транзакцию, если она активна и была начата данным контекстом.
+    Корректно обновляет _task_tx_depth.
     """
     if not started_by_caller or db is None:
         return
-    if _task_tx_depth.get() > 0:
+    depth = _task_tx_depth.get()
+    if depth > 1:
+        _task_tx_depth.set(depth - 1)
         return
-    in_tx = getattr(db, "in_transaction", False)
-    if not in_tx:
-        conn = getattr(db, "_conn", None)
-        if conn:
-            in_tx = getattr(conn, "in_transaction", False)
-    if in_tx:
-        try:
-            await db.execute("COMMIT")
-        except Exception as e:
-            if "no transaction is active" in str(e).lower():
-                pass
-            else:
-                raise
+
+    try:
+        await db.execute("COMMIT")
+    except Exception as e:
+        if "no transaction is active" in str(e).lower():
+            pass
+        else:
+            raise
+    finally:
+        _task_tx_depth.set(max(0, depth - 1))
 
 
 async def safe_rollback(db, started_by_caller: bool = True):
     """
     Безопасно откатывает транзакцию, если она активна и была начата данным контекстом.
+    Корректно обновляет _task_tx_depth.
     """
     if not started_by_caller or db is None:
         return
-    if _task_tx_depth.get() > 0:
+    depth = _task_tx_depth.get()
+    if depth > 1:
+        _task_tx_depth.set(depth - 1)
         return
-    in_tx = getattr(db, "in_transaction", False)
-    if not in_tx:
-        conn = getattr(db, "_conn", None)
-        if conn:
-            in_tx = getattr(conn, "in_transaction", False)
-    if in_tx:
-        try:
-            await db.execute("ROLLBACK")
-        except Exception:
-            pass
+
+    try:
+        await db.execute("ROLLBACK")
+    except Exception:
+        pass
+    finally:
+        _task_tx_depth.set(max(0, depth - 1))
 
 
 async def sqlite_wal_checkpoint_task(interval_seconds: int = 600):
