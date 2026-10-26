@@ -37,7 +37,7 @@ IMAGE_SLOGANS = [
         "subline": "Залетай в Тгач — тут все свои дегенераты. Обсуждай что хочешь без цензуры и ебучих правил."
     },
     {
-        "badge": "ДВАЧ • ТГАЧ /b/",
+        "badge": "ТГАЧ /b/",
         "headline": "ТВОЁ МНЕНИЕ ЗДЕСЬ НАХУЙ НЕ НУЖНО",
         "subline": "Но высказать его можно безнаказанно. Заходи, обосри ОПа и получи ведро сажи."
     },
@@ -64,7 +64,7 @@ IMAGE_SLOGANS = [
     {
         "badge": "БИТАРДЫ ОДОБРЯЮТ",
         "headline": "ОБНИМИ СВОЮ ШИЗУ, СУКА",
-        "subline": "В @dvach_chatbot твой внутренний голос наконец-то найдет таких же отбитых."
+        "subline": "В Тгаче твой внутренний голос наконец-то найдет таких же отбитых."
     },
     {
         "badge": "СВЕРХСЕКРЕТНО /b/",
@@ -72,7 +72,7 @@ IMAGE_SLOGANS = [
         "subline": "Твоя новая цифровая родина здесь. Сканируй QR или ищи в поиске."
     },
     {
-        "badge": "ДВАЧЕВОРЕЗКА",
+        "badge": "ТГАЧЕРЕЗКА",
         "headline": "ХОЧЕШЬ ОБЩЕНИЯ, СКОТИНА?",
         "subline": "Тгач зовет: срачи, лампота, лоли, хентай и бесконечная ебля мозгов."
     },
@@ -104,7 +104,7 @@ IMAGE_SLOGANS = [
     {
         "badge": "АБУ С НАМИ",
         "headline": "МИНУС МОЗГ, ПЛЮС АНОНИМНОСТЬ",
-        "subline": "Вступай в орден святого двачевания. Сканируй QR-код и не выебывайся."
+        "subline": "Вступай в орден анонимного братства. Сканируй QR-код и не выебывайся."
     },
     {
         "badge": "РОДИНА ЖДЕТ",
@@ -148,7 +148,7 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "БЕСКОНЕЧНЫЙ ТРЕД",
-        "headline": "НОЧЬ, ДОШИРАК, ДВАЧ",
+        "headline": "НОЧЬ, ДОШИРАК, ТГАЧ",
         "subline": "Идеальное комбо для спасения от экзистенциальной тоски и ебучей реальности."
     },
     {
@@ -163,7 +163,7 @@ IMAGE_SLOGANS = [
     },
     {
         "badge": "СТАРАЯ ШКОЛА /b/",
-        "headline": "ДУХ РАННЕГО ДВАЧА И САЖИ",
+        "headline": "ДУХ РАННЕЙ БОРДЫ И САЖИ",
         "subline": "Бескомпромиссный интернет-террор, цинизм и абсолютная анонимность."
     },
     {
@@ -209,7 +209,7 @@ IMAGE_SLOGANS = [
     {
         "badge": "ПАСТА-МАШИНА",
         "headline": "ТВОЙ БАТЯ ЗАШЁЛ В ТРЕД",
-        "subline": "И принёс жареный суп со вкусом старого доброго двачевания без цензуры."
+        "subline": "И принёс жареный суп со вкусом старой анонимной борды без цензуры."
     },
     {
         "badge": "ПЕРЕКАТ В БЕЗДНУ",
@@ -237,7 +237,7 @@ IMAGE_SLOGANS = [
         "subline": "Но мы всё равно здесь, блядь. Сканируй QR, пока РКН протирает свои мониторы."
     },
     {
-        "badge": "АЛЁ, ЭТО ДВАЧ?",
+        "badge": "АЛЁ, ЭТО ТГАЧ?",
         "headline": "ДА, ПОШЁЛ НАХУЙ",
         "subline": "Традиционное приветствие для новоприбывших. Заходи, будь как дома."
     },
@@ -294,8 +294,8 @@ AUTO_POST_COMPANION_TEXTS = [
         "👉 <i>Твой персональный инвайт-билет:</i>"
     ),
     (
-        "⚡ <b>Портал в двачевское подполье:</b>\n\n"
-        "Без регистрации, без номеров телефонов, без лицемерия. Настоящий дух старого Двача: "
+        "⚡ <b>Портал в анонимное подполье Тгача:</b>\n\n"
+        "Без регистрации, без номеров телефонов, без лицемерия. Настоящий дух свободной анонимной борды: "
         "свобода слова, черный юмор и никакой политкорректной хуеты. Сканируй код и пиздуй на доску.\n\n"
         "👉 <i>Делись с бро и залетай:</i>"
     ),
@@ -319,7 +319,7 @@ AUTO_POST_COMPANION_TEXTS = [
     ),
     (
         "🪆 <b>Майор в замешательстве:</b>\n\n"
-        "Никаких логов, никакой привязки к аккаунтам, чистый двачевский протокол. "
+        "Никаких логов, никакой привязки к аккаунтам, чистый анонимный протокол Тгача. "
         "Забирай инвайт-постер и зови всех, кто заебался от корпоративного интернета.\n\n"
         "👉 <i>Твой QR-ключ от Тгача:</i>"
     ),
@@ -520,11 +520,11 @@ def create_procedural_background(width: int = 800, height: int = 800, style: int
     glow_overlay = glow_overlay.filter(ImageFilter.GaussianBlur(radius=32))
     img = Image.alpha_composite(img.convert("RGBA"), glow_overlay)
 
-    # Layer 2: Sharp semi-transparent "2ch" watermark text
+    # Layer 2: Sharp semi-transparent "ТГАЧ" watermark text
     wm_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     wm_draw = ImageDraw.Draw(wm_overlay)
-    wm_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 190)
-    wm_text = "2ch"
+    wm_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 160)
+    wm_text = "ТГАЧ"
     wm_bbox = wm_draw.textbbox((0, 0), wm_text, font=wm_font)
     wm_w = wm_bbox[2] - wm_bbox[0]
     wm_h = wm_bbox[3] - wm_bbox[1]
@@ -718,7 +718,7 @@ def _render_layout_cyber_board(
     badge_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 20)
     header_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 28)
 
-    badge_clean = clean_text_for_font(slogan_dict.get("badge", "ДВАЧ • ТГАЧ"))
+    badge_clean = clean_text_for_font(slogan_dict.get("badge", "ТГАЧ /b/"))
     badge_bbox = ov_draw.textbbox((0, 0), badge_clean, font=badge_font)
     badge_w = (badge_bbox[2] - badge_bbox[0]) + 20
 
@@ -789,7 +789,7 @@ def _render_layout_demotivator(
     bot_username: str,
     tgach_logo: Image.Image
 ) -> Image.Image:
-    """Layout 1: Classic 2ch Demotivator Poster Style with solid black border & crisp framing."""
+    """Layout 1: Classic Demotivator Poster Style with solid black border & crisp framing."""
     frame_img = Image.new("RGB", (target_width, target_height), (8, 8, 12))
     pad_x, pad_top = 40, 36
     inner_w = target_width - (pad_x * 2)
@@ -1473,7 +1473,7 @@ def _render_layout_dark_gothic_scroll(
     ov_draw.line([(p1 + 2, 74), (target_width - p1 - 2, 74)], fill=(180, 140, 60, 255), width=2)
 
     banner_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 24)
-    b_title = f"+ EDICTUM INQUISITIONIS + SACRA DVACHIA /{board_id}/ +"
+    b_title = f"+ EDICTUM INQUISITIONIS + SACRA TGACHIA /{board_id}/ +"
     bw = ov_draw.textlength(b_title, font=banner_font)
     ov_draw.text(((target_width - bw)//2, 34), b_title, font=banner_font, fill=(225, 185, 75, 255))
 
@@ -1794,7 +1794,7 @@ def _render_layout_biohazard_zone(
     bot_y = top_h + 12 + img_h + 10
     draw.rectangle([pad, bot_y, target_width - pad, target_height - pad], fill=(14, 13, 11), outline=(80, 70, 50), width=2)
 
-    headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАРАЖЕНИЕ ДВАЧЕМ 100%")).upper()
+    headline_clean = clean_text_for_font(slogan_dict.get("headline", "ЗАРАЖЕНИЕ ТГАЧЕМ 100%")).upper()
     subline_clean = clean_text_for_font(slogan_dict.get("subline", "Уровень токсичности зашкаливает. Пиздуй в тред."))
 
     max_tw = target_width - 240
@@ -1857,7 +1857,7 @@ def _render_layout_ascii_terminal(
     draw.rectangle([14, 14, target_width - 15, target_height - 15], outline=(0, 140, 45), width=1)
 
     top_font = ImageFont.truetype(MONO_FONT or MAIN_FONT, 16)
-    draw.text((24, 22), f"C:\\DVACH\\BBS\\TGACH.EXE -BOARD /{board_id}/", font=top_font, fill=(0, 255, 90))
+    draw.text((24, 22), f"C:\\TGACH\\BBS\\TGACH.EXE -BOARD /{board_id}/", font=top_font, fill=(0, 255, 90))
     draw.text((target_width - 175, 22), "[V3.20_640KB_OK]", font=top_font, fill=(0, 180, 60))
     draw.line([(14, 48), (target_width - 15, 48)], fill=(0, 220, 70), width=2)
 
@@ -1968,7 +1968,7 @@ def _render_layout_y2k_win98(
     canvas.paste(logo_res, (wx1 + 8, tb_y1 + 6), logo_res)
 
     tb_font = ImageFont.truetype(MAIN_FONT or IMPACT_FONT, 17)
-    draw.text((wx1 + 36, tb_y1 + 7), f"Dvach OS - [/{board_id}/ Fatal Alert: Reality Not Found]", font=tb_font, fill=(255, 255, 255))
+    draw.text((wx1 + 36, tb_y1 + 7), f"Tgach OS - [/{board_id}/ Fatal Alert: Reality Not Found]", font=tb_font, fill=(255, 255, 255))
 
     btn_w, btn_h = 20, 20
     bx = wx2 - 10 - btn_w
@@ -2123,7 +2123,7 @@ def _render_layout_schizo_collage(
     draw.rectangle([pad, bot_y, target_width - pad, target_height - pad], fill=(20, 20, 22), outline=(15, 15, 15), width=3)
 
     headline_clean = clean_text_for_font(slogan_dict.get("headline", "САНИТАРЫ УЖЕ БЕССИЛЬНЫ")).upper()
-    subline_clean = clean_text_for_font(slogan_dict.get("subline", "Твой диагноз подтвержден на Дваче. Пиздуй в палату."))
+    subline_clean = clean_text_for_font(slogan_dict.get("subline", "Твой диагноз подтвержден в Тгаче. Пиздуй в палату."))
 
     max_tw = target_width - 240
     hl_font_size = 32
@@ -2150,7 +2150,7 @@ def _render_layout_schizo_collage(
         draw.text((pad + 16, curr_y), line, font=sub_font, fill=(230, 225, 215))
         curr_y += sub_font_size + 4
 
-    draw.text((pad + 16, target_height - pad - 24), f"ZINE://DVACH_{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 13), fill=(225, 29, 72))
+    draw.text((pad + 16, target_height - pad - 24), f"ZINE://TGACH_{bot_username.upper()}", font=ImageFont.truetype(MONO_FONT or MAIN_FONT, 13), fill=(225, 29, 72))
 
     qr_target = f"https://t.me/{bot_username.lstrip('@')}"
     qr_img = generate_qr(qr_target, box_size=4, border=1, fill_color="#e11d48", back_color="#121214")
@@ -2175,7 +2175,7 @@ INVITE_LAYOUT_STYLES = list(range(16))
 
 STYLE_NAMES: Dict[int, str] = {
     0: "CYBER_BOARD",
-    1: "DEMOTIVATOR_2CH",
+    1: "DEMOTIVATOR_TGACH",
     2: "CYBER_PLAQUE",
     3: "VAPOR_NEON",
     4: "BREAKING_NEWS",
@@ -2197,7 +2197,7 @@ STYLE_ALIASES: Dict[str, int] = {
     "cyber": 0,
     "default": 0,
     "demotivator": 1,
-    "demotivator_2ch": 1,
+    "demotivator_tgach": 1,
     "dem": 1,
     "cyber_plaque": 2,
     "plaque": 2,
@@ -2304,7 +2304,7 @@ def build_invite_image_card(
     if not slogan_dict:
         if raw_input_text:
             slogan_dict = {
-                "badge": "ДВАЧ • ТГАЧ /b/",
+                "badge": "ТГАЧ /b/",
                 "headline": raw_input_text,
                 "subline": f"Анонимный чат в телеге: {bot_username}"
             }
@@ -2391,7 +2391,7 @@ def render_custom_demotivator(
     bot_username: str = "@dvach_chatbot"
 ) -> io.BytesIO:
     """
-    Renders a classic high-impact 2ch Demotivator with dual frame, centered Impact title,
+    Renders a classic high-impact Demotivator with dual frame, centered Impact title,
     subline, and crisp Tgach vector badge.
     """
     target_width, target_height = 800, 850

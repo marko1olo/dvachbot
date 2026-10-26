@@ -15383,13 +15383,27 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         ])
 
         file_id = None
+        saved_path = None
+        raw_bytes = None
         try:
             from common.config import STORAGE_CHANNELS
             bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id)
             buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, slogan_dict=slogan, bot=bot)
             raw_bytes = buf.getvalue() if buf else None
 
-            # Загружаем сгенерированную карточку 1 раз в Telegram для получения file_id
+            # Сохраняем сгенерированную карточку на диск для гарантированной доставки и веб-доступа
+            if raw_bytes:
+                cards_dir = os.path.join(DATA_DIR, "invite_cards")
+                os.makedirs(cards_dir, exist_ok=True)
+                saved_path = os.path.join(cards_dir, f"invite_{board_id}_{int(time.time())}_{random.randint(1000, 9999)}.jpg")
+                try:
+                    with open(saved_path, "wb") as f:
+                        f.write(raw_bytes)
+                except Exception as save_err:
+                    logger.warning(f"Failed to persist invite card to disk: {save_err}")
+                    saved_path = None
+
+            # Пробуем пре-аплоад карточки в канал хранения (если бот имеет туда доступ)
             storage_channel = (STORAGE_CHANNELS.get(stream) if isinstance(STORAGE_CHANNELS, dict) else None) or ARCHIVE_CHANNEL_ID
             if bot and storage_channel and raw_bytes:
                 try:
@@ -15398,13 +15412,21 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
                     upload_msg = await bot.send_photo(storage_channel, input_file, caption=f"🖼 Invite Card #{board_id}")
                     if upload_msg and upload_msg.photo:
                         file_id = upload_msg.photo[-1].file_id
+                        try:
+                            from common.database import register_file_owner
+                            b_id = getattr(bot, "id", None)
+                            if b_id:
+                                spawn_task(register_file_owner(file_id, b_id))
+                        except Exception:
+                            pass
                 except Exception as upload_err:
-                    logger.warning(f"Failed to pre-upload invite image to storage channel: {upload_err}")
+                    logger.debug(f"Pre-upload invite image to storage channel skipped or failed: {upload_err}")
 
             content = {
-                'type': 'photo' if (file_id or raw_bytes) else 'text',
+                'type': 'photo' if (file_id or raw_bytes or saved_path) else 'text',
                 'file_id': file_id,
                 'image_bytes': raw_bytes if not file_id else None,
+                'file_path': saved_path,
                 'caption': companion_caption,
                 'text': companion_caption,
                 'is_system_message': True,
@@ -15430,15 +15452,17 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=btn_text, url=site_url)]
         ])
-        from banner_manager import get_banner_delivery_payload, is_video_banner
+        from banner_manager import get_banner_delivery_payload, is_video_banner, BANNERS_DIR
         target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
         b_bot_id = getattr(target_bot, "id", None)
         fname, fid, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
         media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
+        banner_path = str(BANNERS_DIR / fname) if (fname and (BANNERS_DIR / fname).exists()) else None
         content = {
             'type': media_type,
             'file_id': fid,
             'image_bytes': img_bytes,
+            'file_path': banner_path,
             'caption': message_text,
             'text': message_text,
             'is_system_message': True,
@@ -15533,32 +15557,76 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         ))
 
 
+MOTIVATION_TARGET_BOARDS = {'b', 'sex', 'thread'}
+
+async def _is_board_eligible_for_motivation(board_id: str) -> bool:
+    """
+    Проверяет, должна ли доска получать автоматические инвайты.
+    Инвайты рассылаются ТОЛЬКО на основные живые доски (b, sex, thread)
+    либо на доски, где есть реальная активность пользователей (>= 15 постов за последние 7 дней).
+    Никакого спама на пустые / мертвые доски!
+    """
+    if board_id in ('test', 'bunker'):
+        return False
+    if board_id in MOTIVATION_TARGET_BOARDS:
+        return True
+    try:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        cutoff = time.time() - 7 * 86400
+        async with db.execute(
+            "SELECT COUNT(*) FROM Posts WHERE board_id = ? AND timestamp > ? AND author_id != 0",
+            (board_id, cutoff)
+        ) as cursor:
+            row = await cursor.fetchone()
+            count = row[0] if row else 0
+            return count >= 15
+    except Exception as e:
+        logger.warning(f"Error checking motivation eligibility for {board_id}: {e}")
+        return False
+
+
 async def _board_motivation_worker(board_id: str):
     """
     Worker loop to periodically trigger graphic invite card and motivation messages
-    regularly every 4-6 hours (with quiet hours 00:00-08:00 MSK).
+    regularly every 6-10 hours (with quiet hours 00:00-09:00 MSK).
     """
-    # Небольшая пауза при старте, чтобы все боты успели инициализироваться
-    await asyncio.sleep(random.randint(20, 60))
+    # Начальный разброс задержки при старте (10 - 45 минут), чтобы воркеры разных досок не стреляли в одну минуту
+    await asyncio.sleep(random.randint(600, 2700))
 
     while True:
         try:
             now = time.time()
 
-            # Ночные тихие часы (00:00 - 08:00 MSK / UTC+3): не спамить инвайтами ночью
+            # Проверяем пригодность доски: если доска не активна, не спамим!
+            eligible = await _is_board_eligible_for_motivation(board_id)
+            if not eligible:
+                logger.debug(f"[{board_id}] Доска не активна (< 15 постов за 7 дней). Пропуск инвайт-рассылки на 6 часов.")
+                await asyncio.sleep(21600)
+                continue
+
+            # Ночные тихие часы (00:00 - 09:00 MSK / UTC+3): не спамить инвайтами ночью
             msk_hour = int((now + 3 * 3600) % 86400 // 3600)
-            if 0 <= msk_hour < 8:
+            if 0 <= msk_hour < 9:
                 await asyncio.sleep(1800)
                 continue
 
             last_time = _get_last_motivation_time(board_id)
-            # Регулярный интервал рассылки инвайт-карточек как раньше: 4-6 часов (14400 - 21600 сек)
-            target_interval = 14400.0 # 4 часа минимум
+            target_interval = 21600.0  # 6 часов минимум (интервал 6-10 часов)
+
+            if last_time == 0:
+                # Первый запуск для этой доски: НЕ спамить мгновенно!
+                # Устанавливаем таймштамп так, чтобы первый пост ушел через 2-4 часа
+                init_delay = random.randint(7200, 14400)
+                _set_last_motivation_time(board_id, now - (target_interval - init_delay))
+                logger.info(f"⏳ [{board_id}] Первый запуск инвайт-воркера: первый пост через {init_delay//3600}ч {(init_delay%3600)//60}м")
+                await asyncio.sleep(init_delay)
+                continue
 
             elapsed = now - last_time
-            if elapsed < target_interval and last_time > 0:
+            if elapsed < target_interval:
                 # Если интервал еще не прошел с прошлой рассылки, спим оставшееся время
-                wait_time = max(30.0, min(target_interval - elapsed, 1800.0))
+                wait_time = max(60.0, min(target_interval - elapsed, 1800.0))
                 await asyncio.sleep(wait_time)
                 continue
 
@@ -15570,7 +15638,7 @@ async def _board_motivation_worker(board_id: str):
             # Проверяем наличие активных получателей на доске (не спамить пустые доски)
             active_board_users = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
             if not active_board_users:
-                await asyncio.sleep(1800)
+                await asyncio.sleep(3600)
                 continue
 
             streams_to_process = ['ru'] # По дефолту
@@ -15597,8 +15665,8 @@ async def _board_motivation_worker(board_id: str):
 
             if sent_any:
                 _set_last_motivation_time(board_id, time.time())
-                # После успешной отправки следующая рассылка через 4-6 часов (14400 - 21600 сек)
-                next_sleep = random.randint(14400, 21600)
+                # После успешной отправки следующая рассылка через 6-10 часов (21600 - 36000 сек)
+                next_sleep = random.randint(21600, 36000)
                 logger.info(f"✅ [{board_id}] Инвайт-рассылка успешно отправлена. Следующий сон: {next_sleep//3600}ч {(next_sleep%3600)//60}м")
                 await asyncio.sleep(next_sleep)
             else:
@@ -15606,16 +15674,22 @@ async def _board_motivation_worker(board_id: str):
 
         except Exception as e:
             logger.error(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}", exc_info=True)
-            await asyncio.sleep(300)
+            await asyncio.sleep(600)
 
 
 async def motivation_broadcaster():
     """
-    Main entry point to start motivation workers for all boards.
+    Main entry point to start motivation workers for eligible active boards only.
     """
-    await asyncio.sleep(15)  # Начальная задержка
-    tasks = [spawn_task(_board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
-    await asyncio.gather(*tasks)
+    await asyncio.sleep(60)  # Начальная пауза после старта бота
+    eligible_boards = []
+    for bid in BOARDS:
+        if await _is_board_eligible_for_motivation(bid):
+            eligible_boards.append(bid)
+    logger.info(f"🚀 [MOTIVATION] Запуск инвайт-воркеров для активных досок: {eligible_boards}")
+    tasks = [spawn_task(_board_motivation_worker(bid)) for bid in eligible_boards]
+    if tasks:
+        await asyncio.gather(*tasks)
 
 async def fetch_dvach_thread(board: str, only_new: bool = False) -> dict | None:
     try:

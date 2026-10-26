@@ -1,3 +1,4 @@
+import os
 import shared_state
 import asyncio
 import json
@@ -1340,9 +1341,11 @@ class MessageBroadcaster:
                     return sent_msgs
                 elif ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
                     file_source = None
-                    if current_content.get("voice_bytes"):
+                    if current_content.get("voice_bytes") and isinstance(current_content.get("voice_bytes"), (bytes, bytearray)):
                         file_source = BufferedInputFile(current_content["voice_bytes"], filename="roast.ogg")
-                    elif current_content.get("image_bytes"):
+                    elif current_content.get("file_id") and isinstance(current_content.get("file_id"), str) and not current_content.get("file_id").strip().startswith('<'):
+                        file_source = current_content["file_id"]
+                    elif current_content.get("image_bytes") and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
                         if ct == 'photo':
                             filename = "file.jpg"
                         elif ct == 'animation':
@@ -1354,9 +1357,16 @@ class MessageBroadcaster:
                         else:
                             filename = "video.mp4"
                         file_source = BufferedInputFile(current_content["image_bytes"], filename=filename)
-                    elif current_content.get("file_id"):
-                        file_source = current_content["file_id"]
-                    elif current_content.get("image_url"):
+                    elif current_content.get("file_path") and isinstance(current_content.get("file_path"), str) and os.path.isfile(current_content["file_path"]):
+                        try:
+                            with open(current_content["file_path"], "rb") as f:
+                                disk_bytes = f.read()
+                            if disk_bytes:
+                                ext = os.path.splitext(current_content["file_path"])[1].lstrip('.') or ("jpg" if ct == 'photo' else "dat")
+                                file_source = BufferedInputFile(disk_bytes, filename=f"file.{ext}")
+                        except Exception as fpe:
+                            runtime_logger.warning("Error reading file_path in broadcaster: %s", fpe)
+                    elif current_content.get("image_url") and isinstance(current_content.get("image_url"), str) and not current_content.get("image_url").strip().startswith('<'):
                         file_source = current_content["image_url"]
                     if not file_source or (isinstance(file_source, str) and (file_source.strip().startswith('<') or not file_source.strip())):
                         return await _send_text_fallback("missing_or_invalid_file_source")
@@ -1422,6 +1432,15 @@ class MessageBroadcaster:
                             if fid:
                                 self.content['file_id'] = fid
                                 self.content_for_common['file_id'] = fid
+                                current_content['file_id'] = fid
+                                try:
+                                    from common.task_manager import spawn_task
+                                    from common.database import register_file_owner
+                                    b_inst_id = getattr(self.bot_instance, "id", None)
+                                    if b_inst_id:
+                                        spawn_task(register_file_owner(fid, b_inst_id))
+                                except Exception:
+                                    pass
                         self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
@@ -1701,7 +1720,17 @@ class MessageBroadcaster:
                             current_content["file_id"] = None
                             if isinstance(send_content, dict):
                                 send_content["file_id"] = None
-                        fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
+                        fb = getattr(self, '_broadcast_downloaded_fb', None)
+                        if not fb and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
+                            fb = current_content["image_bytes"]
+                        if not fb and current_content.get("file_path") and isinstance(current_content.get("file_path"), str) and os.path.isfile(current_content["file_path"]):
+                            try:
+                                with open(current_content["file_path"], "rb") as f:
+                                    fb = f.read()
+                                if fb:
+                                    self._broadcast_downloaded_fb = fb
+                            except Exception as fpe:
+                                runtime_logger.warning("Error reading file_path in fallback: %s", fpe)
                         if fid and not fb and not getattr(self, '_broadcast_media_download_failed', False):
                             fb, _ = await _download_media_bytes(fid)
                             if fb:
@@ -1722,7 +1751,18 @@ class MessageBroadcaster:
                                     self.content_for_common["file_id"] = None
                                 if hasattr(self, 'content') and isinstance(self.content, dict):
                                     self.content["file_id"] = None
-                        fb = getattr(self, '_broadcast_downloaded_fb', None) or current_content.get("image_bytes")
+                        if not fb:
+                            fb = getattr(self, '_broadcast_downloaded_fb', None)
+                            if not fb and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
+                                fb = current_content["image_bytes"]
+                            if not fb and current_content.get("file_path") and isinstance(current_content.get("file_path"), str) and os.path.isfile(current_content["file_path"]):
+                                try:
+                                    with open(current_content["file_path"], "rb") as f:
+                                        fb = f.read()
+                                    if fb:
+                                        self._broadcast_downloaded_fb = fb
+                                except Exception:
+                                    pass
                         if fb:
                             ct = str(current_content.get("type") or "").split('.')[-1].lower()
                             ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else "dat")
@@ -1763,6 +1803,14 @@ class MessageBroadcaster:
                                         if hasattr(self, 'content') and isinstance(self.content, dict):
                                             self.content['file_id'] = new_fid
                                             self.content.pop('image_bytes', None)
+                                        try:
+                                            from common.task_manager import spawn_task
+                                            from common.database import register_file_owner
+                                            b_inst_id = getattr(self.bot_instance, "id", None)
+                                            if b_inst_id:
+                                                spawn_task(register_file_owner(new_fid, b_inst_id))
+                                        except Exception:
+                                            pass
                                         if self.post_num:
                                             try:
                                                 async with storage_lock:
