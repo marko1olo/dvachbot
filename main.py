@@ -4178,21 +4178,21 @@ def _build_weapons_shop_content(user_id: int, balance: float):
     p_ext = get_current_item_price('extinguisher_obep')
 
     text = (
-        f"⚔️ <b>ЧЕРНЫЙ РЫНОК ОРУЖИЯ И ТОКСИЧНОСТИ</b>\n"
-        f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
-        f"1. 🐒 <b>Кусок говна</b> — <i>{p_shit} ₪</i> (Бросок /shit, дебафф 1-3ч 💩)\n"
-        f"2. 🤮 <b>Блевота</b> — <i>{p_vomit} ₪</i> (Облевать через /vomit на 1-3ч 🤮)\n"
-        f"3. 🇺🇦 <b>Флаг Украины</b> — <i>{p_flag_ua} ₪</i> (Повесить через /flag_ua на 1-3ч 🇺🇦)\n"
-        f"4. 🇷🇺 <b>Флаг России</b> — <i>{p_flag_ru} ₪</i> (Повесить через /flag_ru на 1-3ч 🇷🇺)\n"
-        f"5. 🔪 <b>Заточка</b> — <i>{p_knife} ₪</i> (Ограбить анона на 10-30% через /rob)\n"
-        f"6. 🧯 <b>Перцовый баллончик</b> — <i>{p_spray} ₪</i> (Авто-защита: ослепляет грабителя!)\n"
-        f"7. 🔇 <b>Мут-Ган (1ч)</b> — <i>{p_mute} ₪</i> (Кикнуть реплаем через /shoot)\n"
-        f"8. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Проклятие поноса: /curse)\n"
-        f"9. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Проклятие шизы: /schizopill)\n"
-        f"10. 🚮 <b>Билет Дворника (6ч)</b> — <i>{p_jan} ₪</i> (Права удаления /del)\n"
-        f"11. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 5-30м через /partyvan)\n"
-        f"12. 🧯 <b>Огнетушитель ОБЭП</b> — <i>{p_ext} ₪</i> (Защита от /raid_oligarch и тушение: /extinguish)\n\n"
-        f"💡 <i>Смыть любой дебафф (флаги, говно, блевоту, шизу, пену) можно Аминазином в Аптеке или Огнетушителем /extinguish!</i>"
+        f"⚔️ <b>ЧЕРНЫЙ РЫНОК ОРУЖИЯ</b>\n"
+        f"Баланс: <code>{int(balance):,} ₪</code>\n\n"
+        f"1. 🐒 <b>Говно</b> — <i>{p_shit} ₪</i> (Бросок /shit, дебафф 1-3ч 💩)\n"
+        f"2. 🤮 <b>Блевота</b> — <i>{p_vomit} ₪</i> (/vomit на 1-3ч 🤮)\n"
+        f"3. 🇺🇦 <b>Флаг UA</b> — <i>{p_flag_ua} ₪</i> (Повесить через /flag_ua 🇺🇦)\n"
+        f"4. 🇷🇺 <b>Флаг RU</b> — <i>{p_flag_ru} ₪</i> (Повесить через /flag_ru 🇷🇺)\n"
+        f"5. 🔪 <b>Заточка</b> — <i>{p_knife} ₪</i> (Грабеж 10-30% через /rob)\n"
+        f"6. 🧯 <b>Перцовка</b> — <i>{p_spray} ₪</i> (Авто-защита от грабежа)\n"
+        f"7. 🔇 <b>Мут-Ган (1ч)</b> — <i>{p_mute} ₪</i> (Кикнуть через /shoot)\n"
+        f"8. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Понос: /curse)\n"
+        f"9. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Шиза: /schizopill)\n"
+        f"10. 🚮 <b>Билет Дворника</b> — <i>{p_jan} ₪</i> (Удаление /del на 6ч)\n"
+        f"11. 🚔 <b>Пативэн</b> — <i>{p_van} ₪</i> (ОМОН на 5-30м: /partyvan)\n"
+        f"12. 🧯 <b>Огнетушитель ОБЭП</b> — <i>{p_ext} ₪</i> (Анти-рейд и /extinguish)\n\n"
+        f"💡 <i>Смыть дебаффы: Аминазин в Аптеке или /extinguish!</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4399,8 +4399,8 @@ def _build_lootbox_shop_content(user_id: int, balance: float, active_items: dict
     current_whale_price = calculate_whale_safe_price(opened_today)
 
     if opened_today > 0:
-        whale_price_header = f"текущая цена: <b>{current_whale_price:,} ₪</b> | открыто сегодня: {opened_today}"
-        whale_extra_line = f"• ⚠️ <b>Твой Сейф #{opened_today + 1} стоит {current_whale_price:,} ₪</b> (открыто сегодня: {opened_today})\n"
+        whale_price_header = f"<b>{current_whale_price:,} ₪</b> | открыто: {opened_today}"
+        whale_extra_line = f"• ⚠️ <b>Сейф #{opened_today + 1}: {current_whale_price:,} ₪</b>\n"
         whale_btn_text = f"🐋 Сейф Олигарха #{opened_today + 1} ({current_whale_price:,}₪)"
     else:
         whale_price_header = "от 50 000 ₪"
@@ -4408,26 +4408,25 @@ def _build_lootbox_shop_content(user_id: int, balance: float, active_items: dict
         whale_btn_text = "🐋 Сейф Олигарха (50 000₪)"
 
     text = (
-        f"📦 <b>ДВАЧЕВСКИЕ ЛУТБОКСЫ И КЕЙСЫ</b>\n"
-        f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
+        f"📦 <b>ТГАЧЕВСКИЕ ЛУТБОКСЫ И КЕЙСЫ</b>\n"
+        f"Баланс: <code>{int(balance):,} ₪</code>\n\n"
         f"🗑️ <b>1. Мусорный Пакет ({p_trash} ₪):</b>\n"
-        f"• 50% — Двачевский мусор и заначки (10-20 ₪ кешбэк)\n"
-        f"• 32% — Боевые расходники (Говно, Аминазин, Заточка, Перцовка)\n"
-        f"• 15% — Редкие предметы и титул [Сборщик Стеклотары]\n"
-        f"• 3% — 🔥 <b>ДЖЕКПОТ (Пативэн, Мут-Ган или 350 ₪ + титул [Король Помойки]!)</b>\n\n"
+        f"• 50% — Мусор/заначки (кешбэк 10-20 ₪)\n"
+        f"• 32% — Расходники (Говно, Аминазин, Заточка, Баллон)\n"
+        f"• 15% — Редкий лут + титул [Сборщик Стеклотары]\n"
+        f"• 3% — 🔥 <b>ДЖЕКПОТ</b> (Пативэн/Мут-Ган/350 ₪ + [Король Помойки])\n\n"
         f"👑 <b>2. Золотой Сейф Китов ({p_gold} ₪):</b>\n"
-        f"• 35% — Ценные артефакты (50-130 ₪ кешбэк)\n"
-        f"• 35% — Элитный шмот и реликвии (10% НАВСЕГДА + [Шекелевый Барон], 90% 30 дней)\n"
-        f"• 25% — Боевой комплект (Зеркальный щит + Заточка/Перцовка + Аминазин)\n"
-        f"• 5% — 🌟 <b>МИФИЧЕСКИЙ ДЖЕКПОТ (1 500 ₪, Пативэн, Золотая шапочка навсегда или 3 000 ₪ + [Золотой Кит]!)</b>\n\n"
+        f"• 35% — Артефакты (кешбэк 50-130 ₪)\n"
+        f"• 35% — Элитный шмот (10% перм + [Шекелевый Барон], 90% 30д)\n"
+        f"• 25% — Щит + Заточка/Баллон + Аминазин\n"
+        f"• 5% — 🌟 <b>МИФ-ДЖЕКПОТ</b> (1.5k ₪/Шапочка перм/3k ₪ + [Золотой Кит])\n\n"
         f"🐋 <b>3. Сейф Олигарха ({whale_price_header}):</b>\n"
         f"{whale_extra_line}"
-        f"• Экспоненциальная цена: 50 000 ₪ × 1.5ⁿ (сброс раз в сутки)\n"
-        f"• 70% стоимости навсегда сжигается в Фонд Яхты Абу!\n"
-        f"• 10% — 👑👑 <b>МИФИЧЕСКИЙ СТАТУС (Префикс 👑👑 на 24 часа или Указ Абу на закреп)</b>\n"
-        f"• 25% — ⚜️ Престиж-экипировка (Платиновый Монокль, Мантия Падишаха)\n"
-        f"• 20% — 🧯 Дипломатический Паспорт и Огнетушитель ОБЭП\n"
-        f"• 15% — 🪙 Слиток золота (+15 000 ₪) | 30% — 📜 Грамота лоха (+1 ₪)"
+        f"• 50k ₪ × 1.5ⁿ (сброс в 00:00 UTC) | 70% burn в Фонд Абу\n"
+        f"• 10% — 👑👑 <b>Миф-статус</b> (Префикс 👑👑 на 24ч / Указ Абу)\n"
+        f"• 25% — ⚜️ Престиж-шмот (Монокль, Мантия Падишаха)\n"
+        f"• 20% — 🧯 Дип-Паспорт и Огнетушитель ОБЭП\n"
+        f"• 15% — 🪙 Слиток (+15k ₪) | 30% — 📜 Грамота лоха (+1 ₪)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4438,6 +4437,46 @@ def _build_lootbox_shop_content(user_id: int, balance: float, active_items: dict
             InlineKeyboardButton(text=whale_btn_text, callback_data="shop_buy_lootbox_whale")
         ],
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
+    ])
+    return text, kb
+
+
+def _build_lootbox_opened_content(reveal_text: str, user_id: int, balance: float, active_items: dict | None = None):
+    p_trash = get_current_item_price("lootbox_trash")
+    p_gold = get_current_item_price("lootbox_gold")
+
+    now = int(time.time())
+    opened_today = 0
+    if active_items:
+        reset_ts = active_items.get("whale_safes_reset_ts", 0)
+        if now < reset_ts:
+            opened_today = active_items.get("whale_safes_opened_today", 0)
+    from whale_economy_engine import calculate_whale_safe_price
+    current_whale_price = calculate_whale_safe_price(opened_today)
+
+    if opened_today > 0:
+        whale_btn_text = f"🐋 Еще Сейф #{opened_today + 1} ({current_whale_price:,}₪)"
+    else:
+        whale_btn_text = f"🐋 Сейф Олигарха ({current_whale_price:,}₪)"
+
+    text = (
+        f"{reveal_text}\n\n"
+        f"──────────────────\n"
+        f"📦 <b>Открыть еще кейсы:</b>\n"
+        f"🗑️ Пакет ({p_trash} ₪) | 👑 Сейф ({p_gold} ₪) | 🐋 Олигарх ({current_whale_price:,} ₪)"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"🗑️ Еще Пакет ({p_trash}₪)", callback_data="shop_buy_lootbox_trash"),
+            InlineKeyboardButton(text=f"👑 Еще Сейф ({p_gold}₪)", callback_data="shop_buy_lootbox_gold")
+        ],
+        [
+            InlineKeyboardButton(text=whale_btn_text, callback_data="shop_buy_lootbox_whale")
+        ],
+        [
+            InlineKeyboardButton(text="📋 Шансы и таблица дропов", callback_data="shop_cat_lootbox"),
+            InlineKeyboardButton(text="⬅️ В Хаб", callback_data="shop_main_hub")
+        ]
     ])
     return text, kb
 
@@ -5169,6 +5208,11 @@ async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: Inl
     is a text message or a photo banner with caption.
     """
     try:
+        if len(text) > 1024:
+            await callback.message.delete()
+            await callback.bot.send_message(chat_id=callback.message.chat.id, text=text, reply_markup=kb, parse_mode="HTML")
+            return
+
         if callback.message.caption is not None or callback.message.photo:
             await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
         elif callback.message.text:
@@ -6055,8 +6099,8 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer(f"🐋 Выпало: {res['title']}!", show_alert=True)
         new_b = await get_user_global_balance(db, user_id)
         ai_updated = await _get_user_active_items(db, user_id, board_id)
-        text, kb = _build_lootbox_shop_content(user_id, new_b, ai_updated)
-        await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
+        text, kb = _build_lootbox_opened_content(reveal_text, user_id, new_b, ai_updated)
+        await _render_shop_subview(callback, text, kb, category="lootbox")
         return
 
     now = int(time.time())
@@ -6102,8 +6146,9 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             )
             await callback.answer(f"🎉 Выпало: {title}!", show_alert=True)
             new_b = await get_user_global_balance(db, user_id)
-            text, kb = _build_lootbox_shop_content(user_id, new_b)
-            await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
+            ai_updated = await _get_user_active_items(db, user_id, board_id)
+            text, kb = _build_lootbox_opened_content(reveal_text, user_id, new_b, ai_updated)
+            await _render_shop_subview(callback, text, kb, category="lootbox")
             return
 
         elif item == "lootbox_gold":
@@ -6134,8 +6179,9 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             )
             await callback.answer(f"🌟 ДЖЕКПОТ: {title}!", show_alert=True)
             new_b = await get_user_global_balance(db, user_id)
-            text, kb = _build_lootbox_shop_content(user_id, new_b)
-            await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
+            ai_updated = await _get_user_active_items(db, user_id, board_id)
+            text, kb = _build_lootbox_opened_content(reveal_text, user_id, new_b, ai_updated)
+            await _render_shop_subview(callback, text, kb, category="lootbox")
             return
 
         # --- 2. WEAPONS & COMBAT ---
