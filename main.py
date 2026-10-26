@@ -551,7 +551,7 @@ THREAD_CREATE_COOLDOWN_USER = 1800  # 30 минут в секундах
 THREAD_HISTORY_COOLDOWN = 60 # 1 минут в секундах
 # OP_COMMAND_COOLDOWN is canonical in shared_state.py
 LOCATION_SWITCH_COOLDOWN = 5 # 5 секунд на смену локации (вход/выход)
-SUMMARIZE_COOLDOWN = 600
+SUMMARIZE_COOLDOWN = 1800  # 30 минут кулдаун на /summarize
 ROAST_COOLDOWN = 300
 
 
@@ -15304,6 +15304,7 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
         else: final = f"✅ Пост #{target_post_num} удален из настроек закрепа."
         await status_msg.edit_text(final)
 _MOTIVATION_STATE_FILE = os.path.join(DATA_DIR, "motivation_broadcast_state.json")
+_AUTO_SUMMARY_STATE_FILE = os.path.join(DATA_DIR, "auto_summary_state.json")
 
 def _load_motivation_state() -> dict:
     try:
@@ -15331,6 +15332,32 @@ def _set_last_motivation_time(board_id: str, ts: float):
     st[board_id] = ts
     _save_motivation_state(st)
 
+def _load_auto_summary_state() -> dict:
+    try:
+        if os.path.exists(_AUTO_SUMMARY_STATE_FILE):
+            with open(_AUTO_SUMMARY_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_auto_summary_state(state: dict):
+    try:
+        os.makedirs(os.path.dirname(_AUTO_SUMMARY_STATE_FILE), exist_ok=True)
+        with open(_AUTO_SUMMARY_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+def _get_last_auto_summary_time(board_id: str) -> float:
+    st = _load_auto_summary_state()
+    return float(st.get(board_id, 0.0))
+
+def _set_last_auto_summary_time(board_id: str, ts: float):
+    st = _load_auto_summary_state()
+    st[board_id] = ts
+    _save_auto_summary_state(st)
+
 async def _send_motivation_message(board_id: str, stream: str, recipients: set):
     """
     Sends a motivational message, auto graphic invite card, or site promo to active users.
@@ -15341,39 +15368,8 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
     board_username = BOARD_CONFIG.get(board_id, {}).get('username', '@dvach_chatbot')
     site_url = f"https://tgach.top/{board_id}/"
 
-    if rand_choice < 0.15:
-        # 1. Реклама веб-версии
-        if stream == 'en':
-            text_body = random.choice(SITE_PROMO_PHRASES_EN)
-            btn_text = "🔗 Open Website"
-        elif stream == 'jp':
-            text_body = random.choice(SITE_PROMO_PHRASES_JP)
-            btn_text = "🔗 サイトを開く"
-        else:
-            text_body = random.choice(SITE_PROMO_PHRASES)
-            btn_text = "🔗 Перейти на сайт"
-
-        message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=btn_text, url=site_url)]
-        ])
-        from banner_manager import get_banner_delivery_payload, is_video_banner
-        target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
-        b_bot_id = getattr(target_bot, "id", None)
-        fname, fid, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
-        media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
-        content = {
-            'type': media_type,
-            'file_id': fid,
-            'image_bytes': img_bytes,
-            'caption': message_text,
-            'text': message_text,
-            'is_system_message': True,
-            'archive_allowed': True
-        }
-
-    elif rand_choice < 0.85:
-        # 2. Автоматическая генерация графической инвайт-карточки ("Позови друзей")
+    if rand_choice < 0.80:
+        # 1. Автоматическая генерация графической инвайт-карточки ("Позови друзей", 80% приоритет)
         from invite_image_generator import generate_invite_image_async, get_random_auto_invite_content
         slogan, companion_caption = get_random_auto_invite_content(board_id=board_id, bot_username=board_username)
         site_btn = "🌐 Web Version" if stream == 'en' else ("🌐 ウェブ版" if stream == 'jp' else "🌐 Веб-версия")
@@ -15418,8 +15414,39 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
             logger.error(f"Error generating auto invite image: {e}", exc_info=True)
             content = {'type': 'text', 'text': companion_caption, 'is_system_message': True, 'archive_allowed': True}
 
+    elif rand_choice < 0.90:
+        # 2. Реклама веб-версии (10%)
+        if stream == 'en':
+            text_body = random.choice(SITE_PROMO_PHRASES_EN)
+            btn_text = "🔗 Open Website"
+        elif stream == 'jp':
+            text_body = random.choice(SITE_PROMO_PHRASES_JP)
+            btn_text = "🔗 サイトを開く"
+        else:
+            text_body = random.choice(SITE_PROMO_PHRASES)
+            btn_text = "🔗 Перейти на сайт"
+
+        message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=btn_text, url=site_url)]
+        ])
+        from banner_manager import get_banner_delivery_payload, is_video_banner
+        target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+        b_bot_id = getattr(target_bot, "id", None)
+        fname, fid, img_bytes = get_banner_delivery_payload(category="motivation", bot_id=b_bot_id)
+        media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'
+        content = {
+            'type': media_type,
+            'file_id': fid,
+            'image_bytes': img_bytes,
+            'caption': message_text,
+            'text': message_text,
+            'is_system_message': True,
+            'archive_allowed': True
+        }
+
     else:
-        # 3. Текстовая мотивация/инвайт
+        # 3. Текстовая мотивация/инвайт (10%)
         if stream == 'en':
             motivation = random.choice(MOTIVATIONAL_MESSAGES_EN)
             invite_text = random.choice(INVITE_TEXTS_EN)
@@ -15508,11 +15535,11 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
 
 async def _board_motivation_worker(board_id: str):
     """
-    Worker loop to check activity and periodically trigger motivation and invite card messages
-    regularly every 8-12 hours (with quiet hours 00:00-08:00 MSK and activity threshold >= 10).
+    Worker loop to periodically trigger graphic invite card and motivation messages
+    regularly every 4-6 hours (with quiet hours 00:00-08:00 MSK).
     """
     # Небольшая пауза при старте, чтобы все боты успели инициализироваться
-    await asyncio.sleep(random.randint(30, 90))
+    await asyncio.sleep(random.randint(20, 60))
 
     while True:
         try:
@@ -15525,25 +15552,25 @@ async def _board_motivation_worker(board_id: str):
                 continue
 
             last_time = _get_last_motivation_time(board_id)
-            # Регулярный интервал рассылки пичей: 8-12 часов (28800 - 43200 сек)
-            target_interval = 28800.0 # 8 часов минимум
+            # Регулярный интервал рассылки инвайт-карточек как раньше: 4-6 часов (14400 - 21600 сек)
+            target_interval = 14400.0 # 4 часа минимум
 
             elapsed = now - last_time
             if elapsed < target_interval and last_time > 0:
                 # Если интервал еще не прошел с прошлой рассылки, спим оставшееся время
-                wait_time = max(60.0, min(target_interval - elapsed, 1800.0))
+                wait_time = max(30.0, min(target_interval - elapsed, 1800.0))
                 await asyncio.sleep(wait_time)
-                continue
-
-            # Проверка активности: не спамить доски с низкой активностью (< 10 постов за 12 часов)
-            activity = await get_board_activity_last_hours(board_id, hours=12)
-            if activity < 10:
-                await asyncio.sleep(1800)
                 continue
 
             b_data = board_data.get(board_id)
             if not b_data:
                 await asyncio.sleep(300)
+                continue
+
+            # Проверяем наличие активных получателей на доске (не спамить пустые доски)
+            active_board_users = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
+            if not active_board_users:
+                await asyncio.sleep(1800)
                 continue
 
             streams_to_process = ['ru'] # По дефолту
@@ -15555,13 +15582,13 @@ async def _board_motivation_worker(board_id: str):
             sent_any = False
             for stream in streams_to_process:
                 if board_id == 'int':
-                    recipients = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
+                    recipients = active_board_users
                 else:
                     if ENABLE_MULTILANG:
                         stream_users = await get_stream_active_users(board_id, stream)
-                        recipients = stream_users.intersection(b_data.get('users', {}).get('active', set())) - b_data.get('users', {}).get('banned', set())
+                        recipients = stream_users.intersection(active_board_users)
                     else:
-                        recipients = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
+                        recipients = active_board_users
                 if not recipients:
                     continue
 
@@ -15570,8 +15597,9 @@ async def _board_motivation_worker(board_id: str):
 
             if sent_any:
                 _set_last_motivation_time(board_id, time.time())
-                # После успешной отправки следующая рассылка через 8-12 часов (28800 - 43200 сек)
-                next_sleep = random.randint(28800, 43200)
+                # После успешной отправки следующая рассылка через 4-6 часов (14400 - 21600 сек)
+                next_sleep = random.randint(14400, 21600)
+                logger.info(f"✅ [{board_id}] Инвайт-рассылка успешно отправлена. Следующий сон: {next_sleep//3600}ч {(next_sleep%3600)//60}м")
                 await asyncio.sleep(next_sleep)
             else:
                 await asyncio.sleep(1800)
@@ -17285,6 +17313,19 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         else:
             b_data['last_summarize_time'] = time.time()
     if on_cooldown:
+        # Check if there is a recent summary in cache to provide value without spamming the board
+        recent_cached_text = None
+        for k, (c_ts, c_text) in _SUMMARY_CACHE.items():
+            if k.startswith(f"{board_id}:") and (now_ts - c_ts < 7200):
+                recent_cached_text = c_text
+                break
+        if recent_cached_text:
+            mins_rem = int(remaining // 60)
+            secs_rem = int(remaining % 60)
+            wait_str = f"{mins_rem}м {secs_rem}с" if mins_rem > 0 else f"{secs_rem}с"
+            await message.answer(f"⏳ Саммари уже публиковалось недавно (следующее через {wait_str}):\n\n{recent_cached_text}", parse_mode="HTML", disable_web_page_preview=False)
+            return
+
         if lang == 'en':
             cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
         elif lang == 'jp':
@@ -17539,6 +17580,8 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             err_msg = "Не удалось отправить саммари, тред больше не активен."
         await message.answer(err_msg)
         return
+    _set_last_auto_summary_time(board_id, now_dt.timestamp())
+    b_data['last_summarize_time'] = now_dt.timestamp()
     logger.info(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
 
 @dp.message(Command("bot_stats"))
@@ -27252,58 +27295,125 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
         print(f"🔁 Перезапуск задачи '{task_name}' через {current_delay} секунд...")
         await asyncio.sleep(current_delay)
 
+async def _check_board_inactivity_for_auto_summary(board_id: str, last_summary_ts: float) -> tuple[bool, str]:
+    """
+    Проверяет, что доска находится в состоянии затишья (неактивности) И накопила
+    достаточно новых сообщений с момента прошлого саммари для генерации выжимки.
+    Инварианты:
+    - Минимальный интервал: 8-10 часов (не чаще раза в 8-10ч).
+    - Окно тишины: последнее сообщение от пользователя >= 30 минут назад (не перебивать активный диалог).
+    - Достаточность контента: >= 10 содержательных постов от пользователей с момента последнего саммари.
+    """
+    now_ts = time.time()
+    if last_summary_ts > 0 and (now_ts - last_summary_ts < 28800.0):
+        remaining = 28800.0 - (now_ts - last_summary_ts)
+        return False, f"cooldown_active (remaining {int(remaining)}s / {int(remaining // 3600)}h)"
+
+    async with storage_lock:
+        board_posts = []
+        for p in messages_storage.values():
+            if isinstance(p, dict) and p.get('board_id') == board_id and p.get('author_id') != 0:
+                ts = _fast_storage_ts(p.get('timestamp'))
+                board_posts.append((ts, p))
+        board_posts.sort(key=operator.itemgetter(0))
+
+    if not board_posts:
+        return False, "no_posts_found"
+
+    latest_ts = board_posts[-1][0]
+    time_since_last_post = now_ts - latest_ts
+
+    # Если пользователи прямо сейчас активно общаются (сообщение < 30 мин назад и > 2 сообщений за час), не перебиваем!
+    if time_since_last_post < 1800.0:
+        posts_last_hour = sum(1 for ts, _ in board_posts if ts >= now_ts - 3600.0)
+        if posts_last_hour > 2:
+            return False, f"chat_currently_active ({posts_last_hour} posts in last hour, latest {int(time_since_last_post)}s ago)"
+
+    # Считаем содержательные посты с момента последнего саммари (или за последние 12 часов)
+    threshold = max(last_summary_ts, now_ts - 12 * 3600) if last_summary_ts > 0 else (now_ts - 8 * 3600)
+    new_posts = [p for ts, p in board_posts if ts >= threshold]
+
+    text_posts_count = 0
+    total_chars = 0
+    for p in new_posts:
+        c = p.get('content')
+        if isinstance(c, dict):
+            t = (c.get('text') or c.get('caption') or '').strip()
+            if t:
+                text_posts_count += 1
+                total_chars += len(t)
+
+    if text_posts_count < 10 or total_chars < 250:
+        return False, f"insufficient_new_content ({text_posts_count} text posts, {total_chars} chars since last summary)"
+
+    return True, f"quiet_window_confirmed (latest post {int(time_since_last_post // 60)}m ago, {text_posts_count} posts accumulated)"
+
+
 async def periodic_board_summary():
     """
-    Автоматическое саммари для борды /b/, которое вызывается каждые 8 абсолютных часов
-    (00:00, 08:00, 16:00 UTC). При старте вычисляет точное время до ближайшего слота.
+    Автоматическое саммари для борды /b/, которое публикуется НЕ чаще раза в 8-10 часов
+    и СТРОГО при неактивности (в окно затишья, когда чат затих >= 30 минут, но накопилось
+    достаточно новых сообщений для полноценного обзора).
     """
     import random
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
+
+    # Пауза при старте бота для завершения инициализации
+    await asyncio.sleep(random.randint(60, 120))
+
+    board_id = 'b'
     while True:
-        now = datetime.now(timezone.utc)
-        current_hour = now.hour
-        next_slot_hour = ((current_hour // 8) + 1) * 8
-        if next_slot_hour >= 24:
-            next_slot_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        else:
-            next_slot_time = now.replace(hour=next_slot_hour, minute=0, second=0, microsecond=0)
-
-        sleep_seconds = max(5, (next_slot_time - now).total_seconds())
-        print(f"📝 [PERIODIC SUMMARY] Следующий выпуск в {next_slot_time.strftime('%H:%M:%S UTC')} (сон {int(sleep_seconds)} сек)...")
-        await asyncio.sleep(sleep_seconds)
-
         try:
-            print("📝 [PERIODIC SUMMARY] Начинаю генерацию авто-саммари для /b/...")
-            board_id = 'b'
-            if board_id not in board_data:
+            now_ts = time.time()
+            last_ts = _get_last_auto_summary_time(board_id)
+
+            # 1. Проверяем минимальный интервал: 8 часов (28800 сек)
+            target_min_interval = 28800.0
+            elapsed = now_ts - last_ts
+            if elapsed < target_min_interval and last_ts > 0:
+                wait_sec = max(60.0, min(target_min_interval - elapsed, 1800.0))
+                logger.info(f"⏳ [PERIODIC SUMMARY] Cooldown: прошло {elapsed/3600:.1f}ч из 8ч. Сон {int(wait_sec)}с...")
+                await asyncio.sleep(wait_sec)
                 continue
+
+            if board_id not in board_data:
+                await asyncio.sleep(300)
+                continue
+
+            # 2. Проверяем неактивность (затишье) и достаточность накопленного контента
+            can_summarize, reason = await _check_board_inactivity_for_auto_summary(board_id, last_ts)
+            if not can_summarize:
+                logger.info(f"ℹ️ [PERIODIC SUMMARY] Пропуск авто-саммари: {reason}. Следующая проверка через 15-30 минут...")
+                await asyncio.sleep(random.randint(900, 1800))
+                continue
+
+            logger.info(f"📝 [PERIODIC SUMMARY] Условия выполнены ({reason}). Начинаю генерацию авто-саммари для /{board_id}/...")
 
             # Автосаммари: 5-7 абзацев для полноценного прогона
             auto_paragraph_count = random.randint(5, 7)
             prompt, info_text, chunk, is_blat, is_warhammer = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
 
-            if not chunk or len(chunk) < 100:
-                logger.debug("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
+            if not chunk or len(chunk) < 200:
+                logger.info(f"❌ [PERIODIC SUMMARY] Слишком короткий чанк: {len(chunk) if chunk else 0} символов.")
+                await asyncio.sleep(1800)
                 continue
 
-            logger.debug(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} warhammer={is_warhammer} chunk_len={len(chunk)} chars")
-            hf_token = os.getenv("HF_TOKEN")
+            logger.info(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} warhammer={is_warhammer} chunk_len={len(chunk)} chars")
             summary = await summarize_text_with_hf(prompt, chunk)
-            raw_len = len(summary) if summary else 0
             summary = clean_html_for_tg(summary)
-            logger.debug(f"📝 [PERIODIC SUMMARY] raw_len={raw_len} cleaned_len={len(summary) if summary else 0}")
 
             if not summary or summary.startswith('Нейронка сдохла'):
-                print(f"⚠️ [PERIODIC SUMMARY] LLM недоступна ({repr(summary[:50]) if summary else 'пусто'}), активирую extractive fallback...")
+                logger.warning(f"⚠️ [PERIODIC SUMMARY] LLM недоступна, extractive fallback...")
                 try:
                     from common.extractive_summary import generate_extractive_summary
                     summary = generate_extractive_summary(chunk, prompt, lang='ru', paragraph_count=auto_paragraph_count, board_id=board_id)
                     summary = clean_html_for_tg(summary)
                 except Exception as fb_err:
-                    print(f"❌ [PERIODIC SUMMARY] Extractive fallback error: {fb_err}")
+                    logger.error(f"❌ [PERIODIC SUMMARY] Extractive fallback error: {fb_err}")
 
             if not summary or summary.startswith('Нейронка сдохла'):
-                print(f"❌ [PERIODIC SUMMARY] Ошибка генерации саммари: {repr(summary[:80]) if summary else 'пусто'}")
+                logger.error(f"❌ [PERIODIC SUMMARY] Ошибка генерации саммари: {repr(summary[:80]) if summary else 'пусто'}")
+                await asyncio.sleep(1800)
                 continue
 
             date_str = datetime.now().strftime('%d.%m %H:%M')
@@ -27362,6 +27472,7 @@ async def periodic_board_summary():
             b_data = board_data[board_id]
             recipients = b_data['users']['active'] - b_data['users']['banned']
             if not recipients:
+                await asyncio.sleep(1800)
                 continue
 
             from banner_manager import get_banner_delivery_payload, is_video_banner
@@ -27371,7 +27482,6 @@ async def periodic_board_summary():
             # Для Telegraph ВСЕГДА используем type: 'text', чтобы Telegram автоматически развернул Instant View веб-превью статьи
             is_photo = False if telegraph_url else bool(fid or img_bytes)
             if is_photo and len(final_text) > 1024:
-                # Telegram limit for photo caption is 1024 chars; fallback to text if exceeded
                 is_photo = False
 
             media_type = ('video' if is_video_banner(fname) else 'photo') if is_photo else 'text'
@@ -27405,9 +27515,18 @@ async def periodic_board_summary():
                     "board_id": board_id
                 })
 
-            print("✅ [PERIODIC SUMMARY] Авто-саммари успешно опубликовано в /b/")
+            pub_ts = time.time()
+            _set_last_auto_summary_time(board_id, pub_ts)
+            b_data['last_summarize_time'] = pub_ts
+
+            # Следующий цикл не чаще раза в 8-10 часов (28800 - 36000 секунд)
+            next_sleep_sec = random.randint(28800, 36000)
+            logger.info(f"✅ [PERIODIC SUMMARY] Авто-саммари успешно опубликовано в /{board_id}/ (post_num={pnum}). Следующий выпуск не раньше чем через {next_sleep_sec//3600}ч {(next_sleep_sec%3600)//60}м")
+            await asyncio.sleep(next_sleep_sec)
+
         except Exception as e:
-            print(f"❌ [PERIODIC SUMMARY] Ошибка: {e}")
+            logger.error(f"❌ [PERIODIC SUMMARY] Ошибка в periodic_board_summary: {e}", exc_info=True)
+            await asyncio.sleep(600)
 
 async def periodic_thread_digest():
     """Дайджест активных тредов каждые 8 часов (04:00, 12:00, 20:00 UTC)."""
