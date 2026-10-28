@@ -307,24 +307,49 @@ async def test_reply_to_op_inherits_thread_id():
     assert op_num is not None
     await create_thread(str(op_num), "b", 7040, f"OP thread test {ts}", ts)
 
-    # Reply created with reply_to=op_num and NO thread_id_from_bot
-    reply_num = await create_post(
+    # 1. Reply created from the bot on the board with reply_to=op_num and thread_id_from_bot=None
+    bot_reply_num = await create_post(
         author_id=7041,
         board_id="b",
-        content={"type": "text", "text": "Replying directly to OP"},
+        content={"type": "text", "text": "Replying directly to OP from bot board"},
         timestamp=ts + 1,
         reply_to=op_num,
+        is_from_site=False,
         thread_id_from_bot=None
     )
-    assert reply_num is not None
+    assert bot_reply_num is not None
 
-    # Verify that the reply inherited thread_id == str(op_num)
+    # Verify that the bot reply stays on the board (thread_id IS NULL)
     from common.db_pool import get_pool
     db = await get_pool()
-    async with db.execute("SELECT thread_id FROM Posts WHERE post_num = ?", (reply_num,)) as cursor:
+    async with db.execute("SELECT thread_id FROM Posts WHERE post_num = ?", (bot_reply_num,)) as cursor:
         row = await cursor.fetchone()
         assert row is not None
-        assert row[0] == str(op_num)
+        assert row[0] is None
+
+    # Verify that get_thread_by_op_post STILL includes this reply in the thread view
+    from common.database import get_thread_by_op_post
+    thread_tuple = await get_thread_by_op_post(op_num)
+    assert thread_tuple is not None
+    op_post, replies = thread_tuple
+    reply_ids = [r["post_num"] for r in replies]
+    assert bot_reply_num in reply_ids
+
+    # 2. Reply created from the website in thread mode (post_mode="reply")
+    site_reply_num = await create_post(
+        author_id=7042,
+        board_id="b",
+        content={"type": "text", "text": "Replying directly to OP from site"},
+        timestamp=ts + 2,
+        reply_to=op_num,
+        is_from_site=True,
+        post_mode="reply"
+    )
+    assert site_reply_num is not None
+    async with db.execute("SELECT thread_id FROM Posts WHERE post_num = ?", (site_reply_num,)) as cursor:
+        srow = await cursor.fetchone()
+        assert srow is not None
+        assert srow[0] == str(op_num)
 
 
 @pytest.mark.asyncio
@@ -437,6 +462,150 @@ async def test_new_thread_public_notification_buttons():
     assert len(buttons) == 2
     assert "start=thread_555" in buttons[0].url
     assert "https://tgach.top/b/res/555.html" in buttons[1].url
+
+
+@pytest.mark.asyncio
+async def test_tg_board_reply_to_notification_and_thread_broadcast(isolated_test_db):
+    """
+    Verify full bidirectional bridge when a TG user on the main board replies to
+    'Создан новый тред' or a thread broadcast:
+    1. Post stays on the board (thread_id IS NULL).
+    2. Broadcasted to all board stream users with thread hyperlink and web button.
+    3. Delivered to thread subscribers inside the thread.
+    4. Appears in get_chat_posts_for_board (/{board}/chat/).
+    5. Appears in get_thread_by_op_post (/{board}/res/{thread_id}.html).
+    6. format_post_text renders clean HTML with clickable link without broken &lt;a entities.
+    """
+    from post_processor import NewPostProcessor
+    from main import _notify_new_thread_public, NewThreadPublicContext
+    from common.database import create_thread, get_chat_posts_for_board, get_thread_by_op_post
+    from site_tgach.main import format_post_text
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, patch
+
+    board_id = "b"
+    now_dt = datetime.now(timezone.utc)
+    ts = now_dt.timestamp()
+
+    # 1. Create OP post and thread record
+    op_num = await create_post(
+        author_id=5001,
+        board_id=board_id,
+        content={"type": "text", "text": "Thread OP post text"},
+        timestamp=ts,
+        post_mode="new_thread"
+    )
+    assert op_num is not None
+    await create_thread(str(op_num), board_id, 5001, "Awesome Discussion", ts)
+
+    b_data = {
+        'users': {'active': {1001, 1002, 1003}, 'banned': set()},
+        'user_state': {1001: {'location': 'main'}},
+        'threads_data': {
+            str(op_num): {
+                'title': 'Awesome Discussion',
+                'subscribers': {2001},
+                'posts': [op_num]
+            }
+        }
+    }
+
+    # 2. Trigger _notify_new_thread_public
+    with patch("main.enqueue_board_message", new_callable=AsyncMock):
+        ctx = NewThreadPublicContext(board_id, b_data, "Awesome Discussion", str(op_num), 'ru', now_dt, 'ru')
+        await _notify_new_thread_public(ctx)
+
+    # 3. User 1001 on the board replies to the notification post
+    from shared_state import messages_storage, storage_lock
+    async with storage_lock:
+        notify_post_num = max(messages_storage.keys())
+
+    from post_processor import NewPostProcessor, NewPostContext
+    from shared_state import board_data
+    board_data[board_id] = b_data
+
+    mock_bot = AsyncMock()
+    mock_bot.id = 999
+    ctx_post = NewPostContext(
+        bot_instance=mock_bot,
+        board_id=board_id,
+        user_id=1001,
+        content={"type": "text", "text": "I am replying to the new thread announcement!"},
+        reply_to_post=notify_post_num,
+        is_shadow_muted=False,
+        stream='ru'
+    )
+    processor = NewPostProcessor(ctx_post)
+
+    # Determine recipients and thread
+    ok = await processor._determine_recipients_and_thread()
+    assert ok is not False
+    # CRITICAL: thread_id must remain None so it's a board post!
+    assert processor.thread_id is None
+    # referenced_thread_id must resolve to op_num
+    assert processor.referenced_thread_id == str(op_num)
+    # Recipients should be active board users minus author
+    assert processor.recipients == {1002, 1003}
+
+    # Format headers and attachments
+    await processor._apply_content_transformations()
+    await processor._create_post_record(now_dt)
+    await processor._format_and_update_headers()
+
+    # Verify thread hyperlink and inline keyboard
+    assert f"https://tgach.top/b/res/{op_num}.html#{processor.current_post_num}" in processor.final_content['text']
+    assert processor.board_keyboard is not None
+    assert len(processor.board_keyboard.inline_keyboard) == 1
+    assert "Открыть тред на сайте" in processor.board_keyboard.inline_keyboard[0][0].text
+
+    # Verify site formatting renders clean HTML
+    formatted_html = format_post_text(processor.final_content['text'])
+    assert f'<a href="https://tgach.top/b/res/{op_num}.html#{processor.current_post_num}"' in formatted_html
+    assert "&lt;a" not in formatted_html
+
+    # Verify database persistence: post is saved with thread_id IS NULL
+    from common.db_pool import get_pool
+    db = await get_pool()
+    async with db.execute("SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ?", (processor.current_post_num,)) as cursor:
+        p_row = await cursor.fetchone()
+        assert p_row is not None
+        assert p_row[0] is None
+        assert p_row[1] == notify_post_num
+
+    # Verify website endless chat (/{board}/chat/) returns the post
+    chat_posts = await get_chat_posts_for_board(board_id, offset=0, stream='ru')
+    chat_ids = [p['id'] for p in chat_posts]
+    assert processor.current_post_num in chat_ids
+
+    # Verify website thread view (/{board}/res/{thread_id}.html) ALSO includes this reply
+    thread_tuple = await get_thread_by_op_post(op_num)
+    assert thread_tuple is not None
+    _, replies = thread_tuple
+    reply_ids = [r['post_num'] for r in replies]
+    assert processor.current_post_num in reply_ids
+
+    # Verify delivery: board users receive it with thread_id=None, thread subscribers receive it with thread_id=op_num
+    processor.author_results = [(True, AsyncMock(message_id=9999))]
+    enqueued_deliveries = []
+    async def capture_enqueue(b_id, item):
+        enqueued_deliveries.append(item)
+        return True
+
+    with patch("delivery_manager.enqueue_board_message", side_effect=capture_enqueue):
+        await processor._enqueue_and_notify()
+
+    # Should have 2 enqueued messages:
+    # 1 for board users (1002, 1003) with thread_id=None
+    # 1 for thread subscribers (2001) with thread_id=str(op_num)
+    assert len(enqueued_deliveries) == 2
+    board_delivery = next(d for d in enqueued_deliveries if d.get('thread_id') is None)
+    thread_delivery = next(d for d in enqueued_deliveries if d.get('thread_id') == str(op_num))
+
+    assert board_delivery['recipients'] == {1002, 1003}
+    assert thread_delivery['recipients'] == {2001}
+    assert board_delivery['keyboard'] is not None
+    assert thread_delivery['keyboard'] is not None
+
 
 
 

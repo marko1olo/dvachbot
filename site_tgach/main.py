@@ -3310,6 +3310,33 @@ def _apply_bbcode_and_effects(text: str) -> str:
     for pattern, replacement in BBCODE_REPLACEMENTS:
         text = pattern.sub(replacement, text)
 
+    # Restore safe Telegram / system markup (hyperlinks and basic tags)
+    lt = chr(38) + "lt;"
+    gt = chr(38) + "gt;"
+    quot = chr(38) + "quot;"
+
+    def _safe_a_replacer(match):
+        raw_url = match.group(1).strip()
+        anchor_text = match.group(2)
+        clean_url = "".join(c for c in raw_url if ord(c) >= 32 and ord(c) != 127).strip()
+        scheme_prefix = clean_url.split(":", 1)[0].lower() if ":" in clean_url else ""
+        if scheme_prefix in ("javascript", "data", "vbscript", "blob", "file", "about"):
+            return anchor_text
+        if not (clean_url.startswith("http://") or clean_url.startswith("https://") or clean_url.startswith("/")):
+            return anchor_text
+        safe_url = html.escape(clean_url, quote=True)
+        return f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="post-inline-link">{anchor_text}</a>'
+
+    safe_a_pattern = re.compile(
+        lt + r'a\s+href=' + quot + r'([^"]*?)' + quot + r'.*?' + gt + r'(.*?)' + lt + r'/a' + gt,
+        re.IGNORECASE | re.DOTALL
+    )
+    text = safe_a_pattern.sub(_safe_a_replacer, text)
+    text = re.sub(lt + r'b' + gt + r'(.*?)' + lt + r'/b' + gt, r'<b>\1</b>', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(lt + r'i' + gt + r'(.*?)' + lt + r'/i' + gt, r'<i>\1</i>', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(lt + r's' + gt + r'(.*?)' + lt + r'/s' + gt, r'<s>\1</s>', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(lt + r'blockquote' + gt + r'(.*?)' + lt + r'/blockquote' + gt, r'<blockquote class="post-quote">\1</blockquote>', text, flags=re.IGNORECASE | re.DOTALL)
+
     def btn_replacer(match):
         raw_url = match.group(1).strip()
         # Iteratively decode HTML entities to prevent nested obfuscation (e.g. &amp;#115;)

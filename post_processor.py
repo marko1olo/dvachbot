@@ -11,6 +11,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 from common.board_config import BOARD_CONFIG
+from common.config import SITE_PUBLIC_BASE_URL
 from common.html_utils import escape_html
 from common.task_manager import spawn_task
 from common.database import update_post_content, create_post, get_stream_active_users, process_mentions_and_notify, add_post_copies
@@ -120,11 +121,22 @@ class NewPostProcessor:
         user_location = self.b_data.get('user_state', {}).get(self.user_id, {}).get('location', 'main')
         if self.board_id in THREAD_BOARDS and user_location != 'main':
             self.thread_id = user_location
-        elif self.board_id in THREAD_BOARDS and self.reply_to_post:
-            from common.database import get_thread_op_by_post_num
-            t_op = await get_thread_op_by_post_num(self.reply_to_post)
-            if t_op:
-                self.thread_id = str(t_op)
+        else:
+            self.thread_id = None
+
+        self.referenced_thread_id = None
+        if self.reply_to_post:
+            async with storage_lock:
+                parent_data = messages_storage.get(self.reply_to_post)
+            if parent_data:
+                t_val = parent_data.get('thread_id') or parent_data.get('referenced_thread_id') or parent_data.get('content', {}).get('thread_id')
+                if t_val:
+                    self.referenced_thread_id = str(t_val)
+            if not self.referenced_thread_id:
+                from common.database import get_thread_op_by_post_num
+                t_op = await get_thread_op_by_post_num(self.reply_to_post)
+                if t_op:
+                    self.referenced_thread_id = str(t_op)
 
         if self.board_id in THREAD_BOARDS and self.thread_id:
             thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
@@ -403,6 +415,38 @@ class NewPostProcessor:
             self.author_content['header'] = header_text
             self.final_content.pop('exclude_recipients', None)
             self.author_content.pop('exclude_recipients', None)
+
+            if self.referenced_thread_id and not self.thread_id:
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                thread_info = self.b_data.get('threads_data', {}).get(self.referenced_thread_id)
+                t_title = thread_info.get('title') if thread_info else None
+                if not t_title:
+                    from common.thread_manager import get_thread_info
+                    ti = get_thread_info(self.board_id, str(self.referenced_thread_id))
+                    t_title = ti.get('title') if ti else f"Тред #{self.referenced_thread_id}"
+                safe_title = escape_html(t_title or f"Тред #{self.referenced_thread_id}")
+                site_url = f"{SITE_PUBLIC_BASE_URL}/{self.board_id}/res/{self.referenced_thread_id}.html#{self.current_post_num}"
+
+                thread_link_line = f"\n\n🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+                if self.final_content.get('text'):
+                    self.final_content['text'] = self.final_content['text'] + thread_link_line
+                elif self.final_content.get('caption') is not None:
+                    self.final_content['caption'] = (self.final_content.get('caption') or '') + thread_link_line
+                else:
+                    self.final_content['caption'] = f"🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+
+                if self.author_content.get('text'):
+                    self.author_content['text'] = self.author_content['text'] + thread_link_line
+                elif self.author_content.get('caption') is not None:
+                    self.author_content['caption'] = (self.author_content.get('caption') or '') + thread_link_line
+                else:
+                    self.author_content['caption'] = f"🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+
+                board_btn_text = "Open on Website 🌐" if self.stream == 'en' else ("サイトで開く 🌐" if self.stream == 'jp' else "🌐 Открыть тред на сайте")
+                self.board_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=board_btn_text, url=site_url)]
+                ])
+
             await update_post_content(self.current_post_num, self.final_content)
         finally:
             if self.image_bytes_to_send:
@@ -482,6 +526,7 @@ class NewPostProcessor:
                     recipients={self.user_id},
                     content=self.author_content,
                     reply_info=self.reply_info_for_author,
+                    keyboard=getattr(self, 'board_keyboard', None),
                     verbose=False
                 ))
         except TelegramRetryAfter as e:
@@ -549,6 +594,7 @@ class NewPostProcessor:
                 'author_id': self.user_id, 'timestamp': now_dt,
                 'content': content_for_ram,
                 'author_message_id': None, 'board_id': self.board_id, 'thread_id': self.thread_id,
+                'referenced_thread_id': getattr(self, 'referenced_thread_id', None),
                 'chain_depth': chain_depth
             }
             if MAX_MESSAGES_IN_MEMORY > 0:
@@ -671,11 +717,31 @@ class NewPostProcessor:
             from delivery_manager import enqueue_board_message
             await enqueue_board_message(self.board_id, {
                 'recipients': self.recipients, 'content': self.final_content, 'post_num': self.current_post_num,
-                'board_id': self.board_id, 'thread_id': self.thread_id
+                'board_id': self.board_id, 'thread_id': self.thread_id,
+                'keyboard': getattr(self, 'board_keyboard', None)
             })
 
+        # If a board user replied to a thread post or notification, deliver also to thread subscribers inside thread
+        if not self.is_shadow_muted and self.referenced_thread_id and not self.thread_id:
+            thread_info = self.b_data.get('threads_data', {}).get(self.referenced_thread_id)
+            if not thread_info:
+                from common.thread_manager import get_thread_info
+                thread_info = get_thread_info(self.board_id, str(self.referenced_thread_id))
+            subs = set(thread_info.get('subscribers', set())) if thread_info else set()
+            thread_recipients = (subs - {self.user_id}) - set(self.recipients)
+            if thread_recipients:
+                from delivery_manager import enqueue_board_message
+                await enqueue_board_message(self.board_id, {
+                    'recipients': thread_recipients,
+                    'content': self.final_content,
+                    'post_num': self.current_post_num,
+                    'board_id': self.board_id,
+                    'thread_id': self.referenced_thread_id,
+                    'keyboard': getattr(self, 'board_keyboard', None)
+                })
+
         # Broadcast thread post to active board users without fanfare, with thread hyperlink and web button
-        if not self.is_shadow_muted and self.thread_id and self.board_id in THREAD_BOARDS:
+        if not self.is_shadow_muted and self.thread_id:
             active_board_users = set(self.b_data.get('users', {}).get('active', set()))
             banned_users = set(self.b_data.get('users', {}).get('banned', set()))
             board_recipients = (active_board_users - self.recipients - {self.user_id}) - banned_users

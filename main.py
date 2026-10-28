@@ -20129,7 +20129,13 @@ async def _notify_new_thread_public(ctx: NewThreadPublicContext) -> None:
             InlineKeyboardButton(text=web_btn_text, url=site_url)
         ]
     ])
-    content_notify = {'type': 'text', 'text': notification_text, 'is_system_message': True, 'archive_allowed': True}
+    content_notify = {
+        'type': 'text',
+        'text': notification_text,
+        'is_system_message': True,
+        'archive_allowed': True,
+        'thread_id': str(thread_id),
+    }
     pnum_notify = await create_post(
         board_id=board_id, author_id=0, content=content_notify,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -20139,7 +20145,13 @@ async def _notify_new_thread_public(ctx: NewThreadPublicContext) -> None:
         content_notify['header'] = header
         await update_post_content(pnum_notify, content_notify)
         async with storage_lock:
-            messages_storage[pnum_notify] = {'author_id': 0, 'timestamp': now_dt, 'content': content_notify, 'board_id': board_id}
+            messages_storage[pnum_notify] = {
+                'author_id': 0,
+                'timestamp': now_dt,
+                'content': content_notify,
+                'board_id': board_id,
+                'thread_id': str(thread_id),
+            }
         await enqueue_board_message(board_id, {
             'recipients': b_data['users']['active'], 'content': content_notify,
             'post_num': pnum_notify, 'board_id': board_id, 'keyboard': keyboard

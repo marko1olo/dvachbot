@@ -2130,8 +2130,7 @@ async def create_post(
                             elif post_mode == 'reply' and not final_thread_id:
                                 final_thread_id = inherited_thread_id
                         else:
-                            if not final_thread_id and valid_reply_to:
-                                final_thread_id = inherited_thread_id
+                            final_thread_id = thread_id_from_bot
 
                         post_query = """
                             INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
@@ -2797,13 +2796,21 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                 replies_query = """
                     SELECT post_num, content, timestamp, author_id, board_id, reply_to_post_num, is_shadow, is_op_hidden
                     FROM Posts 
-                    WHERE thread_id = ? 
+                    WHERE (
+                        thread_id = ? 
+                        OR reply_to_post_num IN (
+                            SELECT post_num FROM Posts 
+                            WHERE thread_id = ? 
+                               OR post_num = ?
+                               OR json_extract(content, '$.thread_id') = ?
+                        )
+                    )
                       AND post_num != ?
-                      AND (is_shadow = 0 OR author_id = ?)
+                      AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
                     ORDER BY timestamp ASC
                 """
                 raw_replies_data = []
-                async with db.execute(replies_query, (str(op_post_num), op_post_num, viewer_id)) as cursor:
+                async with db.execute(replies_query, (str(op_post_num), str(op_post_num), op_post_num, str(op_post_num), op_post_num, viewer_id)) as cursor:
                     rep_cols = [d[0] for d in cursor.description]
                     async for row in cursor:
                         if hasattr(row, 'keys'):
@@ -3031,9 +3038,14 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
                 if row:
                     thread_id, reply_to = row
                     if thread_id:
-                        return thread_id
+                        return int(thread_id)
                     if reply_to is None:
-                        return post_num
+                        async with db.execute(
+                            "SELECT 1 FROM Threads WHERE thread_id = ? OR op_id = ? LIMIT 1",
+                            (str(post_num), post_num)
+                        ) as tc:
+                            if await tc.fetchone():
+                                return post_num
                 return None
     except Exception:
         return None
