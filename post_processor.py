@@ -813,16 +813,19 @@ class NewPostProcessor:
         # Fire reply notifications (UserReplies + NotificationQueue).
         # process_mentions_and_notify handles both >>XXXXX inline quotes and
         # bare Telegram replies (reply_to_post without a quote in the text).
-        _mention_text = self.final_content.get('text', '') or ''
-        _reply_to = self.reply_to_post if self.reply_to_post else None
-        if (not self.is_shadow_muted) and (_mention_text or _reply_to):
-            spawn_task(process_mentions_and_notify(
-                source_post_num=self.current_post_num,
-                board_id=self.board_id,
-                text=_mention_text,
-                author_id=self.user_id,
-                reply_to_ui=_reply_to,
-            ))
+        # ЗАКОММЕНТИРОВАНО: Для бот-бот ответов уведомления со ссылкой на сайт не нужны,
+        # так как пользователи находятся в боте и видят ответы в потоке чата.
+        # Уведомления в NotificationQueue предназначены для взаимодействия бот-сайт (когда ответ пришел с сайта).
+        # _mention_text = self.final_content.get('text', '') or ''
+        # _reply_to = self.reply_to_post if self.reply_to_post else None
+        # if (not self.is_shadow_muted) and (_mention_text or _reply_to):
+        #     spawn_task(process_mentions_and_notify(
+        #         source_post_num=self.current_post_num,
+        #         board_id=self.board_id,
+        #         text=_mention_text,
+        #         author_id=self.user_id,
+        #         reply_to_ui=_reply_to,
+        #     ))
         if self.user_id in self.b_data.get('troll_targets', set()):
             pass
 

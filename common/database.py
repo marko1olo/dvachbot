@@ -3153,11 +3153,19 @@ async def create_thread_entry(
                 break
 
     return False
-async def process_mentions_and_notify(source_post_num: int, board_id: str, text: str, author_id: int, reply_to_ui: int = None):
+async def process_mentions_and_notify(
+    source_post_num: int,
+    board_id: str,
+    text: str,
+    author_id: int,
+    reply_to_ui: int = None,
+    is_from_site: bool = False
+):
     """
     Парсит текст на наличие ссылок >>12345 и создает уведомления.
     source_post_num — номер нового опубликованного поста (ответ).
     author_id — автор этого нового поста.
+    is_from_site — флаг, указывающий, что ответ создан на сайте (tgach.top).
     """
     new_reply_post_num = source_post_num
     mentions = set(REF_PATTERN.findall(text))
@@ -3194,7 +3202,10 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                             # NotificationQueue: (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at)
                             # source_post_num = пост получателя (на который ответили)
                             # reply_post_num = новый пост с ответом
-                            if ENABLE_REPLY_NOTIFICATIONS:
+                            # Уведомления со ссылкой на чтение на сайте отправляются только для взаимодействия бот-сайт
+                            # (когда ответ создан на сайте: author_id <= 0 или is_from_site=True).
+                            # Бот-бот ответы происходят напрямую в Telegram-потоке, дублирующие уведы на сайт исключены.
+                            if ENABLE_REPLY_NOTIFICATIONS and (author_id <= 0 or is_from_site):
                                 notifications_to_insert.append((
                                     recipient_id,
                                     parent_post_num,

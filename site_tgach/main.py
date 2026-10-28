@@ -6273,7 +6273,7 @@ async def api_makaba_posting(
             spawn_task(process_backlinks(new_post_num, content["text"], reply_to))
             if board not in ["thread", "test"]:
                 await process_mentions_and_notify(
-                    new_post_num, board, content["text"], author_id, reply_to
+                    new_post_num, board, content["text"], author_id, reply_to, is_from_site=True
                 )
 
     return {"Status": "OK", "Num": new_post_num}
@@ -8497,7 +8497,7 @@ async def api_create_post(
             await update_thread_last_updated(thread_op_num, current_ts)
         if not is_shadow_final and board_id not in ["thread", "test"]:
             await process_mentions_and_notify(
-                new_post_num, board_id, sanitized_text, author_id, reply_to
+                new_post_num, board_id, sanitized_text, author_id, reply_to, is_from_site=True
             )
 
         if is_endless:

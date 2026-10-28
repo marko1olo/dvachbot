@@ -86,13 +86,14 @@ async def test_process_mentions_and_notify_fields_when_enabled():
         )
         assert reply_num_1 is not None
 
-        # Call process_mentions_and_notify for this reply
+        # Call process_mentions_and_notify for this reply (from site)
         await process_mentions_and_notify(
             source_post_num=reply_num_1,
             board_id="b",
             text=f">>{op_num} first reply",
             author_id=7002,
-            reply_to_ui=op_num
+            reply_to_ui=op_num,
+            is_from_site=True
         )
 
         # Check NotificationQueue
@@ -108,7 +109,7 @@ async def test_process_mentions_and_notify_fields_when_enabled():
         assert note["board_id"] == "b"
         assert str(note["thread_id"]) == str(op_num)
 
-        # 3. User 7003 replies to User 7002's reply
+        # 3. User 7003 replies to User 7002's reply (from site)
         reply_num_2 = await create_post(
             author_id=7003,
             board_id="b",
@@ -124,7 +125,8 @@ async def test_process_mentions_and_notify_fields_when_enabled():
             board_id="b",
             text=f">>{reply_num_1} second reply",
             author_id=7003,
-            reply_to_ui=reply_num_1
+            reply_to_ui=reply_num_1,
+            is_from_site=True
         )
 
         notifs2 = await get_and_clear_notification_queue()
@@ -135,6 +137,47 @@ async def test_process_mentions_and_notify_fields_when_enabled():
         assert note2["source_post_num"] == reply_num_1  # Post belonging to user 7002
         assert note2["reply_post_num"] == reply_num_2  # The new reply
         assert str(note2["thread_id"]) == str(op_num)
+
+
+@pytest.mark.asyncio
+async def test_bot_bot_reply_does_not_enqueue_notification():
+    """Verify that when a bot user (author_id > 0, is_from_site=False) replies to another bot user, NotificationQueue is NOT populated."""
+    with patch("common.database.ENABLE_REPLY_NOTIFICATIONS", True):
+        ts = time.time()
+        # 1. User 7050 creates a post in TG bot
+        post_1 = await create_post(
+            author_id=7050,
+            board_id="b",
+            content={"type": "text", "text": f"TG Post 1 {ts}"},
+            timestamp=ts,
+        )
+        assert post_1 is not None
+
+        # 2. User 7051 replies in TG bot (author_id > 0, is_from_site=False)
+        post_2 = await create_post(
+            author_id=7051,
+            board_id="b",
+            content={"type": "text", "text": f">>{post_1} reply from bot to bot"},
+            timestamp=ts + 1,
+            reply_to=post_1,
+            is_from_site=False
+        )
+        assert post_2 is not None
+
+        # Call process_mentions_and_notify without is_from_site (bot-bot)
+        await process_mentions_and_notify(
+            source_post_num=post_2,
+            board_id="b",
+            text=f">>{post_1} reply from bot to bot",
+            author_id=7051,
+            reply_to_ui=post_1,
+            is_from_site=False
+        )
+
+        # NotificationQueue must be empty because both users are in TG bot!
+        notifs = await get_and_clear_notification_queue()
+        matching = [n for n in notifs if n["recipient_id"] == 7050 and n["reply_post_num"] == post_2]
+        assert len(matching) == 0
 
 
 @pytest.mark.asyncio

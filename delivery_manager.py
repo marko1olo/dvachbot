@@ -2051,7 +2051,8 @@ async def site_posts_broadcaster():
                                         board_id=board_id,
                                         text=raw_site_text,
                                         author_id=author_id,
-                                        reply_to_ui=reply_to_site
+                                        reply_to_ui=reply_to_site,
+                                        is_from_site=True
                                     ))
                         if skip_broadcast:
                             await mark_broadcast_posts_sent([post_num])
