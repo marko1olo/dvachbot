@@ -9311,7 +9311,7 @@ async def add_user_global_balance(db, user_id: int, board_id: str | None, amount
     async def _do_add():
         await db.execute(
             "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = ROUND(balance + ?, 2)",
             (user_id, b_id, amount, amount)
         )
         return await get_user_global_balance(db, user_id)
@@ -9338,21 +9338,27 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
     b_id = board_id or "b"
 
     async def _do_deduction() -> tuple[bool, float]:
+        nonlocal amount
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
             row = await c.fetchone()
             total = float(row[0] or 0.0) if row and row[0] is not None else 0.0
 
         if total < amount:
-            return False, total
+            # Epsilon tolerance for IEEE-754 precision issues (e.g. balance 8360232.399999999 vs amount 8360232.40)
+            if (amount - total) <= 0.01:
+                amount = total
+            else:
+                return False, total
 
         async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, b_id)) as c:
             row = await c.fetchone()
             curr_bal = float(row[0] or 0.0) if row and row[0] is not None else 0.0
 
-        if curr_bal >= amount:
+        if curr_bal >= amount or (amount - curr_bal) <= 0.005:
+            to_sub = min(curr_bal, amount)
             async with db.execute(
-                "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
-                (amount, user_id, b_id, amount)
+                "UPDATE Users SET balance = ROUND(MAX(0.0, balance - ?), 2) WHERE user_id = ? AND board_id = ?",
+                (to_sub, user_id, b_id)
             ) as cursor:
                 rowcount = getattr(cursor, "rowcount", None)
             if rowcount == 0:
@@ -9360,6 +9366,20 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
                     row_tot = await c_tot.fetchone()
                     total = float(row_tot[0] or 0.0) if row_tot and row_tot[0] is not None else 0.0
                 return False, total
+
+            rem_after_b = max(0.0, round(amount - to_sub, 2))
+            if rem_after_b > 0:
+                async with db.execute(
+                    "SELECT rowid, balance FROM Users WHERE user_id = ? AND board_id != ? AND balance > 0",
+                    (user_id, b_id)
+                ) as c_rem:
+                    rows_rem = await c_rem.fetchall()
+                for r_id, b_val in rows_rem:
+                    if rem_after_b <= 0:
+                        break
+                    sub_val = min(float(b_val or 0.0), rem_after_b)
+                    await db.execute("UPDATE Users SET balance = ROUND(MAX(0.0, balance - ?), 2) WHERE rowid = ?", (sub_val, r_id))
+                    rem_after_b = max(0.0, round(rem_after_b - sub_val, 2))
         else:
             if curr_bal > 0:
                 await db.execute(
@@ -9376,10 +9396,10 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
                 if remaining <= 0:
                     break
                 to_sub = min(float(bal or 0.0), remaining)
-                await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ? AND balance >= ?", (to_sub, rowid, to_sub))
+                await db.execute("UPDATE Users SET balance = ROUND(MAX(0.0, balance - ?), 2) WHERE rowid = ?", (to_sub, rowid))
                 remaining -= to_sub
 
-            if remaining > 1e-5:
+            if remaining > 0.01:
                 # Прерываем операцию для полного отката
                 raise RuntimeError(f"Incomplete balance deduction for user {user_id}: remaining={remaining}")
 

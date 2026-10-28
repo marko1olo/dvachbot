@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import random
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -165,29 +166,39 @@ def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float
     """
     Парсит произвольный ввод суммы из чата:
     - Числа: 50000, 1000, 150.50, 150,50, "50 000"
-    - Сокращения: 50k, 50к, 1.5m, 1.5м
+    - Сокращения: 50k, 50к, 1.5m, 1.5м, 50кк, 50kk
     - Проценты: 25%, 50%, 75%, 100%
-    - Ключевые слова: all, все, всё, макс, max, пол, половина, half
-    - Валютные суффиксы: 50000 ₪, 1000 руб, 500 шекелей
+    - Ключевые слова: all, все, всё, макс, max, пол, половина, half, треть, четверть
+    - Валютные суффиксы: 50000 ₪, 1000 руб, 500 шекелей, 500р
     Возвращает float > 0 или None при ошибке парсинга.
     """
     if not raw_text or not isinstance(raw_text, str):
         return None
 
     txt = raw_text.strip().lower()
-    # Убираем валютные знаки и слова
-    for suffix in ["шекелей", "шекеля", "шекель", "шек", "рублей", "рубля", "руб", "р.", "р", "₪", "$"]:
-        txt = txt.replace(suffix, "").strip()
 
-    # Убираем внутренние пробелы (например: "50 000" -> "50000")
-    txt = txt.replace(" ", "").replace(",", ".")
+    # Сначала заменяем сленговые миллионные сокращения кк / kk
+    txt = re.sub(r'(\d+)\s*(?:кк|kk)', r'\g<1>m', txt)
+    txt = txt.replace("кк", "m").replace("kk", "m")
+
+    # Убираем валютные знаки и слова с аккуратной обработкой 'р' (чтобы не портить 'треть', 'четверть')
+    currency_patterns = [
+        r'\b(?:шекелей|шекеля|шекель|шекели|шек|рублей|рубля|руб|р\.)\b',
+        r'(?<=\d)\s*(?:р|₪|\$)',
+        r'[₪\$]',
+    ]
+    for pat in currency_patterns:
+        txt = re.sub(pat, "", txt)
+
+    # Убираем внутренние пробелы между цифрами (например: "50 000" -> "50000") и приводим запятую к точке
+    txt = re.sub(r'(?<=\d)\s+(?=\d)', '', txt).replace(" ", "").replace(",", ".")
 
     if not txt:
         return None
 
     # Ключевые слова
     if txt in ("all", "все", "всё", "макс", "max", "весь", "всю"):
-        return max(0.0, round(wallet_balance, 2))
+        return max(0.0, float(wallet_balance))
     if txt in ("half", "пол", "половина", "половину"):
         return max(0.0, round(wallet_balance * 0.5, 2))
     if txt in ("треть",):
@@ -201,6 +212,8 @@ def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float
             pct_val = float(txt[:-1])
             if math.isnan(pct_val) or math.isinf(pct_val) or pct_val <= 0 or pct_val > 100:
                 return None
+            if pct_val >= 99.999:
+                return max(0.0, float(wallet_balance))
             return max(0.0, round(wallet_balance * (pct_val / 100.0), 2))
         except (ValueError, OverflowError):
             return None
@@ -234,6 +247,9 @@ def parse_amount_and_tier(raw_text: str, default_tier: str = "sych") -> Optional
     text = raw_text.strip()
     if not text or text.startswith("/"):
         return None
+
+    # Сжимаем пробелы между цифрами ("1 000 000" -> "1000000")
+    text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)
 
     tokens = text.split()
     if len(tokens) > 4:
@@ -280,9 +296,9 @@ class PendingBankDepositFilter(BaseFilter):
         if not pending:
             return False
 
-        # Prevent cross-chat interception: only intercept in the chat where deposit wizard was opened
+        # Prevent cross-chat interception, but allow private chat (DM) fallback:
         target_chat_id = pending.get("chat_id")
-        if target_chat_id and message.chat.id != target_chat_id:
+        if target_chat_id and message.chat.id != target_chat_id and message.chat.type != "private":
             return False
 
         parsed = parse_amount_and_tier(message.text, default_tier=pending.get("tier_id", "sych"))
@@ -320,6 +336,8 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
     tier_info = get_tier_info(tier_id) or BANK_TIERS["sych"]
 
     principal = float(deposit.get("principal", 0.0))
+    if math.isnan(principal) or math.isinf(principal) or principal < 0:
+        principal = 0.0
     daily_rate = float(deposit.get("daily_rate", tier_info["daily_rate"]))
     base_accrued = float(deposit.get("accrued_interest", 0.0))
 
@@ -427,6 +445,11 @@ async def create_bank_deposit(
 
         if active_count >= MAX_ACTIVE_DEPOSITS_PER_USER:
             return False, None, f"Достигнут лимит активных вкладов ({active_count}/{MAX_ACTIVE_DEPOSITS_PER_USER} шт). Снимите старые вклады перед открытием новых."
+
+        # Auto-clamp micro float discrepancy (epsilon tolerance up to 0.01)
+        cur_bal = await get_user_global_balance(db, user_id)
+        if amount > cur_bal and (amount - cur_bal) <= 0.01:
+            amount = cur_bal
 
         ok, _ = await deduct_user_global_balance(db, user_id, b_id, amount)
         if not ok:
@@ -949,9 +972,9 @@ def build_deposit_presets_kb(tier_id: str, wallet_balance: float) -> Tuple[str, 
     tier_info = BANK_TIERS.get(tier_id, BANK_TIERS["sych"])
     min_dep = tier_info["min_deposit"]
 
-    p25 = max(min_dep, round(wallet_balance * 0.25, 2))
-    p50 = max(min_dep, round(wallet_balance * 0.50, 2))
-    p100 = max(min_dep, round(wallet_balance, 2))
+    p25 = max(min_dep, math.floor(wallet_balance * 0.25 * 100.0) / 100.0)
+    p50 = max(min_dep, math.floor(wallet_balance * 0.50 * 100.0) / 100.0)
+    p100 = max(min_dep, math.floor(wallet_balance * 100.0) / 100.0)
 
     text = (
         f"{tier_info['icon']} <b>ОФОРМЛЕНИЕ ВКЛАДА: {tier_info['name']}</b>\n\n"
@@ -964,9 +987,9 @@ def build_deposit_presets_kb(tier_id: str, wallet_balance: float) -> Tuple[str, 
 
     kb_rows = [
         [
-            InlineKeyboardButton(text=f"25% ({p25:,.0f} ₪)", callback_data=f"bank_do_deposit:{tier_id}:{p25}"),
-            InlineKeyboardButton(text=f"50% ({p50:,.0f} ₪)", callback_data=f"bank_do_deposit:{tier_id}:{p50}"),
-            InlineKeyboardButton(text=f"100% ({p100:,.0f} ₪)", callback_data=f"bank_do_deposit:{tier_id}:{p100}"),
+            InlineKeyboardButton(text=f"25% ({p25:,.0f} ₪)", callback_data=f"bank_do_deposit:{tier_id}:{p25:.2f}"),
+            InlineKeyboardButton(text=f"50% ({p50:,.0f} ₪)", callback_data=f"bank_do_deposit:{tier_id}:{p50:.2f}"),
+            InlineKeyboardButton(text=f"100% ({p100:,.0f} ₪)", callback_data=f"bank_do_deposit:{tier_id}:{p100:.2f}"),
         ],
         [
             InlineKeyboardButton(text="100 ₪", callback_data=f"bank_do_deposit:{tier_id}:100"),
@@ -992,44 +1015,52 @@ async def _render_bank_view(
     """Универсально отображает или обновляет представление Банка с сохранением клавиатуры."""
     try:
         if isinstance(target, types.CallbackQuery):
-            if target.message.caption is not None or target.message.photo:
-                # Если текст укладывается в 1024 символа (лимит caption в Telegram)
-                if len(text) <= 1024:
-                    try:
-                        await target.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-                        return
-                    except Exception as edit_err:
-                        if "not modified" in str(edit_err).lower():
+            msg = target.message
+            if isinstance(msg, types.Message):
+                if msg.caption is not None or msg.photo:
+                    # Если текст укладывается в 1024 символа (лимит caption в Telegram)
+                    if len(text) <= 1024:
+                        try:
+                            await msg.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
                             return
-                        logger.warning(f"[_render_bank_view] edit_caption failed: {edit_err}")
+                        except Exception as edit_err:
+                            if "not modified" in str(edit_err).lower():
+                                return
+                            logger.warning(f"[_render_bank_view] edit_caption failed: {edit_err}")
 
-                # Если edit_caption не удался или длина > 1024:
-                try:
-                    await target.message.delete()
-                except Exception:
-                    pass
-                from banner_manager import send_banner_message
-                await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-                return
-            elif target.message.text is not None:
-                if len(text) <= 4096:
+                    # Если edit_caption не удался или длина > 1024:
                     try:
-                        await target.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
-                        return
-                    except Exception as edit_err:
-                        if "not modified" in str(edit_err).lower():
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    from banner_manager import send_banner_message
+                    await send_banner_message(bot=target.bot, chat_id=msg.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                    return
+                elif msg.text is not None:
+                    if len(text) <= 4096:
+                        try:
+                            await msg.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
                             return
-                        logger.warning(f"[_render_bank_view] edit_text failed: {edit_err}")
-                try:
-                    await target.message.delete()
-                except Exception:
-                    pass
-                from banner_manager import send_banner_message
-                await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-                return
+                        except Exception as edit_err:
+                            if "not modified" in str(edit_err).lower():
+                                return
+                            logger.warning(f"[_render_bank_view] edit_text failed: {edit_err}")
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    from banner_manager import send_banner_message
+                    await send_banner_message(bot=target.bot, chat_id=msg.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                    return
+                else:
+                    from banner_manager import send_banner_message
+                    await send_banner_message(bot=target.bot, chat_id=msg.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                    return
             else:
+                # InaccessibleMessage or None: fallback to sending banner
                 from banner_manager import send_banner_message
-                await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+                chat_id = target.from_user.id
+                await send_banner_message(bot=target.bot, chat_id=chat_id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
                 return
         else:
             from banner_manager import send_banner_message
@@ -1042,7 +1073,11 @@ async def _render_bank_view(
         logger.warning(f"[_render_bank_view] primary render failed: {e}, attempting fallback")
         try:
             if isinstance(target, types.CallbackQuery):
-                await target.message.answer(text=text[:4000], reply_markup=kb, parse_mode="HTML")
+                msg = target.message
+                if isinstance(msg, types.Message):
+                    await msg.answer(text=text[:4000], reply_markup=kb, parse_mode="HTML")
+                else:
+                    await target.bot.send_message(chat_id=target.from_user.id, text=text[:4000], reply_markup=kb, parse_mode="HTML")
             else:
                 await target.answer(text=text[:4000], reply_markup=kb, parse_mode="HTML")
         except Exception as e2:
@@ -1079,19 +1114,33 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
         await message.answer("⛔ <b>Операция отклонена:</b> Вы находитесь в муте!", parse_mode="HTML")
         return
 
-    parts = (message.text or "").split()[1:]
+    raw_content = (message.text or "").strip()
+    cmd_parts = raw_content.split(maxsplit=1)
+    args_str = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
 
     # Если переданы аргументы: /deposit [сумма] [тариф]
-    if parts:
-        raw_amt = parts[0].lower().replace("к", "k").replace("₪", "").replace(",", ".")
+    if args_str:
+        clean_args = re.sub(r'(?<=\d)\s+(?=\d)', '', args_str)
+        parts = clean_args.split()
+
+        raw_amt = (
+            parts[0]
+            .lower()
+            .replace("кк", "m")
+            .replace("kk", "m")
+            .replace("к", "k")
+            .replace("м", "m")
+            .replace("₪", "")
+            .replace(",", ".")
+        )
         raw_tier = parts[1] if len(parts) > 1 else "sych"
 
         wallet_balance = await get_user_global_balance(db, user_id)
 
-        if raw_amt in ("all", "все", "всё"):
-            amount = wallet_balance
+        if raw_amt in ("all", "все", "всё", "макс", "max", "весь", "всю"):
+            amount = math.floor(wallet_balance * 100.0) / 100.0
         elif raw_amt in ("half", "пол", "половина"):
-            amount = round(wallet_balance / 2.0, 2)
+            amount = math.floor(wallet_balance * 0.5 * 100.0) / 100.0
         else:
             try:
                 if raw_amt.endswith("k"):
@@ -1298,7 +1347,6 @@ async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | No
 @bank_router.callback_query(F.data.startswith("bank_do_deposit:") | F.data.startswith("bank_dep_"))
 async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None = None):
     """Исполнение создания депозита по нажатию пресета."""
-    clear_user_pending_deposit(callback.from_user.id)
     b_id = board_id or "b"
     user_id = callback.from_user.id
     raw = callback.data
@@ -1315,10 +1363,10 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
         amt_str = parts[1]
         db_temp = await get_pool()
         w_bal = await get_user_global_balance(db_temp, user_id)
-        if amt_str == "all":
-            amount = w_bal
-        elif amt_str == "half":
-            amount = round(w_bal / 2.0, 2)
+        if amt_str in ("all", "все"):
+            amount = math.floor(w_bal * 100.0) / 100.0
+        elif amt_str in ("half", "пол"):
+            amount = math.floor(w_bal * 0.5 * 100.0) / 100.0
         else:
             amount = float(amt_str)
 
@@ -1326,8 +1374,11 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
     ok, dep, err = await create_bank_deposit(db, user_id, b_id, tier_id, amount)
 
     if not ok:
-        await callback.answer(f"❌ {err}", show_alert=True)
+        await callback.answer(f"❌ {err}"[:199], show_alert=True)
         return
+
+    # Clear pending state ONLY after successful creation
+    clear_user_pending_deposit(callback.from_user.id)
 
     tier_info = BANK_TIERS.get(dep["tier_id"], BANK_TIERS["sych"])
     text = (
@@ -1562,14 +1613,17 @@ async def handle_chat_deposit_amount(
         return
 
     if amount > wallet_balance:
-        await message.answer(
-            f"❌ <b>Недостаточно средств в кошельке!</b>\n\n"
-            f"💵 Запрошено внести: <code>{amount:,.2f} ₪</code>\n"
-            f"💰 Доступно в кошельке: <code>{wallet_balance:,.2f} ₪</code>\n\n"
-            f"<i>Напиши меньшую сумму или отправь <code>все</code> для внесения всего остатка.</i>",
-            parse_mode="HTML"
-        )
-        return
+        if (amount - wallet_balance) <= 0.01:
+            amount = wallet_balance
+        else:
+            await message.answer(
+                f"❌ <b>Недостаточно средств в кошельке!</b>\n\n"
+                f"💵 Запрошено внести: <code>{amount:,.2f} ₪</code>\n"
+                f"💰 Доступно в кошельке: <code>{wallet_balance:,.2f} ₪</code>\n\n"
+                f"<i>Напиши меньшую сумму или отправь <code>все</code> для внесения всего остатка.</i>",
+                parse_mode="HTML"
+            )
+            return
 
     if amount < tier_info["min_deposit"]:
         await message.answer(
