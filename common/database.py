@@ -2110,6 +2110,11 @@ async def create_post(
                                 if row:
                                     valid_reply_to = row[0]
                                     inherited_thread_id = row[1]
+                            if not inherited_thread_id and valid_reply_to:
+                                async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR op_id = ?", (str(valid_reply_to), valid_reply_to)) as tc:
+                                    trow = await tc.fetchone()
+                                    if trow:
+                                        inherited_thread_id = trow[0]
 
                         await db.execute(
                             """INSERT OR IGNORE INTO Users 

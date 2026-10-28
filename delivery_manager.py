@@ -2016,8 +2016,14 @@ async def site_posts_broadcaster():
                                     broadcast_content = _attach_site_media_for_delivery(broadcast_content, source_content)
                                     if post.get('reply_to_post_num'):
                                         broadcast_content['reply_to_post'] = post['reply_to_post_num']
+                                    bot_username = BOARD_CONFIG.get(board_id, {}).get('username', '').lstrip('@')
+                                    new_thread_buttons = [InlineKeyboardButton(text="🌐 Читать на tgach.top", url=site_url)]
+                                    if bot_username and board_id in THREAD_BOARDS:
+                                        new_thread_buttons.append(InlineKeyboardButton(text="🚀 Войти в тред", url=f"https://t.me/{bot_username}?start=thread_{post_num}"))
+                                    broadcast_keyboard = InlineKeyboardMarkup(inline_keyboard=[new_thread_buttons])
                                 else:
                                     broadcast_content = real_content
+                                    broadcast_keyboard = None
 
                                 # Запись в messages_storage — единственное, что здесь
                                 # действительно требует storage_lock. Короткий блок,
@@ -2033,6 +2039,20 @@ async def site_posts_broadcaster():
                                     }
                                     if MAX_MESSAGES_IN_MEMORY > 0:
                                         _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
+
+                                # Fire reply notifications for site posts mentioning TG users or quoting posts
+                                raw_site_text = source_content.get('text', '') or source_content.get('caption', '') or ''
+                                reply_to_site = post.get('reply_to_post_num')
+                                if not is_shadow_muted and (raw_site_text or reply_to_site):
+                                    from common.database import process_mentions_and_notify
+                                    from common.task_manager import spawn_task
+                                    spawn_task(process_mentions_and_notify(
+                                        source_post_num=post_num,
+                                        board_id=board_id,
+                                        text=raw_site_text,
+                                        author_id=author_id,
+                                        reply_to_ui=reply_to_site
+                                    ))
                         if skip_broadcast:
                             await mark_broadcast_posts_sent([post_num])
                             continue
@@ -2040,34 +2060,79 @@ async def site_posts_broadcaster():
                         if ENABLE_MULTILANG and board_id != 'int':
                             stream_users = await get_stream_active_users(board_id, post_stream)
                             base_recipients = base_recipients.intersection(stream_users)
-                        recipients = set()
-                        if is_new_thread or not thread_id:
-                            recipients = base_recipients
-                        else:
-                            thread_info = get_thread_info(board_id, str(thread_id))
-                            if thread_info:
-                                subs = thread_info.get('subscribers', set())
-                                recipients = subs.intersection(base_recipients)
+
                         g_bots = getattr(main, 'GLOBAL_BOTS', None) or getattr(shared_state, 'GLOBAL_BOTS', {})
                         has_worker = bool(g_bots.get(board_id) or board_id in board_data)
-                        if recipients and has_worker:
-                            enqueued = await enqueue_board_message(board_id, {
-                                'recipients': recipients,
-                                'content': broadcast_content,
-                                'post_num': post_num,
-                                'board_id': board_id,
-                                'thread_id': thread_id if not is_new_thread else None
-                            })
-                            if enqueued:
-                                await mark_broadcast_posts_sent([post_num])
+
+                        if is_new_thread or not thread_id:
+                            recipients = base_recipients
+                            if recipients and has_worker:
+                                enqueued = await enqueue_board_message(board_id, {
+                                    'recipients': recipients,
+                                    'content': broadcast_content,
+                                    'post_num': post_num,
+                                    'board_id': board_id,
+                                    'thread_id': None,
+                                    'keyboard': broadcast_keyboard
+                                })
+                                if enqueued:
+                                    await mark_broadcast_posts_sent([post_num])
+                                else:
+                                    runtime_logger.warning(
+                                        f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} "
+                                        f"(no active worker queue) — marking sent, post is in messages_storage"
+                                    )
+                                    await mark_broadcast_posts_sent([post_num])
                             else:
-                                # Воркер доски не запущен (race/crash). Пост уже в messages_storage.
-                                # Маркируем sent чтобы не зациклить повторные записи в storage каждые 5с.
-                                runtime_logger.warning(
-                                    f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} "
-                                    f"(no active worker queue) — marking sent, post is in messages_storage"
-                                )
                                 await mark_broadcast_posts_sent([post_num])
+                        else:
+                            # Thread reply post from website
+                            thread_info = get_thread_info(board_id, str(thread_id))
+                            subs = thread_info.get('subscribers', set()) if thread_info else set()
+                            thread_recipients = subs.intersection(base_recipients)
+                            board_recipients = base_recipients - subs
+
+                            # 1. Deliver to thread subscribers inside thread
+                            if thread_recipients and has_worker:
+                                await enqueue_board_message(board_id, {
+                                    'recipients': thread_recipients,
+                                    'content': broadcast_content,
+                                    'post_num': post_num,
+                                    'board_id': board_id,
+                                    'thread_id': thread_id
+                                })
+
+                            # 2. Broadcast to active board users without fanfare, with thread hyperlink and web button
+                            if board_recipients and has_worker:
+                                base_url = getattr(main, 'SITE_PUBLIC_BASE_URL', None) or SITE_PUBLIC_BASE_URL
+                                site_url = f"{base_url}/{board_id}/res/{thread_id}.html#{post_num}"
+                                t_title = thread_info.get('title') if thread_info else None
+                                safe_title = html.escape(t_title or f"Тред #{thread_id}")
+
+                                board_content = dict(broadcast_content)
+                                thread_link_line = f"\n\n🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+                                if board_content.get('text'):
+                                    board_content['text'] = board_content['text'] + thread_link_line
+                                elif board_content.get('caption') is not None:
+                                    board_content['caption'] = (board_content.get('caption') or '') + thread_link_line
+                                else:
+                                    board_content['caption'] = f"🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+
+                                board_btn_text = "Open on Website 🌐" if post_stream == 'en' else ("サイトで開く 🌐" if post_stream == 'jp' else "🌐 Открыть тред на сайте")
+                                board_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                    [InlineKeyboardButton(text=board_btn_text, url=site_url)]
+                                ])
+
+                                await enqueue_board_message(board_id, {
+                                    'recipients': board_recipients,
+                                    'content': board_content,
+                                    'post_num': post_num,
+                                    'board_id': board_id,
+                                    'thread_id': None,
+                                    'keyboard': board_keyboard
+                                })
+
+                            await mark_broadcast_posts_sent([post_num])
 
                             if (real_content.get('archive_allowed') or not real_content.get('archive_skip')) and not is_shadow_muted:
                                 bot_to_use = g_bots.get(board_id) or g_bots.get('b')
@@ -2079,8 +2144,6 @@ async def site_posts_broadcaster():
                                         content=real_content,
                                         is_shadow_muted=is_shadow_muted
                                     ))
-                        else:
-                            await mark_broadcast_posts_sent([post_num])
                     except Exception as item_err:
                         runtime_logger.error(f"[site_posts_broadcaster] Error processing broadcast item {post}: {item_err}", exc_info=True)
             await asyncio.sleep(5)

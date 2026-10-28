@@ -120,9 +120,20 @@ class NewPostProcessor:
         user_location = self.b_data.get('user_state', {}).get(self.user_id, {}).get('location', 'main')
         if self.board_id in THREAD_BOARDS and user_location != 'main':
             self.thread_id = user_location
+        elif self.board_id in THREAD_BOARDS and self.reply_to_post:
+            from common.database import get_thread_op_by_post_num
+            t_op = await get_thread_op_by_post_num(self.reply_to_post)
+            if t_op:
+                self.thread_id = str(t_op)
+
+        if self.board_id in THREAD_BOARDS and self.thread_id:
             thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
+            if not thread_info:
+                from common.thread_manager import get_thread_info
+                thread_info = get_thread_info(self.board_id, str(self.thread_id))
             if not thread_info or thread_info.get('is_archived'):
-                self.b_data.setdefault('user_state', {}).setdefault(self.user_id, {})['location'] = 'main'
+                if user_location != 'main':
+                    self.b_data.setdefault('user_state', {}).setdefault(self.user_id, {})['location'] = 'main'
                 lang = 'en' if self.board_id == 'int' else 'ru'
                 try:
                     await self.bot_instance.send_message(self.user_id, random.choice(thread_messages[lang]['thread_not_found']))
@@ -662,6 +673,52 @@ class NewPostProcessor:
                 'recipients': self.recipients, 'content': self.final_content, 'post_num': self.current_post_num,
                 'board_id': self.board_id, 'thread_id': self.thread_id
             })
+
+        # Broadcast thread post to active board users without fanfare, with thread hyperlink and web button
+        if not self.is_shadow_muted and self.thread_id and self.board_id in THREAD_BOARDS:
+            active_board_users = set(self.b_data.get('users', {}).get('active', set()))
+            banned_users = set(self.b_data.get('users', {}).get('banned', set()))
+            board_recipients = (active_board_users - self.recipients - {self.user_id}) - banned_users
+            if ENABLE_MULTILANG and self.board_id != 'int':
+                stream_users = await get_stream_active_users(self.board_id, self.stream)
+                board_recipients = board_recipients.intersection(stream_users)
+
+            if board_recipients:
+                from delivery_manager import enqueue_board_message
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
+                t_title = thread_info.get('title') if thread_info else None
+                if not t_title:
+                    from common.thread_manager import get_thread_info
+                    ti = get_thread_info(self.board_id, str(self.thread_id))
+                    t_title = ti.get('title') if ti else f"Тред #{self.thread_id}"
+                safe_title = escape_html(t_title or f"Тред #{self.thread_id}")
+                site_url = f"{SITE_PUBLIC_BASE_URL}/{self.board_id}/res/{self.thread_id}.html#{self.current_post_num}"
+
+                board_content = dict(self.final_content)
+                board_content['header'] = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
+
+                thread_link_line = f"\n\n🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+                if board_content.get('text'):
+                    board_content['text'] = board_content['text'] + thread_link_line
+                elif board_content.get('caption') is not None:
+                    board_content['caption'] = (board_content.get('caption') or '') + thread_link_line
+                else:
+                    board_content['caption'] = f"🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
+
+                board_btn_text = "Open on Website 🌐" if self.stream == 'en' else ("サイトで開く 🌐" if self.stream == 'jp' else "🌐 Открыть тред на сайте")
+                board_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=board_btn_text, url=site_url)]
+                ])
+
+                await enqueue_board_message(self.board_id, {
+                    'recipients': board_recipients,
+                    'content': board_content,
+                    'post_num': self.current_post_num,
+                    'board_id': self.board_id,
+                    'thread_id': None,
+                    'keyboard': board_keyboard
+                })
         should_archive = not self.is_shadow_muted and (self.final_content.get('archive_allowed') or not self.final_content.get('archive_skip'))
         if should_archive:
             spawn_task(_forward_post_to_realtime_archive(

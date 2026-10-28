@@ -20102,21 +20102,32 @@ class NewThreadPublicContext:
 async def _notify_new_thread_public(ctx: NewThreadPublicContext) -> None:
     """Notifies the board that a new thread has been created."""
     board_id, b_data, title, thread_id, lang, now_dt, stream = ctx.board_id, ctx.b_data, ctx.title, ctx.thread_id, ctx.lang, ctx.now_dt, ctx.stream
+    site_url = f"{SITE_PUBLIC_BASE_URL}/{board_id}/res/{thread_id}.html"
+    safe_title = html.escape(title)
+
     notification_phrases = thread_messages.get(lang, {}).get('new_thread_public_notification', [])
     if lang == 'en':
-        default_notification_text = f"New thread created: «<b>{title}</b>»"
+        default_notification_text = f"🌱 <b>New thread created:</b> <a href='{site_url}'>«{safe_title}»</a>"
+        button_text = "Enter Thread"
+        web_btn_text = "Read on Website 🌐"
     elif lang == 'jp':
-        default_notification_text = f"新スレが立ちました: «<b>{title}</b>»"
+        default_notification_text = f"🌱 <b>新スレが立ちました:</b> <a href='{site_url}'>«{safe_title}»</a>"
+        button_text = "スレを見る"
+        web_btn_text = "サイトで読む 🌐"
     else:
-        default_notification_text = f"Создан новый тред: «<b>{title}</b>»"
-    notification_text = random.choice(notification_phrases).format(title=title) if notification_phrases else default_notification_text
+        default_notification_text = f"🌱 <b>Создан новый тред:</b> <a href='{site_url}'>«{safe_title}»</a>"
+        button_text = "Войти в тред"
+        web_btn_text = "🌐 Читать на tgach.top"
+
+    notification_text = random.choice(notification_phrases).format(title=f"<a href='{site_url}'>{safe_title}</a>") if notification_phrases else default_notification_text
     bot_username = BOARD_CONFIG[board_id]['username'].lstrip('@')
     deeplink_url = f"https://t.me/{bot_username}?start=thread_{thread_id}"
-    if lang == 'en': button_text = "Enter Thread"
-    elif lang == 'jp': button_text = "スレを見る"
-    else: button_text = "Войти в тред"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=button_text, url=deeplink_url)]
+        [
+            InlineKeyboardButton(text="🚀 " + button_text, url=deeplink_url),
+            InlineKeyboardButton(text=web_btn_text, url=site_url)
+        ]
     ])
     content_notify = {'type': 'text', 'text': notification_text, 'is_system_message': True, 'archive_allowed': True}
     pnum_notify = await create_post(
@@ -20725,6 +20736,47 @@ async def reply_notifier_task():
                     reply_post_num = note['reply_post_num']    # Новый пост с ответом
                     async with storage_lock:
                         source_post_data = messages_storage.get(source_post_num)
+                        reply_post_data = messages_storage.get(reply_post_num)
+
+                    if not reply_post_data:
+                        try:
+                            from common.database import get_post_by_num
+                            p_row = await get_post_by_num(reply_post_num)
+                            if p_row and p_row.get('content'):
+                                reply_post_data = p_row
+                        except Exception:
+                            pass
+
+                    # Extract quote snippet from reply
+                    snippet = ""
+                    if reply_post_data:
+                        c_dict = reply_post_data.get('content')
+                        if isinstance(c_dict, str):
+                            try:
+                                import json
+                                c_dict = json.loads(c_dict)
+                            except Exception:
+                                c_dict = {}
+                        if isinstance(c_dict, dict):
+                            raw_snip = c_dict.get('text') or c_dict.get('caption') or ''
+                            if raw_snip:
+                                clean_snip = re.sub(r'<[^>]+>', '', raw_snip).strip()
+                                clean_snip = html.unescape(clean_snip)
+                                snippet = (clean_snip[:140] + "...") if len(clean_snip) > 140 else clean_snip
+                            elif c_dict.get('type') == 'photo':
+                                snippet = "[📷 Фото]"
+                            elif c_dict.get('type') == 'video':
+                                snippet = "[📹 Видео]"
+                            elif c_dict.get('type') == 'voice':
+                                snippet = "[🎤 Голосовое сообщение]"
+                            elif c_dict.get('type') == 'audio':
+                                snippet = "[🎧 Аудио]"
+                            elif c_dict.get('type') == 'sticker':
+                                snippet = "[🎭 Стикер]"
+                            elif c_dict.get('type') == 'document':
+                                snippet = "[📁 Документ]"
+                    if not snippet:
+                        snippet = "..."
 
                     board_id = (source_post_data.get('board_id') if source_post_data else None) or note.get('board_id')
                     if not board_id or board_id not in GLOBAL_BOTS: return
@@ -20738,6 +20790,22 @@ async def reply_notifier_task():
                     if not thread_id:
                         thread_id = source_post_num
 
+                    thread_title = None
+                    if board_id in THREAD_BOARDS and thread_id:
+                        thread_info = get_thread_info(board_id, str(thread_id))
+                        if thread_info:
+                            thread_title = thread_info.get('title')
+                        if not thread_title:
+                            try:
+                                from common.db_pool import get_pool
+                                db = await get_pool()
+                                async with db.execute("SELECT title FROM Threads WHERE thread_id = ?", (str(thread_id),)) as tc:
+                                    trow = await tc.fetchone()
+                                    if trow:
+                                        thread_title = trow[0]
+                            except Exception:
+                                pass
+
                     webapp_url = os.getenv("WEBAPP_URL", "https://tgach.top").rstrip('/')
                     if board_id in THREAD_BOARDS:
                         thread_url = f"{webapp_url}/{board_id}/res/{thread_id}.html#post-{reply_post_num}"
@@ -20747,17 +20815,31 @@ async def reply_notifier_task():
                     bot_username = BOARD_CONFIG.get(board_id, {}).get('username', '').lstrip('@')
 
                     if lang == 'en':
-                        text = f"📢 Someone replied to your post >>{source_post_num} with post >>{reply_post_num}"
                         web_btn_text = "Read on Website 🌐"
                         tg_btn_text = "Open in Telegram 💬"
                     elif lang == 'jp':
-                        text = f"📢 あなたの投稿 >>{source_post_num} に返信 >>{reply_post_num} が届きました"
                         web_btn_text = "サイトで読む 🌐"
                         tg_btn_text = "Telegramで開く 💬"
                     else:
-                        text = f"📢 На ваш пост >>{source_post_num} ответили постом >>{reply_post_num}"
                         web_btn_text = "Читать на сайте 🌐"
                         tg_btn_text = "Открыть в Telegram 💬"
+
+                    safe_snippet = html.escape(snippet)
+                    if thread_title:
+                        safe_title = html.escape(thread_title)
+                        if lang == 'en':
+                            text = f"💬 <b>Anon replied to your post >>{source_post_num} in thread «{safe_title}»:</b>\n\n<blockquote>{safe_snippet}</blockquote>"
+                        elif lang == 'jp':
+                            text = f"💬 <b>スレッド「{safe_title}」であなたの投稿 >>{source_post_num} に返信がありました:</b>\n\n<blockquote>{safe_snippet}</blockquote>"
+                        else:
+                            text = f"💬 <b>Анон ответил на твой пост >>{source_post_num} в треде «{safe_title}»:</b>\n\n<blockquote>{safe_snippet}</blockquote>"
+                    else:
+                        if lang == 'en':
+                            text = f"💬 <b>Anon replied to your post >>{source_post_num}:</b>\n\n<blockquote>{safe_snippet}</blockquote>"
+                        elif lang == 'jp':
+                            text = f"💬 <b>あなたの投稿 >>{source_post_num} に返信がありました:</b>\n\n<blockquote>{safe_snippet}</blockquote>"
+                        else:
+                            text = f"💬 <b>Анон ответил на твой пост >>{source_post_num}:</b>\n\n<blockquote>{safe_snippet}</blockquote>"
 
                     buttons = []
                     if bot_username and board_id in THREAD_BOARDS and thread_id:
@@ -20766,8 +20848,9 @@ async def reply_notifier_task():
                     buttons.append(InlineKeyboardButton(text=web_btn_text, url=thread_url))
 
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons])
+                    sent_msg = None
                     try:
-                        await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
+                        sent_msg = await bot_instance.send_message(recipient_id, text, reply_markup=keyboard, parse_mode="HTML")
                     except TelegramForbiddenError:
                         try:
                             await purge_users_from_board_ram(board_id, [recipient_id])
@@ -20777,7 +20860,7 @@ async def reply_notifier_task():
                         delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
                         await asyncio.sleep(delay)
                         try:
-                            await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
+                            sent_msg = await bot_instance.send_message(recipient_id, text, reply_markup=keyboard, parse_mode="HTML")
                         except TelegramForbiddenError:
                             try:
                                 await purge_users_from_board_ram(board_id, [recipient_id])
@@ -20789,6 +20872,10 @@ async def reply_notifier_task():
                         runtime_logger.warning("TelegramBadRequest notifying recipient %s: %s", recipient_id, e)
                     except Exception as e:
                         runtime_logger.warning("Ошибка уведомления %s: %s", recipient_id, e)
+
+                    if sent_msg:
+                        async with storage_lock:
+                            message_to_post[(recipient_id, sent_msg.message_id)] = reply_post_num
                 tasks = [send_one_notification(n) for n in notifications]
                 await asyncio.gather(*tasks)
             await asyncio.sleep(25)

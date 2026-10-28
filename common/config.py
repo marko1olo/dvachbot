@@ -69,7 +69,7 @@ BOT_CONTEXTUAL_REPLY_DAILY_LIMIT = int(os.getenv("BOT_CONTEXTUAL_REPLY_DAILY_LIM
 ENABLE_MULTILANG = False
 
 # --- НАСТРОЙКИ УВЕДОМЛЕНИЙ ОБ ОТВЕТАХ В ЛС (REPLY NOTIFICATIONS) ---
-ENABLE_REPLY_NOTIFICATIONS = os.getenv("ENABLE_REPLY_NOTIFICATIONS", "0").lower() in {"1", "true", "yes", "on"}
+ENABLE_REPLY_NOTIFICATIONS = os.getenv("ENABLE_REPLY_NOTIFICATIONS", "1").lower() not in {"0", "false", "no", "off"}
 
 # Карта каналов для сохранения файлов (Stream -> Channel ID)
 # Теперь os.getenv точно сработает, так как load_dotenv был вызван выше
