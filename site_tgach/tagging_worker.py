@@ -1303,6 +1303,20 @@ async def tagging_loop():
                     logger.info(
                         f"🖼 [BG_TAGGER] ✅ {(file_type or 'media').upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'"
                     )
+
+                    # === АВТО-ЗАЩИТА ОТ КОПРО / ГУРО (>=2 СТРАЙКОВ = ЛОКДАУН) ===
+                    if save_success and tags and "error" not in tags:
+                        try:
+                            from extreme_defense_engine import process_file_extreme_defense
+                            primary_bot = global_bot_pool.get_main_bot() if hasattr(global_bot_pool, 'get_main_bot') else None
+                            spawn_task(process_file_extreme_defense(
+                                bot=primary_bot,
+                                file_id=file_id,
+                                tags=tags,
+                                description=description or ""
+                            ))
+                        except Exception as ext_err:
+                            logger.warning(f"Extreme defense trigger error: {ext_err}")
                 except Exception as e:
                     logger.error(
                         f"❌ [BG_TAGGER] DB Save error for {file_id[:12]}: {e}",

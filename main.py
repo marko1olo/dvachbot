@@ -2708,11 +2708,20 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 async with db.execute(query_channels, (posts_json,)) as cursor:
                     channel_messages_to_delete = await cursor.fetchall()
 
-                await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                # Delete all child tables referencing Posts FIRST to prevent FOREIGN KEY constraint failed
+                await db.execute("DELETE FROM PostFiles WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
                 await db.execute("DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
                 await db.execute("DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
                 await db.execute("DELETE FROM BroadcastQueue WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM DeliveryQueue WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM ModQueue WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM PollVotes WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM Reports WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM NotificationQueue WHERE source_post_num IN (SELECT value FROM json_each(?)) OR reply_post_num IN (SELECT value FROM json_each(?))", (posts_json, posts_json))
+                await db.execute("DELETE FROM Backlinks WHERE source_post_num IN (SELECT value FROM json_each(?)) OR target_post_num IN (SELECT value FROM json_each(?))", (posts_json, posts_json))
                 await db.execute("DELETE FROM UserReplies WHERE post_num IN (SELECT value FROM json_each(?)) OR parent_num IN (SELECT value FROM json_each(?))", (posts_json, posts_json))
+                await db.execute("UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
 
                 if threads_to_delete:
                     threads_json = json.dumps(threads_to_delete)
@@ -2724,7 +2733,7 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
             if "locked" in str(e).lower() or "busy" in str(e).lower():
                 pass
             else:
-                print(f"⛔ DB Error in delete_user_posts: {e}")
+                runtime_logger.error(f"⛔ DB Error in delete_user_posts: {e}", exc_info=True)
                 return [], [], []
         # Backoff outside db_lock
         await asyncio.sleep(0.2 * (attempt + 1))
@@ -14939,7 +14948,8 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     """
     Снимает БАН и ТЕНЕВОЙ МУТ с пользователя СРАЗУ НА ВСЕХ досках.
     """
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
@@ -14990,7 +15000,8 @@ async def cmd_global_unmute(message: types.Message, board_id: str | None, stream
     """
     Админская команда для полного снятия глобального мута (board_id = 'ALL') и мутов со всех досок.
     """
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
@@ -15214,12 +15225,14 @@ async def cmd_toggle_ai_slop(message: types.Message, board_id: str | None, strea
         await message.answer(err)
 @dp.message(Command("whois", "info"))
 async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         try:
             await message.delete()
         except Exception:
             pass
         return
+    if not board_id:
+        board_id = 'b'
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
@@ -17713,8 +17726,8 @@ async def cmd_bot_stats(message: types.Message):
 
 @dp.message(Command("gban"))
 async def cmd_gban(message: types.Message, board_id: str | None, stream: str = 'ru'):
-
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
@@ -17759,7 +17772,8 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
     """
     Выдает ТЕНЕВОЙ МУТ пользователю СРАЗУ НА ВСЕХ досках.
     """
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "24h"
@@ -17864,7 +17878,8 @@ async def cmd_search(message: types.Message, board_id: str | None, stream: str =
     await message.answer("\n".join(response_lines), parse_mode="HTML")
 @dp.message(Command("airdrop"))
 async def cmd_airdrop(message: Message, board_id: str | None):
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     try: await message.delete()
     except Exception: pass
 
@@ -18311,7 +18326,8 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
 
 @dp.message(Command("addmoney"))
 async def cmd_add_money_admin(message: Message, board_id: str | None):
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     try: await message.delete()
     except Exception: pass
 
@@ -22511,13 +22527,20 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
     except Exception: pass
 @dp.message(Command("shadowmute"))
 async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         return
+    if not board_id:
+        board_id = 'b'
     args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
+        target_post_num = await get_post_num_by_reply(message)
+        if target_post_num:
+            db_p = await get_post_by_num(target_post_num)
+            if db_p and db_p.get('board_id'):
+                board_id = db_p.get('board_id')
         if args:
             duration_str = args[0]
     elif args:
@@ -23020,7 +23043,8 @@ async def callback_gen_invite_pic(callback: types.CallbackQuery, board_id: str |
 
 @dp.message(Command("queues"))
 async def cmd_check_queues(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     from common.database import get_system_queue_counts
     db_stats = await get_system_queue_counts()
     runtime_snapshot = _collect_runtime_snapshot()
@@ -24625,9 +24649,17 @@ async def _process_stacked_anime_command(
 
 @dp.message(Command("del", "delete", "rm", "удалить"))
 async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
     user_id = message.from_user.id
     target_msg = message.reply_to_message
+    if not board_id:
+        if target_msg:
+            info = await get_post_info_by_copy(target_msg.chat.id, target_msg.message_id)
+            if info:
+                db_p = await get_post_by_num(info[0])
+                if db_p and db_p.get('board_id'):
+                    board_id = db_p.get('board_id')
+        if not board_id:
+            board_id = 'b'
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
 
     if not target_msg:
@@ -25218,9 +25250,7 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id:
-        try: await message.delete()
-        except TelegramBadRequest: pass
-        return
+        board_id = 'b'
     if not is_admin(message.from_user.id, board_id):
         lang = 'en' if board_id == 'int' else 'ru'
         contact_url = "https://t.me/voprosy?start=rba30"
@@ -25299,8 +25329,10 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
     await _safe_delete_user_message(message)
 @dp.message(Command("lockdown"))
 async def cmd_bot_lockdown(message: Message, board_id: str | None):
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         return
+    if not board_id:
+        board_id = 'b'
     args = (message.text or message.caption or "").split()
     if len(args) < 2:
         await message.answer("Использование: `/lockdown on` или `/lockdown off`", parse_mode="Markdown")
@@ -25314,10 +25346,12 @@ async def cmd_bot_lockdown(message: Message, board_id: str | None):
 @dp.message(Command("togglereactions"))
 async def cmd_togglereactions(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         try: await message.delete()
         except TelegramBadRequest: pass
         return
+    if not board_id:
+        board_id = 'b'
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
@@ -25378,15 +25412,17 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
 @dp.message(Command("reactions"))
 async def cmd_reactions(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         try: await message.delete()
         except TelegramBadRequest: pass
         return
+    if not board_id:
+        board_id = 'b'
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        if lang == 'en': msg = "Reply to a message to use this: <code>/sdel</code>"
-        elif lang == 'jp': msg = "返信して使ってください: <code>/sdel</code>"
-        else: msg = "⚠️ Ответьте на сообщение, которое хотите тихо удалить: <code>/sdel</code>"
+        if lang == 'en': msg = "Reply to a message to use this: <code>/reactions</code>"
+        elif lang == 'jp': msg = "返信して使ってください: <code>/reactions</code>"
+        else: msg = "⚠️ Ответьте на сообщение, реакции которого хотите посмотреть: <code>/reactions</code>"
         await message.answer(msg, parse_mode="HTML")
         try: await message.delete()
         except TelegramBadRequest: pass
@@ -25455,10 +25491,12 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
 @dp.message(Command("filter"))
 async def cmd_filter(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         try: await message.delete()
         except TelegramBadRequest: pass
         return
+    if not board_id:
+        board_id = 'b'
     b_data = board_data[board_id]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     parts = (message.text or message.caption or "").split(maxsplit=2)
@@ -25986,10 +26024,12 @@ async def get_post_num_by_reply(msg: types.Message) -> int | None:
 @dp.message(Command("id"))
 async def cmd_get_id(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    if not board_id: return
     if not is_admin(message.from_user.id, board_id):
-        await message.delete()
+        try: await message.delete()
+        except Exception: pass
         return
+    if not board_id:
+        board_id = 'b'
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     target_id = message.from_user.id
     if lang == 'en': info_header = "🆔 <b>Info about you:</b>\n\n"
@@ -26040,12 +26080,17 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
 
 @dp.message(Command("ban"))
 async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not is_admin(message.from_user.id, board_id): return
+    if not board_id: board_id = 'b'
     target_id = None
     target_post_num = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
         target_post_num = await get_post_num_by_reply(message)
+        if target_post_num:
+            db_p = await get_post_by_num(target_post_num)
+            if db_p and db_p.get('board_id'):
+                board_id = db_p.get('board_id')
     parts = (message.text or message.caption or "").split()
     if len(parts) >= 2:
         raw_target = parts[1].lstrip('#').strip()
@@ -26055,6 +26100,8 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
             if db_p and 'author_id' in db_p:
                 target_id = db_p['author_id']
                 target_post_num = val
+                if db_p.get('board_id'):
+                    board_id = db_p.get('board_id')
             else:
                 target_id = val
     if not target_id:
@@ -26074,18 +26121,21 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     except Exception: pass
 
 async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int):
+    if not board_id or board_id == 'None':
+        board_id = 'b'
     # При бане удаляем посты спамера за последние 24 часа (1440 минут)
     deleted_posts = await delete_user_posts(bot, target_id, 1440, board_id)
     await log_global_event('bot', f"🔨 BAN: Мод {admin_id} забанил {target_id} на /{board_id}/ (удалено {deleted_posts} пст)")
     async with storage_lock:
-        b_data = board_data[board_id]
-        b_data['users']['banned'].add(target_id)
-        b_data['users']['active'].discard(target_id)
+        b_data = board_data.get(board_id) or board_data.get('b', {})
+        if 'users' in b_data:
+            b_data['users']['banned'].add(target_id)
+            b_data['users']['active'].discard(target_id)
         caches_to_clean = [
-            b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
-            b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'],
-            b_data['spam_tracker'], b_data['last_user_msgs'], b_data['message_counter'],
-            b_data['user_state'], b_data['mutes'], b_data['shadow_mutes']
+            b_data.get('last_activity', {}), b_data.get('last_texts', {}), b_data.get('last_stickers', {}),
+            b_data.get('last_animations', {}), b_data.get('last_audios', {}), b_data.get('spam_violations', {}),
+            b_data.get('spam_tracker', {}), b_data.get('last_user_msgs', {}), b_data.get('message_counter', {}),
+            b_data.get('user_state', {}), b_data.get('mutes', {}), b_data.get('shadow_mutes', {})
         ]
         if 'user_settings' in b_data:
              b_data['user_settings'].pop(target_id, None)
@@ -26093,7 +26143,7 @@ async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int
             cache.pop(target_id, None)
     await update_user_status(target_id, board_id, 'banned')
     lang = 'en' if board_id == 'int' else 'ru'
-    board_name = BOARD_CONFIG[board_id]['name']
+    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
     anon_name = generate_anon_name(target_id)
     if lang == 'en':
         response_text = f"✅ Faggot <b>{anon_name}</b> has been banned from {board_name}.\nDeleted posts: {deleted_posts}"
@@ -26104,10 +26154,12 @@ async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int
 
 @dp.message(Command("wipe", "вайп", "сжечь", "потереть"))
 async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         try: await message.delete()
         except Exception: pass
         return
+    if not board_id:
+        board_id = 'b'
     command_args = (message.text or message.caption or "").split()[1:]
     target_id = None
     target_post_num = None
@@ -26115,6 +26167,10 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
         target_post_num = await get_post_num_by_reply(message)
+        if target_post_num:
+            db_p = await get_post_by_num(target_post_num)
+            if db_p and db_p.get('board_id'):
+                board_id = db_p.get('board_id')
         if command_args: duration_str = command_args[0]
     elif command_args:
         raw_target = command_args[0].lstrip('#').strip()
@@ -26124,6 +26180,8 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
             if db_p and 'author_id' in db_p:
                 target_id = db_p['author_id']
                 target_post_num = val
+                if db_p.get('board_id'):
+                    board_id = db_p.get('board_id')
             else:
                 target_id = val
             if len(command_args) > 1: duration_str = command_args[1]
@@ -26166,6 +26224,8 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     except Exception: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
+    if not board_id or board_id == 'None':
+        board_id = 'b'
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
     except Exception: pass
 
@@ -26215,6 +26275,8 @@ async def on_admin_action(callback: types.CallbackQuery):
     try:
         target_id = int(parts[2])
         board_id = parts[3]
+        if not board_id or board_id == 'None':
+            board_id = 'b'
     except (ValueError, IndexError):
         await callback.answer("Ошибка параметров")
         return
@@ -26237,8 +26299,10 @@ async def on_admin_action(callback: types.CallbackQuery):
         await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)
 @dp.message(Command("restrict_anime"))
 async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         return
+    if not board_id:
+        board_id = 'b'
 
     target_id = None
     args = (message.text or message.caption or "").split()
@@ -26422,26 +26486,43 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
     """
     "Теневое" удаление поста. Удаляет все копии сообщения, кроме
     копии у автора оригинального поста. Доступно только админам.
+    Поддерживает reply или номер поста: /sdel <post_num>.
     """
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         try: await message.delete()
         except TelegramBadRequest: pass
         return
+    if not board_id:
+        board_id = 'b'
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    if not message.reply_to_message:
-        if lang == 'en': msg = "Reply to a message to use this: <code>/sdel</code>"
-        elif lang == 'jp': msg = "返信して使ってください: <code>/sdel</code>"
-        else: msg = "⚠️ Ответьте на сообщение, которое хотите тихо удалить: <code>/sdel</code>"
+
+    post_num = None
+    author_id = None
+    if message.reply_to_message:
+        post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
+        if post_info:
+            post_num, author_id = post_info
+    else:
+        args = (message.text or message.caption or "").split()[1:]
+        if args:
+            raw_target = args[0].lstrip('#').strip()
+            if raw_target.isdigit():
+                val = int(raw_target)
+                db_p = await get_post_by_num(val)
+                if db_p:
+                    post_num = val
+                    author_id = db_p.get('author_id')
+                    if db_p.get('board_id'):
+                        board_id = db_p.get('board_id')
+
+    if not post_num:
+        if lang == 'en': msg = "Reply to a message or provide post number: <code>/sdel &lt;post_num&gt;</code>"
+        elif lang == 'jp': msg = "返信するか投稿番号を指定してください: <code>/sdel &lt;post_num&gt;</code>"
+        else: msg = "⚠️ Ответьте на сообщение или укажите номер поста: <code>/sdel &lt;номер_поста&gt;</code>"
         await message.answer(msg, parse_mode="HTML")
-        await message.delete()
+        try: await message.delete()
+        except Exception: pass
         return
-    post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-    if not post_info:
-        err = "Post not found in DB." if lang == 'en' else "Не удалось найти исходный пост в базе данных."
-        await message.answer(err)
-        await message.delete()
-        return
-    post_num, author_id = post_info
     all_copies = await get_post_copies(post_num)
     if not all_copies:
         err = f"No copies found for #{post_num}." if lang == 'en' else f"Не найдено отправленных копий для поста #{post_num}."
@@ -26503,8 +26584,10 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
         pass
 @dp.message(Command("unban"))
 async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
+    if not is_admin(message.from_user.id, board_id):
         return
+    if not board_id:
+        board_id = 'b'
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     target_id = None
     if message.reply_to_message:

@@ -1679,6 +1679,29 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
             pass
         return False
 
+    # 0.5 Known Extreme Content (Copro / Guro) Pre-check
+    if f_id and raw_content_type in ('photo', 'video', 'animation', 'document'):
+        try:
+            from extreme_defense_engine import classify_extreme_media, process_file_extreme_defense
+            db = await get_pool()
+            async with db.execute("SELECT tags, description FROM FileRegistry WHERE file_id = ? LIMIT 1", (f_id,)) as cur:
+                fr_row = await cur.fetchone()
+            if fr_row and fr_row[0]:
+                is_ext, ext_cat, ext_reason = classify_extreme_media(fr_row[0], fr_row[1] or "")
+                if is_ext:
+                    logger.warning(f"🚫 [EXTREME_MEDIA_FAST_BLOCK] user={user_id} file={f_id} matched {ext_cat} ({ext_reason})")
+                    spawn_task(process_file_extreme_defense(
+                        bot=msg.bot,
+                        file_id=f_id,
+                        tags=fr_row[0],
+                        description=fr_row[1] or "",
+                        author_id=user_id,
+                        board_id=board_id
+                    ))
+                    return True  # Route to process_shadow_reject!
+        except Exception as fr_err:
+            pass
+
     msg_date_ts = msg.date.timestamp() if getattr(msg, 'date', None) else time.time()
     media_group_id = getattr(msg, 'media_group_id', None)
     is_media = raw_content_type in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'video_note')
