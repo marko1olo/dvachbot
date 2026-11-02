@@ -11334,37 +11334,42 @@ const PostRenderer = {
         const files = data.content.files || [];
         if (files.length > 0) {
             const f = files[0];
-            const isVid = ['video', 'gif', 'animation', 'video_note'].includes(f.type);
-            const mediaUrl = f.original_url || (f.original_file_id ? `/files/${f.original_file_id}` : "") || "";
-            const thumbUrl = f.thumbnail_url || (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : mediaUrl) || "";
-            
-            if (typeof FailedMediaCache !== 'undefined' && ((mediaUrl && FailedMediaCache.isFailed(mediaUrl)) || (thumbUrl && FailedMediaCache.isFailed(thumbUrl)))) {
-                thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center;"><img src="/static/img/mascot/mascot_confused.png" style="max-height:48px; width:auto; opacity:0.6;" alt="Недоступно"></div>`;
-            } else if (isVid) {
-                const vidUrl = mediaUrl;
-                // Use overlay img (NOT poster=) to avoid browser black rect on 404
-                const thumbForOverlay = f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.thumbnail_url || '');
-                if (vidUrl) {
-                    const hue = (parseInt(String(threadId).slice(-4), 10) * 137) % 360;
-                    const vidBg = `hsl(${hue},55%,35%)`;
-                    const overlayHtml = thumbForOverlay
-                        ? `<img src="${thumbForOverlay}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:1;" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`
-                        : `<div style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;display:flex;align-items:center;justify-content:center;"><span style="font-size:2em;">🎬</span></div>`;
-                    thumbHtml = `
-                        <div class="catalog-thumb lazy-media-wrapper" data-src="${vidUrl}" data-file-id="${f.original_file_id || ''}" data-type="video" style="background-color:${vidBg};">
-                            ${overlayHtml}
-                            <video class="lazy-load${blurClass}" preload="none" muted playsinline loop data-src="${vidUrl}" style="width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;z-index:2;opacity:0;transition:opacity 0.3s;"></video>
-                            <span class="lazy-badge" style="position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,0.6);color:white;padding:2px 4px;font-size:10px;border-radius:3px;z-index:3;">VIDEO</span>
-                        </div>`;
-                } else {
-                     thumbHtml = `<div class="catalog-thumb" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em;">⏳</span></div>`;
-                }
+            const isBroken = f.is_broken === true || f.download_failed === true || f.tags === 'download_failed' || f.tags === 'error';
+            if (isBroken) {
+                thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><img src="/static/img/mascot/mascot_confused.png" style="max-height:48px; width:auto; opacity:0.6;" alt="Недоступно"></div>`;
             } else {
-                const imgUrl = thumbUrl || mediaUrl;
-                if (imgUrl) {
-                    thumbHtml = `<div class="catalog-thumb"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="${imgUrl}" class="lazy-load${blurClass}" style="width: 100%; height: 100%; object-fit: cover;" referrerpolicy="no-referrer"></div>`;
+                const isVid = ['video', 'gif', 'animation', 'video_note'].includes(f.type);
+                const mediaUrl = f.original_url || (f.original_file_id ? `/files/${f.original_file_id}` : "") || "";
+                const thumbUrl = f.thumbnail_url || (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : mediaUrl) || "";
+                
+                if (typeof FailedMediaCache !== 'undefined' && ((mediaUrl && FailedMediaCache.isFailed(mediaUrl)) || (thumbUrl && FailedMediaCache.isFailed(thumbUrl)))) {
+                    thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center;"><img src="/static/img/mascot/mascot_confused.png" style="max-height:48px; width:auto; opacity:0.6;" alt="Недоступно"></div>`;
+                } else if (isVid) {
+                    const vidUrl = mediaUrl;
+                    // Use overlay img (NOT poster=) to avoid browser black rect on 404
+                    const thumbForOverlay = f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.thumbnail_url || '');
+                    if (vidUrl) {
+                        const hue = (parseInt(String(threadId).slice(-4), 10) * 137) % 360;
+                        const vidBg = `hsl(${hue},55%,35%)`;
+                        const overlayHtml = thumbForOverlay
+                            ? `<img src="${thumbForOverlay}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:1;" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`
+                            : `<div style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;display:flex;align-items:center;justify-content:center;"><span style="font-size:2em;">🎬</span></div>`;
+                        thumbHtml = `
+                            <div class="catalog-thumb lazy-media-wrapper" data-src="${vidUrl}" data-file-id="${f.original_file_id || ''}" data-type="video" style="background-color:${vidBg};">
+                                ${overlayHtml}
+                                <video class="lazy-load${blurClass}" preload="none" muted playsinline loop data-src="${vidUrl}" style="width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;z-index:2;opacity:0;transition:opacity 0.3s;"></video>
+                                <span class="lazy-badge" style="position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,0.6);color:white;padding:2px 4px;font-size:10px;border-radius:3px;z-index:3;">VIDEO</span>
+                            </div>`;
+                    } else {
+                         thumbHtml = `<div class="catalog-thumb" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em;">⏳</span></div>`;
+                    }
                 } else {
-                    thumbHtml = `<div class="catalog-thumb" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em">🖼️</span></div>`;
+                    const imgUrl = thumbUrl || mediaUrl;
+                    if (imgUrl) {
+                        thumbHtml = `<div class="catalog-thumb"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="${imgUrl}" data-file-id="${f.original_file_id || ''}" class="lazy-load${blurClass}" style="width: 100%; height: 100%; object-fit: cover;" referrerpolicy="no-referrer" onerror="handleImageError(this)"></div>`;
+                    } else {
+                        thumbHtml = `<div class="catalog-thumb" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em">🖼️</span></div>`;
+                    }
                 }
             }
         } else {

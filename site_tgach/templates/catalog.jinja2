@@ -162,9 +162,9 @@
                     {% if thread.content.files and thread.content.files[0] %}
                         {% set file0 = thread.content.files[0] %}
                         {# thumb_strict: ONLY real thumbnail, never falls back to video original - avoids black poster #}
-                        {% set thumb_strict = (file0.thumbnail_file_id and '/files/' ~ file0.thumbnail_file_id) or (file0.thumbnail_url and not 'api.telegram.org' in file0.thumbnail_url and file0.thumbnail_url) %}
-                        {% set thumb_url = thumb_strict or (file0.original_file_id and '/files/' ~ file0.original_file_id) or (file0.original_url and not 'api.telegram.org' in file0.original_url and file0.original_url) %}
-                        {% set orig_url = (file0.original_file_id and '/files/' ~ file0.original_file_id) or (file0.original_url and not 'api.telegram.org' in file0.original_url and file0.original_url) %}
+                        {% set thumb_strict = (file0.thumbnail_url and not 'api.telegram.org' in file0.thumbnail_url and file0.thumbnail_url) or (file0.thumbnail_file_id and '/files/' ~ file0.thumbnail_file_id) %}
+                        {% set orig_url = (file0.original_url and not 'api.telegram.org' in file0.original_url and file0.original_url) or (file0.original_file_id and '/files/' ~ file0.original_file_id) %}
+                        {% set thumb_url = thumb_strict or orig_url %}
                         {% if thumb_url or orig_url %}
                             {% if file0.type in ['video', 'video_note', 'animation', 'gif'] %}
                                 <div class="catalog-thumb lazy-media-wrapper"

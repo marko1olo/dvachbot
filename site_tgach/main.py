@@ -514,11 +514,18 @@ def is_ip_restricted(ip_str: str) -> bool:
 
 async def is_request_from_ru(request: Request) -> bool:
     cookie_country = request.cookies.get("user_country")
-    if cookie_country:
+    if cookie_country and cookie_country != "XX":
         return cookie_country == "RU"
-    ip = get_real_ip(request)
-    country = await get_country_by_ip(ip)
-    return country == "RU"
+    client_ip = get_real_ip(request)
+    country = await get_country_by_ip(client_ip)
+    if country and country != "XX":
+        return country == "RU"
+    if client_ip in ("127.0.0.1", "localhost", "::1") or not country or country == "XX":
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            return True
+        return False
+    return False
 
 
 from logging.handlers import RotatingFileHandler
@@ -3562,6 +3569,17 @@ def _select_mirror_strategically(
     if "ibb.co" in base_thumbnail_url or "imgbb" in base_thumbnail_url:
         base_thumbnail_url = ""
 
+    fid = file_info.get("original_file_id")
+    safe_name = file_info.get("filename") or file_info.get("name")
+    if not base_original_url and fid:
+        base_original_url = f"/files/{fid}/{safe_name}" if safe_name else f"/files/{fid}"
+    tid = file_info.get("thumbnail_file_id")
+    if not base_thumbnail_url:
+        if tid:
+            base_thumbnail_url = f"/files/{tid}/{safe_name}" if safe_name else f"/files/{tid}"
+        elif base_original_url:
+            base_thumbnail_url = base_original_url
+
     # Проверка R2 CDN
     r2_candidate = mirrors.get("r2") or mirrors.get("r2_url")
     hf_candidate = mirrors.get("huggingface")
@@ -3581,11 +3599,9 @@ def _select_mirror_strategically(
         else:
             selected_original = base_original_url
     else:
-        # Для RU-IP: Приоритет HF или Telegram
+        # Для RU-IP: Приоритет HF или локальный прокси Telegram/сервера
         if hf_valid:
             selected_original = hf_candidate
-        elif zeroxzero_candidate:
-            selected_original = zeroxzero_candidate
         else:
             selected_original = base_original_url
 
@@ -3612,8 +3628,6 @@ def _select_mirror_strategically(
         else:
             if hf_thumb_valid:
                 selected_thumbnail = hf_thumb
-            elif zeroxzero_thumb:
-                selected_thumbnail = zeroxzero_thumb
             else:
                 selected_thumbnail = base_thumbnail_url
 
@@ -4186,11 +4200,13 @@ async def enrich_heavy_data(posts: List[dict]):
             get_mirrors_batch,
             get_duplicate_counts,
             get_blurhashes_batch,
+            get_failed_files_batch,
         )
 
         tasks.append(get_duplicate_counts(all_fids))
         tasks.append(get_blurhashes_batch(all_fids))
         tasks.append(get_mirrors_batch(all_fids))
+        tasks.append(get_failed_files_batch(all_fids))
 
     if poll_post_ids:
         from common.database import get_poll_results_batch
@@ -4217,6 +4233,7 @@ async def enrich_heavy_data(posts: List[dict]):
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     dupe_map, blur_map, mirror_map = {}, {}, {}
+    failed_set = set()
     res_idx = 0
     if all_fids:
         dupe_map = (
@@ -4229,6 +4246,13 @@ async def enrich_heavy_data(posts: List[dict]):
         res_idx += 1
         mirror_map = (
             results[res_idx] if not isinstance(results[res_idx], Exception) else {}
+        )
+        res_idx += 1
+        failed_set = (
+            results[res_idx]
+            if not isinstance(results[res_idx], Exception)
+            and isinstance(results[res_idx], (set, list, tuple))
+            else set()
         )
         res_idx += 1
 
@@ -4271,10 +4295,23 @@ async def enrich_heavy_data(posts: List[dict]):
                 f["blurhash"] = blur_map.get(fid)
                 f["dupe_count"] = dupe_map.get(fid, 0)
 
-                # Сохраняем зеркала в скрытые поля для фазы гидратации
-                f["_mirrors"] = mirror_map.get(fid, {})
                 tid = f.get("thumbnail_file_id")
-                f["_thumb_mirrors"] = mirror_map.get(tid, {}) if tid else {}
+                is_orig_failed = (
+                    (fid in failed_set)
+                    or f.get("is_broken")
+                    or (f.get("tags") in ("download_failed", "error"))
+                )
+                is_thumb_failed = (tid in failed_set) if tid else False
+
+                if is_orig_failed:
+                    f["is_broken"] = True
+                    f["download_failed"] = True
+                    f["original_url"] = ""
+                    f["thumbnail_url"] = ""
+                else:
+                    # Сохраняем зеркала в скрытые поля для фазы гидратации
+                    f["_mirrors"] = mirror_map.get(fid, {})
+                    f["_thumb_mirrors"] = mirror_map.get(tid, {}) if tid else {}
 
         if p.get("content", {}).get("files"):
             attach_file_meta(p["content"]["files"])
@@ -4325,6 +4362,10 @@ def finalize_posts_for_user(
         # 3. Выбор зеркал
         def apply_urls(file_list):
             for f in file_list:
+                if f.get("is_broken") or f.get("download_failed"):
+                    f["original_url"] = ""
+                    f["thumbnail_url"] = ""
+                    continue
                 mirrors = f.get("_mirrors", {})
                 thumb_mirrors = f.get("_thumb_mirrors", {})
                 f["original_url"], f["thumbnail_url"] = _select_mirror_strategically(
@@ -9447,7 +9488,7 @@ async def api_get_catalog(
     current_version = BOARD_VERSIONS[board_id]
     stream = getattr(request.state, "stream", "ru")
     selected_boards_str = ",".join(sorted(request.query_params.getlist("boards")))
-    cache_key = f"api_catalog_v3:{board_id}:{sort}:{stream}:{current_version}:{selected_boards_str}"
+    cache_key = f"api_catalog_v4:{board_id}:{sort}:{stream}:{current_version}:{selected_boards_str}"
     backend = FastAPICache.get_backend()
     cached = await backend.get(cache_key)
     if cached:
@@ -10873,14 +10914,8 @@ async def get_telegram_file(
     skipped_types = [s.strip().lower() for s in skip.split(",") if s.strip()] if skip else []
     in_fallback = bool(skipped_types) or request.query_params.get("fallback") == "1"
 
-    # Динамическое определение страны по IP
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
+    # Динамическое определение страны
+    is_ru = await is_request_from_ru(request)
 
     # Заголовки против кэширования редиректов
     no_cache_headers = {
@@ -11527,14 +11562,7 @@ async def main_serve():
 
 @app.get("/api/is-ru")
 async def check_if_ru(request: Request):
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
-    return {"is_ru": is_ru}
+    return {"is_ru": await is_request_from_ru(request)}
 
 
 if __name__ == "__main__":

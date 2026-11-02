@@ -296,8 +296,8 @@
                         <div class="post-files-container post-gallery">
                             {% for file in op_post.content.files %}
                                 {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
-                                    {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
+                                    {% set file_orig_src = file.original_url or (file.original_file_id and '/files/' ~ file.original_file_id) %}
+                                    {% set file_thumb_src = file.thumbnail_url or (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url or (file.original_file_id and '/files/' ~ file.original_file_id) %}
                                     {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
                                         <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                             {% if file.blurhash %}
@@ -306,7 +306,7 @@
                                             <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                 data-src="{{ file_thumb_src }}" 
                                                 data-file-id="{{ file.original_file_id }}"
-                                                class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ op_post.id }}] {{ op_post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';" onerror="handleImageError(this)">
+                                                class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ op_post.id }}] {{ op_post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onerror="handleImageError(this)">
                                             <noscript><img src="{{ file_orig_src }}" alt="[Пост /{{ board_id }}/ #{{ op_post.id }}] {{ op_post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
@@ -370,7 +370,7 @@
                         <div class="post-audios-container">
                             {% for file in op_post.content.files %}
                                 {% if file.type in ['audio', 'voice', 'document'] %}
-                                    {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                                    {% set file_orig_src = file.original_url or (file.original_file_id and '/files/' ~ file.original_file_id) %}
                                     {% if file.type == 'audio' or file.type == 'voice' %}
                                         {% set unique_id = 'audio-' ~ op_post.id ~ '-' ~ loop.index %}
                                         <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file_orig_src }}">
@@ -550,8 +550,8 @@
                                 <div class="post-files-container post-gallery">
                                     {% for file in reply.content.files %}
                                         {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
-                                                {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                                {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
+                                                {% set file_orig_src = file.original_url or (file.original_file_id and '/files/' ~ file.original_file_id) %}
+                                                {% set file_thumb_src = file.thumbnail_url or (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url or (file.original_file_id and '/files/' ~ file.original_file_id) %}
                                                 {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
                                                     <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                                         {% if file.blurhash %}
@@ -560,7 +560,7 @@
                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file_thumb_src }}" 
                                                             data-file-id="{{ file.original_file_id }}"
-                                                            class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';" onerror="handleImageError(this)">
+                                                            class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onerror="handleImageError(this)">
                                                         <noscript><img src="{{ file_orig_src }}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
@@ -624,7 +624,7 @@
                                 <div class="post-audios-container">
                                     {% for file in reply.content.files %}
                                         {% if file.type in ['audio', 'voice', 'document'] %}
-                                            {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                                            {% set file_orig_src = file.original_url or (file.original_file_id and '/files/' ~ file.original_file_id) %}
                                             {% if file.type == 'audio' or file.type == 'voice' %}
                                                 {% set unique_id = 'audio-' ~ reply.id ~ '-' ~ loop.index %}
                                                 <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file_orig_src }}">
