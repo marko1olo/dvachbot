@@ -4584,7 +4584,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                 f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
             )
     else:
-        # Спонтанная интервенция в срач — строго проверяем кулдаун >= 3600с на доску!
+        # Спонтанная интервенция в срач — кулдаун >= 1200с (20 мин) на доску
         last_interv = _LAST_SPONTANEOUS_CYBERCHAD_INTERVENTION.get(board_id, 0.0)
         if now - last_interv < 3600.0:
             return
@@ -4601,7 +4601,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                     msg_low = msg_txt.lower()
                     if any(re.search(pat, msg_low) for pat in aggro_patterns):
                         aggro_count += 1
-                if aggro_count >= 3:
+                if aggro_count >= 2:
                     should_intervene = True
                     is_direct_mode = False
 

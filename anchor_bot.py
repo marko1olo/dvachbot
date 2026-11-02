@@ -25,9 +25,9 @@ if TYPE_CHECKING:
 # ──────────────────────────────────────────
 # TUNABLE CONSTANTS
 # ──────────────────────────────────────────
-MSG_INTERVAL: int = 115          # fire after every N messages on a board
-MIN_INTERVAL_SEC: float = 1800.0 # but no sooner than 30 min since last post
-MAX_PER_HOUR: int = 2            # hard cap: max posts per board per hour
+MSG_INTERVAL: int = 40           # fire after every N messages on a board (tuned from 115)
+MIN_INTERVAL_SEC: float = 600.0  # no sooner than 10 min since last post (tuned from 1800s)
+MAX_PER_HOUR: int = 4            # hard cap: max posts per board per hour (tuned from 2)
 CONTEXT_WINDOW: int = 15         # how many recent messages to sample for context
 
 # ──────────────────────────────────────────
@@ -63,12 +63,19 @@ def anchor_tick(board_id: str) -> bool:
     Side-effect: increments the per-board counter and sets cooldown timestamps synchronously.
     """
     _msg_counter[board_id] += 1
+    now = time.time()
 
-    if _msg_counter[board_id] < MSG_INTERVAL:
+    time_since_last = now - _last_anchor_ts[board_id]
+    if time_since_last < MIN_INTERVAL_SEC:
         return False
 
-    now = time.time()
-    if now - _last_anchor_ts[board_id] < MIN_INTERVAL_SEC:
+    # Trigger conditions:
+    # 1. Fast active flow: reached MSG_INTERVAL (40) messages
+    # 2. Steady flow: reached >= 10 messages AND >= 1200s (20 min) since last post
+    is_count_trigger = (_msg_counter[board_id] >= MSG_INTERVAL)
+    is_time_trigger = (time_since_last >= 1200.0 and _msg_counter[board_id] >= 10)
+
+    if not (is_count_trigger or is_time_trigger):
         return False
 
     _prune_hourly(board_id, now)
