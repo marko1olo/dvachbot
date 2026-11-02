@@ -366,7 +366,6 @@ from common.database import (
     get_chat_posts_for_board,
     get_global_chat_posts,
     log_global_event,
-    get_db_connection,
     get_all_media_from_thread,
     sync_boards_with_config,
     get_thread_ids_for_posts,
@@ -414,7 +413,45 @@ from site_tgach.backup import backup_loop
 from site_tgach.importer import process_import_queue
 from site_tgach.neuro_scanner import scanner_loop, SCANNER_TRIGGER
 import asyncio
-from common.db_pool import create_pool, close_pool, get_pool, wal_checkpoint_truncate
+from common.db_pool import create_pool, close_pool, get_pool, wal_checkpoint_truncate, db_lock
+
+
+class PooledConnectionContext:
+    """
+    Высокопроизводительный пул-адаптер соединения для site_tgach.
+    Вместо создания нового aiosqlite.connect() и исполнения 8 PRAGMA-запросов на каждый HTTP-вызов,
+    переиспользует активное соединение из common.db_pool.get_pool().
+    Гарантирует автоматический откат (ROLLBACK) зависшей транзакции при исключениях и отсутствие утечек ресурсов.
+    """
+    __slots__ = ("_conn",)
+
+    def __init__(self):
+        self._conn = None
+
+    async def __aenter__(self):
+        self._conn = await get_pool()
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None and self._conn is not None:
+            try:
+                in_tx = getattr(self._conn, "in_transaction", False)
+                if not in_tx:
+                    raw_conn = getattr(self._conn, "_conn", None)
+                    if raw_conn:
+                        in_tx = getattr(raw_conn, "in_transaction", False)
+                if in_tx:
+                    await self._conn.execute("ROLLBACK")
+            except Exception:
+                pass
+        self._conn = None
+
+    def __await__(self):
+        return get_pool().__await__()
+
+
+def get_db_connection():
+    return PooledConnectionContext()
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.image_processing import process_and_upload_image
 from site_tgach.mirror_health import is_hf_link_allowed
@@ -2442,7 +2479,7 @@ class CachedStaticFiles(StaticFiles):
 
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)
-        resp.headers["Cache-Control"] = "public, max-age=31536000"
+        resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
         return resp
 
 
@@ -2486,7 +2523,7 @@ app.mount(
     name="static",
 )
 templates = Jinja2Templates(directory=os.path.join(site_root, "templates"))
-templates.env.globals["static_version"] = "10.1"
+templates.env.globals["static_version"] = "10.2"
 app.state.templates = templates
 
 from site_tgach.stats_api import router as stats_v2_router
@@ -8655,7 +8692,6 @@ async def api_import_thread(
     log_system_event(
         f"Запущен импорт ({mode}): {url} -> /{board_id}/ [{target_stream}]"
     )
-    from common.database import get_db_connection
     import time
 
     try:
@@ -8683,8 +8719,6 @@ class CancelImportRequest(BaseModel):
 async def api_get_active_simulations(user: dict = Depends(get_required_user)):
     if not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Forbidden")
-
-    from common.database import get_db_connection
 
     simulations = []
 
@@ -8717,7 +8751,6 @@ async def api_cancel_simulation(
     if not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    from common.database import get_db_connection
     from common.db_pool import db_lock
 
     async with db_lock, get_db_connection() as conn:
@@ -9595,7 +9628,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
 
     # 4. Сохраняем в кэш БД
     try:
-        async with get_db_connection() as conn:
+        async with db_lock, get_db_connection() as conn:
             await conn.execute(
                 "INSERT OR REPLACE INTO VoiceTranscriptions (file_id, transcription, created_at) VALUES (?, ?, ?)",
                 (file_id, transcription_text, time.time()),
