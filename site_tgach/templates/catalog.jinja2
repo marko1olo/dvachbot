@@ -21,7 +21,8 @@
     <meta property="og:description" content="Каталог тредов раздела /{{ board_id }}/ — {{ board_info.description }}">
     <meta property="og:url" content="{{ request.url }}">
     <meta property="og:image" content="{{ request.base_url }}static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=10.1">
+    <link rel="preload" href="/static/fonts/Roboto.woff2" as="font" type="font/woff2" crossorigin>
+        <link rel="stylesheet" href="/static/css/style.css?v=10.1">
     <link rel="icon" href="/static/favicon.ico">
     <link rel="alternate" type="application/rss+xml" title="RSS ТГАЧ - {{ board_info.name }}" href="/{{ board_id }}/rss.xml">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>

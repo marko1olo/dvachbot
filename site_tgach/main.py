@@ -45,6 +45,8 @@ import faulthandler
 import hashlib
 import io
 import mimetypes
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 import random
 import secrets
 
@@ -62,6 +64,7 @@ from common.secret_redaction import (
     install_logging_redaction,
 )
 from site_tgach.mirror_worker import close_internal_file_bots, process_mirror_queue
+_VIDEO_THUMB_SEMAPHORE = asyncio.Semaphore(2)
 from site_tgach.tagging_worker import tagging_loop
 import logging
 from collections import defaultdict
@@ -2180,36 +2183,13 @@ async def custom_access_log_middleware(request: Request, call_next):
         )
     client_ip = get_real_ip(request)
 
-    timestamp = datetime.now().strftime("%H:%M:%S")
     status_code = response.status_code
     if path.startswith("/files/") and status_code < 400:
-        print(f"[{timestamp}] {client_ip:<13} file accepted ({process_time:.0f}ms)")
         return response
-    status_color = "\033[32m"
-    if status_code >= 500:
-        status_color = "\033[31m"
-    elif status_code >= 400:
-        status_color = "\033[33m"
-    elif status_code >= 300:
-        status_color = "\033[36m"
-    reset_color = "\033[0m"
-    redirect_tag = ""
-    if status_code in (307, 302, 301) and "location" in response.headers:
-        loc = response.headers["location"]
-        if "huggingface.co" in loc:
-            redirect_tag = " \033[33m-> [HF]\033[0m"
-        elif "catbox.moe" in loc:
-            redirect_tag = " \033[35m-> [CB]\033[0m"
-        elif "0x0.st" in loc:
-            redirect_tag = " \033[36m-> [0x0]\033[0m"
-        elif "api.telegram.org" in loc:
-            redirect_tag = " \033[34m-> [TG]\033[0m"
-        else:
-            redirect_tag = " -> [OTHER]"
-
-    print(
-        f"[{timestamp}] {client_ip:<13} {request.method} {request.url.path} {status_color}{status_code}{reset_color}{redirect_tag} ({process_time:.0f}ms)"
-    )
+    if status_code >= 400:
+        logger.info(f"[{client_ip}] {request.method} {request.url.path} -> {status_code} ({process_time:.0f}ms)")
+    elif logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"[{client_ip}] {request.method} {request.url.path} -> {status_code} ({process_time:.0f}ms)")
     return response
 
 
@@ -2280,6 +2260,25 @@ def is_bot_by_headers(request: Request) -> bool:
     return False
 
 
+_BLACKLIST_SET: set[str] = set()
+_BLACKLIST_RAW_PREV: str = ""
+_WHITELIST_SET: set[str] = set()
+_WHITELIST_RAW_PREV: str = ""
+
+def get_blacklist_set(raw: str) -> set[str]:
+    global _BLACKLIST_SET, _BLACKLIST_RAW_PREV
+    if raw != _BLACKLIST_RAW_PREV:
+        _BLACKLIST_SET = {x.strip() for x in raw.split(",") if x.strip()}
+        _BLACKLIST_RAW_PREV = raw
+    return _BLACKLIST_SET
+
+def get_whitelist_set(raw: str) -> set[str]:
+    global _WHITELIST_SET, _WHITELIST_RAW_PREV
+    if raw != _WHITELIST_RAW_PREV:
+        _WHITELIST_SET = {x.strip() for x in raw.split(",") if x.strip()}
+        _WHITELIST_RAW_PREV = raw
+    return _WHITELIST_SET
+
 @app.middleware("http")
 async def ddos_guard_middleware(request: Request, call_next):
     # 1. Сначала получаем IP
@@ -2292,17 +2291,12 @@ async def ddos_guard_middleware(request: Request, call_next):
 
     # 2. Потом проверяем черный список
     blacklist_raw = await get_setting_cached("ip_blacklist") or ""
-    if client_ip in blacklist_raw.split(","):
+    if blacklist_raw and client_ip in get_blacklist_set(blacklist_raw):
         return Response("Banned by AI security", status_code=403)
 
-    # Здесь вычислялось is_tor (принадлежность client_ip к TOR_EXIT_NODES) и
-    # больше нигде не использовалось - особой обработки выходных узлов Tor в
-    # этом middleware нет. Убрано: проверка шла на КАЖДЫЙ HTTP-запрос.
-    # Если такая политика нужна, её надо вводить осознанно, а не оживлять
-    # мёртвую переменную.
     # 1. Проверка белого списка (кэшированная настройка из БД)
     whitelist_raw = await get_setting_cached("ip_whitelist") or ""
-    if client_ip in whitelist_raw.split(","):
+    if whitelist_raw and client_ip in get_whitelist_set(whitelist_raw):
         return await call_next(request)
 
     # 2. Ручной троллинг (если ты добавил IP в список через админку)
@@ -10880,19 +10874,22 @@ async def get_telegram_file(
                                 v_bytes = await v_resp.read()
                     if v_bytes:
                         from site_tgach.tagging_worker import extract_video_frame_cpu
-                        jpeg_bytes = await asyncio.to_thread(extract_video_frame_cpu, v_bytes)
+                        async with _VIDEO_THUMB_SEMAPHORE:
+                            jpeg_bytes = await asyncio.to_thread(extract_video_frame_cpu, v_bytes)
                         if jpeg_bytes:
                             try:
-                                os.makedirs(os.path.join("data", "thumbnails"), exist_ok=True)
-                                with open(thumb_disk_path, "wb") as f_out:
-                                    f_out.write(jpeg_bytes)
+                                def _save_thumb_file(p_out, b_data):
+                                    os.makedirs(os.path.dirname(p_out), exist_ok=True)
+                                    with open(p_out, "wb") as f_out:
+                                        f_out.write(b_data)
+                                await asyncio.to_thread(_save_thumb_file, thumb_disk_path, jpeg_bytes)
                             except Exception as e:
                                 logger.warning(f"Failed to cache extracted thumbnail: {e}")
                             return Response(
                                 content=jpeg_bytes,
                                 media_type="image/jpeg",
                                 headers={
-                                    "Cache-Control": "public, max-age=86400",
+                                    "Cache-Control": "public, max-age=2592000, immutable",
                                     "Access-Control-Allow-Origin": "*",
                                 },
                             )
