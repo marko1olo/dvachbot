@@ -3435,6 +3435,7 @@ def format_post_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
+    text = re.sub(r'(?:\r?\n)*🧵\s*(?:<|&lt;)a\s+href=[^>]+(?:>|&gt;).*?(?:<|&lt;)/a(?:>|&gt;)', '', text, flags=re.IGNORECASE)
     text = _apply_xss_protection(text)
     text = html.escape(text, quote=True)
     text = _apply_bbcode_and_effects(text)
@@ -3958,6 +3959,9 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
         if raw_text is None:
             raw_text = ""
             content["text"] = ""
+        elif raw_text:
+            raw_text = re.sub(r'(?:\r?\n)*🧵\s*(?:<|&lt;)a\s+href=[^>]+(?:>|&gt;).*?(?:<|&lt;)/a(?:>|&gt;)', '', raw_text, flags=re.IGNORECASE)
+            content["text"] = raw_text
         has_text = bool(str(raw_text).strip())
         has_files = bool(content.get("files"))
         if current_type != "poll":

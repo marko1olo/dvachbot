@@ -22,7 +22,7 @@
  * @function checkIfVideoIsNote - Checks if a video element should be treated as a note based on its dimensions and duration.
  * @function showToast - Displays a toast notification with a message for a specified duration.
  */
-/*
+/*!
 ............/´¯/)................(\¯`\..................
 .........../...//....ЗДОХНИ.......\\...\................
 ........../...//......ФАШИСТ.......\\...\...............
@@ -278,6 +278,7 @@ function cleanUrlAndSuffix(full) {
 
 window.formatTextGlobal = (text, opId = null, boardId = null, threadId = null) => {
     if (!text) return "";
+    text = text.replace(/(?:\r?\n)*🧵\s*(?:<|&lt;)a\s+href=[^>]+(?:>|&gt;).*?(?:<|&lt;)\/a(?:>|&gt;)/gi, "");
     let s = text.replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
@@ -491,8 +492,18 @@ function checkIfVideoIsNote(video) {
         video.pause();
     }
 }
-let notificationSound = new Audio('/static/sounds/not.mp3');
-notificationSound.volume = 0.5;
+let _notAudio = null;
+const notificationSound = {
+    volume: 0.5,
+    cloneNode: function() {
+        if (!_notAudio) {
+            _notAudio = new Audio('/static/sounds/not.mp3');
+        }
+        const clone = _notAudio.cloneNode();
+        clone.volume = this.volume;
+        return clone;
+    }
+};
 function showToast(message, duration = CONSTANTS.TOAST_DURATION) {
     let container = document.getElementById('toast-container');
     if (!container) {
@@ -5137,8 +5148,19 @@ const MascotManager = {
         this.wrapper.append(this.bubble, this.body);
     },
     preloadEssentials() {
-        const toLoad = [...this.db.idle, ...this.db.walk, ...this.db.drag_start];
-        toLoad.forEach(src => { const i = new Image(); i.src = this.basePath + src; });
+        if (this.db.idle && this.db.idle.length > 0) {
+            const first = new Image();
+            first.src = this.basePath + this.db.idle[0];
+        }
+        const scheduleRemaining = () => {
+            const toLoad = [...(this.db.idle || []).slice(1), ...(this.db.walk || []), ...(this.db.drag_start || [])];
+            toLoad.forEach(src => { const i = new Image(); i.src = this.basePath + src; });
+        };
+        if ('requestIdleCallback' in window) {
+            window.requestIdleCallback(scheduleRemaining, { timeout: 4000 });
+        } else {
+            setTimeout(scheduleRemaining, 3500);
+        }
     },
     setImg(filename, instant = false) {
         if (!this.imgFront || !this.imgBack) return;
@@ -13952,7 +13974,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log("⚠️ App already initialized, skipping...");
         return;
     }
-    SpankAudioManager.init();
+    // SpankAudioManager is deferred and lazy-initializes on first user play()
     window.isTgachInitialized = true;
     const overlay = document.getElementById('modal-overlay');
     if (overlay) {

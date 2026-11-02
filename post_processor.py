@@ -428,13 +428,8 @@ class NewPostProcessor:
                 site_url = f"{SITE_PUBLIC_BASE_URL}/{self.board_id}/res/{self.referenced_thread_id}.html#{self.current_post_num}"
 
                 thread_link_line = f"\n\n🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
-                if self.final_content.get('text'):
-                    self.final_content['text'] = self.final_content['text'] + thread_link_line
-                elif self.final_content.get('caption') is not None:
-                    self.final_content['caption'] = (self.final_content.get('caption') or '') + thread_link_line
-                else:
-                    self.final_content['caption'] = f"🧵 <a href=\"{site_url}\">[Тред: {safe_title}]</a>"
-
+                # Keep final_content clean for web/database persistence.
+                # Only append thread_link_line to author_content for Telegram private notifications.
                 if self.author_content.get('text'):
                     self.author_content['text'] = self.author_content['text'] + thread_link_line
                 elif self.author_content.get('caption') is not None:
