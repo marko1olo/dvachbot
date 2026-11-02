@@ -14957,6 +14957,9 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
         try: await message.delete()
@@ -15009,6 +15012,9 @@ async def cmd_global_unmute(message: types.Message, board_id: str | None, stream
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
         try: await message.delete()
@@ -15240,6 +15246,9 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("ID needed." if lang == 'en' else "Нужен ID.")
         return
@@ -17735,6 +17744,9 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
         try: await message.delete()
@@ -17788,6 +17800,9 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
                 duration_str = args[1]
         except ValueError: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         if lang == 'en': usage = "Usage: <code>/gshadowmute &lt;id&gt; [time]</code> or reply."
         elif lang == 'jp': usage = "使用法: <code>/gshadowmute &lt;ID&gt; [時間]</code> または返信。"
@@ -20302,6 +20317,9 @@ async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: s
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай."))
         return
@@ -20337,6 +20355,9 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай."))
         return
@@ -20372,6 +20393,9 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай."))
         return
@@ -20410,6 +20434,9 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
         try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("Need ID or reply: /lie &lt;id&gt;" if lang == 'en' else "Need ID or reply: /lie &lt;id&gt;")
         return
@@ -22551,6 +22578,9 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
         except ValueError:
             pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         if lang == 'en':
             usage = "Usage: <code>/shadowmute &lt;user_id&gt; [time]</code> or reply."
@@ -24708,6 +24738,9 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
     if not post_num:
         info = await get_post_info_by_copy(target_msg.chat.id, target_msg.message_id)
         if info: post_num = info[0]
+    if not post_num:
+        from post_helpers import extract_post_num_from_message
+        post_num = extract_post_num_from_message(target_msg)
 
     # 2. Проверка возраста поста и защиты фольгой (только для обычных дворников)
     if is_janitor and not admin_status:
@@ -25229,6 +25262,9 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
         except ValueError:
             pass
 
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         await message.answer("⚠️ Ответьте на сообщение юзера или укажите его ID: <code>/troll &lt;ID&gt;</code>", parse_mode="HTML")
         return
@@ -25361,6 +25397,9 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
             try: target_id = int(parts[1])
             except ValueError: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         if lang == 'en':
             usage = "Usage: <code>/togglereactions &lt;user_id&gt;</code> or reply."
@@ -25958,44 +25997,61 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
     post_num = None
+
+    # 1. Поиск по RAM
     async with storage_lock:
         post_num = message_to_post.get(lookup_key)
         if post_num and post_num in messages_storage:
             author_id = messages_storage[post_num].get("author_id")
             if author_id is not None:
                 return author_id
+
+    # 2. Поиск по metadata через post_helpers (zero-width, entities, regex)
+    from post_helpers import extract_post_num_from_message
+    extracted_num = extract_post_num_from_message(msg.reply_to_message)
+    if extracted_num:
+        post_num = extracted_num
+        db_post = await get_post_by_num(post_num)
+        if db_post and 'author_id' in db_post and db_post['author_id'] is not None:
+            return db_post['author_id']
+
+    # 3. Поиск по копиям сообщений (PostCopies / ChannelCopies)
     if not post_num:
         info = await get_post_info_by_copy(target_chat_id, reply_mid)
         if info:
             post_num = info[0]
             if info[1] is not None:
                 return info[1]
+
+    # 4. Фолбэк на таблицу ChannelCopies напрямую
+    try:
+        db = await get_pool()
+        async with db.execute(
+            "SELECT p.author_id, p.post_num FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?",
+            (target_chat_id, reply_mid)
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row[0] is not None:
+                return row[0]
+    except Exception:
+        pass
+
+    # 5. Текстовый парсинг
     if not post_num:
         from common.text_utils import extract_post_num_from_message_text
         reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
         extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
         if extracted_pnum:
             post_num = extracted_pnum
+
     if post_num:
         db_post = await get_post_by_num(post_num)
-        if db_post and 'author_id' in db_post:
+        if db_post and 'author_id' in db_post and db_post['author_id'] is not None:
             return db_post['author_id']
+
     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
     if db_author_id is not None:
         return db_author_id
-
-    # Фолбэк на таблицу ChannelCopies
-    try:
-        db = await get_pool()
-        async with db.execute(
-            "SELECT p.author_id FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?",
-            (target_chat_id, reply_mid)
-        ) as cur:
-            row = await cur.fetchone()
-            if row and row[0]:
-                return row[0]
-    except Exception:
-        pass
 
     if reply_user and reply_user.is_bot:
         return 0
@@ -26008,18 +26064,44 @@ async def get_post_num_by_reply(msg: types.Message) -> int | None:
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
+
+    # 1. RAM storage lookup
     async with storage_lock:
         pnum = message_to_post.get(lookup_key)
         if pnum:
             return pnum
+
+    # 2. Extract from message using zero-width invisible unicode, entities or header regex
+    from post_helpers import extract_post_num_from_message
+    extracted_num = extract_post_num_from_message(msg.reply_to_message)
+    if extracted_num:
+        return extracted_num
+
+    # 3. PostCopies / ChannelCopies lookup via get_post_info_by_copy
     info = await get_post_info_by_copy(target_chat_id, reply_mid)
-    if info:
+    if info and info[0]:
         return info[0]
+
+    # 4. Direct ChannelCopies query fallback
+    try:
+        db = await get_pool()
+        async with db.execute(
+            "SELECT post_num FROM ChannelCopies WHERE channel_id = ? AND message_id = ?",
+            (target_chat_id, reply_mid)
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception:
+        pass
+
+    # 5. Fallback extract from text
     from common.text_utils import extract_post_num_from_message_text
     reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
     extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
     if extracted_pnum:
         return extracted_pnum
+
     return None
 @dp.message(Command("id"))
 async def cmd_get_id(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -26039,11 +26121,25 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
         replied_author_id = None
         replied_author_id = await get_author_id_by_reply(message)
         if replied_author_id == 0:
-            msg = "ℹ️ System message (bot)." if lang == 'en' else ("ℹ️ システムメッセージ（ボット）。" if lang == 'jp' else "ℹ️ Вы ответили на системное сообщение (автор: бот).")
-            await message.answer(msg)
-            await message.delete()
+            pnum = await get_post_num_by_reply(message)
+            ip_str = ""
+            if pnum:
+                p_data = await get_post_by_num(pnum)
+                if p_data and p_data.get('ip'):
+                    ip_str = f"\n🌐 IP: <code>{escape_html(p_data['ip'])}</code>"
+            if pnum:
+                msg = (
+                    f"ℹ️ Пост #{pnum} создан анонимным пользователем на сайте (author_id=0).{ip_str}"
+                    if lang == 'ru' else
+                    f"ℹ️ Post #{pnum} was created by anonymous web user (author_id=0).{ip_str}"
+                )
+            else:
+                msg = "ℹ️ System message (bot)." if lang == 'en' else ("ℹ️ システムメッセージ（ボット）。" if lang == 'jp' else "ℹ️ Вы ответили на системное сообщение (автор: бот).")
+            await message.answer(msg, parse_mode="HTML")
+            try: await message.delete()
+            except Exception: pass
             return
-        if replied_author_id:
+        if replied_author_id is not None:
             target_id = replied_author_id
             if lang == 'en': info_header = "🆔 <b>User Info:</b>\n\n"
             elif lang == 'jp': info_header = "🆔 <b>ユーザー情報:</b>\n\n"
@@ -26089,23 +26185,62 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
         target_post_num = await get_post_num_by_reply(message)
         if target_post_num:
             db_p = await get_post_by_num(target_post_num)
-            if db_p and db_p.get('board_id'):
-                board_id = db_p.get('board_id')
+            if db_p:
+                if db_p.get('board_id'):
+                    board_id = db_p.get('board_id')
+                if target_id is None and 'author_id' in db_p and db_p['author_id'] is not None:
+                    target_id = db_p['author_id']
     parts = (message.text or message.caption or "").split()
     if len(parts) >= 2:
         raw_target = parts[1].lstrip('#').strip()
         if raw_target.isdigit():
             val = int(raw_target)
             db_p = await get_post_by_num(val)
-            if db_p and 'author_id' in db_p:
+            if db_p and 'author_id' in db_p and db_p['author_id'] is not None:
                 target_id = db_p['author_id']
                 target_post_num = val
                 if db_p.get('board_id'):
                     board_id = db_p.get('board_id')
             else:
                 target_id = val
-    if not target_id:
+
+    if target_id is None:
         await message.answer("Нужно ответить на сообщение или указать ID/номер поста: <code>/ban &lt;id|post_num&gt;</code>", parse_mode="HTML")
+        return
+
+    if target_id == 0:
+        db_p = await get_post_by_num(target_post_num) if target_post_num else None
+        ip_info = ""
+        thread_id = None
+        if db_p:
+            if db_p.get('ip'):
+                ip_info = f"\n🌐 IP адрес: <code>{escape_html(db_p['ip'])}</code>"
+            if db_p.get('thread_id'):
+                thread_id = str(db_p['thread_id'])
+            if db_p.get('board_id'):
+                board_id = db_p.get('board_id')
+
+        kb_buttons = []
+        if target_post_num:
+            kb_buttons.append([
+                InlineKeyboardButton(text=f"🗑 Удалить пост #{target_post_num}", callback_data=f"admin_action:del_post:{target_post_num}:{board_id}:0")
+            ])
+        if thread_id:
+            kb_buttons.append([
+                InlineKeyboardButton(text=f"💥 Снести весь тред #{thread_id}", callback_data=f"admin_action:del_thread:{thread_id}:{board_id}:0")
+            ])
+        kb_buttons.append([
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
+        ])
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+        msg_text = (
+            f"⚠️ Пост #{target_post_num or '?'} создан анонимным пользователем на сайте (author_id=0).{ip_info}\n\n"
+            f"Бан по user_id=0 невозможен (это затронет всех анонимов сайта).\n"
+            f"Выберите действие для этого поста/треда:"
+        )
+        await message.answer(msg_text, parse_mode="HTML", reply_markup=kb)
+        try: await message.delete()
+        except Exception: pass
         return
 
     anon_name = generate_anon_name(target_id)
@@ -26164,38 +26299,96 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     target_id = None
     target_post_num = None
     duration_str = "1h"
+    is_global = False
+
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
         target_post_num = await get_post_num_by_reply(message)
         if target_post_num:
             db_p = await get_post_by_num(target_post_num)
-            if db_p and db_p.get('board_id'):
-                board_id = db_p.get('board_id')
-        if command_args: duration_str = command_args[0]
+            if db_p:
+                if db_p.get('board_id'):
+                    board_id = db_p['board_id']
+                if target_id is None and 'author_id' in db_p and db_p['author_id'] is not None:
+                    target_id = db_p['author_id']
+
+        for arg in command_args:
+            arg_lower = arg.lower().strip()
+            if arg_lower in ("global", "all_boards", "везде", "все_доски", "вседоски"):
+                is_global = True
+            elif arg_lower:
+                duration_str = arg_lower
+
     elif command_args:
         raw_target = command_args[0].lstrip('#').strip()
         if raw_target.isdigit():
             val = int(raw_target)
             db_p = await get_post_by_num(val)
-            if db_p and 'author_id' in db_p:
+            if db_p and 'author_id' in db_p and db_p['author_id'] is not None:
                 target_id = db_p['author_id']
                 target_post_num = val
                 if db_p.get('board_id'):
                     board_id = db_p.get('board_id')
             else:
                 target_id = val
-            if len(command_args) > 1: duration_str = command_args[1]
+
+            for arg in command_args[1:]:
+                arg_lower = arg.lower().strip()
+                if arg_lower in ("global", "all_boards", "везде", "все_доски", "вседоски"):
+                    is_global = True
+                elif arg_lower:
+                    duration_str = arg_lower
         else:
-            await message.answer("❌ Invalid User ID or Post Number.")
+            lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+            if lang == 'en':
+                err_msg = "❌ Invalid User ID or Post Number. Reply to a post or specify: <code>/wipe &lt;post_num|user_id&gt; [time] [global]</code>"
+            else:
+                err_msg = "❌ Неверный номер поста или ID пользователя. Ответьте на сообщение или укажите: <code>/wipe &lt;post_num|user_id&gt; [время] [global]</code>"
+            await message.answer(err_msg, parse_mode="HTML")
             return
 
-    if not target_id:
+    if target_id is None:
         lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
         if lang == 'en':
-            msg = "Usage: <code>/wipe [time]</code> (reply to post) or <code>/wipe &lt;post_num|user_id&gt; [time]</code>\nExamples: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+            msg = "Usage: <code>/wipe [time] [global]</code> (reply to post) or <code>/wipe &lt;post_num|user_id&gt; [time] [global]</code>\nExamples: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>, <code>/wipe all global</code>"
         else:
-            msg = "Использование: <code>/wipe [время]</code> (в ответ на пост) или <code>/wipe &lt;post_num|user_id&gt; [время]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+            msg = "Использование: <code>/wipe [время] [global]</code> (в ответ на пост) или <code>/wipe &lt;post_num|user_id&gt; [время] [global]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>, <code>/wipe all global</code>"
         await message.answer(msg, parse_mode="HTML")
+        return
+
+    if target_id == 0:
+        db_p = await get_post_by_num(target_post_num) if target_post_num else None
+        ip_info = ""
+        thread_id = None
+        if db_p:
+            if db_p.get('ip'):
+                ip_info = f"\n🌐 IP адрес: <code>{escape_html(db_p['ip'])}</code>"
+            if db_p.get('thread_id'):
+                thread_id = str(db_p['thread_id'])
+            if db_p.get('board_id'):
+                board_id = db_p.get('board_id')
+
+        kb_buttons = []
+        if target_post_num:
+            kb_buttons.append([
+                InlineKeyboardButton(text=f"🗑 Удалить пост #{target_post_num}", callback_data=f"admin_action:del_post:{target_post_num}:{board_id}:0")
+            ])
+        if thread_id:
+            kb_buttons.append([
+                InlineKeyboardButton(text=f"💥 Снести весь тред #{thread_id}", callback_data=f"admin_action:del_thread:{thread_id}:{board_id}:0")
+            ])
+        kb_buttons.append([
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
+        ])
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+        msg_text = (
+            f"⚠️ Пост #{target_post_num or '?'} создан анонимным пользователем на сайте (author_id=0).{ip_info}\n\n"
+            f"Вайп по user_id=0 невозможен (это затронет всех анонимов сайта).\n"
+            f"Выберите действие для этого поста/треда:"
+        )
+        await message.answer(msg_text, parse_mode="HTML", reply_markup=kb)
+        try: await message.delete()
+        except Exception: pass
         return
 
     duration_str = duration_str.lower().replace(" ", "")
@@ -26213,19 +26406,40 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
 
     anon_name = generate_anon_name(target_id)
     time_label = f"{minutes} минут" if minutes < 60 else (f"{minutes//60}ч" if minutes < 1440 else (f"{minutes//1440}д" if minutes < 500000 else "за ВСЁ время"))
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+
+    target_board_for_wipe = 'all' if is_global else board_id
+    wipe_buttons = [
         [
-            InlineKeyboardButton(text="🔥 Да, сжечь посты!", callback_data=f"admin_action:wipe:{target_id}:{board_id}:{minutes}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
+            InlineKeyboardButton(text=f"🔥 Да, сжечь на /{board_id}/!", callback_data=f"admin_action:wipe:{target_id}:{board_id}:{minutes}")
         ]
+    ]
+    if not is_global:
+        wipe_buttons.append([
+            InlineKeyboardButton(text="🔥 Сжечь на ВСЕХ досках (global)", callback_data=f"admin_action:wipe:{target_id}:all:{minutes}")
+        ])
+    else:
+        wipe_buttons = [
+            [
+                InlineKeyboardButton(text="🔥 Да, сжечь на ВСЕХ досках (global)!", callback_data=f"admin_action:wipe:{target_id}:all:{minutes}")
+            ]
+        ]
+    wipe_buttons.append([
+        InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
     ])
-    await message.answer(f"⚠️ Вайп: <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}.\nНажмите подтверждение — шедоумут и удаление постов применятся только после этого.", parse_mode="HTML", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=wipe_buttons)
+
+    board_label = "ВСЕХ досках" if is_global else f"/{board_id}/"
+    await message.answer(
+        f"⚠️ Вайп: <b>{anon_name}</b> (ID: <code>{target_id}</code>) на {board_label} {time_label}.\n"
+        f"Нажмите подтверждение — шедоумут и удаление постов применятся только после этого.",
+        parse_mode="HTML", reply_markup=kb
+    )
     try: await message.delete()
     except Exception: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
-    if not board_id or board_id == 'None':
-        board_id = 'b'
+    is_global = str(board_id).lower() in ('all', 'global', 'all_boards')
+    effective_board_id = 'all' if is_global else (board_id or 'b')
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
     except Exception: pass
 
@@ -26233,20 +26447,27 @@ async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: in
     smute_seconds = max(3600, minutes * 60)
     try:
         from common.database import update_shadow_mute
-        await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
-        await log_global_event('bot', f"🔇 WIPE SHADOWMUTE: Юзер {target_id} получил шедоумут на {smute_seconds}с на /{board_id}/ (авто при /wipe)")
+        if is_global:
+            from shared_state import BOARDS
+            for b in BOARDS:
+                await update_shadow_mute(user_id=target_id, board_id=b, duration_seconds=smute_seconds, reason='wipe')
+            await log_global_event('bot', f"🔇 WIPE SHADOWMUTE: Юзер {target_id} получил шедоумут на {smute_seconds}с на ВСЕХ досках (авто при /wipe)")
+        else:
+            await update_shadow_mute(user_id=target_id, board_id=effective_board_id, duration_seconds=smute_seconds, reason='wipe')
+            await log_global_event('bot', f"🔇 WIPE SHADOWMUTE: Юзер {target_id} получил шедоумут на {smute_seconds}с на /{effective_board_id}/ (авто при /wipe)")
     except Exception as e:
         print(f"⚠️ Wipe shadowmute failed: {e}")
 
-    deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
-    await log_global_event('bot', f"🚮 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м, шедоумут {smute_seconds}с)")
+    deleted_count = await delete_user_posts(bot, target_id, minutes, effective_board_id)
+    board_log_str = "ВСЕХ досках" if is_global else f"/{effective_board_id}/"
+    await log_global_event('bot', f"🚮 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на {board_log_str} (глубина {minutes}м, шедоумут {smute_seconds}с)")
     anon_name = generate_anon_name(target_id)
-    lang = 'en' if board_id == 'int' else 'ru'
+    lang = 'en' if effective_board_id == 'int' else 'ru'
     time_label = f"{minutes}m" if minutes < 60 else (f"{minutes//60}h" if minutes < 1440 else (f"{minutes//1440}d" if minutes < 500000 else "ALL"))
     if lang == 'en':
-        text = f"🚮 Posts by <b>{anon_name}</b> ({time_label}) were wiped.\nTotal deleted: <b>{deleted_count}</b>\n👻 User shadowmuted for at least 1h."
+        text = f"🚮 Posts by <b>{anon_name}</b> ({time_label}) on {board_log_str} were wiped.\nTotal deleted: <b>{deleted_count}</b>\n👻 User shadowmuted for at least 1h."
     else:
-        text = f"🚮 Посты от <b>{anon_name}</b> ({time_label}) удалены.\nСнесено постов и копий: <b>{deleted_count}</b>\n👻 Автору выдан шедоумут минимум на 1 час."
+        text = f"🚮 Посты от <b>{anon_name}</b> ({time_label}) на {board_log_str} удалены.\nСнесено постов и копий: <b>{deleted_count}</b>\n👻 Автору выдан шедоумут минимум на 1 час."
     try:
         await message.edit_text(text, parse_mode="HTML")
     except Exception:
@@ -26297,6 +26518,28 @@ async def on_admin_action(callback: types.CallbackQuery):
         minutes = int(parts[4])
         await callback.answer("Вайпаем...")
         await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)
+    elif action == "del_post":
+        post_num = target_id
+        await callback.answer("Удаляем пост...")
+        deleted_count = await delete_single_post(post_num, callback.bot)
+        await log_global_event('bot', f"🗑️ DEL_POST: Мод {admin_id} удалил анонимный пост #{post_num} на /{board_id}/ (копий: {deleted_count})")
+        await callback.message.edit_text(f"🗑 Анонимный пост #{post_num} и его копии ({deleted_count}) успешно удалены.", parse_mode="HTML")
+        return
+    elif action == "del_thread":
+        thread_id = str(parts[2])
+        await callback.answer("Сносим тред...")
+        try:
+            from common.database import archive_thread_in_db
+            try: t_int = int(thread_id)
+            except ValueError: t_int = 0
+            if t_int: await archive_thread_in_db(t_int)
+        except Exception:
+            pass
+        effective_b = board_id if board_id not in ('all', 'global') else 'b'
+        await delete_thread_atomic(callback.bot, effective_b, thread_id, notify_users=True, initiator_id=admin_id)
+        await log_global_event('bot', f"💥 DEL_THREAD: Мод {admin_id} снес тред #{thread_id} на /{effective_b}/")
+        await callback.message.edit_text(f"💥 Тред #{thread_id} на /{effective_b}/ успешно снесён.", parse_mode="HTML")
+        return
 @dp.message(Command("restrict_anime"))
 async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str = 'ru'):
     if not is_admin(message.from_user.id, board_id):
@@ -26364,6 +26607,9 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
             if len(args) > 1: duration_str = args[1]
         except ValueError: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_id == 0:
+        await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
+        return
     if not target_id:
         if lang == 'en':
             usage = "Usage: <code>/shadowmute_threads &lt;user_id&gt; [time]</code> or reply."
@@ -26502,6 +26748,15 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
         post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
         if post_info:
             post_num, author_id = post_info
+        if not post_num:
+            from post_helpers import extract_post_num_from_message
+            post_num = extract_post_num_from_message(message.reply_to_message)
+            if post_num:
+                db_p = await get_post_by_num(post_num)
+                if db_p:
+                    author_id = db_p.get('author_id')
+                    if db_p.get('board_id'):
+                        board_id = db_p.get('board_id')
     else:
         args = (message.text or message.caption or "").split()[1:]
         if args:

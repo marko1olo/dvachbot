@@ -57,6 +57,10 @@ SAFE_MYTHOLOGY_AND_MEMES = {
     'religious_art', 'classic_art', 'renaissance', 'virgin_vs_chad'
 }
 
+SAFE_GURO_EXCLUSIONS = {
+    'tobacco', 'smoke', 'smoking', 'snuffbox', 'pipe'
+}
+
 
 def classify_extreme_media(tags_str: str, desc_str: str = "") -> Tuple[bool, str, str]:
     """
@@ -98,8 +102,11 @@ def classify_extreme_media(tags_str: str, desc_str: str = "") -> Tuple[bool, str
 
     # 2. Проверка на Гуро / Снафф / Некрофилия / Расчленение
     has_mythology_context = any(w in full_text for w in SAFE_MYTHOLOGY_AND_MEMES)
+    has_tobacco_context = any(w in full_text for w in SAFE_GURO_EXCLUSIONS)
     for kw in EXPLICIT_GURO_TAGS:
         if re.search(r'\b' + re.escape(kw) + r'\b', t_lower):
+            if kw == 'snuff' and has_tobacco_context:
+                continue
             if kw in {'severed_head', 'severed_limb', 'decapitation'} and has_mythology_context and 'corpse' not in t_lower and 'real_life' not in t_lower:
                 continue
             return True, "GURO", f"Explicit guro/mutilation tag matched: '{kw}'"
@@ -142,11 +149,26 @@ async def register_extreme_strike(author_id: int, post_num: int, category: str, 
     now = time.time()
     min_ts = now - STRIKE_WINDOW_SECONDS
 
-    # 1. Обновляем память
+    # 1. Загружаем из DB, если в кэше пусто (например, после рестарта)
+    if author_id not in _EXTREME_STRIKES_CACHE:
+        try:
+            db = await get_pool()
+            async with db.execute(
+                "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
+                (author_id, board_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0]:
+                items = json.loads(row[0])
+                loaded_strikes = items.get("extreme_strikes", [])
+                _EXTREME_STRIKES_CACHE[author_id] = [
+                    s for s in loaded_strikes if isinstance(s, dict) and s.get('ts', 0) >= min_ts
+                ]
+        except Exception:
+            pass
+
     user_strikes = _EXTREME_STRIKES_CACHE.get(author_id, [])
-    # Очищаем старые
     user_strikes = [s for s in user_strikes if s.get('ts', 0) >= min_ts]
-    # Добавляем новый
     user_strikes.append({
         "post_num": post_num,
         "category": category,
@@ -173,16 +195,7 @@ async def register_extreme_strike(author_id: int, post_num: int, category: str, 
                 except Exception:
                     items = {}
 
-            db_strikes = items.get("extreme_strikes", [])
-            db_strikes = [s for s in db_strikes if isinstance(s, dict) and s.get('ts', 0) >= min_ts]
-            db_strikes.append({
-                "post_num": post_num,
-                "category": category,
-                "file_id": file_id,
-                "board_id": board_id,
-                "ts": now
-            })
-            items["extreme_strikes"] = db_strikes
+            items["extreme_strikes"] = user_strikes
 
             await db.execute(
                 "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
@@ -218,12 +231,12 @@ async def execute_extreme_lockdown(
         f"🚨 [AUTO-DEFENSE LOCKDOWN] User {author_id} triggered >2 strikes ({category}). Applying lockdown!"
     )
 
-    # 1. Авто-тоггл медиа (shadow_ban_media = 1)
+    # 1. Авто-тоггл медиа (shadow_ban_media = 1, nsfw_spoiler = 1)
     try:
         db = await get_pool()
         async with db_lock:
             await db.execute(
-                "UPDATE Users SET shadow_ban_media = 1 WHERE user_id = ?",
+                "UPDATE Users SET shadow_ban_media = 1, nsfw_spoiler = 1 WHERE user_id = ?",
                 (author_id,)
             )
             await db.commit()
@@ -234,31 +247,34 @@ async def execute_extreme_lockdown(
             for b in BOARDS:
                 if b in board_data:
                     u_set = board_data[b].setdefault('user_settings', {}).setdefault(author_id, {
-                        'nsfw': False, 'hide': set(), 'shadow_gif': False, 'shadow_sticker': False, 'shadow_media': True
+                        'nsfw': True, 'hide': set(), 'shadow_gif': False, 'shadow_sticker': False, 'shadow_media': True
                     })
                     u_set['shadow_media'] = True
+                    u_set['nsfw'] = True
         except Exception as e:
             logger.warning(f"RAM media_toggle sync error: {e}")
 
         await log_global_event(
             'bot',
-            f"🔇 AUTO-MEDIA_TOGGLE: Система навсегда ЗАПРЕТИЛА медиа юзеру {author_id} (Text-only mode) за спам {category}"
+            f"🔇 AUTO-MEDIA_TOGGLE: Система навсегда ЗАПРЕТИЛА медиа юзеру {author_id} (Text-only mode + NSFW) за спам {category}"
         )
     except Exception as e:
         logger.error(f"Failed to set shadow_ban_media for {author_id}: {e}")
 
-    # 2. Авто-шедоумут на 24 часа (86400 секунд)
+    # 2. Авто-шедоумут на 24 часа (86400 секунд) на ВСЕХ досках
     smute_duration = 86400
     try:
-        await update_shadow_mute(
-            user_id=author_id,
-            board_id=board_id or 'b',
-            duration_seconds=smute_duration,
-            reason=f'auto_copro_guro_{category.lower()}'
-        )
+        from shared_state import BOARDS
+        for b in BOARDS:
+            await update_shadow_mute(
+                user_id=author_id,
+                board_id=b,
+                duration_seconds=smute_duration,
+                reason=f'auto_copro_guro_{category.lower()}'
+            )
         await log_global_event(
             'bot',
-            f"🔇 AUTO-SHADOWMUTE: Юзер {author_id} получил шедоумут на {smute_duration}с на /{board_id}/ (авто-защита {category})"
+            f"🔇 AUTO-SHADOWMUTE: Юзер {author_id} получил шедоумут на {smute_duration}с на ВСЕХ досках (авто-защита {category})"
         )
     except Exception as e:
         logger.error(f"Failed to shadowmute {author_id}: {e}")
@@ -266,28 +282,37 @@ async def execute_extreme_lockdown(
     # 3. Удаление постов спамера
     deleted_count = 0
     try:
-        # Импортируем delete_user_posts и delete_single_post из main
-        from main import delete_user_posts, delete_single_post
+        import sys
+        main_mod = sys.modules.get('main')
+        if not main_mod:
+            try:
+                import main as main_mod
+            except Exception:
+                pass
+
+        delete_user_posts = getattr(main_mod, 'delete_user_posts', None)
+        delete_single_post = getattr(main_mod, 'delete_single_post', None)
 
         # Сначала удаляем конкретные зафиксированные посты с шок-контентом
-        for p_num in offending_post_nums:
-            if p_num and p_num > 0:
-                try:
-                    await delete_single_post(p_num, bot)
-                    deleted_count += 1
-                except Exception as del_err:
-                    logger.warning(f"Failed to delete offending post #{p_num}: {del_err}")
+        if delete_single_post and bot:
+            for p_num in offending_post_nums:
+                if p_num and p_num > 0:
+                    try:
+                        await delete_single_post(p_num, bot)
+                        deleted_count += 1
+                    except Exception as del_err:
+                        logger.warning(f"Failed to delete offending post #{p_num}: {del_err}")
 
-        # Сносим все посты юзера за последние 24 часа
-        if bot:
-            wiped = await delete_user_posts(bot, author_id, 1440, board_id or 'b')
+        # Сносим все посты юзера за последние 24 часа на ВСЕХ досках
+        if bot and delete_user_posts:
+            wiped = await delete_user_posts(bot, author_id, 1440, 'all')
             deleted_count = max(deleted_count, wiped)
     except Exception as e:
         logger.error(f"Failed to wipe posts for {author_id}: {e}")
 
     await log_global_event(
         'bot',
-        f"🚮 AUTO-WIPE: Снесено {deleted_count} постов спамера {author_id} на /{board_id}/"
+        f"🚮 AUTO-WIPE: Снесено {deleted_count} постов спамера {author_id} на ВСЕХ досках"
     )
 
     # 4. Уведомление админов в Telegram
@@ -343,10 +368,8 @@ async def process_file_extreme_defense(
             query = """
                 SELECT p.post_num, p.author_id, p.board_id
                 FROM Posts p
-                WHERE p.post_num IN (
-                    SELECT post_num FROM PostFiles 
-                    WHERE original_file_id = ? OR thumbnail_file_id = ?
-                )
+                JOIN PostFiles pf ON p.post_num = pf.post_num
+                WHERE pf.original_file_id = ? OR pf.thumbnail_file_id = ?
                 ORDER BY p.post_num DESC LIMIT 1
             """
             async with db.execute(query, (file_id, file_id)) as cursor:

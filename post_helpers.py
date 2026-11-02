@@ -168,7 +168,8 @@ def extract_post_num_from_message(message: Any) -> int | None:
 
     # 3. First-line header regex
     if raw_text:
-        first_line = raw_text.split('\n', 1)[0]
+        clean_raw = re.sub(r'<[^>]+>', '', raw_text)
+        first_line = clean_raw.split('\n', 1)[0]
         m = RE_HEADER_POST_NUM.search(first_line)
         if m:
             try:
@@ -176,7 +177,7 @@ def extract_post_num_from_message(message: Any) -> int | None:
             except ValueError:
                 pass
         # 4. Full text search
-        m = RE_HEADER_POST_NUM.search(raw_text)
+        m = RE_HEADER_POST_NUM.search(clean_raw)
         if m:
             try:
                 return int(m.group(1))

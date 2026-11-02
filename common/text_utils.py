@@ -518,16 +518,38 @@ def safe_tg_caption(text: str, max_len: int = 1024) -> str:
     return res
 
 
+ZW_ZERO = '\u200b'  # Zero-width space (binary 0)
+ZW_ONE = '\u200c'   # Zero-width non-joiner (binary 1)
+ZW_FRAME = '\u2060' # Word joiner (frame delimiter)
+
+def decode_post_num_zw(text: str | None) -> int | None:
+    """Extracts and decodes an invisible post number from zero-width unicode characters."""
+    if not text or ZW_FRAME not in text:
+        return None
+    m = re.search(f"{ZW_FRAME}([{ZW_ZERO}{ZW_ONE}]+){ZW_FRAME}", text)
+    if not m:
+        return None
+    raw_bits = m.group(1).replace(ZW_ZERO, '0').replace(ZW_ONE, '1')
+    try:
+        val = int(raw_bits, 2)
+        return val if val > 0 else None
+    except ValueError:
+        return None
+
 def extract_post_num_from_message_text(text: str) -> tuple[int | None, int | None]:
     """
     Извлекает номер поста из заголовка сообщения Telegram (из текста или подписи).
     Возвращает (post_num, local_thread_num).
     Если это обычный пост, возвращает (post_num, None).
-    Если это заголовок поста в треде (напр. №15/500), возвращает (None, local_thread_num).
+    Если это заголовок поста в треде (напр. №15/500) с invisible ZW-metadata,
+    возвращает (zw_post_num, local_thread_num). Без ZW-метаданных возвращает (None, local_thread_num).
     Гарантированно отсекает цитаты (>>12345), реплаи и цифры внутри тела поста.
     """
     if not text:
         return None, None
+
+    # Сначала проверяем Zero-width невидимые метаданные (гарантированный глобальный post_num)
+    zw_num = decode_post_num_zw(text)
 
     clean_text = re.sub(r'<[^>]+>', '', text)
     header_block = clean_text.split('\n\n')[0].strip()
@@ -540,7 +562,10 @@ def extract_post_num_from_message_text(text: str) -> tuple[int | None, int | Non
     )
     if thread_match:
         local_num = int(thread_match.group(1))
-        return None, local_num
+        return (zw_num, local_num)
+
+    if zw_num:
+        return zw_num, None
 
     patterns = [
         r'(?:Пост|Post|Пiст|Повiдомлення|Малява|Депеша|Донесение|Пакет|Подарок|Казус|Сообщение|СИГНАЛ)\s*(?:№|#|No\.?)\s*(\d+)',
