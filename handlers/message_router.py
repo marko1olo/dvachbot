@@ -1377,12 +1377,13 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if not is_reply_to_bot:
                         if user_id in b_data.get('persona_favorites', {}):
                             now_t_fav = time.time()
-                            if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 75.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.12:
+                            # Фавориты Чеда (multi-reply): 1.5%
+                            if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.015:
                                 should_reply = True
                         else:
-                            # Глобальный пассивный тригер: 6%
+                            # Глобальный пассивный тригер: 0.8%
                             now_t_glob = time.time()
-                            if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.06:
+                            if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 180.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.008:
                                 should_reply = True
                     if should_reply:
                         last_persona_board_ts[board_id] = time.time()  # race guard
@@ -1613,14 +1614,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 if user_id in b_data.get('persona_favorites', {}):
                     text_clean = message.text or message.caption or ("[фотография]" if photo_id else None)
                     now_t_fav = time.time()
-                    # Фавориты Чеда: шанс 8%, кулдаун 120 секунд
-                    if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.08:
+                    # Фавориты Чеда: шанс 1.5%, кулдаун 180 секунд
+                    if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 180.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.015:
                         should_reply = True
                 else:
-                    # Глобальный пассивный тригер: 4%, кулдаун 180 секунд
+                    # Глобальный пассивный тригер: шанс 0.8%, кулдаун 240 секунд
                     text_clean2 = message.text or message.caption or None
                     now_t_glob = time.time()
-                    if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 180.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.04:
+                    if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 240.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.008:
                         should_reply = True
             if should_reply:
                 last_persona_board_ts[board_id] = time.time()  # race guard
