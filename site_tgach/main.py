@@ -3906,7 +3906,7 @@ def _process_files_list(content: dict) -> None:
                 if tid_str.startswith(("http://", "https://")):
                     file_info["thumbnail_url"] = tid_str
                 else:
-                    file_info["thumbnail_url"] = f"/files/{tid_str.strip('/')}"
+                    file_info["thumbnail_url"] = f"/files/{tid_str.strip('/')}/{safe_name}"
             else:
                 file_info["thumbnail_url"] = ""
         valid_files.append(file_info)
@@ -10582,11 +10582,11 @@ async def _proxy_protected_telegram_file(
         guessed_type = mimetypes.guess_type(filename or file_path)[0]
         media_type = resp.headers.get("Content-Type")
         if not media_type or media_type == "application/octet-stream":
-            if file_id.startswith("AgAC") or file_path.endswith((".jpg", ".jpeg")):
+            if file_id.startswith(("AgAC", "AAMC")) or file_path.endswith((".jpg", ".jpeg")):
                 guessed_type = "image/jpeg"
             elif file_path.endswith(".png"):
                 guessed_type = "image/png"
-            elif file_path.endswith(".mp4"):
+            elif file_id.startswith(("BAAC", "CQAC", "BQAC", "CgAC")) or file_path.endswith(".mp4"):
                 guessed_type = "video/mp4"
             media_type = guessed_type or media_type or "image/jpeg"
 
@@ -10594,6 +10594,22 @@ async def _proxy_protected_telegram_file(
             "image/jpeg", "image/png", "image/webp", "image/gif",
             "video/mp4", "video/webm", "video/quicktime",
             "audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/opus",
+        }
+
+        MIME_TO_EXT = {
+            "image/jpeg": ".jpg",
+            "image/pjpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "video/quicktime": ".mov",
+            "audio/ogg": ".ogg",
+            "audio/mpeg": ".mp3",
+            "audio/mp3": ".mp3",
+            "audio/wav": ".wav",
+            "audio/opus": ".opus",
         }
 
         headers = {
@@ -10609,10 +10625,16 @@ async def _proxy_protected_telegram_file(
 
         safe_filename = sanitize_header_filename(filename or os.path.basename(file_path))
         file_ext = os.path.splitext(safe_filename)[1].lower()
+        if not file_ext and media_type:
+            inferred_ext = MIME_TO_EXT.get(media_type.split(";")[0].strip().lower(), "")
+            if inferred_ext:
+                safe_filename += inferred_ext
+                file_ext = inferred_ext
+
         is_safe_ext = file_ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav', '.opus')
         is_safe_mime = media_type in SAFE_INLINE_MEDIA_TYPES
 
-        if is_safe_ext and is_safe_mime:
+        if is_safe_mime or (is_safe_ext and is_safe_mime):
             headers["Content-Disposition"] = format_content_disposition("inline", safe_filename)
         else:
             headers["Content-Disposition"] = format_content_disposition("attachment", safe_filename)
@@ -10706,12 +10728,34 @@ async def _proxy_external_url(
             if value:
                 headers[header_name] = value
 
+        MIME_TO_EXT = {
+            "image/jpeg": ".jpg",
+            "image/pjpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "video/quicktime": ".mov",
+            "audio/ogg": ".ogg",
+            "audio/mpeg": ".mp3",
+            "audio/mp3": ".mp3",
+            "audio/wav": ".wav",
+            "audio/opus": ".opus",
+        }
+
         safe_filename = sanitize_header_filename(filename or os.path.basename(url.split("?")[0]))
         file_ext = os.path.splitext(safe_filename)[1].lower()
+        if not file_ext and media_type:
+            inferred_ext = MIME_TO_EXT.get(media_type.split(";")[0].strip().lower(), "")
+            if inferred_ext:
+                safe_filename += inferred_ext
+                file_ext = inferred_ext
+
         is_safe_ext = file_ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.webm', '.mov', '.ogg', '.mp3', '.wav', '.opus')
         is_safe_mime = media_type in SAFE_INLINE_MEDIA_TYPES
 
-        if is_safe_ext and is_safe_mime:
+        if is_safe_mime or (is_safe_ext and is_safe_mime):
             headers["Content-Disposition"] = format_content_disposition("inline", safe_filename)
         else:
             headers["Content-Disposition"] = format_content_disposition("attachment", safe_filename)
@@ -11026,11 +11070,12 @@ async def get_telegram_file(
 
     # 3. PixHost (Direct для всех)
     if pixhost_link and "pixhost" not in skipped_types:
-        return RedirectResponse(
-            url=pixhost_link,
-            status_code=307,
-            headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
-        )
+        if not ("pixhost.to/show/" in pixhost_link) and any(x in pixhost_link for x in ["img", "thumbs/", "/images/"]):
+            return RedirectResponse(
+                url=pixhost_link,
+                status_code=307,
+                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
+            )
 
     # 4. Telegram Direct
     if "telegram" not in skipped_types:

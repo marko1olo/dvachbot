@@ -7916,7 +7916,10 @@ async def get_file_mirrors(file_id: str) -> dict:
             db = await get_pool()
             async with db.execute("SELECT mirror_type, url FROM FileMirrors WHERE file_id = ?", (file_id,)) as cursor:
                 async for row in cursor:
-                    mirrors[row[0]] = row[1]
+                    m_type, m_url = row[0], row[1]
+                    if m_type == "pixhost" and ("pixhost.to/show/" in m_url or not any(x in m_url for x in ["img", "thumbs/", "/images/"])):
+                        continue
+                    mirrors[m_type] = m_url
             return mirrors
         except Exception:
             return {}

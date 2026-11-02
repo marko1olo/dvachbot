@@ -11217,7 +11217,7 @@ const PostRenderer = {
                         } else {
                             imgContent += `<a href="${safeUrl}" class="file-thumb" data-filename="${filename}" data-src="${safeUrl}" data-type="image" ${fileIdAttr}>
                                 ${blurHtml}
-                                <img src="${placeholder}" data-src="${safeThumb || safeUrl}" class="post-image lazy-load${blurClass}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                <img src="${placeholder}" data-src="${safeThumb || safeUrl}" class="post-image lazy-load${blurClass}" alt="img" referrerpolicy="no-referrer">
                                 ${bayanHtml}
                             </a>`;
                         }
@@ -11357,8 +11357,8 @@ const PostRenderer = {
         if (files.length > 0) {
             const f = files[0];
             const isVid = ['video', 'gif', 'animation', 'video_note'].includes(f.type);
-            const mediaUrl = (f.original_file_id ? `/files/${f.original_file_id}` : f.original_url) || "";
-            const thumbUrl = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url))) || "";
+            const mediaUrl = f.original_url || (f.original_file_id ? `/files/${f.original_file_id}` : "") || "";
+            const thumbUrl = f.thumbnail_url || (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : mediaUrl) || "";
             
             if (typeof FailedMediaCache !== 'undefined' && ((mediaUrl && FailedMediaCache.isFailed(mediaUrl)) || (thumbUrl && FailedMediaCache.isFailed(thumbUrl)))) {
                 thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center;"><img src="/static/img/mascot/mascot_confused.png" style="max-height:48px; width:auto; opacity:0.6;" alt="Недоступно"></div>`;
@@ -11628,6 +11628,20 @@ function handleImageError(img) {
                 FailedMediaCache.markFailed(currentSrc);
             }
             delete img.dataset.finalError;
+            img.classList.remove('broken-final', 'broken-media');
+            if (parent) {
+                parent.classList.remove('broken-media');
+                parent.classList.add('is-loading');
+            }
+            img.onload = function() {
+                img.classList.remove('broken-final', 'broken-media');
+                img.classList.add('loaded');
+                img.dataset.loaded = "true";
+                if (parent) {
+                    parent.classList.remove('is-loading', 'broken-media');
+                    parent.classList.add('loaded');
+                }
+            };
             img.onerror = function() { handleImageError(img); };
             img.src = fallbackUrl;
             return;
@@ -11711,6 +11725,20 @@ function handleImageError(img) {
             vid.onerror = () => handleImageError(vid);
             img.replaceWith(vid);
         } else {
+            img.classList.remove('broken-final', 'broken-media');
+            if (parent) {
+                parent.classList.remove('broken-media');
+                parent.classList.add('is-loading');
+            }
+            img.onload = function() {
+                img.classList.remove('broken-final', 'broken-media');
+                img.classList.add('loaded');
+                img.dataset.loaded = "true";
+                if (parent) {
+                    parent.classList.remove('is-loading', 'broken-media');
+                    parent.classList.add('loaded');
+                }
+            };
             img.onerror = () => handleImageError(img);
             img.src = newUrl;
         }
@@ -14615,13 +14643,15 @@ const SmartLoader = {
                 this.process(); 
                 return;
             } else {
-                img.classList.add('broken-final');
                 if (typeof handleImageError === 'function') {
                     handleImageError(img);
-                } else if (parent) {
-                    parent.classList.remove('is-loading');
-                    parent.classList.add('broken-media');
-                    parent.innerHTML = getBrokenMediaPlaceholderHtml(img.dataset.src || img.src);
+                } else {
+                    img.classList.add('broken-final');
+                    if (parent) {
+                        parent.classList.remove('is-loading');
+                        parent.classList.add('broken-media');
+                        parent.innerHTML = getBrokenMediaPlaceholderHtml(img.dataset.src || img.src);
+                    }
                 }
             }
         }
