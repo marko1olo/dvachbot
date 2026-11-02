@@ -1,3 +1,4 @@
+import asyncio
 # -*- coding: utf-8 -*-
 """
 stats_api.py — FastAPI Standalone Endpoints for Next-Gen Stats WebApp & JSON API.
@@ -35,15 +36,7 @@ async def view_stats_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="stats_dashboard.jinja2", context={"request": request})
 
 
-@router.get("/api/stats/dashboard_data")
-async def get_dashboard_data():
-    """Returns cached JSON metrics for charts."""
-    global _DASHBOARD_CACHE, _LAST_CACHE_TIME
-    now = time.time()
-
-    if _DASHBOARD_CACHE and (now - _LAST_CACHE_TIME < 30.0):
-        return _DASHBOARD_CACHE
-
+def _fetch_dashboard_data_sync(now: float) -> Dict[str, Any]:
     day_ago = now - 86400
     with contextlib.closing(connect_ro_db()) as conn:
         c = conn.cursor()
@@ -115,7 +108,7 @@ async def get_dashboard_data():
         else:
             media_formats = [0, 0, 0, 0]
 
-    _DASHBOARD_CACHE = {
+    return {
         "posts_24h": posts_24h,
         "users_24h": users_24h,
         "tx_volume": int(tx_vol),
@@ -127,6 +120,17 @@ async def get_dashboard_data():
         "deciles": deciles,
         "media_formats": media_formats
     }
+
+@router.get("/api/stats/dashboard_data")
+async def get_dashboard_data():
+    """Returns cached JSON metrics for charts."""
+    global _DASHBOARD_CACHE, _LAST_CACHE_TIME
+    now = time.time()
+
+    if _DASHBOARD_CACHE and (now - _LAST_CACHE_TIME < 30.0):
+        return _DASHBOARD_CACHE
+
+    _DASHBOARD_CACHE = await asyncio.to_thread(_fetch_dashboard_data_sync, now)
     _LAST_CACHE_TIME = now
     return _DASHBOARD_CACHE
 
@@ -143,5 +147,5 @@ async def get_stats_poster(category: str):
     if category not in generators:
         return Response(content="Category not found", status_code=404)
 
-    buf = generators[category]()
+    buf = await asyncio.to_thread(generators[category])
     return StreamingResponse(buf, media_type="image/png")

@@ -5452,7 +5452,7 @@ async def api_set_system_setting(
     if not user.get("is_admin"):
         raise HTTPException(403, "Forbidden")
     await set_system_setting(data.key, data.value)
-    await get_setting_cached.cache_clear()
+    get_setting_cached.cache_clear()
     return {"status": "ok"}
 
 
@@ -9423,7 +9423,7 @@ async def api_get_catalog(
         posts = orjson.loads(cached)
     else:
         raw = await get_op_posts_for_board(
-            board_id, sort_by=sort, page=1, page_size=100, stream=stream
+            board_id, sort_by=sort, page=1, page_size=100, stream=stream, reply_limit=0
         )
         posts = _convert_and_enrich_posts(raw)
         await enrich_heavy_data(posts)
@@ -9434,7 +9434,11 @@ async def api_get_catalog(
     posts_copy = copy.deepcopy(posts)
     is_ru = await is_request_from_ru(request)
     finalize_posts_for_user(posts_copy, int(user["id"]), is_ru)
-    return posts_copy
+    return Response(
+        content=orjson.dumps(posts_copy),
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=15"}
+    )
 
 
 @app.get("/api/summary/{thread_id}")
@@ -9718,7 +9722,7 @@ async def api_get_threads(
         raise HTTPException(status_code=404, detail="Board not found")
 
     current_version = (
-        BOARD_VERSIONS[board_id] if board_id in BOARD_VERSIONS else time.time()
+        BOARD_VERSIONS.get(board_id, max(BOARD_VERSIONS.values(), default=0))
     )
     stream = getattr(request.state, "stream", "ru")
     view_mode = request.query_params.get("view", "threads")
@@ -10564,7 +10568,7 @@ async def _proxy_protected_telegram_file(
         headers = {
             "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
-            "Cache-Control": "public, max-age=300",
+            "Cache-Control": "public, max-age=2592000, immutable",
             "X-Content-Type-Options": "nosniff",
         }
         for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
@@ -10900,7 +10904,7 @@ async def get_telegram_file(
     mirrors = {}
 
     is_video_ext = is_video_id
-    max_attempts = 1 if in_fallback else (15 if is_video_ext else 8)
+    max_attempts = 1
 
     for attempt in range(max_attempts):
         # 1. Проверяем зеркала в кэше/БД
