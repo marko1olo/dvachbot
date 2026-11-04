@@ -631,7 +631,7 @@ SITE_SECURITY_MAP_MAX_KEYS = int(os.getenv("SITE_SECURITY_MAP_MAX_KEYS", "10000"
 SITE_DB_MAINTENANCE_ENABLED = os.getenv(
     "SITE_DB_MAINTENANCE_ENABLED", "0"
 ).strip().lower() in {"1", "true", "yes", "on"}
-RANDOM_DEAD_FILE_TTL_SEC = int(os.getenv("SITE_RANDOM_DEAD_FILE_TTL_SEC", "3600"))
+RANDOM_DEAD_FILE_TTL_SEC = int(os.getenv("SITE_RANDOM_DEAD_FILE_TTL_SEC", "300"))
 RANDOM_DEAD_FILE_MAX_KEYS = int(os.getenv("SITE_RANDOM_DEAD_FILE_MAX_KEYS", "5000"))
 RANDOM_API_DEADLINE_SEC = float(os.getenv("SITE_RANDOM_API_DEADLINE_SEC", "6.0"))
 RANDOM_AVAILABILITY_TIMEOUT_SEC = float(
@@ -10407,6 +10407,10 @@ async def _fetch_telegram_path(file_id: str, bot_token: str, bot_id: int | None 
                 tg_file = await asyncio.wait_for(bot.get_file(file_id), timeout=4.0)
                 if tg_file and tg_file.file_path:
                     return tg_file.file_path
+            except TelegramBadRequest as e:
+                err_text = str(e).lower()
+                if "wrong file_id" in err_text or "unavailable" in err_text or "too big" in err_text:
+                    return None
             except Exception:
                 pass
 
@@ -10427,6 +10431,11 @@ async def _fetch_telegram_path(file_id: str, bot_token: str, bot_id: int | None 
                     data = await resp.json()
                     if data.get("ok"):
                         return data["result"]["file_path"]
+                elif resp.status == 400:
+                    data = await resp.json()
+                    desc = str(data.get("description", "")).lower()
+                    if "wrong file_id" in desc or "unavailable" in desc or "too big" in desc:
+                        return None
         except Exception:
             pass
 
@@ -10437,6 +10446,8 @@ async def _fetch_telegram_path(file_id: str, bot_token: str, bot_id: int | None 
                         data = await resp.json()
                         if data.get("ok"):
                             return data["result"]["file_path"]
+                    elif resp.status == 400:
+                        return None
             except Exception:
                 pass
 
@@ -10573,7 +10584,7 @@ async def get_cached_file_path(
                     import traceback; traceback.print_exc()
                 return None
 
-            for start in range(0, min(len(candidates), 8), batch_size):
+            for start in range(0, len(candidates), batch_size):
                 tasks = [
                     spawn_task(fetch_with_bot(bot_id, token))
                     for bot_id, token in candidates[start : start + batch_size]
@@ -10604,7 +10615,7 @@ async def get_cached_file_path(
             allow_protected_tokens=allow_protected_tokens
         )
         random.shuffle(all_bot_tokens)
-        result = await try_bot_batch(all_bot_tokens, batch_size=4)
+        result = await try_bot_batch(all_bot_tokens, batch_size=5)
 
         if result:
             return result
