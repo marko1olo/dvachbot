@@ -3,6 +3,12 @@ from urllib.parse import urlparse
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
 from common.database import update_thread_last_updated, create_board, approve_board, delete_board
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 """
 main.py
@@ -649,11 +655,13 @@ def _mark_random_dead_file(file_id: str | None):
     try:
         backend = FastAPICache.get_backend()
         if backend:
-            key = f"dead_file:public:{file_id}"
-            try:
-                spawn_task(backend.set(key, "1", expire=RANDOM_DEAD_FILE_TTL_SEC), name=f"dead_file_{file_id}")
-            except Exception:
-                import traceback; traceback.print_exc()
+            async def _cache_dead_keys():
+                try:
+                    await backend.set(f"dead_file:public:{file_id}", "1", expire=RANDOM_DEAD_FILE_TTL_SEC)
+                    await backend.set(f"dead_file:protected:{file_id}", "1", expire=RANDOM_DEAD_FILE_TTL_SEC)
+                except Exception:
+                    pass
+            spawn_task(_cache_dead_keys(), name=f"dead_file_{file_id}")
     except Exception:
         import traceback; traceback.print_exc()
 
@@ -5952,7 +5960,8 @@ async def roulette_redirect_alias():
     return RedirectResponse(url="/tv/random", status_code=301)
 
 
-@app.get("/{board_id}/")
+@app.api_route("/{board_id}", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/", methods=["GET", "HEAD"])
 async def read_board_index_redirect(board_id: str):
     if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=404)
@@ -6414,7 +6423,8 @@ async def api_get_my_posts_content(request: Request, data: PostNumsRequest):
     return posts
 
 
-@app.get("/{board_id}/threads/")
+@app.api_route("/{board_id}/threads", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/threads/", methods=["GET", "HEAD"])
 async def read_board_threads(
     board_id: str,
     request: Request,
@@ -6540,7 +6550,8 @@ async def read_board_chat(
     )
 
 
-@app.get("/{board_id}/res/")
+@app.api_route("/{board_id}/res", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/res/", methods=["GET", "HEAD"])
 async def read_res_root_redirect(board_id: str):
     if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=404)
@@ -6550,16 +6561,23 @@ async def read_res_root_redirect(board_id: str):
     return RedirectResponse(url=f"/{board_id}/threads/", status_code=301)
 
 
-@app.get("/{board_id}/res/{post_num}.html")
+@app.api_route("/{board_id}/res/{post_num}", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/res/{post_num}/", methods=["GET", "HEAD"])
 async def read_thread(
     board_id: str,
-    post_num: int,
+    post_num: str,
     request: Request,
     user: dict | None = Depends(get_optional_user),
 ):
     board_id = board_id.lower()
     if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=404, detail="Board not found")
+
+    clean_post_num = str(post_num).rstrip("/").removesuffix(".html").removesuffix(".htm")
+    try:
+        post_num = int(clean_post_num)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     # ПРЕ-ВАЛИДАЦИЯ: Находим реальный ID треда (ОП-поста)
     real_thread_id = await get_thread_op_by_post_num(post_num)
@@ -6700,13 +6718,19 @@ async def read_thread(
     return HTMLResponse(content=html_content)
 
 
-@app.get("/{board_id}/res/{post_num}/export")
-async def export_thread_html(board_id: str, post_num: int):
+@app.api_route("/{board_id}/res/{post_num}/export", methods=["GET", "HEAD"])
+async def export_thread_html(board_id: str, post_num: str):
     board_id = board_id.lower()
     if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=404, detail="Board not found")
 
-    real_thread_id = await get_thread_op_by_post_num(post_num)
+    clean_post_num = str(post_num).rstrip("/").removesuffix(".html").removesuffix(".htm")
+    try:
+        post_num_int = int(clean_post_num)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    real_thread_id = await get_thread_op_by_post_num(post_num_int)
     if not real_thread_id:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -6869,15 +6893,20 @@ async def export_thread_html(board_id: str, post_num: int):
     return Response(content="\n".join(html_lines), media_type="text/html", headers=headers)
 
 
-@app.get("/{board_id}/res/{post_num}/gallery")
+@app.api_route("/{board_id}/res/{post_num}/gallery", methods=["GET", "HEAD"])
 async def thread_gallery_page(
     board_id: str,
-    post_num: int,
+    post_num: str,
     request: Request,
     user: dict | None = Depends(get_optional_user),
 ):
     if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=404, detail="Board not found")
+    clean_post_num = str(post_num).rstrip("/").removesuffix(".html").removesuffix(".htm")
+    try:
+        post_num = int(clean_post_num)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Thread not found")
     # Кеш HTML для анонимов на 10 сек (галерея тяжелая — много файлов)
     if not user:
         _gcache_key = f"gallery_html:{board_id}:{post_num}"
@@ -6908,7 +6937,16 @@ async def thread_gallery_page(
     return HTMLResponse(content=html_content)
 
 
-@app.get("/{board_id}/catalog/")
+@app.api_route("/catalog/{board_id}", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/catalog/{board_id}/", methods=["GET", "HEAD"], include_in_schema=False)
+async def redirect_board_catalog(board_id: str):
+    if board_id in BOARD_CONFIG:
+        return RedirectResponse(url=f"/{board_id}/catalog/", status_code=307)
+    raise HTTPException(status_code=404, detail="Board not found")
+
+
+@app.api_route("/{board_id}/catalog", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/catalog/", methods=["GET", "HEAD"])
 async def read_board_catalog(
     board_id: str, request: Request, user: dict | None = Depends(get_optional_user)
 ):
@@ -10341,14 +10379,14 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
             limit=250, ttl_dns_cache=300, family=socket.AF_INET, ssl=_NO_VERIFY_SSL
         )
         GLOBAL_HTTP_SESSION = aiohttp.ClientSession(
-            connector=connector, timeout=aiohttp.ClientTimeout(total=10)
+            connector=connector, timeout=aiohttp.ClientTimeout(total=4)
         )
 
     async with TELEGRAM_FILE_SEMAPHORE:
         try:
             url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
             # Убираем прокси из аргументов, раз у тебя TUN VPN
-            async with GLOBAL_HTTP_SESSION.get(url) as resp:
+            async with GLOBAL_HTTP_SESSION.get(url, timeout=aiohttp.ClientTimeout(total=3.5)) as resp:
                 if resp.status != 200:
                     return None
                 data = await resp.json()
@@ -10413,6 +10451,8 @@ def _resolve_known_file_bot_token(
 async def get_cached_file_path(
     file_id: str, allow_protected_tokens: bool = False
 ) -> tuple[str, str] | None:
+    if not file_id or _is_random_dead_file(file_id):
+        return None
     backend = FastAPICache.get_backend()
     dead_key = (
         f"dead_file:{'protected' if allow_protected_tokens else 'public'}:{file_id}"
@@ -10485,7 +10525,7 @@ async def get_cached_file_path(
                     import traceback; traceback.print_exc()
                 return None
 
-            for start in range(0, len(candidates), batch_size):
+            for start in range(0, min(len(candidates), 8), batch_size):
                 tasks = [
                     spawn_task(fetch_with_bot(bot_id, token))
                     for bot_id, token in candidates[start : start + batch_size]
@@ -10521,7 +10561,14 @@ async def get_cached_file_path(
         if result:
             return result
         if all_bot_tokens:
-            await backend.set(dead_key, "1", expire=30)
+            _mark_random_dead_file(file_id)
+            if backend:
+                try:
+                    await backend.set(dead_key, "1", expire=RANDOM_DEAD_FILE_TTL_SEC)
+                    await backend.set(f"dead_file:public:{file_id}", "1", expire=RANDOM_DEAD_FILE_TTL_SEC)
+                    await backend.set(f"dead_file:protected:{file_id}", "1", expire=RANDOM_DEAD_FILE_TTL_SEC)
+                except Exception:
+                    pass
 
     # No mirror or bot path is available right now. Positive hits are cached by
     # owner; full-pool misses are briefly negative-cached above to avoid hammering.
@@ -10874,10 +10921,18 @@ async def check_url_alive(url: str) -> bool:
 @app.api_route("/{board_id}/src/{file_id:path}", methods=["GET", "HEAD"])
 @app.api_route("/{board_id}/thumb/{file_id:path}", methods=["GET", "HEAD"])
 async def get_telegram_file(
-    file_id: str, request: Request, filename: str = None, skip: str = None, board_id: str = None
+    file_id: str, request: Request, filename: str = None, skip: str = None, board_id: str = None, visited_fids: set[str] | None = None
 ):
     # Очистка file_id от лишних слешей и сегментов пути
     file_id = file_id.lstrip("/")
+    if not file_id or _is_random_dead_file(file_id):
+        raise HTTPException(status_code=404, detail="File unavailable.")
+
+    if visited_fids is None:
+        visited_fids = set()
+    if file_id in visited_fids:
+        raise HTTPException(status_code=404, detail="File recursion detected.")
+    visited_fids.add(file_id)
 
     # Если file_id уже является полной ссылкой (или URL в пути), перенаправляем только на разрешенные домены
     if file_id.startswith(("http:/", "https:/", "http://", "https://")):
@@ -10955,9 +11010,9 @@ async def get_telegram_file(
         except Exception as e:
             logger.warning(f"Error querying thumbnail for video {file_id}: {e}")
 
-        if thumb_fid and thumb_fid != file_id:
+        if thumb_fid and thumb_fid != file_id and thumb_fid not in visited_fids and not _is_random_dead_file(thumb_fid):
             logger.info(f"Resolved video {file_id[:10]} -> thumbnail {thumb_fid[:10]}")
-            return await get_telegram_file(thumb_fid, request, filename, skip)
+            return await get_telegram_file(thumb_fid, request, filename, skip, visited_fids=visited_fids)
 
         # 2. Check disk cache for dynamic thumbnail
         safe_thumb_id = re.sub(r'[^a-zA-Z0-9_-]', '', file_id)
@@ -11183,9 +11238,9 @@ async def get_telegram_file(
         except Exception as e:
             logger.error(f"Error querying original file for thumbnail fallback: {e}", exc_info=True)
 
-        if orig_fid and orig_fid != file_id:
+        if orig_fid and orig_fid != file_id and orig_fid not in visited_fids and not _is_random_dead_file(orig_fid):
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
-            return await get_telegram_file(orig_fid, request, filename, skip)
+            return await get_telegram_file(orig_fid, request, filename, skip, visited_fids=visited_fids)
 
     elif file_id.startswith(("BAAC", "CQAC", "BQAC", "CgAC")):
         thumb_fid = None
@@ -11209,9 +11264,9 @@ async def get_telegram_file(
         except Exception as e:
             logger.error(f"Error querying thumbnail file for video fallback: {e}", exc_info=True)
 
-        if thumb_fid and thumb_fid != file_id:
+        if thumb_fid and thumb_fid != file_id and thumb_fid not in visited_fids and not _is_random_dead_file(thumb_fid):
             logger.info(f"Fallback video {file_id[:10]} -> thumbnail {thumb_fid[:10]}")
-            return await get_telegram_file(thumb_fid, request, filename, skip)
+            return await get_telegram_file(thumb_fid, request, filename, skip, visited_fids=visited_fids)
 
 
     # Если совсем всё плохо

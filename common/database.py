@@ -1562,12 +1562,18 @@ async def load_state_from_db(thread_boards: set) -> dict:
             async with db.execute("SELECT user_id, board_id, mute_type, expires_at FROM Mutes") as cursor:
                 async for row in cursor:
                     user_id, board_id, mute_type, expires_at_ts = row
-                    expires_at_dt = datetime.fromtimestamp(expires_at_ts, tz=UTC)
+                    try:
+                        ts_val = min(float(expires_at_ts or 0), 4102444800.0)
+                        expires_at_dt = datetime.fromtimestamp(ts_val, tz=UTC)
+                    except Exception:
+                        expires_at_dt = datetime.fromtimestamp(4102444800.0, tz=UTC)
                     if expires_at_dt > datetime.now(UTC):
-                        if mute_type == 'shadow':
-                            state_data['board_data'][board_id]['shadow_mutes'][user_id] = expires_at_dt
-                        elif mute_type == 'mute':
-                            state_data['board_data'][board_id]['mutes'][user_id] = expires_at_dt
+                        target_boards = [board_id] if board_id in state_data['board_data'] else (list(state_data['board_data'].keys()) if board_id == 'ALL' else [])
+                        for tb in target_boards:
+                            if mute_type == 'shadow':
+                                state_data['board_data'][tb]['shadow_mutes'][user_id] = expires_at_dt
+                            elif mute_type == 'mute':
+                                state_data['board_data'][tb]['mutes'][user_id] = expires_at_dt
 
             print("  > Загрузка тредов...")
             async with db.execute("SELECT thread_id, board_id, op_id, title, created_at, is_archived, stream FROM Threads") as cursor:
@@ -2811,6 +2817,26 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                         raw_op_data = dict(zip(cols, row))
 
             if not raw_op_data:
+                # Fallback: op_post_num may be a thread_id in Posts for imported threads
+                fallback_query = """
+                    SELECT p.post_num, p.content, p.timestamp, p.author_id, p.board_id, 
+                           p.reply_to_post_num, p.thread_id, p.is_shadow, p.is_op_hidden,
+                           t.is_endless, t.is_pinned
+                    FROM Posts p
+                    LEFT JOIN Threads t ON p.post_num = t.thread_num
+                    WHERE p.thread_id = ?
+                    ORDER BY p.timestamp ASC LIMIT 1
+                """
+                async with db.execute(fallback_query, (str(op_post_num),)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        cols = [d[0] for d in cursor.description]
+                        if hasattr(row, 'keys'):
+                            raw_op_data = dict(row)
+                        else:
+                            raw_op_data = dict(zip(cols, row))
+
+            if not raw_op_data:
                 return None
 
             # Если передан номер ответа, а не ОП-поста — переключаемся на реальный ОП-пост
@@ -2825,11 +2851,29 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                         else:
                             raw_op_data = dict(zip(cols, row))
                         op_post_num = real_op_num
+                    else:
+                        fallback_query = """
+                            SELECT p.post_num, p.content, p.timestamp, p.author_id, p.board_id, 
+                                   p.reply_to_post_num, p.thread_id, p.is_shadow, p.is_op_hidden,
+                                   t.is_endless, t.is_pinned
+                            FROM Posts p
+                            LEFT JOIN Threads t ON p.post_num = t.thread_num
+                            WHERE p.thread_id = ?
+                            ORDER BY p.timestamp ASC LIMIT 1
+                        """
+                        async with db.execute(fallback_query, (str(real_op_num),)) as f_cur:
+                            f_row = await f_cur.fetchone()
+                            if f_row:
+                                cols = [d[0] for d in f_cur.description]
+                                raw_op_data = dict(f_row) if hasattr(f_row, 'keys') else dict(zip(cols, f_row))
+                                op_post_num = real_op_num
 
             if raw_op_data['is_shadow'] and raw_op_data['author_id'] != current_user_id:
                 return None
 
             # 2. Забираем ответы
+            target_thread_id = str(raw_op_data.get('thread_id') or op_post_num)
+            op_actual_post_num = raw_op_data['post_num']
             viewer_id = current_user_id if current_user_id else -1
             replies_query = """
                 SELECT post_num, content, timestamp, author_id, board_id, reply_to_post_num, is_shadow, is_op_hidden
@@ -2840,6 +2884,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                         SELECT post_num FROM Posts 
                         WHERE thread_id = ? 
                            OR post_num = ?
+                           OR json_extract(content, '$.thread_id') = ?
                     )
                 )
                   AND post_num != ?
@@ -2847,7 +2892,14 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                 ORDER BY timestamp ASC
             """
             raw_replies_data = []
-            async with db.execute(replies_query, (str(op_post_num), str(op_post_num), op_post_num, op_post_num, viewer_id)) as cursor:
+            async with db.execute(replies_query, (
+                target_thread_id,
+                target_thread_id,
+                op_actual_post_num,
+                target_thread_id,
+                op_actual_post_num,
+                viewer_id
+            )) as cursor:
                 rep_cols = [d[0] for d in cursor.description]
                 async for row in cursor:
                     if hasattr(row, 'keys'):
@@ -3082,7 +3134,17 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
                         ) as tc:
                             if await tc.fetchone():
                                 return post_num
-                return None
+            async with db.execute(
+                "SELECT thread_id, op_id FROM Threads WHERE thread_id = ? OR op_id = ? LIMIT 1",
+                (str(post_num), post_num)
+            ) as tc:
+                t_row = await tc.fetchone()
+                if t_row:
+                    try:
+                        return int(t_row[0])
+                    except (ValueError, TypeError):
+                        return int(t_row[1]) if t_row[1] else post_num
+            return None
     except Exception:
         return None
 async def get_post_count_in_thread(thread_op_num: int) -> int:
