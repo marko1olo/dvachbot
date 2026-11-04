@@ -39,14 +39,16 @@ class TestGetUserIdFromSession(unittest.TestCase):
     def test_with_user_no_id_in_session(self):
         request = StubRequest(
             session={'user': {}},
-            headers={"x-real-ip": "1.2.3.4"}
+            headers={"x-real-ip": "1.2.3.4"},
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
 
     def test_without_user_in_session(self):
         request = StubRequest(
             session={},
-            headers={"x-real-ip": "1.2.3.4"}
+            headers={"x-real-ip": "1.2.3.4"},
+            client_host="127.0.0.1"
         )
         self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
 
@@ -212,7 +214,7 @@ class TestCleanTitleText(unittest.TestCase):
         self.assertEqual(clean_title_text("[Спойлер] Секрет 🤫"), "Секрет 🤫")
 
 
-from Dubsite_tgach.main import format_bayan_label
+from Dubsite_tgach.main import format_bayan_label, TRANSLATIONS
 
 class TestFormatBayanLabel(unittest.TestCase):
     @patch('Dubsite_tgach.main.random.choice')
@@ -222,7 +224,7 @@ class TestFormatBayanLabel(unittest.TestCase):
         self.assertEqual(format_bayan_label(2), "♻️ Mocked_Low (2)")
         self.assertEqual(format_bayan_label(3), "♻️ Mocked_Low (3)")
         # Make sure the phrases are chosen properly by looking at what was passed
-        self.assertEqual(len(mock_choice.call_args[0][0]), 3) # "bayan_low" array in RU has 3 items
+        self.assertEqual(len(mock_choice.call_args[0][0]), len(TRANSLATIONS["ru"]["bayan_low"]))
 
     @patch('Dubsite_tgach.main.random.choice')
     def test_bayan_mid(self, mock_choice):
@@ -451,13 +453,14 @@ class TestFormatPostText(unittest.TestCase):
         self.assertEqual(format_post_text([]), "")
 
     def test_xss_obfuscation(self):
-        self.assertEqual(format_post_text("<script>alert(1)</script>"), "&lt;scrlpt&gt;alert(1)&lt;/scrlpt&gt;")
-        self.assertEqual(format_post_text("<iframe src='x'></iframe>"), "&lt;lframe src=&#x27;x&#x27;&gt;&lt;/lframe&gt;")
-        self.assertEqual(format_post_text("expression(alert(1))"), "explession(alert(1))")
-        self.assertEqual(format_post_text("<style>body{}</style>"), "&lt;sty1e&gt;body{}&lt;/sty1e&gt;")
-        self.assertEqual(format_post_text("<STYLE>body{}</STYLE>"), "&lt;STYLe&gt;body{}&lt;/STYLe&gt;")
-        self.assertEqual(format_post_text("<img onerror=alert(1)>"), "&lt;img 0nerror=alert(1)&gt;")
-        self.assertEqual(format_post_text("<body onload=alert(1)>"), "&lt;body 0nload=alert(1)&gt;")
+        # Verification that HTML tags are securely escaped without destructive word mangling
+        self.assertEqual(format_post_text("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;")
+        self.assertEqual(format_post_text("<iframe src='x'></iframe>"), "&lt;iframe src=&#x27;x&#x27;&gt;&lt;/iframe&gt;")
+        self.assertEqual(format_post_text("expression(alert(1))"), "expression(alert(1))")
+        self.assertEqual(format_post_text("<style>body{}</style>"), "&lt;style&gt;body{}&lt;/style&gt;")
+        self.assertEqual(format_post_text("<STYLE>body{}</STYLE>"), "&lt;STYLE&gt;body{}&lt;/STYLE&gt;")
+        self.assertEqual(format_post_text("<img onerror=alert(1)>"), "&lt;img onerror=alert(1)&gt;")
+        self.assertEqual(format_post_text("<body onload=alert(1)>"), "&lt;body onload=alert(1)&gt;")
 
     def test_html_escaping(self):
         self.assertEqual(format_post_text("a < b > c \" d ' e & f"), "a &lt; b &gt; c &quot; d &#x27; e &amp; f")

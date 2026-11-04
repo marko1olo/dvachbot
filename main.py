@@ -1871,7 +1871,10 @@ async def load_state():
         board_data[board_id].update(data)
     spam_words_map = await load_all_spam_words()
     for board_id, words_set in spam_words_map.items():
-        board_data[board_id]['spam_filter_words'] = words_set
+        if board_id in board_data:
+            board_data[board_id]['spam_filter_words'] = words_set
+        else:
+            board_data.setdefault(board_id, {})['spam_filter_words'] = words_set
         try:
             from common.spam_filter import set_spam_filter_words
             set_spam_filter_words(board_id, words_set)
@@ -1879,7 +1882,10 @@ async def load_state():
             print(f"⚠️ Failed to init spam_filter_words for {board_id}: {_sfw_err}")
     reaction_bans_map = await load_all_reaction_bans()
     for board_id, banned_set in reaction_bans_map.items():
-        board_data[board_id]['reaction_banned_users'] = banned_set
+        if board_id in board_data:
+            board_data[board_id]['reaction_banned_users'] = banned_set
+        else:
+            board_data.setdefault(board_id, {})['reaction_banned_users'] = banned_set
     print(f"✅ Состояние из SQLite загружено. Общий счетчик постов: {state['post_counter']}")
     for board_id in BOARDS:
         b_data = board_data.get(board_id, {})
@@ -22556,10 +22562,9 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
 async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = 'ru'):
     if not is_admin(message.from_user.id, board_id):
         return
-    if not board_id:
-        board_id = 'b'
     args = (message.text or message.caption or "").split()[1:]
     target_id = None
+    target_board_id = None  # None means GLOBAL shadowmute across all boards
     duration_str = "24h"
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
@@ -22567,27 +22572,39 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
         if target_post_num:
             db_p = await get_post_by_num(target_post_num)
             if db_p and db_p.get('board_id'):
-                board_id = db_p.get('board_id')
+                target_board_id = db_p.get('board_id')
         if args:
             duration_str = args[0]
+            if len(args) > 1:
+                cand_board = args[1].strip('/').lower()
+                if cand_board in BOARD_CONFIG or cand_board == 'all':
+                    target_board_id = cand_board
     elif args:
         try:
             target_id = int(args[0])
             if len(args) > 1:
                 duration_str = args[1]
+            if len(args) > 2:
+                cand_board = args[2].strip('/').lower()
+                if cand_board in BOARD_CONFIG or cand_board == 'all':
+                    target_board_id = cand_board
         except ValueError:
             pass
+
+    # If no board was found/specified, default to GLOBAL shadowmute
+    is_global = (not target_board_id or target_board_id.upper() == 'ALL')
+
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if target_id == 0:
         await message.answer("⚠️ Невозможно применить к анонимному пользователю сайта (author_id=0).")
         return
     if not target_id:
         if lang == 'en':
-            usage = "Usage: <code>/shadowmute &lt;user_id&gt; [time]</code> or reply."
+            usage = "Usage: <code>/shadowmute &lt;user_id&gt; [time] [board]</code> or reply (defaults to global)."
         elif lang == 'jp':
-            usage = "使用法: <code>/shadowmute &lt;user_id&gt; [時間]</code> または返信。"
+            usage = "使用法: <code>/shadowmute &lt;user_id&gt; [時間] [板]</code> または返信 (未指定時はグローバル)。"
         else:
-            usage = "Использование: <code>/shadowmute &lt;user_id&gt; [время]</code> или ответом на сообщение."
+            usage = "Использование: <code>/shadowmute &lt;user_id&gt; [время] [доска]</code> или ответом на сообщение (по умолчанию глобально)."
         await message.answer(usage, parse_mode="HTML")
         return
     try:
@@ -22598,23 +22615,44 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
         else: total_seconds, time_str = int(duration_str) * 60, f"{int(duration_str)} мин"
         total_seconds = min(total_seconds, 2592000)
         expires_dt = datetime.now(UTC) + timedelta(seconds=total_seconds)
-        async with storage_lock:
-            b_data = board_data[board_id]
-            b_data['shadow_mutes'][target_id] = expires_dt
-        await update_shadow_mute(target_id, board_id, expires_dt.timestamp())
-        await log_global_event('bot', f"👻 SHADOWMUTE: Мод {message.from_user.id} скрыл {target_id} на /{board_id}/ до {expires_dt.strftime('%H:%M:%S')}")
-        board_name = BOARD_CONFIG[board_id]['name']
-        if lang == 'en':
-            msg = f"👻 Shadowmuted user <code>{target_id}</code> for {time_str} on {board_name}."
-        elif lang == 'jp':
-            msg = f"👻 ユーザー <code>{target_id}</code> を {board_name} で {time_str} シャドウミュートしました。"
+
+        if is_global:
+            async with storage_lock:
+                for b in BOARD_CONFIG.keys():
+                    board_data[b].setdefault('shadow_mutes', {})[target_id] = expires_dt
+                board_data.setdefault('ALL', {}).setdefault('shadow_mutes', {})[target_id] = expires_dt
+            await update_shadow_mute(target_id, 'ALL', expires_dt.timestamp())
+            for b in BOARD_CONFIG.keys():
+                await update_shadow_mute(target_id, b, expires_dt.timestamp())
+            await log_global_event('bot', f"👻 GSHADOWMUTE: Мод {message.from_user.id} скрыл {target_id} ГЛОБАЛЬНО на {time_str}")
+            if lang == 'en':
+                msg = f"👻 Globally shadowmuted user <code>{target_id}</code> for {time_str} (all boards)."
+            elif lang == 'jp':
+                msg = f"👻 ユーザー <code>{target_id}</code> を全板で {time_str} グローバルシャドウミュートしました。"
+            else:
+                msg = f"👻 Пользователь <code>{target_id}</code> тихо замучен <b>ГЛОБАЛЬНО (на всех досках)</b> на {time_str}."
+            await message.answer(msg, parse_mode="HTML")
         else:
-            msg = f"👻 Тихо замучен пользователь <code>{target_id}</code> на {time_str} на доске {board_name}."
-        await message.answer(msg, parse_mode="HTML")
+            async with storage_lock:
+                b_data = board_data[target_board_id]
+                b_data['shadow_mutes'][target_id] = expires_dt
+            await update_shadow_mute(target_id, target_board_id, expires_dt.timestamp())
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {message.from_user.id} скрыл {target_id} на /{target_board_id}/ до {expires_dt.strftime('%H:%M:%S')}")
+            board_name = BOARD_CONFIG.get(target_board_id, {}).get('name', target_board_id)
+            if lang == 'en':
+                msg = f"👻 Shadowmuted user <code>{target_id}</code> for {time_str} on {board_name}."
+            elif lang == 'jp':
+                msg = f"👻 ユーザー <code>{target_id}</code> を {board_name} で {time_str} シャドウミュートしました。"
+            else:
+                msg = f"👻 Тихо замучен пользователь <code>{target_id}</code> на {time_str} на доске {board_name}."
+            await message.answer(msg, parse_mode="HTML")
     except ValueError:
         err = "❌ Invalid format. Ex: <code>30m</code>, <code>2h</code>" if lang == 'en' else "❌ Неверный формат времени. Примеры: <code>30m</code>, <code>2h</code>, <code>1d</code>"
         await message.answer(err, parse_mode="HTML")
-    await message.delete()
+    try:
+        await message.delete()
+    except Exception:
+        pass
 @dp.message(Command("nsfw"))
 async def cmd_nsfw(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -22764,13 +22802,13 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
     - Админ: Снимает теневой бан с пользователя на всей доске.
     - ОП треда: Снимает локальный теневой бан внутри треда.
     """
-    if not board_id: return
     user_id = message.from_user.id
-    is_adm = is_admin(user_id, board_id)
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    b_data = board_data[board_id]
+    effective_board = board_id or 'b'
+    is_adm = is_admin(user_id, effective_board)
+    lang = stream if ENABLE_MULTILANG else ('en' if effective_board == 'int' else 'ru')
+    b_data = board_data.get(effective_board, {})
     if not is_adm:
-        if board_id not in THREAD_BOARDS:
+        if not board_id or board_id not in THREAD_BOARDS:
             try: await message.delete()
             except Exception: pass
             return
@@ -22791,7 +22829,6 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         if not message.reply_to_message:
             await message.delete()
             return
-        target_id = None
         target_id = await get_author_id_by_reply(message)
         if not target_id:
             await message.delete()
@@ -22804,29 +22841,64 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
             await message.answer(f"👻 (shadow) {response_text}", parse_mode=None)
         await message.delete()
         return
+
     target_id = None
+    target_board_id = None
+    parts = (message.text or message.caption or "").split()
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    else:
-        parts = (message.text or message.caption or "").split()
-        if len(parts) == 2:
-            try: target_id = int(parts[1])
-            except ValueError: pass
+        if len(parts) > 1:
+            cand = parts[1].strip('/').lower()
+            if cand in BOARD_CONFIG or cand == 'all':
+                target_board_id = cand
+    elif len(parts) > 1:
+        try:
+            target_id = int(parts[1])
+            if len(parts) > 2:
+                cand = parts[2].strip('/').lower()
+                if cand in BOARD_CONFIG or cand == 'all':
+                    target_board_id = cand
+        except ValueError:
+            pass
+
     if not target_id:
         if lang == 'en':
-            msg = "Usage: <code>/unshadowmute &lt;id&gt;</code> or reply."
+            msg = "Usage: <code>/unshadowmute &lt;id&gt; [board]</code> or reply."
         elif lang == 'jp':
-            msg = "使用法: <code>/unshadowmute &lt;ID&gt;</code> または返信。"
+            msg = "使用法: <code>/unshadowmute &lt;ID&gt; [板]</code> または返信。"
         else:
-            msg = "Использование: <code>/unshadowmute &lt;id&gt;</code> или ответом на сообщение."
+            msg = "Использование: <code>/unshadowmute &lt;id&gt; [доска]</code> или ответом на сообщение."
         await message.answer(msg, parse_mode="HTML")
         return
+
+    is_global_unmute = (target_board_id == 'all' or (not board_id and not target_board_id))
     was_muted = False
     async with storage_lock:
-        if target_id in b_data['shadow_mutes']:
-            del b_data['shadow_mutes'][target_id]
-            was_muted = True
-    await update_shadow_mute(target_id, board_id, 0)
+        if is_global_unmute:
+            for b in BOARD_CONFIG.keys():
+                if target_id in board_data.get(b, {}).get('shadow_mutes', {}):
+                    del board_data[b]['shadow_mutes'][target_id]
+                    was_muted = True
+            if target_id in board_data.get('ALL', {}).get('shadow_mutes', {}):
+                del board_data['ALL']['shadow_mutes'][target_id]
+                was_muted = True
+        else:
+            tb = target_board_id or effective_board
+            if target_id in board_data.get(tb, {}).get('shadow_mutes', {}):
+                del board_data[tb]['shadow_mutes'][target_id]
+                was_muted = True
+            if target_id in board_data.get('ALL', {}).get('shadow_mutes', {}):
+                del board_data['ALL']['shadow_mutes'][target_id]
+                was_muted = True
+
+    if is_global_unmute:
+        await update_shadow_mute(target_id, 'ALL', 0)
+        for b in BOARD_CONFIG.keys():
+            await update_shadow_mute(target_id, b, 0)
+    else:
+        tb = target_board_id or effective_board
+        await update_shadow_mute(target_id, tb, 0)
+        await update_shadow_mute(target_id, 'ALL', 0)
     if was_muted:
         if lang == 'en':
             resp = f"👻 User <code>{target_id}</code> un-shadowmuted."
@@ -25534,30 +25606,36 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
         try: await message.delete()
         except TelegramBadRequest: pass
         return
-    if not board_id:
-        board_id = 'b'
-    b_data = board_data[board_id]
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+
+    is_global = not board_id or board_id == 'ALL'
+    cur_board = 'b' if is_global else board_id
+    b_data = board_data.setdefault(cur_board, {})
+    lang = stream if ENABLE_MULTILANG else ('en' if cur_board == 'int' else 'ru')
     parts = (message.text or message.caption or "").split(maxsplit=2)
     subcommand = parts[1].lower() if len(parts) > 1 else "help"
     b_data.setdefault('spam_filter_words', set())
+
     if subcommand == "list":
-        spam_words = b_data.get('spam_filter_words', set())
+        from common.spam_filter import _spam_filter_words
+        spam_words = set(b_data.get('spam_filter_words', set()))
+        if 'ALL' in _spam_filter_words:
+            spam_words.update(_spam_filter_words['ALL'])
         if not spam_words:
             if lang == 'en': resp = "Filter list is empty."
             elif lang == 'jp': resp = "フィルターリストは空です。"
-            else: resp = "Список стоп-слов для этой доски пуст."
+            else: resp = "Список стоп-слов пуст."
         else:
             sorted_words = sorted(list({str(w).strip().lower() for w in spam_words if str(w).strip()}))
             word_list = "\n".join([f"• <code>{escape_html(word)}</code>" for word in sorted_words])
-            board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
+            board_title = "Глобальные (все доски)" if is_global else BOARD_CONFIG.get(cur_board, {}).get('name', cur_board)
             if lang == 'en':
-                resp = f"<b>Stop-words on {board_name}:</b>\n\n{word_list}"
+                resp = f"<b>Stop-words ({board_title}):</b>\n\n{word_list}"
             elif lang == 'jp':
-                resp = f"<b>{board_name} のNGワード:</b>\n\n{word_list}"
+                resp = f"<b>NGワード ({board_title}):</b>\n\n{word_list}"
             else:
-                resp = f"<b>Текущие стоп-слова на доске {board_name}:</b>\n\n{word_list}"
+                resp = f"<b>Текущие стоп-слова ({board_title}):</b>\n\n{word_list}"
         await message.answer(resp, parse_mode="HTML")
+
     elif subcommand == "add":
         if len(parts) < 3 or not parts[2].strip():
             if lang == 'en': txt = "Usage: <code>/filter add &lt;word&gt;</code>"
@@ -25572,19 +25650,28 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
                 else: err = "Слово слишком короткое."
                 await message.answer(err)
                 return
-            if await add_spam_word(board_id, word_to_add):
+            target_bid = 'ALL' if is_global else cur_board
+            if await add_spam_word(target_bid, word_to_add):
+                from common.spam_filter import _spam_filter_words
+                _spam_filter_words[target_bid].add(word_to_add)
                 b_data.setdefault('spam_filter_words', set()).add(word_to_add)
-                try:
-                    from common.spam_filter import _spam_filter_words
-                    _spam_filter_words[board_id].add(word_to_add)
-                except Exception:
-                    pass
-                if lang == 'en': msg = f"✅ Added '<code>{escape_html(word_to_add)}</code>'."
-                elif lang == 'jp': msg = f"✅ '<code>{escape_html(word_to_add)}</code>' を追加しました。"
-                else: msg = f"✅ Слово '<code>{escape_html(word_to_add)}</code>' добавлено."
+                if is_global:
+                    for b in BOARD_CONFIG.keys():
+                        board_data.setdefault(b, {}).setdefault('spam_filter_words', set()).add(word_to_add)
+                        _spam_filter_words[b].add(word_to_add)
+                if lang == 'en':
+                    scope = "globally" if is_global else f"on /{cur_board}/"
+                    msg = f"✅ Added '<code>{escape_html(word_to_add)}</code>' {scope}."
+                elif lang == 'jp':
+                    scope = "全板" if is_global else f"/{cur_board}/"
+                    msg = f"✅ '<code>{escape_html(word_to_add)}</code>' を{scope}に追加しました。"
+                else:
+                    scope = "ГЛОБАЛЬНО (все доски)" if is_global else f"на доске /{cur_board}/"
+                    msg = f"✅ Слово '<code>{escape_html(word_to_add)}</code>' добавлено {scope}."
                 await message.answer(msg, parse_mode="HTML")
             else:
                 await message.answer("❌ DB Error.")
+
     elif subcommand in ("remove", "del", "delete", "rm"):
         if len(parts) < 3 or not parts[2].strip():
             if lang == 'en': txt = "Usage: <code>/filter remove &lt;word&gt;</code>"
@@ -25593,11 +25680,20 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
             await message.answer(txt, parse_mode="HTML")
         else:
             word_to_remove = parts[2].strip().lower()
-            removed = await remove_spam_word(board_id, word_to_remove)
+            target_bid = 'ALL' if is_global else cur_board
+            removed = await remove_spam_word(target_bid, word_to_remove)
+            if is_global:
+                removed_all = await remove_spam_word('b', word_to_remove)
+                removed = removed or removed_all
             b_data.setdefault('spam_filter_words', set()).discard(word_to_remove)
             try:
                 from common.spam_filter import _spam_filter_words
-                _spam_filter_words[board_id].discard(word_to_remove)
+                _spam_filter_words[target_bid].discard(word_to_remove)
+                if is_global:
+                    _spam_filter_words['ALL'].discard(word_to_remove)
+                    for b in BOARD_CONFIG.keys():
+                        _spam_filter_words[b].discard(word_to_remove)
+                        board_data.setdefault(b, {}).setdefault('spam_filter_words', set()).discard(word_to_remove)
             except Exception:
                 pass
             if removed:
@@ -25610,6 +25706,7 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
                 elif lang == 'jp': msg = "ℹ️ リストに見つかりません。"
                 else: msg = "ℹ️ Слово не найдено."
                 await message.answer(msg)
+
     else:
         if lang == 'en':
             usage = (
@@ -25628,481 +25725,11 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
         else:
             usage = (
                 "<b>Управление спам-фильтром:</b>\n"
-                "<code>/filter list</code> - Показать текущие стоп-слова\n"
-                "<code>/filter add &lt;слово&gt;</code> - Добавить слово\n"
-                "<code>/filter remove &lt;слово&gt;</code> - Удалить слово"
+                "<code>/filter list</code> — список стоп-слов\n"
+                "<code>/filter add &lt;слово&gt;</code> — добавить слово\n"
+                "<code>/filter remove &lt;слово&gt;</code> — удалить слово"
             )
         await message.answer(usage, parse_mode="HTML")
-    try: await message.delete()
-    except TelegramBadRequest: pass
-async def git_commit_and_push_db() -> bool:
-
-    if not GITHUB_TOKEN:
-        print("⚠️ GITHUB_TOKEN не настроен, бэкап в облако невозможен.")
-        return False
-    asyncio.get_running_loop()
-    return False # await loop.run_in_executor(git_executor, sync_git_operations_db, GITHUB_TOKEN)
-@dp.callback_query(F.data == "save_all")
-async def admin_save_all(callback: types.CallbackQuery):
-
-    is_any_admin = any(is_admin(callback.from_user.id, b_id) for b_id in BOARDS)
-    if not is_any_admin:
-        try: await callback.answer("Access denied", show_alert=True)
-        except Exception: pass
-        return
-    user_lang = callback.from_user.language_code or 'en'
-    is_ru = 'ru' in user_lang or 'uk' in user_lang or 'be' in user_lang
-    start_txt = "Запуск внепланового бэкапа БД..." if is_ru else "Starting manual DB backup..."
-    try:
-        await callback.answer(start_txt)
-    except TelegramBadRequest:
-        pass
-    try:
-        db = await get_pool()
-        await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-        print("💾 [Manual Backup] WAL Checkpoint выполнен.")
-    except Exception as e:
-        print(f"⚠️ Ошибка чекпоинта перед бэкапом: {e}")
-
-    success = await git_commit_and_push_db()
-    if is_ru:
-        response_text = "✅ База данных успешно сохранена в GitHub." if success else "❌ Ошибка при создании бэкапа. См. логи."
-    else:
-        response_text = "✅ Database successfully pushed to GitHub." if success else "❌ Backup failed. Check logs."
-    if isinstance(callback.message, types.Message):
-        try:
-            await callback.message.edit_text(response_text)
-        except TelegramBadRequest:
-            await callback.message.answer(response_text)
-@dp.callback_query(F.data.startswith("stats_"))
-async def admin_stats_board(callback: types.CallbackQuery):
-    try:
-        board_id = callback.data.split("_")[1]
-    except IndexError: return
-    if not is_admin(callback.from_user.id, board_id):
-        try: await callback.answer("Access denied", show_alert=True)
-        except Exception: pass
-        return
-    if not isinstance(callback.message, types.Message):
-        try: await callback.answer()
-        except Exception: pass
-        return
-    b_data = board_data[board_id]
-    lang = 'en' if board_id == 'int' else 'ru'
-    if lang == 'en':
-        stats_text = (
-            f"Stats for {BOARD_CONFIG[board_id]['name']}:\n\n"
-            f"Active users: {len(b_data['users']['active'])}\n"
-            f"Banned: {len(b_data['users']['banned'])}\n"
-            f"Queue size: {message_queues[board_id].qsize()}"
-        )
-        back_txt = "⬅️ Back"
-    else:
-        stats_text = (
-            f"Статистика доски {BOARD_CONFIG[board_id]['name']}:\n\n"
-            f"Активных: {len(b_data['users']['active'])}\n"
-            f"Забаненных: {len(b_data['users']['banned'])}\n"
-            f"В очереди: {message_queues[board_id].qsize()}"
-        )
-        back_txt = "⬅️ Назад"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=back_txt, callback_data=f"admin_main_{board_id}")]
-    ])
-    try:
-        await callback.message.edit_text(stats_text, reply_markup=keyboard)
-    except TelegramBadRequest:
-        pass
-    try: await callback.answer()
-    except TelegramBadRequest: pass
-@dp.callback_query(F.data.startswith("restrictions_"))
-async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'): # Добавлены аргументы board_id и stream
-
-    if not board_id:
-        try:
-            board_id = callback.data.split("_")[1]
-        except IndexError: return
-    if not is_admin(callback.from_user.id, board_id):
-        await callback.answer("Отказано в доступе", show_alert=True)
-        return
-    if not isinstance(callback.message, types.Message):
-        await callback.answer()
-        return
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    b_data = board_data[board_id]
-    now = datetime.now(UTC)
-    text_parts = [f"<b>Список ограничений на доске {BOARD_CONFIG[board_id]['name']}:</b>"]
-    banned_users = b_data['users']['banned']
-    if banned_users:
-        banned_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(list(banned_users))])
-        if lang == 'en': header = "\n<u>🚫 Banned forever:</u>"
-        elif lang == 'jp': header = "\n<u>🚫 永久BAN:</u>"
-        else: header = "\n<u>🚫 Забанены навсегда:</u>"
-        text_parts.append(f"{header}\n{banned_list}")
-    active_mutes = {uid: expiry for uid, expiry in b_data['mutes'].items() if expiry > now}
-    if active_mutes:
-        mute_lines = []
-        for uid, expiry in sorted(active_mutes.items(), key=lambda item: item[1]):
-            remaining = expiry - now
-            hours, remainder = divmod(remaining.total_seconds(), 3600)
-            minutes, _ = divmod(remainder, 60)
-            time_left_str = f"{int(hours)}ч {int(minutes)}м"
-            mute_lines.append(f"  • ID <code>{uid}</code> (осталось: {time_left_str})")
-        mutes_list = "\n".join(mute_lines)
-        if lang == 'en': header = "\n<u>🔇 Muted:</u>"
-        elif lang == 'jp': header = "\n<u>🔇 ミュート中:</u>"
-        else: header = "\n<u>🔇 В муте:</u>"
-        text_parts.append(f"{header}\n{mutes_list}")
-    active_shadow_mutes = {uid: expiry for uid, expiry in b_data['shadow_mutes'].items() if expiry > now}
-    if active_shadow_mutes:
-        shadow_mute_lines = []
-        for uid, expiry in sorted(active_shadow_mutes.items(), key=lambda item: item[1]):
-            remaining = expiry - now
-            hours, remainder = divmod(remaining.total_seconds(), 3600)
-            minutes, _ = divmod(remainder, 60)
-            time_left_str = f"{int(hours)}ч {int(minutes)}м"
-            shadow_mute_lines.append(f"  • ID <code>{uid}</code> (осталось: {time_left_str})")
-        shadow_mutes_list = "\n".join(shadow_mute_lines)
-        text_parts.append(f"\n<u>👻 Полный теневой мут:</u>\n{shadow_mutes_list}")
-    gif_banned_users = []
-    user_settings = b_data.get('user_settings', {})
-    for uid, settings in user_settings.items():
-        if settings.get('shadow_gif'):
-            gif_banned_users.append(uid)
-    if gif_banned_users:
-        gif_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(gif_banned_users)])
-        text_parts.append(f"\n<u>👾 Теневой бан GIF:</u>\n{gif_list}")
-    sticker_banned_users = []
-    for uid, settings in user_settings.items():
-        if settings.get('shadow_sticker'):
-            sticker_banned_users.append(uid)
-    if sticker_banned_users:
-        sticker_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(sticker_banned_users)])
-        text_parts.append(f"\n<u>🃏 Теневой бан Стикеров:</u>\n{sticker_list}")
-    media_banned_users = []
-    for uid, settings in user_settings.items():
-        if settings.get('shadow_media'):
-            media_banned_users.append(uid)
-    if media_banned_users:
-        media_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(media_banned_users)])
-        text_parts.append(f"\n<u>🔇 Теневой бан Медиа (только текст):</u>\n{media_list}")
-    lie_media_users = []
-    for uid, settings in user_settings.items():
-        if settings.get('lie_media'):
-            lie_media_users.append(uid)
-    if lie_media_users:
-        lie_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(lie_media_users)])
-        text_parts.append(f"\n<u>🎭 Archive media substitution:</u>\n{lie_list}")
-    if len(text_parts) == 1:
-        final_text = f"На доске {BOARD_CONFIG[board_id]['name']} нет активных ограничений."
-    else:
-        final_text = "\n".join(text_parts)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=f"admin_main_{board_id}")]
-    ])
-    try:
-        await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            print(f"Ошибка обновления списка ограничений: {e}")
-    await callback.answer()
-@dp.callback_query(F.data.startswith("filter_list_"))
-async def admin_filter_list(callback: types.CallbackQuery):
-
-    try:
-        board_id = callback.data.split("_")[-1]
-    except IndexError: return
-    if not is_admin(callback.from_user.id, board_id):
-        try: await callback.answer("Access denied", show_alert=True)
-        except Exception: pass
-        return
-    b_data = board_data[board_id]
-    spam_words = b_data.get('spam_filter_words', set())
-    lang = 'en' if board_id == 'int' else 'ru'
-    if lang == 'en':
-        header = f"<b>🤬 Stop-words ({len(spam_words)}):</b>"
-        instr = (
-            "\n\n<b>📝 How to manage:</b>\n"
-            "• Add: <code>/filter add word</code>\n"
-            "• Del: <code>/filter remove word</code>\n"
-            "<i>(Write commands in chat)</i>"
-        )
-        empty_txt = "\n\n<i>List is empty. Filter disabled.</i>"
-        back_txt = "⬅️ Back"
-    else:
-        header = f"<b>🤬 Фильтр стоп-слов ({len(spam_words)} шт):</b>"
-        instr = (
-            "\n\n<b>📝 Как управлять:</b>\n"
-            "• Добавить: <code>/filter add слово</code>\n"
-            "• Удалить: <code>/filter remove слово</code>\n"
-            "<i>(Писать команды в чат)</i>"
-        )
-        empty_txt = "\n\n<i>Список пуст. Фильтр отключен.</i>"
-        back_txt = "⬅️ Назад в меню"
-    if not spam_words:
-        list_text = empty_txt
-    else:
-        sorted_words = sorted(list(spam_words))
-        words_display = ", ".join([f"<code>{escape_html(w)}</code>" for w in sorted_words])
-        list_text = f"\n\n{words_display}"
-    final_text = f"{header}{list_text}{instr}"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=back_txt, callback_data=f"admin_main_{board_id}")]
-    ])
-    try:
-        await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
-    except TelegramBadRequest:
-        pass
-    try: await callback.answer()
-    except TelegramBadRequest: pass
-@dp.callback_query(F.data.startswith("reaction_bans_"))
-async def admin_reaction_bans(callback: types.CallbackQuery):
-
-    try:
-        board_id = callback.data.split("_")[-1]
-    except IndexError: return
-    if not is_admin(callback.from_user.id, board_id):
-        try: await callback.answer("Access denied", show_alert=True)
-        except Exception: pass
-        return
-    b_data = board_data[board_id]
-    lang = 'en' if board_id == 'int' else 'ru'
-    banned_users = b_data.get('reaction_banned_users', set())
-    board_name = BOARD_CONFIG[board_id]['name']
-    if not banned_users:
-        if lang == 'en':
-            response_text = f"No users are banned from reacting on {board_name}."
-        elif lang == 'jp':
-            response_text = f"{board_name} でリアクション禁止のユーザーはいません。"
-        else:
-            response_text = f"На доске {board_name} нет пользователей с запретом на реакции."
-    else:
-        sorted_banned = sorted(list(banned_users))
-        user_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted_banned])
-        if lang == 'en':
-            response_text = f"<b>🚫 Users banned from reacting on {board_name}:</b>\n\n{user_list}"
-        elif lang == 'jp':
-            response_text = f"<b>🚫 {board_name} でリアクション禁止のユーザー:</b>\n\n{user_list}"
-        else:
-            response_text = f"<b>🚫 Пользователи с запретом на реакции на доске {board_name}:</b>\n\n{user_list}"
-    back_txt = "⬅️ Back" if lang == 'en' else ("⬅️ 戻る" if lang == 'jp' else "⬅️ Назад в меню")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=back_txt, callback_data=f"admin_main_{board_id}")]
-    ])
-    try:
-        await callback.message.edit_text(response_text, parse_mode="HTML", reply_markup=keyboard)
-    except TelegramBadRequest:
-        pass
-    try: await callback.answer()
-    except TelegramBadRequest: pass
-@dp.callback_query(F.data.startswith("admin_main_"))
-async def admin_back_to_main(callback: types.CallbackQuery):
-
-    try:
-        board_id = callback.data.split("_")[2]
-    except IndexError: return
-    if not is_admin(callback.from_user.id, board_id):
-        try: await callback.answer("Нет прав", show_alert=True)
-        except Exception: pass
-        return
-    b_data = board_data[board_id]
-    lang = 'en' if board_id == 'int' else 'ru'
-    user_settings = b_data.get('user_settings', {})
-    gif_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_gif'))
-    sticker_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_sticker'))
-    reaction_ban_count = len(b_data.get('reaction_banned_users', set()))
-    media_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_media'))
-    lie_media_count = sum(1 for s in user_settings.values() if s.get('lie_media'))
-    board_name = BOARD_CONFIG[board_id]['name']
-    if lang == 'en':
-        header_text = f"Admin panel for board {board_name}:"
-        memo_text = (
-            "<b>🗒️ Command Cheatsheet:</b>\n"
-            "<code>/filter ...</code> - Manage spam filter\n"
-            f"<code>/togglereactions &lt;id&gt;</code> - Ban reactions ({reaction_ban_count})\n"
-            f"<code>/togglegif &lt;id&gt;</code> - Shadow Ban GIFs ({gif_ban_count})\n"
-            f"<code>/togglestickers &lt;id&gt;</code> - Shadow Ban Stickers ({sticker_ban_count})\n"
-            f"<code>/togglemedia &lt;id&gt;</code> - Shadow Ban Media ({media_ban_count})\n"
-            f"<code>/lie &lt;id&gt;</code> - Archive media substitution ({lie_media_count})\n"
-            "<code>/reactions</code> (reply) - Show who reacted"
-        )
-        btn_stats = "📊 Stats"
-        btn_filter = "🤬 Filter"
-        btn_restr = "🚫 Restrictions"
-        btn_backup = "💾 Backup"
-    elif lang == 'jp': # На всякий случай
-        header_text = f"{board_name} 管理パネル:"
-        memo_text = (
-            "<b>🗒️ コマンド:</b>\n"
-            "<code>/filter ...</code> - フィルタ管理\n"
-            f"<code>/togglereactions &lt;id&gt;</code> - リアクション禁止 ({reaction_ban_count})\n"
-            f"<code>/togglegif &lt;id&gt;</code> - GIF禁止 ({gif_ban_count})\n"
-            f"<code>/togglestickers &lt;id&gt;</code> - スタンプ禁止 ({sticker_ban_count})\n"
-            f"<code>/togglemedia &lt;id&gt;</code> - メディア禁止 ({media_ban_count})\n"
-            f"<code>/lie &lt;id&gt;</code> - Archive media substitution ({lie_media_count})\n"
-            "<code>/reactions</code> (返信) - リアクションした人を見る"
-        )
-        btn_stats = "📊 統計"
-        btn_filter = "🤬 フィルタ"
-        btn_restr = "🚫 制限"
-        btn_backup = "💾 保存"
-    else:
-        header_text = f"Админка доски {board_name}:"
-        memo_text = (
-            f"{header_text}\n\n"
-            "<code>/ban</code>, <code>/unban</code> — Бан/Разбан\n"
-            "<code>/mute [время]</code>, <code>/unmute</code> — Мут\n"
-            "<code>/shadowmute [время]</code> — Теневой мут\n"
-            "<code>/gban</code>, <code>/gunban</code> — ГЛОБАЛЬНО\n\n"
-            "<code>/del</code>, <code>/sdel</code> — Удаление\n"
-            "<code>/pin</code>, <code>/unpin</code> — Закреп\n\n"
-            "<code>/whois [id]</code> — Досье\n"
-            f"<code>/togglegif</code> — Бан GIF ({gif_ban_count})\n"
-            f"<code>/togglestickers</code> — Бан стикеров ({sticker_ban_count})\n\n"
-            f"<code>/lie</code> — Подмена медиа архивом ({lie_media_count})\n\n"
-            "<code>/say</code>, <code>/ans</code> — Ответы\n"
-            "<code>/stop</code> — Стоп режимы"
-        )
-        btn_stats = "📊 Статистика"
-        btn_filter = "🤬 Стоп-слова"
-        btn_restr = "🚫 Ограничения (Баны/Муты)"
-        btn_backup = "💾 Сохранить Бэкап"
-    final_text = f"{header_text}\n\n{memo_text}"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=btn_stats, callback_data=f"stats_{board_id}"),
-         InlineKeyboardButton(text=btn_filter, callback_data=f"filter_list_{board_id}")],
-        [InlineKeyboardButton(text=btn_restr, callback_data=f"restrictions_{board_id}")],
-        [InlineKeyboardButton(text=btn_backup, callback_data="save_all")],
-    ])
-    try:
-        await callback.message.edit_text(final_text, reply_markup=keyboard, parse_mode="HTML")
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower():
-             print(f"Admin menu update error: {e}")
-    try:
-        await callback.answer()
-    except TelegramBadRequest:
-        pass
-async def get_author_id_by_reply(msg: types.Message) -> int | None:
-    if not msg.reply_to_message:
-        return None
-
-    # 0. Прямой ответ на сообщение живого пользователя (не бота)
-    reply_user = msg.reply_to_message.from_user
-    if reply_user and not reply_user.is_bot:
-        return reply_user.id
-    if msg.reply_to_message.forward_from and not msg.reply_to_message.forward_from.is_bot:
-        return msg.reply_to_message.forward_from.id
-
-    target_chat_id = msg.reply_to_message.chat.id
-    reply_mid = msg.reply_to_message.message_id
-    lookup_key = (target_chat_id, reply_mid)
-    post_num = None
-
-    # 1. Поиск по RAM
-    async with storage_lock:
-        post_num = message_to_post.get(lookup_key)
-        if post_num and post_num in messages_storage:
-            author_id = messages_storage[post_num].get("author_id")
-            if author_id is not None:
-                return author_id
-
-    # 2. Поиск по metadata через post_helpers (zero-width, entities, regex)
-    from post_helpers import extract_post_num_from_message
-    extracted_num = extract_post_num_from_message(msg.reply_to_message)
-    if extracted_num:
-        post_num = extracted_num
-        db_post = await get_post_by_num(post_num)
-        if db_post and 'author_id' in db_post and db_post['author_id'] is not None:
-            return db_post['author_id']
-
-    # 3. Поиск по копиям сообщений (PostCopies / ChannelCopies)
-    if not post_num:
-        info = await get_post_info_by_copy(target_chat_id, reply_mid)
-        if info:
-            post_num = info[0]
-            if info[1] is not None:
-                return info[1]
-
-    # 4. Фолбэк на таблицу ChannelCopies напрямую
-    try:
-        db = await get_pool()
-        async with db.execute(
-            "SELECT p.author_id, p.post_num FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?",
-            (target_chat_id, reply_mid)
-        ) as cur:
-            row = await cur.fetchone()
-            if row and row[0] is not None:
-                return row[0]
-    except Exception:
-        pass
-
-    # 5. Текстовый парсинг
-    if not post_num:
-        from common.text_utils import extract_post_num_from_message_text
-        reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
-        extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
-        if extracted_pnum:
-            post_num = extracted_pnum
-
-    if post_num:
-        db_post = await get_post_by_num(post_num)
-        if db_post and 'author_id' in db_post and db_post['author_id'] is not None:
-            return db_post['author_id']
-
-    db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
-    if db_author_id is not None:
-        return db_author_id
-
-    if reply_user and reply_user.is_bot:
-        return 0
-
-    return None
-
-async def get_post_num_by_reply(msg: types.Message) -> int | None:
-    if not msg.reply_to_message:
-        return None
-    target_chat_id = msg.reply_to_message.chat.id
-    reply_mid = msg.reply_to_message.message_id
-    lookup_key = (target_chat_id, reply_mid)
-
-    # 1. RAM storage lookup
-    async with storage_lock:
-        pnum = message_to_post.get(lookup_key)
-        if pnum:
-            return pnum
-
-    # 2. Extract from message using zero-width invisible unicode, entities or header regex
-    from post_helpers import extract_post_num_from_message
-    extracted_num = extract_post_num_from_message(msg.reply_to_message)
-    if extracted_num:
-        return extracted_num
-
-    # 3. PostCopies / ChannelCopies lookup via get_post_info_by_copy
-    info = await get_post_info_by_copy(target_chat_id, reply_mid)
-    if info and info[0]:
-        return info[0]
-
-    # 4. Direct ChannelCopies query fallback
-    try:
-        db = await get_pool()
-        async with db.execute(
-            "SELECT post_num FROM ChannelCopies WHERE channel_id = ? AND message_id = ?",
-            (target_chat_id, reply_mid)
-        ) as cur:
-            row = await cur.fetchone()
-            if row and row[0]:
-                return row[0]
-    except Exception:
-        pass
-
-    # 5. Fallback extract from text
-    from common.text_utils import extract_post_num_from_message_text
-    reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
-    extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
-    if extracted_pnum:
-        return extracted_pnum
-
-    return None
 @dp.message(Command("id"))
 async def cmd_get_id(message: types.Message, board_id: str | None, stream: str = 'ru'):
 

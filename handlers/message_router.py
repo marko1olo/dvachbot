@@ -1086,10 +1086,27 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 except Exception:
                     pass
             return
+        # Silently drop Telegram service messages without cluttering error logs
+        service_types = {
+            'new_chat_members', 'left_chat_member', 'new_chat_title',
+            'new_chat_photo', 'delete_chat_photo', 'group_chat_created',
+            'supergroup_chat_created', 'channel_chat_created', 'pinned_message'
+        }
+        raw_content_type = str(getattr(message.content_type, 'value', message.content_type)).lower()
+        if raw_content_type in service_types:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
         supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note']
         if message.content_type not in supported_types:
             logger.warning(f"🚫 [MSG DROPPED: UNSUPPORTED_TYPE] user={user_id} board={board_id} type={message.content_type}")
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
             return
         if message.content_type == 'text' and not (message.text and message.text.strip()):
             logger.warning(f"🚫 [MSG DROPPED: EMPTY_TEXT] user={user_id} board={board_id}")

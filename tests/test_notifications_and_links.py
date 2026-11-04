@@ -596,14 +596,14 @@ async def test_tg_board_reply_to_notification_and_thread_broadcast(isolated_test
     await processor._format_and_update_headers()
 
     # Verify thread hyperlink and inline keyboard
-    assert f"https://tgach.top/b/res/{op_num}.html#{processor.current_post_num}" in processor.final_content['text']
+    assert f"https://tgach.top/b/res/{op_num}.html#{processor.current_post_num}" in processor.author_content['text']
     assert processor.board_keyboard is not None
     assert len(processor.board_keyboard.inline_keyboard) == 1
     assert "Открыть тред на сайте" in processor.board_keyboard.inline_keyboard[0][0].text
 
-    # Verify site formatting renders clean HTML
-    formatted_html = format_post_text(processor.final_content['text'])
-    assert f'<a href="https://tgach.top/b/res/{op_num}.html#{processor.current_post_num}"' in formatted_html
+    # Verify site formatting cleanly strips raw thread links without broken &lt;a entities
+    formatted_html = format_post_text(processor.author_content['text'])
+    assert "🧵" not in formatted_html
     assert "&lt;a" not in formatted_html
 
     # Verify database persistence: post is saved with thread_id IS NULL

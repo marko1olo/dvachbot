@@ -356,6 +356,13 @@ HOMOGLYPH_LATIN_TO_CYRILLIC = str.maketrans({
     'O': 'о', 'P': 'р', 'T': 'т', 'X': 'х', 'Y': 'у'
 })
 
+HOMOGLYPH_CYRILLIC_TO_LATIN = str.maketrans({
+    'а': 'a', 'с': 'c', 'е': 'e', 'о': 'o', 'р': 'p', 'х': 'x', 'у': 'y',
+    'в': 'b', 'н': 'h', 'к': 'k', 'м': 'm', 'т': 't',
+    'А': 'a', 'С': 'c', 'Е': 'e', 'О': 'o', 'Р': 'p', 'Х': 'x', 'У': 'y',
+    'В': 'b', 'Н': 'h', 'К': 'k', 'М': 'm', 'Т': 't'
+})
+
 def canonicalize_spam_text(text: str, map_homoglyphs: bool = False) -> str:
     """
     Нормализует Unicode (NFKC), удаляет zero-width и RTL-override символы,
@@ -500,20 +507,26 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     if is_link_spam:
         return True
 
-    banned_words = _spam_filter_words.get(board_id)
+    banned_words = set(_spam_filter_words.get(board_id) or set())
+    if 'ALL' in _spam_filter_words:
+        banned_words.update(_spam_filter_words['ALL'])
     if not banned_words:
         return False
 
-    for wl in URL_WHITELIST:
+    for wl in sorted(URL_WHITELIST, key=len, reverse=True):
         clean_canonical = clean_canonical.replace(wl, "")
 
-    clean_with_homoglyphs = clean_canonical.translate(HOMOGLYPH_LATIN_TO_CYRILLIC)
+    clean_with_cyrillic = clean_canonical.translate(HOMOGLYPH_LATIN_TO_CYRILLIC)
+    clean_with_latin = clean_canonical.translate(HOMOGLYPH_CYRILLIC_TO_LATIN)
 
     for word in banned_words:
         w = canonicalize_spam_text(str(word)).strip()
         if not w:
             continue
-        if w in clean_canonical or w in clean_with_homoglyphs:
+        w_cyr = w.translate(HOMOGLYPH_LATIN_TO_CYRILLIC)
+        w_lat = w.translate(HOMOGLYPH_CYRILLIC_TO_LATIN)
+        if (w in clean_canonical or w in clean_with_cyrillic or w in clean_with_latin or
+            w_cyr in clean_with_cyrillic or w_lat in clean_with_latin):
             return True
     return False
 
@@ -840,6 +853,49 @@ def check_flood(
     return False, ""
 
 
+_top_active_users_cache: set[int] = set()
+_top_active_users_cache_ts: float = 0.0
+
+def get_top_active_monthly_users(ttl: float = 600.0) -> set[int]:
+    """
+    Returns the user IDs of the top 15 most active users for the last 30 days.
+    These users receive an indulgence against emergency anti-dox TG link filters.
+    """
+    global _top_active_users_cache, _top_active_users_cache_ts
+    now = time.time()
+    if _top_active_users_cache and (now - _top_active_users_cache_ts) < ttl:
+        return _top_active_users_cache
+    try:
+        from common.config import DB_NAME
+        import sqlite3
+        conn = sqlite3.connect(str(DB_NAME), timeout=3.0)
+        c = conn.cursor()
+        month_ago = now - (30 * 86400)
+        c.execute("""
+            SELECT author_id
+            FROM Posts
+            WHERE timestamp > ?
+              AND author_id > 0
+              AND author_id NOT IN (8758394244, 9020568224, 8959719321, 8973793918, 8385226024)
+              AND is_shadow = 0
+            GROUP BY author_id
+            ORDER BY count(*) DESC
+            LIMIT 15
+        """, (month_ago,))
+        _top_active_users_cache = {row[0] for row in c.fetchall()}
+        _top_active_users_cache_ts = now
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error fetching top active monthly users: {e}")
+        if not _top_active_users_cache:
+            _top_active_users_cache = {
+                5264555563, 5489746335, 6557599214, 7716348189, 5780136258,
+                1229015404, 6817120667, 7414244332, 8612598423, 8983482049,
+                7161855695, 6925451988, 597708036, 7208625308, 8500120330
+            }
+    return _top_active_users_cache
+
+
 def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None) -> Tuple[bool, str]:
     """
     Checks for link spam or doxing phone number leaks (Anti-Dox).
@@ -859,14 +915,40 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
     now = now_ts or time.time()
     clean_text = text
 
-    # Remove whitelisted domains before evaluation
-    for wl in URL_WHITELIST:
+    # Remove whitelisted domains before evaluation (longest match first)
+    for wl in sorted(URL_WHITELIST, key=len, reverse=True):
         clean_text = clean_text.replace(wl, "")
 
     # Phone number / doxing leaks (+79..., 89..., +380..., +375...)
     if contains_phone_number(clean_text):
         phones = extract_phone_numbers(clean_text)
         return True, f"Слив телефонного номера (Anti-Dox): {phones[0]}"
+
+    # 32-Hour Emergency Anti-Dox: auto-shadowmute any Telegram links or @username/@channel mentions
+    # Active until 2026-11-04 08:40:00 UTC+4 (32 hours from deployment)
+    # Indulgence: Admins and TOP 15 most active users of the last month are exempt!
+    TG_LINKS_AUTOSHADOW_UNTIL = 1793767200.0
+    if now < TG_LINKS_AUTOSHADOW_UNTIL:
+        top_15 = get_top_active_monthly_users()
+        if user_id not in top_15:
+            norm_text = canonicalize_spam_text(clean_text)
+            # Check @username or @channel mention (at least 2 alphanumeric chars)
+            if re.search(r'@[a-zA-Z0-9_]{2,}', clean_text) or re.search(r'@[a-zA-Z0-9_]{2,}', norm_text):
+                return True, "Аварийный авто-шедоумут: обнаружен @юзернейм/паблик (режим защиты 32 часа, без индульгенции)"
+
+            # Check t.me, telegram.me, telegram.dog, tg://, etc.
+            tg_pattern = re.compile(
+                r'(?:https?:\/\/)?(?:www\.)?(?:t(?:elegram)?\.(?:me|dog)|telegram\.org)\/[a-zA-Z0-9_+%-]+|tg:\/\/\S+|t\s*[\.,]\s*me[\s\/]',
+                re.IGNORECASE
+            )
+            if tg_pattern.search(clean_text) or tg_pattern.search(norm_text):
+                return True, "Аварийный авто-шедоумут: обнаружена Telegram ссылка/паблик (режим защиты 32 часа, без индульгенции)"
+
+            # Check Cyrillic homoglyphs for t.me
+            cyr_homo = str.maketrans('тасеорхі', 'taceopxi')
+            trans_text = norm_text.translate(cyr_homo)
+            if tg_pattern.search(trans_text):
+                return True, "Аварийный авто-шедоумут: обнаружена Telegram ссылка/паблик (режим защиты 32 часа, без индульгенции)"
 
     return False, ""
 

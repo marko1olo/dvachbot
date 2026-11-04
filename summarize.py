@@ -378,7 +378,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         top_candidates = [
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
         ]
         # Weighted random selection of the primary model per request
@@ -413,7 +413,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         top_fast = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
         ]
         chosen_fast = random.choice(top_fast)
         remaining_fast = [m for m in top_fast if m != chosen_fast]
@@ -427,7 +427,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         top_gem = [
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
         ]
         chosen_gem = random.choice(top_gem)
         remaining_gem = [m for m in top_gem if m != chosen_gem]
@@ -452,7 +452,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("deepseek-v4-flash", "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
         ]
@@ -461,7 +461,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("deepseek-v4-flash", "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
@@ -477,7 +477,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("deepseek-v4-flash", "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),

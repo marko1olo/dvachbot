@@ -460,14 +460,19 @@ def _iter_message_ids_for_copy(mid_or_list):
         return mid_or_list
     return (mid_or_list,)
 
-def _drop_post_copy_maps_unlocked(post_num: int) -> int:
+def _drop_post_copy_maps_unlocked(post_num: int, drop_reverse: bool = True) -> int:
     copies_map = post_to_messages.pop(post_num, None)
     if not copies_map:
         return 0
-    # post_to_messages is pruned to conserve RAM, but message_to_post retains reverse
-    # mappings as an independent LRU bounded dictionary (up to BOT_MESSAGE_TO_POST_LIMIT=500000)
-    # so replies to older posts continue to resolve without DB overhead.
-    return len(copies_map)
+    removed = 0
+    for uid, mid_or_list in copies_map.items():
+        for mid in _iter_message_ids_for_copy(mid_or_list):
+            if drop_reverse:
+                if message_to_post.pop((uid, mid), None) is not None:
+                    removed += 1
+            else:
+                removed += 1
+    return removed
 
 def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     if max_posts < 0:
