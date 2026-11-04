@@ -44,7 +44,7 @@ async def test_work_cooldown_alert_task_fires():
         mock_send_banner.assert_called_once()
         args, kwargs = mock_send_banner.call_args
         caption_lower = kwargs["caption"].lower()
-        assert any(w in caption_lower for w in ["работ", "завод", "кулдаун", "сыч", "смен", "пахат", "станок", "шекел", "абу", "доширак", "перерыв", "таймер", "батрач", "труда"])
+        assert any(w in caption_lower for w in ["работ", "завод", "кулдаун", "сыч", "смен", "пахат", "станок", "шекел", "абу", "доширак", "перерыв", "таймер", "батрач", "труда", "ваканси"])
 
 
 @pytest.mark.asyncio
@@ -57,6 +57,23 @@ async def test_work_cooldown_alert_skips_if_active_cooldown_remains():
     with patch("work_alerts.asyncio.sleep", new=AsyncMock()), \
          patch("common.db_pool.get_pool", new=AsyncMock(return_value=MagicMock())), \
          patch("common.bot_helpers._get_user_active_items", new=AsyncMock(return_value={"work_cooldowns": {"factory": 9999999999}})), \
+         patch("banner_manager.send_banner_message", new=AsyncMock()) as mock_send_banner:
+
+        await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0)
+
+        mock_send_banner.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_work_cooldown_alert_respects_user_opt_out():
+    """Verify that alert is NOT sent if user has opted out of work alerts."""
+    mock_bot = MagicMock()
+    user_id = 999444
+    board_id = "b"
+
+    with patch("work_alerts.asyncio.sleep", new=AsyncMock()), \
+         patch("common.db_pool.get_pool", new=AsyncMock(return_value=MagicMock())), \
+         patch("common.bot_helpers._get_user_active_items", new=AsyncMock(return_value={"work_alerts_disabled": True, "work_cooldowns": {"bottles": 0}})), \
          patch("banner_manager.send_banner_message", new=AsyncMock()) as mock_send_banner:
 
         await _work_cooldown_alert_task(mock_bot, user_id, board_id, finish_ts=0)
