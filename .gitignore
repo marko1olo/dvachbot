@@ -6,6 +6,7 @@
 *.db.before_merge
 *.before_merge
 data/thumbnails/
+data/invite_cards/
 last_100_lol_pics/
 
 # Кэш Python
