@@ -81,17 +81,65 @@ def test_compute_airdrop_allocations_proportional_and_capped():
     assert abs(total_distributed - pool) < 50
 
 
-def test_get_seconds_until_next_weekly_run():
-    from weekly_airdrop_engine import get_seconds_until_next_weekly_run
-    # 1. First run ever (last_run_ts <= 0) -> exactly 900 seconds (15 min)
-    target, sleep_sec = get_seconds_until_next_weekly_run(0.0, 1000.0)
-    assert sleep_sec == 900.0
+def test_get_seconds_until_next_weekly_run_first_run_zero():
+    from weekly_airdrop_engine import get_seconds_until_next_weekly_run, MSK
+    now_ts = 1_700_000_000.0
+    target_dt, sleep_sec = get_seconds_until_next_weekly_run(0.0, now_ts)
 
-    # 2. Subsequent run -> exactly 7 days (604800s) from last run
-    last_run = 1000.0
-    now = 1000.0 + 86400.0  # 1 day later
-    target, sleep_sec = get_seconds_until_next_weekly_run(last_run, now)
-    assert sleep_sec == 6 * 86400.0
+    assert sleep_sec == 900.0
+    assert isinstance(target_dt, datetime)
+    assert target_dt.tzinfo == MSK
+    assert target_dt.utcoffset() == timedelta(hours=3)
+    assert target_dt.timestamp() == now_ts + 900.0
+
+
+def test_get_seconds_until_next_weekly_run_first_run_negative():
+    from weekly_airdrop_engine import get_seconds_until_next_weekly_run, MSK
+    now_ts = 1_700_000_000.0
+    target_dt, sleep_sec = get_seconds_until_next_weekly_run(-12345.0, now_ts)
+
+    assert sleep_sec == 900.0
+    assert isinstance(target_dt, datetime)
+    assert target_dt.tzinfo == MSK
+    assert target_dt.timestamp() == now_ts + 900.0
+
+
+def test_get_seconds_until_next_weekly_run_subsequent_regular():
+    from weekly_airdrop_engine import get_seconds_until_next_weekly_run, MSK, WEEKLY_INTERVAL_SECONDS
+    last_run = 1_700_000_000.0
+    now_ts = last_run + 86_400.0  # 1 day after last run
+    expected_sleep = WEEKLY_INTERVAL_SECONDS - 86_400.0
+
+    target_dt, sleep_sec = get_seconds_until_next_weekly_run(last_run, now_ts)
+
+    assert sleep_sec == expected_sleep
+    assert isinstance(target_dt, datetime)
+    assert target_dt.tzinfo == MSK
+    assert target_dt.utcoffset() == timedelta(hours=3)
+    assert target_dt.timestamp() == last_run + WEEKLY_INTERVAL_SECONDS
+
+
+def test_get_seconds_until_next_weekly_run_exact_boundary():
+    from weekly_airdrop_engine import get_seconds_until_next_weekly_run, WEEKLY_INTERVAL_SECONDS
+    last_run = 1_700_000_000.0
+    now_ts = last_run + WEEKLY_INTERVAL_SECONDS  # Exactly 7 days later
+
+    target_dt, sleep_sec = get_seconds_until_next_weekly_run(last_run, now_ts)
+
+    assert sleep_sec == 0.0
+    assert target_dt.timestamp() == last_run + WEEKLY_INTERVAL_SECONDS
+
+
+def test_get_seconds_until_next_weekly_run_overdue():
+    from weekly_airdrop_engine import get_seconds_until_next_weekly_run, WEEKLY_INTERVAL_SECONDS
+    last_run = 1_700_000_000.0
+    now_ts = last_run + WEEKLY_INTERVAL_SECONDS + 3600.0  # 1 hour overdue
+
+    target_dt, sleep_sec = get_seconds_until_next_weekly_run(last_run, now_ts)
+
+    # sleep_seconds must be clamped to 0.0, never negative
+    assert sleep_sec == 0.0
+    assert target_dt.timestamp() == last_run + WEEKLY_INTERVAL_SECONDS
 
 def test_seconds_until_next_sunday_2100():
     msk = timezone(timedelta(hours=3))
