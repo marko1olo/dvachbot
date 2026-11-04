@@ -302,9 +302,10 @@ def _health_probe() -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-def _kill_tree(process: subprocess.Popen, reason: str) -> None:
-    pid = process.pid
-    log(f"Killing bot child tree pid={pid}; reason={reason}")
+def _kill_pid_tree(pid: int, reason: str) -> None:
+    if pid <= 0:
+        return
+    log(f"Killing process tree pid={pid}; reason={reason}")
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -313,11 +314,26 @@ def _kill_tree(process: subprocess.Popen, reason: str) -> None:
             check=False,
         )
     else:
-        process.terminate()
         try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            import psutil
+            if psutil.pid_exists(pid):
+                p = psutil.Process(pid)
+                for c in p.children(recursive=True):
+                    try:
+                        c.kill()
+                    except Exception:
+                        pass
+                p.kill()
+        except Exception:
+            pass
+
+
+def _kill_tree(process: subprocess.Popen, reason: str) -> None:
+    pid = process.pid
+    _kill_pid_tree(pid, reason)
+    lock_pid = _read_lock_pid()
+    if lock_pid and lock_pid != pid:
+        _kill_pid_tree(lock_pid, f"{reason}_associated_lock_pid")
     try:
         BOT_LOCK.unlink()
         log("Removed bot.lock after forced child stop")
@@ -331,6 +347,11 @@ def _start_child() -> subprocess.Popen:
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    python_exe = getattr(sys, "_base_executable", sys.executable)
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        env["VIRTUAL_ENV"] = sys.prefix
+        scripts_dir = str(Path(sys.prefix) / "Scripts")
+        env["PATH"] = scripts_dir + os.pathsep + env.get("PATH", "")
     LOG_DIR.mkdir(exist_ok=True)
     banner = (
         "\n======================================================\n"
@@ -360,7 +381,7 @@ def _start_child() -> subprocess.Popen:
     stdout_fh = STDOUT_LOG.open("a", encoding="utf-8", buffering=1)
     stdout_fh.write(banner)
     child = subprocess.Popen(
-        [sys.executable, "-X", "utf8", "-u", "main.py"],
+        [python_exe, "-X", "utf8", "-u", "main.py"],
         cwd=str(ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -470,8 +491,22 @@ def _monitor_child(child: subprocess.Popen) -> bool:
     last_heartbeat_notice = 0.0
     last_scheduled_restart_date: str | None = None
     soft_restart_requested_at: float | None = None
+    known_child_pids: set[int] = {child.pid}
     try:
         while True:
+            # Regularly track known child PIDs from bot.lock and psutil
+            lock_pid = _read_lock_pid()
+            if lock_pid:
+                known_child_pids.add(lock_pid)
+            try:
+                import psutil
+                if psutil.pid_exists(child.pid):
+                    p = psutil.Process(child.pid)
+                    for c in p.children(recursive=True):
+                        known_child_pids.add(c.pid)
+            except Exception:
+                pass
+
             return_code = child.poll()
             if return_code is not None:
                 log(f"Bot child exited pid={child.pid} code={return_code}")
@@ -480,32 +515,50 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                     log("Stop request detected after child exit; supervisor exits")
                     return True
                 live_pid = _locked_live_bot_pid()
-                if live_pid and live_pid != child.pid:
+                if live_pid and live_pid in known_child_pids:
+                    # Our tracked child/worker process is finishing up. Wait briefly.
+                    for _ in range(6):
+                        if not _is_bot_process(live_pid):
+                            break
+                        time.sleep(0.5)
+                    if _is_bot_process(live_pid):
+                        log(f"Lingering child process pid={live_pid} did not exit in time; killing...")
+                        _kill_pid_tree(live_pid, "lingering_child_shutdown")
+                    BOT_LOCK.unlink(missing_ok=True)
+                elif live_pid and live_pid != child.pid:
                     is_descendant = False
                     try:
                         import psutil
                         if psutil.pid_exists(live_pid):
                             p = psutil.Process(live_pid)
                             parent = p.parent()
-                            if parent and parent.pid == child.pid:
+                            if parent and (parent.pid == child.pid or parent.pid in known_child_pids):
                                 is_descendant = True
                     except Exception:
                         pass
 
-                    if not is_descendant:
-                        log(
-                            f"Child exited while bot.lock is owned by another live pid={live_pid}; "
-                            "supervisor exits instead of restart-looping"
-                        )
-                        return True
-                    else:
-                        try:
-                            import psutil
-                            if psutil.pid_exists(live_pid):
-                                psutil.Process(live_pid).kill()
-                        except Exception:
-                            pass
+                    if is_descendant:
+                        log(f"Descendant process pid={live_pid} still alive; killing...")
+                        _kill_pid_tree(live_pid, "descendant_child_cleanup")
                         BOT_LOCK.unlink(missing_ok=True)
+                    else:
+                        healthy, probe_details = _health_probe()
+                        if not healthy:
+                            log(
+                                f"Stale/unhealthy bot process pid={live_pid} holding bot.lock ({probe_details}); "
+                                "killing zombie process and restarting..."
+                            )
+                            _kill_pid_tree(live_pid, "unhealthy_zombie_cleanup")
+                            BOT_LOCK.unlink(missing_ok=True)
+                        else:
+                            log(
+                                f"Child exited while another healthy bot is active pid={live_pid}; "
+                                "supervisor exits to avoid split-brain"
+                            )
+                            return True
+                else:
+                    BOT_LOCK.unlink(missing_ok=True)
+
                 log(f"Bot child exited (code={return_code}). Supervisor will restart the bot...")
                 return False
 
