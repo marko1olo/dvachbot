@@ -115,6 +115,7 @@ _CANNED_REFUSAL_MARKERS = (
 _PROVIDER_LOCKS: dict[str, asyncio.Lock] = {}
 _PROVIDER_LOCKS_LOOP: asyncio.AbstractEventLoop | None = None
 _PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
+DEFAULT_AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "deepseek-v4-flash")
 MIN_PROVIDER_INTERVAL: dict[str, float] = {
     "gemini": 2.5,
     "groq": 2.5,
@@ -394,7 +395,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             [chosen_first]
             + remaining_top
             + [
-                ("deepseek-v4-flash", "agentrouter"),
+                (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
                 ("gemini-3.6-flash", "gemini"),
                 ("gemini-3.7-flash", "gemini"),
                 ("qwen/qwen3.8-27b", "groq"),
@@ -432,7 +433,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         models_cascade = [chosen_gem] + remaining_gem + [
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.7-flash", "gemini"),
-            ("deepseek-v4-flash", "agentrouter"),
+            (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
             ("qwen/qwen3.8-27b", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
             ("openai/gpt-oss-120b", "groq"),
@@ -446,7 +447,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("openai/gpt-oss-120b", "groq"),
             ("llama-3.1-8b-instant", "groq"),
             ("openai/gpt-oss-20b", "groq"),
-            ("deepseek-v4-flash", "agentrouter"),
+            (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
@@ -454,7 +455,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         ]
     elif model_preference in ("deepseek", "agentrouter"):
         models_cascade = [
-            ("deepseek-v4-flash", "agentrouter"),
+            (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
@@ -469,7 +470,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     else:
         # Default summarization cascade: DeepSeek prioritized as #1
         models_cascade = [
-            ("deepseek-v4-flash", "agentrouter"),
+            (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
@@ -711,6 +712,22 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
                 if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")
+                    break
+                if "unauthorized_client" in err_str.lower() or "unauthorized client" in err_str.lower():
+                    logger.warning(f"⚠️ {provider} client rejected upstream (unauthorized_client). Placing provider on 1h cooldown.")
+                    _provider_cooldowns[provider] = time.time() + 3600.0
+                    skip_providers.add(provider)
+                    break
+                if (
+                    "无可用渠道" in err_str
+                    or "no available channel" in err_str.lower()
+                    or "no channel available" in err_str.lower()
+                ):
+                    logger.warning(
+                        f"⚠️ {provider} model {model_name} has no available channels upstream. Placing model on 30m cooldown."
+                    )
+                    _model_cooldowns[model_name] = time.time() + 1800.0
+                    skip_model = True
                     break
                 if "402" in err_str or "budget pool" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} budget pool quota exhausted (402). Placing model on 30m cooldown.")

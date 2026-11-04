@@ -145,3 +145,55 @@ async def test_agentrouter_fallback_when_no_keys(
     assert result == "Gemini summary response"
     # First model called should be gemini-3.5-flash since deepseek was skipped
     assert mock_client.chat.completions.create.call_args[1]["model"] == "gemini-3.5-flash"
+
+
+@pytest.mark.asyncio
+@patch("summarize.AsyncOpenAI")
+@patch("summarize.agentrouter_pool.get_all_active_tokens", return_value=["sk-ar-test-01"])
+@patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key-01"])
+@patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key-01"])
+async def test_agentrouter_no_available_channel_cooldown(
+    mock_groq, mock_google, mock_ar, mock_openai_cls
+):
+    from summarize import _model_cooldowns, DEFAULT_AGENTROUTER_MODEL
+    mock_client = AsyncMock()
+    mock_openai_cls.return_value = mock_client
+
+    mock_completion_fallback = MagicMock()
+    mock_completion_fallback.choices = [MagicMock(message=MagicMock(content="Fallback response"))]
+
+    mock_client.chat.completions.create.side_effect = [
+        Exception("Error code: 503 - {'error': {'message': '\u5f53\u524d\u5206\u7ec4 default \u4e0b\u5bf9\u4e8e\u6a21\u578b deepseek-v4-flash \u65e0\u53ef\u7528\u6e20\u9053'}}"),
+        mock_completion_fallback
+    ]
+
+    result = await summarize_text_with_hf("Prompt", "Text content")
+    assert result == "Fallback response"
+    assert DEFAULT_AGENTROUTER_MODEL in _model_cooldowns
+    assert _model_cooldowns[DEFAULT_AGENTROUTER_MODEL] > time.time() + 1700
+
+
+@pytest.mark.asyncio
+@patch("summarize.AsyncOpenAI")
+@patch("summarize.agentrouter_pool.get_all_active_tokens", return_value=["sk-ar-test-01", "sk-ar-test-02"])
+@patch("summarize.google_pool.get_all_active_tokens", return_value=["google-key-01"])
+@patch("summarize.groq_pool.get_all_active_tokens", return_value=["groq-key-01"])
+async def test_agentrouter_unauthorized_client_pauses_provider(
+    mock_groq, mock_google, mock_ar, mock_openai_cls
+):
+    from summarize import _provider_cooldowns
+    mock_client = AsyncMock()
+    mock_openai_cls.return_value = mock_client
+
+    mock_completion_fallback = MagicMock()
+    mock_completion_fallback.choices = [MagicMock(message=MagicMock(content="Fallback response"))]
+
+    mock_client.chat.completions.create.side_effect = [
+        Exception("Error code: 401 - {'error': {'message': 'unauthorized client detected, contact support'}}"),
+        mock_completion_fallback
+    ]
+
+    result = await summarize_text_with_hf("Prompt", "Text content")
+    assert result == "Fallback response"
+    assert "agentrouter" in _provider_cooldowns
+    assert _provider_cooldowns["agentrouter"] > time.time() + 3500
