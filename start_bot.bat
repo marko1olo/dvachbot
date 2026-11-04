@@ -1,9 +1,11 @@
 @echo off
+if "%~1"=="--no-conhost" goto :skip_conhost
 if not defined CONHOST_WRAPPED (
     set "CONHOST_WRAPPED=1"
     start "" "%SystemRoot%\System32\conhost.exe" "%ComSpec%" /k call "%~f0" %*
     exit /b 0
 )
+:skip_conhost
 chcp 65001 >nul
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
