@@ -44,6 +44,64 @@ def test_calculate_weekly_pool_dynamic_abu_fund():
     assert calculate_weekly_pool(10000, abu_fund_total=50_000_000.0) == MAX_WEEKLY_POOL
 
 
+def test_calculate_weekly_pool_default_args_and_zeroes():
+    # Default abu_fund_total should default to 0.0
+    assert calculate_weekly_pool(0) == MIN_WEEKLY_POOL
+    assert calculate_weekly_pool(0, 0.0) == MIN_WEEKLY_POOL
+    assert calculate_weekly_pool(100) == MIN_WEEKLY_POOL + (100 * POST_BONUS_RATE)
+
+
+def test_calculate_weekly_pool_negative_and_zero_fund():
+    # Negative abu_fund_total must not reduce below MIN_WEEKLY_POOL
+    assert calculate_weekly_pool(0, abu_fund_total=-500_000.0) == MIN_WEEKLY_POOL
+    assert calculate_weekly_pool(50, abu_fund_total=-100.0) == MIN_WEEKLY_POOL + (50 * POST_BONUS_RATE)
+    # Both negative posts and negative abu fund
+    assert calculate_weekly_pool(-999, abu_fund_total=-99999.0) == MIN_WEEKLY_POOL
+
+
+def test_calculate_weekly_pool_threshold_transition():
+    # Threshold where fund_component starts exceeding MIN_WEEKLY_POOL
+    # MIN_WEEKLY_POOL / ABU_FUND_SHARE_RATE = 200,000 / 0.06 = 3,333,333.333...
+    fund_below_threshold = 3_000_000.0  # 6% = 180,000 < 200,000
+    assert calculate_weekly_pool(0, abu_fund_total=fund_below_threshold) == MIN_WEEKLY_POOL
+
+    fund_above_threshold = 4_000_000.0  # 6% = 240,000 > 200,000
+    expected_above = 4_000_000.0 * ABU_FUND_SHARE_RATE
+    assert calculate_weekly_pool(0, abu_fund_total=fund_above_threshold) == expected_above
+
+    # With posts added to fund_above_threshold
+    posts = 500
+    assert calculate_weekly_pool(posts, abu_fund_total=fund_above_threshold) == round(expected_above + (posts * POST_BONUS_RATE), 2)
+
+
+def test_calculate_weekly_pool_max_cap_and_boundaries():
+    # Test exactly hitting MAX_WEEKLY_POOL:
+    # MAX_WEEKLY_POOL = 2,500,000
+    # Let fund_component = 1,000,000 (from fund = 1,000,000 / 0.06 = 16,666,666.67)
+    # Needed bonus = 1,500,000 -> 1,500,000 / 30 = 50,000 posts
+    fund = 1_000_000.0 / ABU_FUND_SHARE_RATE
+    assert calculate_weekly_pool(50_000, abu_fund_total=fund) == MAX_WEEKLY_POOL
+
+    # Slightly exceeding MAX_WEEKLY_POOL by 1 post
+    assert calculate_weekly_pool(50_001, abu_fund_total=fund) == MAX_WEEKLY_POOL
+
+    # Vastly exceeding MAX_WEEKLY_POOL
+    assert calculate_weekly_pool(1_000_000, abu_fund_total=fund) == MAX_WEEKLY_POOL
+
+    # Post bonus alone exceeding MAX_WEEKLY_POOL:
+    # 200,000 base + posts * 30 >= 2,500,000 -> posts * 30 >= 2,300,000 -> posts >= 76,667
+    assert calculate_weekly_pool(100_000, abu_fund_total=0.0) == MAX_WEEKLY_POOL
+
+
+def test_calculate_weekly_pool_rounding_precision():
+    # Float precision rounding to 2 decimal places:
+    # Fund = 3,500,000.123 -> fund_component = 210000.00738 -> round(..., 2)
+    fund = 3_500_000.123
+    result = calculate_weekly_pool(0, abu_fund_total=fund)
+    assert result == round(fund * ABU_FUND_SHARE_RATE, 2)
+    assert isinstance(result, float)
+
+
 def test_compute_airdrop_allocations_empty():
     assert compute_airdrop_allocations([], 100_000) == []
     assert compute_airdrop_allocations([{"user_id": 1, "posts_count": 10}], 0) == []
