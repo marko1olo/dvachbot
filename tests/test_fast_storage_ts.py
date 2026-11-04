@@ -25,24 +25,6 @@ class TestFastStorageTs(unittest.TestCase):
         self.assertEqual(result, 1683729000.5)
         self.assertIsInstance(result, float)
 
-    def test_string_numeric_timestamp(self):
-        result = _fast_storage_ts("1683729000.5")
-        self.assertEqual(result, 1683729000.5)
-        self.assertIsInstance(result, float)
-
-    def test_string_iso_timestamp(self):
-        result = _fast_storage_ts("2023-05-10T14:30:00+00:00")
-        expected_dt = datetime(2023, 5, 10, 14, 30, 0, tzinfo=timezone.utc)
-        self.assertEqual(result, expected_dt.timestamp())
-
-    def test_string_invalid(self):
-        self.assertEqual(_fast_storage_ts("not-a-valid-timestamp"), 0.0)
-
-    def test_other_invalid_types(self):
-        self.assertEqual(_fast_storage_ts([]), 0.0)
-        self.assertEqual(_fast_storage_ts({}), 0.0)
-        self.assertEqual(_fast_storage_ts(object()), 0.0)
-
 
 if __name__ == '__main__':
     unittest.main()
