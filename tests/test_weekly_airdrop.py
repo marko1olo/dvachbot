@@ -49,6 +49,53 @@ def test_compute_airdrop_allocations_empty():
     assert compute_airdrop_allocations([{"user_id": 1, "posts_count": 10}], 0) == []
 
 
+def test_compute_airdrop_allocations_empty_contributors():
+    """
+    Comprehensive edge case testing for empty and falsy contributors list
+    across various pool sizes and algorithm parameters.
+    """
+    # 1. Empty list with standard pool sizes
+    res_std = compute_airdrop_allocations([], 100_000.0)
+    assert isinstance(res_std, list)
+    assert res_std == []
+    assert len(res_std) == 0
+
+    assert compute_airdrop_allocations([], MIN_WEEKLY_POOL) == []
+    assert compute_airdrop_allocations([], MAX_WEEKLY_POOL) == []
+
+    # 2. Empty list with zero or negative total pool
+    assert compute_airdrop_allocations([], 0.0) == []
+    assert compute_airdrop_allocations([], -50_000.0) == []
+
+    # 3. Empty list with custom algorithm parameters (exponent and max_share)
+    res_custom = compute_airdrop_allocations([], 500_000.0, exponent=0.5, max_share=0.25)
+    assert res_custom == []
+
+    # 4. Falsy/None input for contributors
+    assert compute_airdrop_allocations(None, 100_000.0) == []
+    assert compute_airdrop_allocations(None, 0.0) == []
+
+
+def test_compute_airdrop_allocations_zero_posts_contributors():
+    """
+    Edge cases where contributors are present but have 0 posts,
+    resulting in total_weight <= 0.
+    """
+    # Single user with 0 posts
+    assert compute_airdrop_allocations([{"user_id": 1, "posts_count": 0}], 100_000.0) == []
+
+    # Multiple users with 0 posts
+    contributors_zero = [
+        {"user_id": 1, "posts_count": 0},
+        {"user_id": 2, "posts_count": 0},
+        {"user_id": 3, "posts_count": 0},
+    ]
+    assert compute_airdrop_allocations(contributors_zero, 100_000.0) == []
+
+    # Zero posts with zero pool
+    assert compute_airdrop_allocations(contributors_zero, 0.0) == []
+
+
 def test_compute_airdrop_allocations_proportional_and_capped():
     pool = 100_000.0
     contributors = [
@@ -235,3 +282,37 @@ async def test_weekly_airdrop_empty_fund_skipped():
         assert res["status"] == "skipped"
         assert res["reason"] == "abu_fund_empty"
 
+
+@pytest.mark.asyncio
+async def test_weekly_airdrop_no_contributors_skipped():
+    """
+    Validates execute_weekly_airdrop behavior when no contributors qualify:
+    - Empty posts table or only posts not meeting threshold.
+    - Ensures procedure returns {"status": "skipped", "reason": "no_contributors"}
+    - Verifies zero transactions and zero balance deductions.
+    """
+    async with aiosqlite.connect(":memory:") as db:
+        await db.execute("CREATE TABLE Posts (post_num INTEGER PRIMARY KEY, board_id TEXT, author_id INTEGER, content TEXT, timestamp REAL, is_shadow INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE Users (user_id INTEGER, board_id TEXT, balance REAL DEFAULT 0.0, PRIMARY KEY (user_id, board_id))")
+        await db.execute("CREATE TABLE UserTransactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, category TEXT, description TEXT, timestamp INTEGER)")
+        await db.execute("CREATE TABLE GlobalStats (key TEXT PRIMARY KEY, value TEXT)")
+        await db.execute("INSERT INTO GlobalStats (key, value) VALUES ('abu_yacht_fund', '1000000')")
+
+        # Insert only 1 post for User 1 (below min_posts=3 threshold)
+        now = time.time()
+        await db.execute("INSERT INTO Posts VALUES (1, 'b', 1, '{}', ?, 0)", (now,))
+        await db.commit()
+
+        # fetch_weekly_contributors should return empty list
+        contribs = await fetch_weekly_contributors(db, days=7, min_posts=3)
+        assert contribs == []
+
+        mock_bot = AsyncMock()
+        res = await execute_weekly_airdrop(db, {"b": mock_bot})
+        assert res["status"] == "skipped"
+        assert res["reason"] == "no_contributors"
+
+        # Verify no user transactions were written
+        async with db.execute("SELECT COUNT(*) FROM UserTransactions") as cur:
+            tx_count = (await cur.fetchone())[0]
+            assert tx_count == 0

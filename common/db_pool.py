@@ -25,9 +25,10 @@ def _patch_aiosqlite_safe_worker():
             return
 
         def _safe_run(self):
+            sentinel = getattr(aiosqlite.core, "_STOP_RUNNING_SENTINEL", None)
             while True:
                 tx_item = self._tx.get()
-                if tx_item is aiosqlite.core._STOP_RUNNING_SENTINEL:
+                if sentinel is not None and tx_item is sentinel:
                     break
 
                 future, function = tx_item
