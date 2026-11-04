@@ -2135,16 +2135,16 @@ async def site_posts_broadcaster():
 
                             await mark_broadcast_posts_sent([post_num])
 
-                            if (real_content.get('archive_allowed') or not real_content.get('archive_skip')) and not is_shadow_muted:
-                                bot_to_use = g_bots.get(board_id) or g_bots.get('b')
-                                if bot_to_use:
-                                    spawn_task(_forward_post_to_realtime_archive(
-                                        bot_instance=bot_to_use,
-                                        board_id=board_id,
-                                        post_num=post_num,
-                                        content=real_content,
-                                        is_shadow_muted=is_shadow_muted
-                                    ))
+                        if (real_content.get('archive_allowed') or not real_content.get('archive_skip')) and not is_shadow_muted:
+                            bot_to_use = g_bots.get(board_id) or g_bots.get('b')
+                            if bot_to_use:
+                                spawn_task(_forward_post_to_realtime_archive(
+                                    bot_instance=bot_to_use,
+                                    board_id=board_id,
+                                    post_num=post_num,
+                                    content=real_content,
+                                    is_shadow_muted=is_shadow_muted
+                                ))
                     except Exception as item_err:
                         runtime_logger.error(f"[site_posts_broadcaster] Error processing broadcast item {post}: {item_err}", exc_info=True)
             await asyncio.sleep(5)

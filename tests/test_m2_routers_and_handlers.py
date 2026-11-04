@@ -515,12 +515,12 @@ class TestM2RoutersAndHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Сейф Сыча", sent_text)
         cb_datas = [btn.callback_data for row in sent_kb.inline_keyboard for btn in row]
-        self.assertIn("bank_do_deposit:sych:500.0", cb_datas)
-        self.assertIn("bank_do_deposit:sych:1000.0", cb_datas)
-        self.assertIn("bank_do_deposit:sych:2000.0", cb_datas)
+        self.assertIn("bank_do_deposit:sych:500.00", cb_datas)
+        self.assertIn("bank_do_deposit:sych:1000.00", cb_datas)
+        self.assertIn("bank_do_deposit:sych:2000.00", cb_datas)
 
         # 2. Click 500 ₪ preset
-        cb_do = make_mock_callback(user_id=user_id, data="bank_do_deposit:sych:500.0")
+        cb_do = make_mock_callback(user_id=user_id, data="bank_do_deposit:sych:500.00")
         await cb_bank_do_deposit(cb_do, board_id="b")
 
         tot_p, tot_a, deps = await get_user_bank_summary(self.db, user_id)

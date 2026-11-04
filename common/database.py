@@ -5016,9 +5016,9 @@ async def sync_boards_with_config(board_config: dict):
     from common.db_pool import get_pool, db_lock, db_transaction
 
     async with db_lock:
+        db = await get_pool()
         for attempt in range(10):
             try:
-                db = await get_pool()
                 async with db_transaction(db):
                     # Оптимизация: используем генератор напрямую в executemany, чтобы избежать N+1 execute
                     # и лишних аллокаций памяти (по сравнению с циклом for ... append).
