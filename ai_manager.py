@@ -666,7 +666,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                     ]
                 }
                 gemini_timeout = max(35.0, min(180.0, float(duration) * 0.7 + 25.0))
-                models_to_try = ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.5-flash"]
+                models_to_try = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
                 for gkey in google_keys:
                     for model_name in models_to_try:
                         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gkey}"
@@ -2174,8 +2174,7 @@ async def handle_music_roast_batch(
         max_duration = max([m.get("duration") or 60 for m in tracks_meta_list] or [60])
         gemini_timeout = max(40.0, min(240.0, float(max_duration) * 0.7 + 35.0))
         models_to_try = [
-            "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash",
-            "gemini-1.5-flash", "gemini-3.8-flash", "gemini-3.5-flash"
+            "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"
         ]
 
         raw_music_res = None

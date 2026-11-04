@@ -9678,7 +9678,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
         key, wait_sec = await google_pool.acquire_token_async(min_interval=3.0, max_wait=10.0)
         if not key:
             break
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={key}"
         for proxy in [None, PROXY_URL]:
             try:
                 async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=30.0) as client:

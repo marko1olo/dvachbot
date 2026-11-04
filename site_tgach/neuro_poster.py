@@ -281,7 +281,7 @@ class NeuroManager:
         # Fallback to Google Gemini (or primary path for image analysis)
         gemini_keys = google_pool.get_all_active_tokens()
         if gemini_keys:
-            gemini_models = ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash-lite"]
+            gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
             for g_key in gemini_keys[:5]:
                 for g_model in gemini_models:
                     try:

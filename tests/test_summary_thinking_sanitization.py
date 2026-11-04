@@ -208,8 +208,6 @@ class TestModelCascadeValidity:
         "gemini-3.6-flash",
         "gemini-3.7-flash",
         "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
         "deepseek-v4-flash",
         "qwen/qwen3.8-27b",
         "qwen/qwen3.6-27b",

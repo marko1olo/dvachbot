@@ -72,7 +72,8 @@
 | Лимит | Модель |
 |-------|--------|
 | 15 RPM | `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` |
-| 5–10 RPM | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+| 5–10 RPM | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.7-flash` |
+| ❌ Dead | `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-1.5-flash` |
 
 ### Различай HTTP-ошибки LLM:
 - `400 "has been decommissioned"` → модель мёртвая → убрать из конфига

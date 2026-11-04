@@ -31,7 +31,6 @@ class TestVisionCascade:
 
     VALID_VISION_MODELS = {
         "gemini-3.1-flash-lite",
-        "gemini-2.5-flash",
         "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.8-flash",
@@ -47,6 +46,8 @@ class TestVisionCascade:
         for old_model in [
             "gemini-1.5-flash",
             "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             "gemini-1.5-pro",
             "llama-3.2-90b-vision-preview",
         ]:
@@ -113,7 +114,7 @@ class TestVisionCascade:
 
         content, finish_reason = await _call_gemini_native(
             http_client=mock_http_client,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.5-flash-lite",
             api_key="test-key",
             prompt_text="test prompt",
             images_data=[b"fake_jpeg"],
@@ -265,7 +266,7 @@ class TestVisionCascade:
         assert "ecchi" in parsed["tags"]
         assert "купальнике" in parsed["description"]
 
-        # MUST be called exactly once: gemini-2.5-flash and gemini-3.5-flash-lite must NOT be called!
+        # MUST be called exactly once: gemini-3.5-flash and gemini-3.5-flash-lite must NOT be called!
         assert mock_gemini_call.call_count == 1
         assert mock_gemini_call.call_args[1]["model_name"] == "gemini-3.1-flash-lite"
         # Groq must be called immediately

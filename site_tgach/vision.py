@@ -288,14 +288,12 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     ("qwen/qwen3.8-27b", "groq"),
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
-                    ("gemini-2.5-flash", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
                 ]
             else:
                 models_cascade = [
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
-                    ("gemini-2.5-flash", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
                     ("qwen/qwen3.8-27b", "groq"),
                 ]
