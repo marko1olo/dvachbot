@@ -361,6 +361,7 @@ class TestVisionCascade:
         mock_resp_404.text = "Model not found"
 
         with patch("site_tgach.neuro_moderator._execute_groq_post", new_callable=AsyncMock) as mock_post, \
+             patch("site_tgach.neuro_moderator.google_pool.get_all_active_tokens", return_value=[]), \
              patch("site_tgach.neuro_moderator.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_post.return_value = mock_resp_404
 
@@ -381,6 +382,7 @@ class TestVisionCascade:
         mock_resp_429.text = "Rate limit exceeded"
 
         with patch("site_tgach.neuro_moderator._execute_groq_post", new_callable=AsyncMock) as mock_post, \
+             patch("site_tgach.neuro_moderator.google_pool.get_all_active_tokens", return_value=[]), \
              patch("site_tgach.neuro_moderator.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_post.return_value = mock_resp_429
 

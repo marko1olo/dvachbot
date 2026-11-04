@@ -288,11 +288,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     ("qwen/qwen3.8-27b", "groq"),
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
+                    ("gemini-2.5-flash", "gemini"),
+                    ("gemini-3.5-flash", "gemini"),
                 ]
             else:
                 models_cascade = [
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
+                    ("gemini-2.5-flash", "gemini"),
+                    ("gemini-3.5-flash", "gemini"),
                     ("qwen/qwen3.8-27b", "groq"),
                 ]
 
@@ -354,7 +358,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             now = time.time()
                             provider_last = _GLOBAL_GEMINI_LAST_CALL if provider == "gemini" else _GLOBAL_GROQ_LAST_CALL
                             global_wait = max(0.0, provider_last - now)
-                            if global_wait > 15.0:
+                            if global_wait > 35.0:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} is in cooldown ({global_wait:.1f}s remaining). Skipping {provider} models.")
                                 if provider == "gemini":
                                     skip_gemini_models = True
