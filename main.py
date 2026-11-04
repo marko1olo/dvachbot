@@ -11612,7 +11612,7 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
         work_timers = items.setdefault("work_cooldowns", {})
         for _job, _ts in get_user_work_cooldowns(user_id).items():
             work_timers[_job] = max(work_timers.get(_job, 0), _ts)
-        is_success, amount_change, outcome_msg, dropped_item = execute_job_action(job_id, items)
+        is_success, amount_change, outcome_msg, dropped_item = execute_job_action(job_id, items, user_id=user_id)
         if job_id in items.get("work_cooldowns", {}):
             set_user_work_cooldown(user_id, job_id, items["work_cooldowns"][job_id])
 
@@ -11686,9 +11686,15 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
             await db.commit()
             ans_text = outcome_msg + (drop_note if dropped_item else "")
         else:
-            # Failure with penalty
-            await deduct_user_global_balance(db, user_id, board_id, amount_change)
-            await record_user_transaction(db, user_id, -amount_change, 'work', f'Штраф на работе ({job_id})')
+            # Failure with penalty (soft overdraft defence)
+            ok, rem_bal = await deduct_user_global_balance(db, user_id, board_id, amount_change)
+            if not ok and amount_change > 0:
+                cur_bal = await get_user_global_balance(db, user_id)
+                if cur_bal > 0:
+                    await deduct_user_global_balance(db, user_id, board_id, cur_bal)
+                    await record_user_transaction(db, user_id, -cur_bal, 'work', f'Частичный штраф на работе ({job_id})')
+            else:
+                await record_user_transaction(db, user_id, -amount_change, 'work', f'Штраф на работе ({job_id})')
             await db.execute(
                 "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",

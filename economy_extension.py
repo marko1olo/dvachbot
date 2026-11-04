@@ -66,7 +66,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from common.anon_identity import get_anon_id
 from common.database import record_user_transaction, add_user_global_balance, get_user_global_balance, deduct_user_global_balance
 
-from common.db_pool import get_pool, db_lock
+from common.db_pool import get_pool, db_lock, db_transaction
 
 economy_router = Router()
 
@@ -252,7 +252,7 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
     from shared_state import get_user_work_cooldowns, set_user_work_cooldown
     night_mult = 1.5 if is_night_shift_active(now) else 1.0
 
-    async with db_lock:
+    async with db_transaction(db):
         from common.bot_helpers import _get_user_active_items
         active_items = await _get_user_active_items(db, user_id, board_id)
         shared_cooldowns = get_user_work_cooldowns(user_id)
@@ -303,8 +303,13 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 # 5% chance of item drop
                 if random.random() < 0.05:
                     drop_choice = random.choice(["trash_lootbox", "beer_cap", "feet_socks"])
-                    inv = active_items.setdefault("inventory", {})
-                    inv[drop_choice] = inv.get(drop_choice, 0) + 1
+                    if drop_choice == "trash_lootbox":
+                        active_items["lootbox_trash"] = active_items.get("lootbox_trash", 0) + 1
+                    elif drop_choice == "feet_socks":
+                        active_items["owned_feet_socks"] = True
+                        active_items["feet_socks_expires"] = now + 7 * 86400
+                    else:
+                        active_items[drop_choice] = active_items.get(drop_choice, 0) + 1
                     drop_names = {
                         "trash_lootbox": "📦 Мусорный Лутбокс",
                         "beer_cap": "🍺 Коллекционная пивная крышка",
@@ -353,6 +358,9 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 hours = left // 3600
                 mins = (left % 3600) // 60
                 ans_text = f"⏳ В офисе «БыстроДеньги» пересменка! Новый микрозайм через {hours}ч {mins}м."
+            elif int(active_items.get("microloan_debt", 0)) > 0:
+                d_amt = int(active_items.get("microloan_debt", 0))
+                ans_text = f"❌ В офисе «БыстроДеньги» отказ! Коллекторы требуют закрыть старый долг {d_amt:,} ₪."
             else:
                 earned = random.randint(5000, 15000)
                 active_items["last_microloan"] = now
@@ -378,7 +386,7 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                         work_timers[_job] = _ts
 
                 best_job = None
-                best_left = float('inf')
+                max_rem = 0
 
                 for jid, jcfg in WORK_VACANCIES.items():
                     jcd = int(jcfg["cooldown_sec"] * cd_mult)
@@ -386,8 +394,8 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                     jpassed = now - jlast
                     if jpassed < jcd:
                         rem = jcd - jpassed
-                        if rem < best_left:
-                            best_left = rem
+                        if rem > max_rem:
+                            max_rem = rem
                             best_job = (jid, jcfg["title"].split('/')[0].strip())
 
                 if not best_job:
@@ -471,7 +479,7 @@ async def cb_work_quests(callback: types.CallbackQuery, board_id: str | None = N
     if not board_id: return
     user_id = callback.from_user.id
     db = await get_pool()
-    async with db_lock:
+    async with db_transaction(db):
         from common.bot_helpers import _get_user_active_items
         active_items = await _get_user_active_items(db, user_id, board_id)
         from common.daily_quests_engine import render_quests_text
@@ -499,7 +507,7 @@ async def cb_work_claim_quests(callback: types.CallbackQuery, board_id: str | No
     user_id = callback.from_user.id
     db = await get_pool()
     ans_text = ""
-    async with db_lock:
+    async with db_transaction(db):
         from common.bot_helpers import _get_user_active_items
         active_items = await _get_user_active_items(db, user_id, board_id)
         from common.daily_quests_engine import claim_daily_quests_reward, render_quests_text

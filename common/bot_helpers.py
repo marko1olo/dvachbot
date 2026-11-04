@@ -238,6 +238,38 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
         if eq_v:
             result[slot_k] = eq_v
 
+    # Collect recent_shifts and daily_quests across all board rows
+    all_recent_shifts = {}
+    merged_daily_quests = {}
+    for b_id, a_str in rows:
+        if not a_str:
+            continue
+        try:
+            d = json.loads(a_str) if isinstance(a_str, str) else (a_str if isinstance(a_str, dict) else {})
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            r_s = d.get("recent_shifts")
+            if isinstance(r_s, dict):
+                for jid, timestamps in r_s.items():
+                    if isinstance(timestamps, list):
+                        all_recent_shifts.setdefault(jid, []).extend(timestamps)
+            dq = d.get("daily_quests")
+            if isinstance(dq, dict):
+                if dq.get("claimed"):
+                    merged_daily_quests = dq
+                elif not merged_daily_quests:
+                    merged_daily_quests = dq
+
+    if all_recent_shifts:
+        now_ts = time.time()
+        result["recent_shifts"] = {
+            jid: sorted(list(set(ts for ts in tss if 0 <= now_ts - ts < 86400)))
+            for jid, tss in all_recent_shifts.items()
+        }
+    if merged_daily_quests:
+        result["daily_quests"] = merged_daily_quests
+
     if max_shifts > 0:
         result["work_shifts"] = max_shifts
     if all_achievements:

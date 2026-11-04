@@ -349,9 +349,9 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
     is_locked = now < locked_until
     remaining_lock_sec = max(0.0, locked_until - now)
 
-    # Для срочного вклада «skuf»: по истечении 72ч (locked_until) ставка переводится на базовую ставку сейфа «sych» (0.5%/сутки)
+    # Для срочных вкладов («skuf», «mmm_abu»): по истечении срока блокировки ставка переводится на базовую ставку сейфа «sych» (0.5%/сутки)
     effective_daily_rate = daily_rate
-    if tier_id == "skuf" and locked_until > created_at:
+    if tier_id in ("skuf", "mmm_abu") and locked_until > created_at:
         post_lock_rate = BANK_TIERS["sych"]["daily_rate"]
         if now <= locked_until:
             instant_accrual = principal * (daily_rate / 86400.0) * elapsed_seconds
@@ -763,11 +763,13 @@ async def execute_abu_bank_haircut(
 
         if not dry_run:
             async with db_transaction(db):
-                # Обновляем тело вклада и фиксируем начисленные проценты до момента стрижки
-                await db.execute(
-                    "UPDATE BankDeposits SET principal = ?, accrued_interest = ?, last_accrual_at = ? WHERE id = ?",
+                # Обновляем тело вклада и фиксируем начисленные проценты до момента стрижки (только если вклад еще активен)
+                async with db.execute(
+                    "UPDATE BankDeposits SET principal = ?, accrued_interest = ?, last_accrual_at = ? WHERE id = ? AND status = 'active'",
                     (new_principal, new_accrued, now, dep_id)
-                )
+                ) as upd_cursor:
+                    if getattr(upd_cursor, "rowcount", 0) == 0:
+                        continue  # Уже отозван или закрыт параллельно
                 # Переводим конфискованное в Казну Абу
                 await add_to_abu_fund(db, shave, donor_id=user_id, reason=f"Стрижка вкладов Абу (-{int(haircut_pct*100)}%) со вклада #{dep_id}")
                 # Фиксируем транзакцию списания

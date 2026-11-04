@@ -253,11 +253,12 @@ def find_item_by_name_or_id(query: str) -> Optional[Tuple[str, str, str]]:
         "обэп": ("extinguisher_obep", "weapon", "🧯 Огнетушитель ОБЭП"),
         "кит": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
         "олигарх": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
+        "сейф олигарха": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
         "whale": ("lootbox_whale", "lootbox", "🐋 Сейф Олигарха"),
     }
-    for alias, entry in fuzzy_map.items():
+    for alias in sorted(fuzzy_map.keys(), key=len, reverse=True):
         if alias in clean:
-            return entry
+            return fuzzy_map[alias]
 
     return None
 
@@ -268,27 +269,28 @@ def find_item_by_name_or_id(query: str) -> Optional[Tuple[str, str, str]]:
 
 async def _load_user_active_items_for_update(db, user_id: int, board_id: str) -> Dict[str, Any]:
     """
-    Загружает active_items пользователя из БД для обновления под транзакцией.
+    Загружает active_items пользователя из БД для обновления под транзакцией с кросс-борд объединением.
     """
-    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-        row = await c.fetchone()
-        if row and row[0]:
-            try:
-                return json.loads(row[0])
-            except Exception:
-                return {}
-    return {}
+    from common.bot_helpers import _get_user_active_items
+    return await _get_user_active_items(db, user_id, board_id)
 
 
 async def _save_user_active_items(db, user_id: int, board_id: str, items: Dict[str, Any]):
     """
-    Сохраняет active_items пользователя в БД.
+    Сохраняет active_items пользователя в БД и синхронизирует состояние по всем строкам бордов.
     """
+    serialized = json.dumps(items, ensure_ascii=False)
     await db.execute(
         "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
         "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-        (user_id, board_id, json.dumps(items, ensure_ascii=False))
+        (user_id, board_id, serialized)
     )
+    # Кросс-борд синхронизация эскроу для предотвращения дюпа на других бордах
+    async with db.execute("SELECT board_id FROM Users WHERE user_id = ? AND board_id != ?", (user_id, board_id)) as c:
+        other_boards = [r[0] for r in await c.fetchall()]
+    for ob_id in other_boards:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (serialized, user_id, ob_id))
 
 
 def extract_item_for_escrow(active_items: Dict[str, Any], item_id: str, item_type: str) -> Tuple[bool, Dict[str, Any], str]:
@@ -514,8 +516,11 @@ def restore_item_to_active_items(active_items: Dict[str, Any], item_id: str, ite
             exp_ts = item_data.get("expires_at")
             if exp_ts is not None:
                 if now < exp_ts:
+                    rem_sec = max(0, exp_ts - now)
+                    cur_exp = active_items.get(f"{clean_id}_expires", 0)
+                    base = max(now, cur_exp)
                     active_items[f"owned_{clean_id}"] = True
-                    active_items[f"{clean_id}_expires"] = exp_ts
+                    active_items[f"{clean_id}_expires"] = base + rem_sec
                 else:
                     # Expired while on the market
                     pass
@@ -615,14 +620,17 @@ async def create_market_listing(
     2. Создает запись в таблице MarketListings со статусом 'active'.
     Возвращает (success: bool, listing_dict: Optional[dict], error_msg: str).
     """
-    if not isinstance(price, (int, float)) or math.isnan(price) or math.isinf(price) or price <= 0:
-        return False, None, "Цена должна быть положительным числом больше 0 ₪."
+    try:
+        price = round(float(price), 2)
+    except (ValueError, TypeError):
+        return False, None, "Некорректная цена."
+    if math.isnan(price) or math.isinf(price) or price < 1.0:
+        return False, None, "Цена предмета на Базаре должна быть не менее 1.00 ₪."
     if price > 100_000_000:
         return False, None, "Максимальная цена предмета на Базаре — 100 000 000 ₪."
 
     await ensure_market_schema(db)
     board_id = seller_board_id or "b"
-    price = round(float(price), 2)
 
     detected_type, item_name, default_meta = classify_item(item_id)
     final_type = item_type or detected_type
@@ -704,7 +712,7 @@ async def cancel_market_listing(
         if s_id != user_id:
             return False, None, "Вы не являетесь владельцем этого лота."
 
-        if status != "active":
+        if status not in ("active", "expired"):
             return False, None, f"Лот уже не активен (текущий статус: {status})."
 
         item_data = {}
@@ -824,7 +832,7 @@ async def buy_market_listing(
 
         await add_user_global_balance(db, seller_id, seller_board_id or "b", payout)
         if fee > 0:
-            await add_to_abu_fund(db, fee, donor_id=buyer_id, reason=f"Комиссия Базара: лот #{lot_id} ({item_name})")
+            await add_to_abu_fund(db, fee, donor_id=seller_id, reason=f"Комиссия Базара: лот #{lot_id} ({item_name})")
 
         buyer_items = await _load_user_active_items_for_update(db, buyer_id, b_id)
         buyer_items = restore_item_to_active_items(buyer_items, item_id, item_type, item_data)
