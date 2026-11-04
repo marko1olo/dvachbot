@@ -646,7 +646,7 @@ class NeuroManager:
 
         result = await self._safe_api_call(
             messages=messages,
-            max_tokens=250,
+            max_tokens=2048,
             temperature=0.8
         )
         if result:

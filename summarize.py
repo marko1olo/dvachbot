@@ -713,7 +713,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                     continue
                             else:
                                 raise RuntimeError(f"AgentRouter empty message output: {ar_data}")
-                        elif ar_resp.status_code in (400, 404) and "not support" not in ar_resp.text.lower():
+                        elif ar_resp.status_code in (400, 404) or any(phrase in ar_resp.text.lower() for phrase in ("not support", "unsupported", "unknown model")):
+                            # Fall back to standard OpenAI chat/completions endpoint
                             pass
                         else:
                             raise RuntimeError(f"AgentRouter error {ar_resp.status_code}: {ar_resp.text[:300]}")

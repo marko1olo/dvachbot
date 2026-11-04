@@ -21,7 +21,7 @@ async def prepare_image_for_analysis(file_path: str, timeout: int = 45):
     Читает файл, ресайзит до 1024px по длинной стороне, возвращает JPEG bytes.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         def _load_and_resize():
             with Image.open(file_path) as img:
                 img = img.convert("RGB")
@@ -33,8 +33,11 @@ async def prepare_image_for_analysis(file_path: str, timeout: int = 45):
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=85)
                 return buf.getvalue()
-        data = await loop.run_in_executor(None, _load_and_resize)
+        data = await asyncio.wait_for(loop.run_in_executor(None, _load_and_resize), timeout=timeout)
         return data, None
+    except asyncio.TimeoutError:
+        logger.warning(f"⏱️ Image preparation timed out ({timeout}s) for {file_path}")
+        return None, f"Image preparation timed out ({timeout}s)"
     except Image.DecompressionBombError:
         logger.warning("💣 Decompression bomb detected in prepare_image_for_analysis")
         return None, "Decompression bomb detected"
@@ -45,11 +48,24 @@ logger = logging.getLogger("site_tgach.vision")
 logger.setLevel(logging.INFO)
 GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
+_VISION_SEMAPHORE_LOOP = None
 BANNED_GEMINI_KEYS = set()
 _LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
 _GLOBAL_GEMINI_LAST_CALL = 0.0
 _GLOBAL_GROQ_LAST_CALL = 0.0
-_KEY_RATE_LOCK = asyncio.Lock()
+_KEY_RATE_LOCK = None
+_KEY_RATE_LOCK_LOOP = None
+
+def _get_key_rate_lock():
+    global _KEY_RATE_LOCK, _KEY_RATE_LOCK_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _KEY_RATE_LOCK is None or _KEY_RATE_LOCK_LOOP != current_loop:
+        _KEY_RATE_LOCK = asyncio.Lock()
+        _KEY_RATE_LOCK_LOOP = current_loop
+    return _KEY_RATE_LOCK
 VISION_MODEL_FALLBACKS: dict[str, str] = {
     "gemini-3.8-flash": "gemini-3.5-flash-lite",
 }
@@ -70,9 +86,14 @@ VISION_IMAGE_PREP_TIMEOUT_SECONDS = max(5, _env_int("STOMCHAT_VISION_IMAGE_PREP_
 
 
 def _get_vision_semaphore():
-    global _VISION_SEMAPHORE
-    if _VISION_SEMAPHORE is None:
+    global _VISION_SEMAPHORE, _VISION_SEMAPHORE_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _VISION_SEMAPHORE is None or _VISION_SEMAPHORE_LOOP != current_loop:
         _VISION_SEMAPHORE = asyncio.Semaphore(VISION_CONCURRENCY)
+        _VISION_SEMAPHORE_LOOP = current_loop
     return _VISION_SEMAPHORE
 
 
@@ -285,11 +306,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             # Gemini Flash prioritized for user/site inspection with Groq fallback.
             if source == "TAGGER":
                 models_cascade = [
-                    ("qwen/qwen3.8-27b", "groq"),
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
                     ("gemini-3.6-flash", "gemini"),
+                    ("qwen/qwen3.8-27b", "groq"),
                 ]
             else:
                 models_cascade = [
@@ -353,7 +374,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         selected_key = None
                         sleep_time = 0.0
 
-                        async with _KEY_RATE_LOCK:
+                        async with _get_key_rate_lock():
                             global _GLOBAL_GEMINI_LAST_CALL, _GLOBAL_GROQ_LAST_CALL
                             now = time.time()
                             provider_last = _GLOBAL_GEMINI_LAST_CALL if provider == "gemini" else _GLOBAL_GROQ_LAST_CALL
@@ -458,7 +479,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                             content = getattr(msg_obj, "reasoning_content", None)
 
                             # Update post-request cooldown to ensure strict >= 3.0s between requests
-                            async with _KEY_RATE_LOCK:
+                            async with _get_key_rate_lock():
                                 fin_now = time.time()
                                 _LAST_VISION_CALL_TIME[selected_key] = fin_now + 3.0
                                 if provider == "gemini":
@@ -555,7 +576,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 _MODEL_404_COOLDOWN[model_name] = time.time() + 86400.0
                                 permanent_model_failures += 1
                                 pool.penalize_token(selected_key, 2.5)
-                                async with _KEY_RATE_LOCK:
+                                async with _get_key_rate_lock():
                                     fin_now = time.time()
                                     _LAST_VISION_CALL_TIME[selected_key] = fin_now + 2.5
                                     if provider == "gemini":
@@ -576,7 +597,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if "tokens per day" in err_str or "tpd" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for 1h.")
                                 pool.penalize_token(selected_key, 3600.0)
-                                async with _KEY_RATE_LOCK:
+                                async with _get_key_rate_lock():
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + 3600.0
                                 available_keys.remove(selected_key)
                                 # TPD is an account-level daily limit — if 2+ keys hit TPD in a row,
@@ -585,7 +606,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 if consecutive_429 >= 2 and len(available_keys) == 0:
                                     halt_sec = 7200.0  # 2 hours — TPD resets at midnight UTC
                                     logger.warning(f"⚠️ [VISION] [{source}] {provider} multiple TPD hits ({consecutive_429} keys). Account-level daily limit reached. Halting {provider} for 2h.")
-                                    async with _KEY_RATE_LOCK:
+                                    async with _get_key_rate_lock():
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
                                             skip_gemini_models = True
@@ -599,7 +620,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 cd_duration = 30.0 if provider == "groq" else 45.0
                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing for {cd_duration:.0f}s.")
                                 pool.penalize_token(selected_key, cd_duration)
-                                async with _KEY_RATE_LOCK:
+                                async with _get_key_rate_lock():
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
                                     if provider == "gemini":
                                         _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0)
@@ -612,7 +633,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     # 60s was causing ~15 retry storms per hour, burning all keys each time.
                                     halt_sec = 1800.0 if provider == "groq" else 300.0
                                     logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}) and no keys remain. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
-                                    async with _KEY_RATE_LOCK:
+                                    async with _get_key_rate_lock():
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
                                             skip_gemini_models = True

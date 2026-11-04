@@ -42,6 +42,20 @@ GROQ_MODELS = ["qwen/qwen3.8-27b"]
 GROQ_MODEL = GROQ_MODELS[0]
 GROQ_TIMEOUT = 45.0
 
+_DEEP_CHECK_SEMAPHORE = None
+_DEEP_CHECK_SEMAPHORE_LOOP = None
+
+def _get_deep_check_semaphore():
+    global _DEEP_CHECK_SEMAPHORE, _DEEP_CHECK_SEMAPHORE_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _DEEP_CHECK_SEMAPHORE is None or _DEEP_CHECK_SEMAPHORE_LOOP != current_loop:
+        _DEEP_CHECK_SEMAPHORE = asyncio.Semaphore(2)
+        _DEEP_CHECK_SEMAPHORE_LOOP = current_loop
+    return _DEEP_CHECK_SEMAPHORE
+
 
 
 # === ПРОМПТЫ (Централизованное хранение) ===
@@ -156,9 +170,9 @@ async def _safe_groq_json(messages, max_tokens=1024):
                                 logger.warning(
                                     f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
                                 )
-                                if resp.status_code == 400 and "refusal" in resp.text.lower():
-                                    logger.warning("DeepCheck API refusal, skipping without false positive penalty.")
-                                    return None
+                                if resp.status_code == 400 and any(w in resp.text.lower() for w in ("refusal", "safety", "prohibited", "content policy")):
+                                    logger.warning("DeepCheck API refusal/safety filter triggered.")
+                                    return {"safety_refusal": True, "reason": "Groq/API Safety Refusal"}
                                 await asyncio.sleep(2.5)
                                 break
                     except Exception as e:
@@ -208,7 +222,14 @@ async def _safe_groq_json(messages, max_tokens=1024):
                             }
                         )
                         if resp.status_code == 200:
-                            raw_content = resp.json()["choices"][0]["message"]["content"].strip()
+                            resp_json = resp.json()
+                            choices = resp_json.get("choices") or []
+                            if choices:
+                                finish_reason = (choices[0].get("finish_reason") or "").lower()
+                                if finish_reason in ("content_filter", "safety"):
+                                    logger.warning(f"⚠️ [DeepCheck] Gemini safety filter refused content ({finish_reason})")
+                                    return {"safety_refusal": True, "reason": f"Gemini Safety Filter: {finish_reason}"}
+                            raw_content = choices[0]["message"]["content"].strip() if choices and choices[0].get("message") else ""
                             content = raw_content
                             if "```" in content:
                                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
@@ -229,6 +250,9 @@ async def _safe_groq_json(messages, max_tokens=1024):
                             logger.warning(f"⚠️ [DeepCheck] Gemini key ...{g_key[-6:]} returned {resp.status_code}. Banning key.")
                             google_pool.ban_token(g_key)
                             break
+                        elif resp.status_code == 400 and any(w in resp.text.lower() for w in ("safety", "block", "refusal", "prohibited")):
+                            logger.warning(f"⚠️ [DeepCheck] Gemini 400 content safety refusal: {resp.text[:120]}")
+                            return {"safety_refusal": True, "reason": f"Gemini Safety Refusal: {resp.text[:120]}"}
                         elif resp.status_code == 404:
                             logger.warning(f"⚠️ [DeepCheck] Gemini model {g_model} returned 404. Cooldown 2.5s, skipping model.")
                             google_pool.penalize_token(g_key, 2.5)
@@ -252,6 +276,17 @@ async def _safe_groq_json(messages, max_tokens=1024):
 async def run_deep_check(image_bytes: bytes, file_id: str):
     """
     Запускает глубокую нейро-проверку безопасности изображения.
+    """
+    if not file_id or file_id.startswith("CAAC") or file_id.startswith("sticker_"):
+        logger.info(f"⏩ [DeepCheck] Skipping sticker media: {file_id[:16]}")
+        return
+    async with _get_deep_check_semaphore():
+        return await _run_deep_check_impl(image_bytes, file_id)
+
+
+async def _run_deep_check_impl(image_bytes: bytes, file_id: str):
+    """
+    Внутренняя реализация deep check под семафором.
 
     ФУНКЦИОНАЛ:
     1. Распознавание ЦП (Photorealistic + Child) или прямого отказа нейронки (CSAM Refusal).
@@ -300,6 +335,23 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
 
     if not check_res:
         logger.warning(f"⚠️ [DeepCheck] AI returned no result for {file_id}. Skipping.")
+        return
+
+    if check_res.get("safety_refusal"):
+        refusal_reason = check_res.get("reason", "AI Refusal: Content Safety Triggered")
+        logger.warning(f"🛡️ [DeepCheck] Safety refusal for {file_id}. Quarantining with BLUR + ModQueue.")
+        affected = await apply_auto_censure(file_id, "blur")
+        for pid in affected:
+            await add_to_mod_queue(pid, file_id, f"AI Safety Refusal: {refusal_reason}", 0.9)
+            try:
+                db = await get_pool()
+                async with db_lock:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
+                        (pid, time.time()),
+                    )
+            except Exception as e:
+                logger.warning("Failed to insert into BroadcastQueue: %s", e)
         return
 
     # Разбор вердикта нейронки
