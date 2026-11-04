@@ -37,7 +37,7 @@ for p in posts:
             content_dict = json.loads(p['content'])
             text = content_dict.get('text') or content_dict.get('caption') or ""
             clean_text = text
-    except:
+    except Exception:
         pass
     p['clean_text'] = clean_text
 
