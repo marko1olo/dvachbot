@@ -172,6 +172,7 @@ from fastapi import (
     UploadFile,
     Depends,
     Body,
+    Query,
 )
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -1660,11 +1661,9 @@ async def notify_admins(bot: Bot, text: str):
         except Exception as e:
             logger.error(f"⚠️ Ошибка доставки админу {admin_id}: {e}", exc_info=True)
 
+    # Never mutate global ADMIN_IDS on transient telegram send failures
     for b_admin in blocked_admins:
-        if isinstance(ADMIN_IDS, list) and b_admin in ADMIN_IDS:
-            ADMIN_IDS.remove(b_admin)
-        elif isinstance(ADMIN_IDS, set) and b_admin in ADMIN_IDS:
-            ADMIN_IDS.discard(b_admin)
+        logger.warning(f"Admin {b_admin} has blocked bot or was unreachable via Telegram.")
 
 
 limiter = Limiter(key_func=get_user_id_from_session, config_filename=os.devnull)
@@ -3157,13 +3156,17 @@ async def custom_404_handler(request: Request, exc):
 
 @app.exception_handler(500)
 async def custom_500_handler(request: Request, exc):
-    if request.method == "POST" and request.url.path.startswith("/api/post/"):
-        logger.exception(
-            "site_post_500 method=%s path=%s content_length=%s",
-            request.method,
-            request.url.path,
-            request.headers.get("content-length", "-"),
-            exc_info=exc,
+    logger.exception(
+        "site_error_500 method=%s path=%s content_length=%s",
+        request.method,
+        request.url.path,
+        request.headers.get("content-length", "-"),
+        exc_info=exc,
+    )
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"status": "error", "error": "Internal Server Error", "detail": "Internal Server Error"},
+            status_code=500,
         )
     return templates.TemplateResponse(
         request=request,
@@ -3179,9 +3182,9 @@ async def custom_500_handler(request: Request, exc):
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
-    if request.url.path.startswith("/api/post/"):
+    if request.url.path.startswith("/api/"):
         return JSONResponse(
-            {"Status": "Error", "Error": exc.detail, "detail": exc.detail},
+            {"status": "error", "error": exc.detail, "detail": exc.detail},
             status_code=exc.status_code,
             headers=exc.headers,
         )
@@ -5946,7 +5949,7 @@ async def admin_feed_websocket(websocket: WebSocket):
 async def api_get_media_feed(
     board_id: str,
     request: Request,
-    page: int = 1,
+    page: int = Query(1, ge=1, le=10000),
     user: dict = Depends(get_current_user_or_guest),
 ):
     if board_id not in BOARD_CONFIG:
@@ -7959,7 +7962,7 @@ async def api_create_post(
 
             if verify_pow(pow_challenge, pow_nonce, DEFAULT_POW_DIFFICULTY):
                 is_pow_valid = True
-                nonce_key = f"used_pow_{pow_nonce}"
+                nonce_key = f"used_pow_{pow_challenge}_{pow_nonce}"
                 backend = FastAPICache.get_backend()
                 if await backend.get(nonce_key):
                     raise HTTPException(
@@ -9471,6 +9474,10 @@ async def api_get_thread(
 
     # Кэширование на основе версии треда (обновляется только при активности в конкретном треде)
     current_version = THREAD_VERSIONS.get(str(thread_id), THREAD_VERSIONS.get(thread_id, 0))
+    etag = f'"{thread_id}-{current_version}"'
+    if request.headers.get("if-none-match") == etag and not (user and user.get("is_admin")):
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=5, stale-while-revalidate=10"})
+
     stream = getattr(request.state, "stream", "ru")
     # Кэш общий для всех (без shadow-постов)
     cache_key = f"api_thread_full_v2:{board_id}:{thread_id}:{stream}:{current_version}"
@@ -9837,9 +9844,9 @@ async def api_get_chat_posts(
 async def api_get_threads(
     board_id: str,
     request: Request,
-    page: int = 0,
+    page: int = Query(0, ge=0, le=10000),
     sort: str = "bump",
-    page_size: int = 25,
+    page_size: int = Query(25, ge=1, le=100),
     user: dict = Depends(get_current_user_or_guest),
 ):
     board_id = board_id.lower()
@@ -10668,7 +10675,7 @@ async def _proxy_protected_telegram_file(
             range_header = request.headers.get("range")
             if range_header:
                 request_headers["Range"] = range_header
-        resp = await session.get(url, headers=request_headers)
+        resp = await session.get(url, headers=request_headers, allow_redirects=False)
     except Exception:
         raise HTTPException(status_code=404, detail="File unavailable.")
 
@@ -10791,7 +10798,7 @@ async def _proxy_external_url(
             range_header = request.headers.get("range")
             if range_header:
                 request_headers["Range"] = range_header
-        resp = await session.get(url, headers=request_headers)
+        resp = await session.get(url, headers=request_headers, allow_redirects=False)
     except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
         logger.warning(f"Proxy external file upstream unavailable ({url[:80]}): {e}")
         raise HTTPException(status_code=404, detail="File unavailable.")

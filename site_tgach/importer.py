@@ -346,7 +346,7 @@ class ThreadImporter:
         try:
             MAX_JSON_SIZE = 10 * 1024 * 1024
             async with self.client.stream(
-                "GET", target_url, follow_redirects=True
+                "GET", target_url, follow_redirects=False
             ) as response:
                 if response.status_code != 200:
                     raise Exception(f"HTTP {response.status_code}")
