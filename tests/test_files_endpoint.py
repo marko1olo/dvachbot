@@ -13,7 +13,7 @@ except Exception:
 client = TestClient(app, raise_server_exceptions=False)
 
 @pytest.fixture(autouse=True)
-def mock_external_deps():
+def mock_external_deps(isolated_test_db):
     with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country, \
          patch("common.database.is_file_permanently_failed", new_callable=AsyncMock) as mock_failed, \
          patch("site_tgach.main.get_file_owner_id", new_callable=AsyncMock) as mock_owner, \
@@ -96,7 +96,7 @@ def test_dead_file_redis_sync():
         assert resp.status_code == 404
 
 def test_cors_headers_on_direct_link():
-    direct_url = "https://external.cdn.example.com/direct_image.png"
+    direct_url = "https://files.catbox.moe/direct_image.png"
     resp = client.get(f"/file/{direct_url}", follow_redirects=False)
     assert resp.status_code == 301
     assert resp.headers.get("location") == direct_url

@@ -21565,7 +21565,7 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
     # _DAILY_SHOP_PURCHASES — КРИТИЧЕСКАЯ УТЕЧКА: ключи содержат date_str, старые дни не чистились
     try:
         import datetime as _dt_module
-        today_str = _dt_module.datetime.utcnow().strftime('%Y-%m-%d')
+        today_str = _dt_module.datetime.now(_dt_module.timezone.utc).strftime('%Y-%m-%d')
         shop_stale = [k for k in list(shared_state._DAILY_SHOP_PURCHASES.keys())
                       if isinstance(k, tuple) and len(k) >= 3 and k[2] != today_str]
         for k in shop_stale:

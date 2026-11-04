@@ -4834,7 +4834,8 @@ async def api_get_file_tags(file_id: str):
     return {"tags": tags}
 
 
-@app.get("/search/tags")
+@app.api_route("/search/tags", methods=["GET", "HEAD"])
+@app.api_route("/search/tags/", methods=["GET", "HEAD"])
 @limiter.limit("60/minute")
 async def search_tags_page(
     request: Request,
@@ -4928,7 +4929,8 @@ async def search_tags_page(
     return HTMLResponse(content=html_content)
 
 
-@app.get("/tags/")
+@app.api_route("/tags", methods=["GET", "HEAD"])
+@app.api_route("/tags/", methods=["GET", "HEAD"])
 async def tags_index_page(
     request: Request, user: dict | None = Depends(get_optional_user)
 ):
@@ -4966,14 +4968,15 @@ async def tags_index_page(
     return HTMLResponse(content=html_content)
 
 
-@app.get("/tags/{tag_name}")
+@app.api_route("/tags/{tag_name}", methods=["GET", "HEAD"])
+@app.api_route("/tags/{tag_name}/", methods=["GET", "HEAD"])
 async def tag_seo_page(
     request: Request,
     tag_name: str,
     page: int = 1,
     user: dict | None = Depends(get_optional_user),
 ):
-    clean_tag = tag_name.strip().replace("-", " ")
+    clean_tag = tag_name.strip().removesuffix(".html").removesuffix(".htm").replace("-", " ")
 
     # Кэшируем страницу конкретного тега
     cache_key = f"seo_tag:{clean_tag}:{page}"

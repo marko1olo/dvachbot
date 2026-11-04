@@ -289,12 +289,14 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
+                    ("gemini-3.6-flash", "gemini"),
                 ]
             else:
                 models_cascade = [
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
+                    ("gemini-3.6-flash", "gemini"),
                     ("qwen/qwen3.8-27b", "groq"),
                 ]
 
@@ -568,8 +570,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     permanent_model_failures += 1
                                 break
                             if "503" in err_str or "504" in err_str or "unavailable" in err_str or "500" in err_str:
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name} for 15m.")
-                                _MODEL_503_COOLDOWN[model_name] = time.time() + 900.0
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name} for 60s.")
+                                _MODEL_503_COOLDOWN[model_name] = time.time() + 60.0
                                 break
                             if "tokens per day" in err_str or "tpd" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for 1h.")

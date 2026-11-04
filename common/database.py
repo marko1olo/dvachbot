@@ -8738,23 +8738,22 @@ async def get_poll_results_batch(post_nums: list[int]) -> dict[int, dict[str, in
 
 async def get_file_tags(file_id: str) -> list[str]:
     """Возвращает список тегов для файла."""
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
 
-    async with db_lock:
-        try:
-            db = await get_pool()
-            async with db.execute("SELECT tags FROM FileRegistry WHERE file_id = ?", (file_id,)) as cursor:
-                row = await cursor.fetchone()
-                if row and row[0]:
-                    return [t.strip() for t in row[0].split(',') if t.strip()]
-        except Exception:
-            import traceback; traceback.print_exc()
+    try:
+        db = await get_pool()
+        async with db.execute("SELECT tags FROM FileRegistry WHERE file_id = ?", (file_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return [t.strip() for t in row[0].split(',') if t.strip()]
+    except Exception:
+        import traceback; traceback.print_exc()
     return []
 
 async def search_files_by_tags(tags: list[str], limit: int = 50, offset: int = 0) -> list[dict]:
     if not tags: return []
 
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
 
     search_terms = []
     for t in tags:
@@ -8784,18 +8783,17 @@ async def search_files_by_tags(tags: list[str], limit: int = 50, offset: int = 0
     """
 
     results = []
-    async with db_lock:
-        try:
-            db = await get_pool()
-            async with db.execute(query, (fts_query, limit, offset)) as cursor:
-                async for row in cursor:
-                    results.append({
-                        "file_id": row[0],
-                        "score": row[1],
-                        "tags": row[2]
-                    })
-        except Exception as e:
-            print(f"Tag search error: {e}")
+    try:
+        db = await get_pool()
+        async with db.execute(query, (fts_query, limit, offset)) as cursor:
+            async for row in cursor:
+                results.append({
+                    "file_id": row[0],
+                    "score": row[1],
+                    "tags": row[2]
+                })
+    except Exception as e:
+        print(f"Tag search error: {e}")
 
     return results
 async def get_mirrors_batch(file_ids: list[str]) -> dict:
