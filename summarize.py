@@ -115,7 +115,7 @@ _CANNED_REFUSAL_MARKERS = (
 _PROVIDER_LOCKS: dict[str, asyncio.Lock] = {}
 _PROVIDER_LOCKS_LOOP: asyncio.AbstractEventLoop | None = None
 _PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
-DEFAULT_AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "deepseek-v4-flash")
+DEFAULT_AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "gpt-6.1-sol")
 MIN_PROVIDER_INTERVAL: dict[str, float] = {
     "gemini": 2.5,
     "groq": 2.5,
@@ -666,6 +666,58 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     )
                     if provider == "agentrouter":
                         client_kwargs["default_headers"] = {"User-Agent": "opencode/1.18.25"}
+                    if provider == "agentrouter" and not is_mock_env:
+                        ar_headers = {
+                            "Authorization": f"Bearer {api_key}",
+                            "User-Agent": "opencode/1.18.25",
+                            "Content-Type": "application/json"
+                        }
+                        ar_input = f"{effective_sys}\n\n{effective_dump}" if effective_sys else effective_dump
+                        ar_payload = {
+                            "model": model_name,
+                            "input": ar_input,
+                        }
+                        ar_base = base_url.rstrip("/")
+                        ar_resp = await http_client.post(
+                            f"{ar_base}/responses",
+                            headers=ar_headers,
+                            json=ar_payload,
+                            timeout=25.0,
+                        )
+                        if ar_resp.status_code == 200:
+                            ar_data = ar_resp.json()
+                            extracted_txt = None
+                            for out_item in ar_data.get("output", []):
+                                if out_item.get("type") == "message":
+                                    msg_content = out_item.get("content", [])
+                                    if isinstance(msg_content, list) and msg_content:
+                                        extracted_txt = msg_content[0].get("text")
+                                    elif isinstance(msg_content, str):
+                                        extracted_txt = msg_content
+                            if not extracted_txt and "text" in ar_data:
+                                extracted_txt = ar_data.get("text")
+                            if extracted_txt:
+                                result = clean_ai_thinking(extracted_txt)
+                                if result and any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS):
+                                    logger.warning(f"\U0001f6e1\ufe0f Canned refusal/helpline detected from {model_name}. Skipping model.")
+                                    skip_model = True
+                                    break
+                                if result:
+                                    return result
+                                else:
+                                    logger.warning(f"Model {model_name} returned empty text after <think> stripping")
+                                    consecutive_empty += 1
+                                    if consecutive_empty >= 2:
+                                        skip_model = True
+                                        break
+                                    continue
+                            else:
+                                raise RuntimeError(f"AgentRouter empty message output: {ar_data}")
+                        elif ar_resp.status_code in (400, 404) and "not support" not in ar_resp.text.lower():
+                            pass
+                        else:
+                            raise RuntimeError(f"AgentRouter error {ar_resp.status_code}: {ar_resp.text[:300]}")
+
                     client = AsyncOpenAI(**client_kwargs)
                     create_kwargs = dict(
                         model=model_name,

@@ -2,7 +2,7 @@ import asyncio
 import time
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from summarize import summarize_text_with_hf, _model_cooldowns, _key_cooldowns
+from summarize import summarize_text_with_hf, _model_cooldowns, _key_cooldowns, DEFAULT_AGENTROUTER_MODEL
 from common.token_pool import agentrouter_pool, TokenRotator
 
 @pytest.fixture(autouse=True)
@@ -63,7 +63,7 @@ async def test_default_preference_routes_to_deepseek_first(
     
     # Verify create arguments: model and max_tokens
     create_kwargs = mock_client.chat.completions.create.call_args[1]
-    assert create_kwargs["model"] == "deepseek-v4-flash"
+    assert create_kwargs["model"] == DEFAULT_AGENTROUTER_MODEL
     assert create_kwargs["max_tokens"] >= 4096
 
 
@@ -86,7 +86,7 @@ async def test_explicit_deepseek_preference(
     result = await summarize_text_with_hf("Prompt", "Text content", model_preference="deepseek")
 
     assert result == "Ответ DeepSeek"
-    assert mock_client.chat.completions.create.call_args[1]["model"] == "deepseek-v4-flash"
+    assert mock_client.chat.completions.create.call_args[1]["model"] == DEFAULT_AGENTROUTER_MODEL
 
 
 @pytest.mark.asyncio
@@ -117,8 +117,8 @@ async def test_agentrouter_402_budget_pool_cooldowns_model_not_key(
     assert result == "Fallback Gemini summary"
     
     # Model must be on cooldown
-    assert "deepseek-v4-flash" in _model_cooldowns
-    assert _model_cooldowns["deepseek-v4-flash"] > time.time() + 1700
+    assert DEFAULT_AGENTROUTER_MODEL in _model_cooldowns
+    assert _model_cooldowns[DEFAULT_AGENTROUTER_MODEL] > time.time() + 1700
     
     # Key must NOT have been penalized
     mock_penalize_token.assert_not_called()

@@ -209,6 +209,7 @@ class TestModelCascadeValidity:
         "gemini-3.7-flash",
         "gemini-3.5-flash",
         "deepseek-v4-flash",
+        "gpt-6.1-sol",
         "qwen/qwen3.8-27b",
         "qwen/qwen3.6-27b",
     }
