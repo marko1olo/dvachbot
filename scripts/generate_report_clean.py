@@ -34,7 +34,7 @@ for p in posts_chronological:
         reply_to = content_json.get('reply_to_post')
         if reply_to:
             replies[reply_to].append(p)
-    except:
+    except Exception:
         pass
 
 report = []
@@ -97,7 +97,8 @@ else:
 
 report.append("\n## 💬 АКТИВНЫЕ ДИАЛОГИ, РУГАНЬ И ТРЕДЫ (Топ-3 треда)\n")
 for thread_id, thread_posts in sorted(threads.items(), key=lambda x: len(x[1]), reverse=True)[:3]:
-    if thread_id is None: continue
+    if thread_id is None:
+        continue
     report.append(f"### Тред `{thread_id}` (Постов: {len(thread_posts)})\n")
     for p in thread_posts[-7:]:
          report.append(f"- **#{p['post_num']}** ({p['author_id']}): {p['text']}")
