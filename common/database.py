@@ -6621,6 +6621,20 @@ async def check_phash_ban(phash_str: str) -> bool:
     if phash_str in _BANNED_PHASH_CACHE:
         return True
 
+    # Проверка перцептивной близости через расстояние Хэмминга (<= 6 бит)
+    try:
+        import imagehash
+        target_h = imagehash.hex_to_hash(phash_str)
+        for b_str in _BANNED_PHASH_CACHE:
+            try:
+                b_h = imagehash.hex_to_hash(b_str)
+                if (target_h - b_h) <= 6:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     return False
 async def get_banned_files_list(limit: int = 100) -> list[dict]:
     """

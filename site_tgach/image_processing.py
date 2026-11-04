@@ -347,13 +347,17 @@ async def process_and_upload_image(
                     logger.warning("💣 Decompression bomb detected in _validate_and_phash")
                     return None
 
-            thumbnail_bytes, phash_str = await asyncio.gather(
-                create_thumbnail_in_memory(contents),
-                asyncio.to_thread(_validate_and_phash),
-                return_exceptions=True
-            )
-            if isinstance(thumbnail_bytes, Exception): thumbnail_bytes = None
-            if isinstance(phash_str, Exception): phash_str = None
+            try:
+                thumbnail_bytes = await create_thumbnail_in_memory(contents)
+            except Exception as e:
+                logger.debug(f"Thumbnail creation error: {e}")
+                thumbnail_bytes = None
+
+            try:
+                phash_str = await asyncio.to_thread(_validate_and_phash)
+            except Exception as e:
+                logger.debug(f"pHash calculation error: {e}")
+                phash_str = None
 
             if phash_str and await check_phash_ban(phash_str):
                 return {"banned": True, "reason": "Banned by pHash"}

@@ -140,11 +140,11 @@ def generate_challenge_str() -> str:
 
     # 1. Агрессивная очистка при превышении лимита или по истечении времени
     if len(POW_CACHE) > MAX_POW_CACHE_SIZE or random.random() < 0.1:
-        to_del = [k for k, v in POW_CACHE.items() if v < now]
-        # Если кэш всё еще переполнен (атака), удаляем 20% случайных записей
+        to_del = [k for k, v in list(POW_CACHE.items()) if v < now]
+        # Если кэш всё еще переполнен (атака), удаляем самые старые записи (FIFO)
         if len(POW_CACHE) > MAX_POW_CACHE_SIZE:
             keys = list(POW_CACHE.keys())
-            to_del.extend(random.sample(keys, len(keys) // 5))
+            to_del.extend(keys[:len(keys) // 5])
 
         for k in to_del:
             POW_CACHE.pop(k, None)
@@ -194,6 +194,8 @@ def verify_pow(challenge: str, nonce: str, difficulty: int = DEFAULT_POW_DIFFICU
 
     # Проверяем типы и наличие челленджа в кэше
     if not challenge or not nonce or not isinstance(challenge, str) or not isinstance(nonce, str):
+        return False
+    if len(challenge) > 64 or len(nonce) > 64:
         return False
 
     now = time.time()
@@ -258,7 +260,7 @@ def check_ddos(ip: str) -> bool:
                 REQUEST_HISTORY.pop(k, None)
 
         if len(IP_BAN_LIST) > MAX_BAN_LIST_SIZE:
-            b_keys = list(IP_BAN_LIST.keys())
+            b_keys = sorted(IP_BAN_LIST.keys(), key=lambda k: IP_BAN_LIST[k])
             for k in b_keys[:len(b_keys)//5]:
                 IP_BAN_LIST.pop(k, None)
 

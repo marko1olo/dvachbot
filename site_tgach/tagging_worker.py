@@ -324,7 +324,7 @@ def process_image_cpu(image_bytes):
     3. Ресайзит картинку для нейронки.
     """
     try:
-        Image.MAX_IMAGE_PIXELS = 49_000_000
+        Image.MAX_IMAGE_PIXELS = 16_000_000
 
         if not image_bytes:
             return None, "Empty bytes"
@@ -350,15 +350,24 @@ def process_image_cpu(image_bytes):
         except Image.DecompressionBombError:
             return None, "Decompression Bomb Detected"
         except Exception as e:
-            # Если это видео или неподдерживаемый формат — пробуем извлечь кадр через ffmpeg
-            frame_bytes = extract_video_frame_cpu(image_bytes)
-            if frame_bytes:
-                try:
-                    img = Image.open(io.BytesIO(frame_bytes))
-                    img.load()
-                    if img.mode != "RGB":
-                        img = img.convert("RGB")
-                except Exception:
+            # Если это видео — проверяем сигнатуру перед вызовом ffmpeg
+            is_video_magic = (
+                image_bytes.startswith(b"\x00\x00\x00")
+                or b"ftyp" in image_bytes[:32]
+                or image_bytes.startswith(b"\x1a\x45\xdf\xa3")
+                or (image_bytes.startswith(b"RIFF") and b"WEBM" in image_bytes[:16])
+            )
+            if is_video_magic:
+                frame_bytes = extract_video_frame_cpu(image_bytes)
+                if frame_bytes:
+                    try:
+                        img = Image.open(io.BytesIO(frame_bytes))
+                        img.load()
+                        if img.mode != "RGB":
+                            img = img.convert("RGB")
+                    except Exception:
+                        return (sha, None, None, None), f"unsupported_format: {e}"
+                else:
                     return (sha, None, None, None), f"unsupported_format: {e}"
             else:
                 return (sha, None, None, None), f"unsupported_format: {e}"
@@ -503,6 +512,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
             WHERE fid IS NOT NULL
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
+              AND (json_array_length(?) = 0 OR fid NOT IN (SELECT value FROM json_each(?)))
             LIMIT 20
         """
         query_gaps_media = """
@@ -525,6 +535,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
             WHERE fid IS NOT NULL
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
+              AND (json_array_length(?) = 0 OR fid NOT IN (SELECT value FROM json_each(?)))
             LIMIT 20
         """
         query_gaps_single = """
@@ -550,12 +561,16 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
             WHERE fid IS NOT NULL
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
+              AND (json_array_length(?) = 0 OR fid NOT IN (SELECT value FROM json_each(?)))
             LIMIT 20
         """
+        exclude_json = json.dumps(list(exclude_list) if exclude_list else [])
+        gap_params = (exclude_json, exclude_json)
+
         async def _fetch_gaps():
             gap_tasks = []
             try:
-                async with db.execute(query_gaps_files) as cursor:
+                async with db.execute(query_gaps_files, gap_params) as cursor:
                     async for row in cursor:
                         if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks):
                             gap_tasks.append(
@@ -572,7 +587,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
                 logger.debug(f"Gaps files query note: {eg}")
 
             try:
-                async with db.execute(query_gaps_media) as cursor:
+                async with db.execute(query_gaps_media, gap_params) as cursor:
                     async for row in cursor:
                         if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks) and not any(g["fid"] == row[0] for g in gap_tasks):
                             gap_tasks.append(
@@ -589,7 +604,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
                 logger.debug(f"Gaps media query note: {eg}")
 
             try:
-                async with db.execute(query_gaps_single) as cursor:
+                async with db.execute(query_gaps_single, gap_params) as cursor:
                     async for row in cursor:
                         if row[0] and (not exclude_list or row[0] not in exclude_list) and not any(t["fid"] == row[0] for t in tasks) and not any(g["fid"] == row[0] for g in gap_tasks):
                             gap_tasks.append(
@@ -1201,7 +1216,7 @@ async def tagging_loop():
                         cooldown_secs = 600  # 10min — 45s was causing constant retry loops when all API keys hit limits
                         logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt} for {file_id[:15]}). Pausing tagger for {cooldown_secs//60}m to let rate limits recover.")
                         TEMP_FAILED_FILES[file_id] = {
-                            "until": time.time() + 300,
+                            "until": time.time() + cooldown_secs + 120,
                             "cnt": fail_cnt,
                         }
                         tags = None
