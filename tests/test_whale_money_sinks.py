@@ -38,18 +38,54 @@ from whale_economy_engine import (
 class TestWhaleSafes:
     """Tests for F3.1: Exponential Whale Safes and 70% Abu Yacht Fund burn."""
 
-    def test_whale_safe_price_exponential(self):
-        """Validates progression P(n) = int(50000 * (1.5 ** n))."""
-        assert calculate_whale_safe_price(0) == 50000
-        assert calculate_whale_safe_price(1) == 75000
-        assert calculate_whale_safe_price(2) == 112500
-        assert calculate_whale_safe_price(3) == 168750
-        assert calculate_whale_safe_price(4) == 253125
-        assert calculate_whale_safe_price(5) == 379687
-        assert calculate_whale_safe_price(6) == 569531
+    @pytest.mark.parametrize("n, expected_price", [
+        (-100, 50000),
+        (-1, 50000),
+        (0, 50000),
+        (1, 75000),
+        (2, 112500),
+        (3, 168750),
+        (4, 253125),
+        (5, 379687),
+        (6, 569531),
+        (10, 2883251),
+        (20, 166262836),
+        (39, 368577744031),
+        (40, 552866616047),
+        (41, 552866616047),
+        (50, 552866616047),
+        (100, 552866616047),
+    ])
+    def test_whale_safe_price_parameterized(self, n, expected_price):
+        """Validates exact pricing across standard, negative, boundary, and capped values."""
+        price = calculate_whale_safe_price(n)
+        assert price == expected_price
+        assert isinstance(price, int)
 
-        # Edge case: negative n safely clamped
-        assert calculate_whale_safe_price(-1) == 50000
+    def test_whale_safe_price_clamping_and_monotonicity(self):
+        """
+        Validates mathematical properties of calculate_whale_safe_price:
+        - Clamping lower bound: any n <= 0 evaluates to P(0) = 50000.
+        - Strict monotonicity: P(n+1) > P(n) for all 0 <= n < 40.
+        - Upper clamping ceiling: P(n) == P(40) for all n >= 40.
+        """
+        # Negative boundary clamping
+        for neg_n in [-1000, -50, -2, -1]:
+            assert calculate_whale_safe_price(neg_n) == calculate_whale_safe_price(0) == 50000
+
+        # Monotonicity check across valid escalation range
+        for n in range(40):
+            current_p = calculate_whale_safe_price(n)
+            next_p = calculate_whale_safe_price(n + 1)
+            assert next_p > current_p, f"Expected P({n+1}) > P({n}), got {next_p} <= {current_p}"
+            # Escalation ratio approximately 1.5
+            ratio = next_p / current_p
+            assert 1.49 <= ratio <= 1.51, f"Ratio {ratio} out of expected bounds for n={n}"
+
+        # Upper bound saturation clamping
+        p40 = calculate_whale_safe_price(40)
+        for over_n in [41, 42, 50, 100, 500]:
+            assert calculate_whale_safe_price(over_n) == p40
 
     def test_whale_safe_drop_structure_and_types(self):
         """roll_whale_safe() returns valid 5-element tuple conforming to lootbox contract."""
