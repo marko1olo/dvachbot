@@ -486,8 +486,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     # Additional fallbacks if external keys configured
     if os.getenv("OPENROUTER_API_KEY"):
         models_cascade.extend([
-            ("google/gemini-2.0-flash-exp:free", "openrouter"),
             ("meta-llama/llama-3.3-70b-instruct:free", "openrouter"),
+            ("mistralai/mistral-7b-instruct:free", "openrouter"),
         ])
     if os.getenv("OPENAI_API_KEY"):
         models_cascade.extend([

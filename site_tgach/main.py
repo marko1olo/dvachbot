@@ -5864,7 +5864,12 @@ async def api_captcha_generate(request: Request):
 async def api_get_updates(board_id: str, since: float):
     safe_since = max(since, time.time() - 86400)
     raw_posts = await get_updates_since(board_id, safe_since)
-    return await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
+    posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
+    return Response(
+        content=orjson.dumps(posts),
+        media_type="application/json",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/api/admin/activity_stats")
@@ -9513,7 +9518,14 @@ async def api_get_thread(
     op_id = posts_flat[0].get("author_id") if posts_flat else None
     finalize_posts_for_user(posts_flat, int(user["id"]), is_ru, op_author_id=op_id)
 
-    return posts_flat
+    return Response(
+        content=orjson.dumps(posts_flat),
+        media_type="application/json",
+        headers={
+            "Cache-Control": "public, max-age=5, stale-while-revalidate=10",
+            "ETag": f'"{thread_id}-{current_version}"',
+        },
+    )
 
 
 @app.get("/api/catalog/{board_id}")
@@ -9912,7 +9924,11 @@ async def api_get_threads(
         p["posts_count"] = rc + 1
         p["anon_count"] = p.get("anon_count", 1)
 
-    return posts_final
+    return Response(
+        content=orjson.dumps(posts_final),
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=5, stale-while-revalidate=10"},
+    )
 
 
 @app.post("/api/report")
