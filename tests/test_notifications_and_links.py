@@ -553,13 +553,16 @@ async def test_tg_board_reply_to_notification_and_thread_broadcast(isolated_test
         }
     }
 
+    from shared_state import messages_storage, storage_lock
+    async with storage_lock:
+        messages_storage.clear()
+
     # 2. Trigger _notify_new_thread_public
     with patch("main.enqueue_board_message", new_callable=AsyncMock):
         ctx = NewThreadPublicContext(board_id, b_data, "Awesome Discussion", str(op_num), 'ru', now_dt, 'ru')
         await _notify_new_thread_public(ctx)
 
     # 3. User 1001 on the board replies to the notification post
-    from shared_state import messages_storage, storage_lock
     async with storage_lock:
         notify_post_num = max(messages_storage.keys())
 

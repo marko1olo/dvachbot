@@ -150,6 +150,8 @@ async def test_site_thread_broadcaster_separation_of_broadcast_and_storage(isola
         assert archive_call_content.get("text") == real_post_text
         assert "На сайте создан новый тред" not in archive_call_content.get("text", "")
 
+        shared_state.messages_storage.clear()
+
 
 @pytest.mark.asyncio
 async def test_cyberchad_voice_verdict_broadcasts_to_board_for_all_users():
