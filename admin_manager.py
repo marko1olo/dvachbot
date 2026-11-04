@@ -5,7 +5,7 @@ from bot_helpers import *
 from post_helpers import *
 from shared_state import *
 from aiogram import Router, F, types
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
 from html import escape as escape_html
 from post_helpers import delete_user_posts

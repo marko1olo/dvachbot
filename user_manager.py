@@ -7,7 +7,7 @@ from post_helpers import *
 from shared_state import *
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from aiogram import Router, F, types
-from aiogram.types import Message, WebAppInfo
+from aiogram.types import Message, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
 from deanonymizer import generate_deanon_info
 from common.database import get_post_info_by_copy, get_pool, update_user_settings_db
