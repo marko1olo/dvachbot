@@ -328,19 +328,24 @@ def _kill_pid_tree(pid: int, reason: str) -> None:
             pass
 
 
+def _clear_bot_lock(context: str = "") -> None:
+    try:
+        BOT_LOCK.unlink()
+        msg = f"Removed bot.lock {context}".strip()
+        log(msg)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log(f"Could not remove bot.lock: {exc}")
+
+
 def _kill_tree(process: subprocess.Popen, reason: str) -> None:
     pid = process.pid
     _kill_pid_tree(pid, reason)
     lock_pid = _read_lock_pid()
     if lock_pid and lock_pid != pid:
         _kill_pid_tree(lock_pid, f"{reason}_associated_lock_pid")
-    try:
-        BOT_LOCK.unlink()
-        log("Removed bot.lock after forced child stop")
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        log(f"Could not remove bot.lock: {exc}")
+    _clear_bot_lock("after forced child stop")
 
 
 def _start_child() -> subprocess.Popen:
