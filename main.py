@@ -27890,8 +27890,8 @@ async def periodic_shop_broadcast():
                 img_bytes = None
                 if not fid and hasattr(photo_payload, 'path') and os.path.exists(photo_payload.path):
                     try:
-                        with open(photo_payload.path, 'rb') as bf:
-                            img_bytes = bf.read()
+                        from common.async_file_io import read_file_bytes_async
+                        img_bytes = await read_file_bytes_async(photo_payload.path)
                     except Exception:
                         pass
                 media_type = ('video' if is_video_banner(fname) else 'photo') if (fid or img_bytes) else 'text'

@@ -1423,8 +1423,8 @@ async def board_help_worker(board_id: str, extended_interval: bool = False):
                 img_bytes = None
                 if not fid and hasattr(photo_payload, 'path') and os.path.exists(photo_payload.path):
                     try:
-                        with open(photo_payload.path, 'rb') as bf:
-                            img_bytes = bf.read()
+                        from common.async_file_io import read_file_bytes_async
+                        img_bytes = await read_file_bytes_async(photo_payload.path)
                     except Exception:
                         pass
                 is_photo = bool(fid or img_bytes)
