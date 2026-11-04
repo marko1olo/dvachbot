@@ -271,6 +271,28 @@ def test_get_telegraph_token_generation_failure():
 
 
 @pytest.mark.asyncio
+async def test_telegraph_request_async_retries_with_asyncio_sleep():
+    import summarize
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_resp_fail = MagicMock()
+    mock_resp_fail.raise_for_status.side_effect = RuntimeError("HTTP error")
+
+    mock_resp_success = MagicMock()
+    mock_resp_success.raise_for_status = MagicMock()
+    mock_resp_success.json.return_value = {"ok": True, "result": {"access_token": "fake_tok"}}
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = [mock_resp_fail, mock_resp_fail, mock_resp_success]
+
+    with patch("summarize.get_shared_http_client", return_value=mock_client),          patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        res = await summarize._telegraph_request_async("createAccount", {"short_name": "test"})
+        assert res == {"access_token": "fake_tok"}
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(2)
+        mock_sleep.assert_any_call(4)
+
+@pytest.mark.asyncio
 async def test_concurrent_single_flight_coalescing():
     """20 concurrent requests with identical prompt coalesce into 1 single LLM call."""
     import summarize

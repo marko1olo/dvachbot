@@ -806,16 +806,14 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
 TELEGRAPH_TOKEN_FILE = os.path.join("data", "telegraph_token.txt")
 _telegraph_token_cache = None
 
-def _telegraph_request_sync(method: str, params: dict) -> dict:
-    """Make a direct (no proxy) HTTP request to Telegraph API."""
-    import requests
-    import time
+async def _telegraph_request_async(method: str, params: dict) -> dict:
+    """Make a direct (no proxy) HTTP request to Telegraph API asynchronously."""
     url = f"https://api.telegra.ph/{method}"
-    # Explicitly bypass proxy for Telegraph - SOCKS on 10808 is not for external APIs
     last_err = None
+    client = get_shared_http_client()
     for attempt in range(3):
         try:
-            resp = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
+            resp = await client.get(url, params=params, timeout=15.0)
             resp.raise_for_status()
             data = resp.json()
             if not data.get("ok"):
@@ -823,9 +821,24 @@ def _telegraph_request_sync(method: str, params: dict) -> dict:
             return data["result"]
         except Exception as e:
             last_err = e
-            time.sleep(2 * (attempt + 1))
+            await asyncio.sleep(2 * (attempt + 1))
             
     raise RuntimeError(f"Telegraph request failed after 3 attempts: {last_err}")
+
+def _telegraph_request_sync(method: str, params: dict) -> dict:
+    """Make a direct (no proxy) HTTP request to Telegraph API (sync wrapper)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # Running inside an active event loop, run in a dedicated thread to avoid deadlock/blocking
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, _telegraph_request_async(method, params)).result()
+    else:
+        return asyncio.run(_telegraph_request_async(method, params))
 
 def _telegraph_create_account_sync() -> str:
     """Create a Telegraph account and return the access token."""
