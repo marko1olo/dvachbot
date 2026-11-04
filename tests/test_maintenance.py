@@ -96,6 +96,33 @@ class TestMaintenance(unittest.TestCase):
         mock_cur.execute.assert_any_call("DELETE FROM PostCopies WHERE post_num < ?", (500000,))
         mock_con.commit.assert_called_once()
 
+    @patch('builtins.print')
+    def test_clean_old_postcopies_exception(self, mock_print):
+        """Test error path: cursor or execution raises an exception."""
+        from maintenance import clean_old_postcopies
+        mock_con = MagicMock()
+        mock_con.cursor.side_effect = Exception("DB connection dropped")
+
+        clean_old_postcopies(mock_con, retention_days=3)
+
+        mock_print.assert_called_once_with("⚠️ Пропуск очистки PostCopies: DB connection dropped")
+        mock_con.commit.assert_not_called()
+
+    @patch('builtins.print')
+    def test_clean_old_postcopies_no_posts_found(self, mock_print):
+        """Test edge case: row is None or row[0] is None/empty."""
+        from maintenance import clean_old_postcopies
+        mock_con = MagicMock()
+        mock_cur = MagicMock()
+        mock_con.cursor.return_value = mock_cur
+        mock_cur.fetchone.return_value = (None,)
+
+        clean_old_postcopies(mock_con, retention_days=3)
+
+        mock_cur.execute.assert_called_once()
+        mock_con.commit.assert_not_called()
+        mock_print.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()
 
