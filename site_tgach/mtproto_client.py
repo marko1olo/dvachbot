@@ -101,7 +101,7 @@ async def _cleanup_idle_clients():
         tokens_to_remove = []
 
         # Ищем кандидатов на удаление (без лока, чтобы не блокировать всё)
-        for token, last_time in _LAST_USED.items():
+        for token, last_time in list(_LAST_USED.items()):
             if now - last_time > idle_timeout:
                 tokens_to_remove.append(token)
 
@@ -318,6 +318,8 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
 
 async def upload_file_mtproto(bot_token: str, chat_id: int, file_bytes: bytes, filename: str, file_type: str) -> dict | None:
     """Загружает файл через MTProto (Pyrogram) если Bot API не справляется."""
+    if not API_ID or not API_HASH:
+        return None
     client = await get_active_client(bot_token)
     if not client:
         return None

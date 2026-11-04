@@ -95,7 +95,7 @@ class MemoryUploadFile:
 
 
 class ThreadImporter:
-    MEDIA_CONCURRENCY_LIMIT = 5
+    MEDIA_CONCURRENCY_LIMIT = 2
     MAX_MEDIA_DOWNLOAD_SIZE = 50 * 1024 * 1024  # 50 MB (Telegram limit & 1GB VPS RAM safety)
     BLOCKED_MIME_TYPES = {
         "text/html", "application/json", "text/plain", "text/xml",
@@ -228,9 +228,13 @@ class ThreadImporter:
         self, url: str, retries: int = 3
     ) -> Optional[httpx.Response]:
         url = url.strip()
-        if not is_safe_url(url):
+        if not is_safe_url(url, allowed_domains=ALLOWED_IMPORT_DOMAINS):
             logger.warning(f"🛡️ SSRF BLOCKED request to unsafe URL: {url}")
             return None
+
+        parsed_url = urlparse(url)
+        hostname = (parsed_url.hostname or "").lower()
+        is_2ch = hostname == "2ch.hk" or hostname.endswith(".2ch.hk") or hostname == "2ch.life" or hostname.endswith(".2ch.life")
 
         for i in range(retries):
             try:
@@ -239,11 +243,12 @@ class ThreadImporter:
                 req_headers = {"User-Agent": self.client.headers.get("user-agent", "Mozilla/5.0")} if self.client else {"User-Agent": "Mozilla/5.0"}
 
                 # Передаем куки только если это 2ch (для доступа к скрытым разделам, если есть пасскод)
-                req_cookies = self.client.cookies if (self.client and "2ch" in url) else {}
+                req_cookies = self.client.cookies if (self.client and is_2ch) else {}
 
                 async with httpx.AsyncClient(
                     verify=False,
                     http2=False,
+                    follow_redirects=False,
                     timeout=httpx.Timeout(timeout=30.0, connect=10.0, read=25.0, write=10.0),
                     cookies=req_cookies,
                     transport=httpx.AsyncHTTPTransport(
@@ -268,12 +273,23 @@ class ThreadImporter:
                                 logger.warning(f"⚠️ Blocked MIME type ({ct}) from {url}")
                                 return None
 
-                            # 3. Stream chunks with size cap to prevent OOM / decompression bomb
+                            # 3. Stream chunks with size cap and early magic byte validation
                             accumulated = bytearray()
+                            magic_verified = False
                             async for chunk in resp.aiter_bytes():
                                 accumulated.extend(chunk)
+                                if not magic_verified and len(accumulated) >= 32:
+                                    if not is_valid_media_magic(bytes(accumulated[:32])):
+                                        logger.warning(f"⚠️ Disallowed or corrupted media content magic from {url}")
+                                        return None
+                                    magic_verified = True
                                 if len(accumulated) > self.MAX_MEDIA_DOWNLOAD_SIZE:
                                     logger.warning(f"⚠️ Stream exceeded {self.MAX_MEDIA_DOWNLOAD_SIZE} bytes: {url}")
+                                    return None
+
+                            if not magic_verified and accumulated:
+                                if not is_valid_media_magic(bytes(accumulated)):
+                                    logger.warning(f"⚠️ Disallowed or corrupted media content magic from {url}")
                                     return None
 
                             return httpx.Response(
@@ -518,6 +534,7 @@ class ThreadImporter:
                         else:
                             uploader_bot = self.bot
                             uploader_bot_id = getattr(self.bot, "id", 0)
+                        file_data["buffer"].seek(0)
                         fake_file = MemoryUploadFile(
                             file_data["buffer"], file_data["name"], file_data["content_type"]
                         )
@@ -775,6 +792,11 @@ class ThreadImporter:
                             }
                         )
                     except Exception as post_error:
+                        if is_op:
+                            logger.error(
+                                f"❌ Failed to process OP post (post 0). Aborting thread import: {post_error}"
+                            )
+                            return
                         logger.error(
                             f"⚠️ Error processing post {i} (skipped): {post_error}"
                         )
@@ -932,12 +954,10 @@ class ThreadImporter:
                         stream,
                     ),
                 )
-                await conn.commit()
 
                 chunk_size = 20
                 replies_data = prepared_posts[1:]
                 for i in range(0, len(replies_data), chunk_size):
-                    await conn.execute("BEGIN")
                     chunk = replies_data[i : i + chunk_size]
                     if chunk:
                         values_placeholders = []
@@ -972,10 +992,7 @@ class ThreadImporter:
                         for idx, (new_id,) in enumerate(rows):
                             self.created_post_ids.append(new_id)
                             id_map[chunk[idx]["old_id"]] = new_id
-                    await conn.commit()
-                    await asyncio.sleep(0.05)
 
-                await conn.execute("BEGIN")
                 unique_authors = set(p["author_id"] for p in prepared_posts if p.get("author_id", 0) > 0)
                 user_params = [(uid, target_board, stream) for uid in unique_authors]
                 if user_params:
@@ -985,6 +1002,7 @@ class ThreadImporter:
 
                 current_channel = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS["ru"])
                 channel_copies_params = []
+                post_files_params = []
                 for p_data in prepared_posts:
                     p_num = id_map.get(p_data["old_id"])
                     if not p_num:
@@ -994,15 +1012,30 @@ class ThreadImporter:
                             channel_copies_params.append(
                                 (p_num, current_channel, f["channel_message_id"])
                             )
+                        orig_fid = f.get("original_file_id") or f.get("file_id")
+                        thumb_fid = f.get("thumbnail_file_id")
+                        orig_url = f.get("original_url") or f.get("url") or ""
+                        thumb_url = f.get("thumbnail_url") or ""
+                        ftype = f.get("type") or "image"
+                        if orig_fid or thumb_fid:
+                            post_files_params.append(
+                                (p_num, ftype, orig_fid, thumb_fid, orig_url, thumb_url)
+                            )
                 if channel_copies_params:
                     await conn.executemany(
                         "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
                         channel_copies_params,
                     )
-                await conn.commit()
+                if post_files_params:
+                    await conn.executemany(
+                        """
+                        INSERT OR IGNORE INTO PostFiles (post_num, file_type, original_file_id, thumbnail_file_id, original_url, thumbnail_url)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        post_files_params,
+                    )
 
                 for i in range(0, len(prepared_posts), chunk_size):
-                    await conn.execute("BEGIN")
                     chunk = prepared_posts[i : i + chunk_size]
                     update_posts_params = []
                     all_backlink_pairs = []
@@ -1048,7 +1081,7 @@ class ThreadImporter:
                             all_backlink_pairs,
                         )
 
-                    await conn.commit()
+                await conn.commit()
 
                 if all_files_for_queue:
                     for fid in all_files_for_queue:

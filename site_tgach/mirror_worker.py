@@ -88,27 +88,26 @@ async def close_internal_file_bots():
     _INTERNAL_FILE_BOTS.clear()
 
 async def _find_msg_info(file_id: str):
-    from common.db_pool import get_pool, db_lock # Локальный импорт
+    from common.db_pool import get_pool
     try:
-        async with db_lock:
-            db = await get_pool()
-            # No post_num window limit - search full table for old restored posts too
-            query = """
-                SELECT cc.channel_id, cc.message_id, p.post_num
-                FROM PostFiles pf
-                JOIN Posts p ON pf.post_num = p.post_num
-                LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
-                WHERE (pf.original_file_id = ? OR pf.thumbnail_file_id = ?)
-                  AND p.post_num = (
-                      SELECT MAX(p2.post_num)
-                      FROM PostFiles pf2
-                      JOIN Posts p2 ON pf2.post_num = p2.post_num
-                      WHERE pf2.original_file_id = ? OR pf2.thumbnail_file_id = ?
-                  )
-                LIMIT 1
-            """
-            async with db.execute(query, (file_id, file_id, file_id, file_id)) as cursor:
-                return await cursor.fetchone()
+        db = await get_pool()
+        # No post_num window limit - search full table for old restored posts too
+        query = """
+            SELECT cc.channel_id, cc.message_id, p.post_num
+            FROM PostFiles pf
+            JOIN Posts p ON pf.post_num = p.post_num
+            LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
+            WHERE (pf.original_file_id = ? OR pf.thumbnail_file_id = ?)
+              AND p.post_num = (
+                  SELECT MAX(p2.post_num)
+                  FROM PostFiles pf2
+                  JOIN Posts p2 ON pf2.post_num = p2.post_num
+                  WHERE pf2.original_file_id = ? OR pf2.thumbnail_file_id = ?
+              )
+            LIMIT 1
+        """
+        async with db.execute(query, (file_id, file_id, file_id, file_id)) as cursor:
+            return await cursor.fetchone()
     except Exception as e:
         logger.error(f"DB lookup error: {e}", exc_info=True)
         return None
@@ -216,18 +215,6 @@ async def _process_single_task(task):
             if file_path:
                 _, ext = os.path.splitext(file_path)
                 if ext: file_ext = ext
-
-                if public_safe_bot:
-                    tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
-                    if mirror_type == 'catbox':
-                        if is_catbox_available():
-                            logger.info(f"DEBUG: [Task {task_id}] Uploading URL to Catbox...")
-                            success_link = await upload_url_to_catbox(tg_url)
-                            logger.info(f"DEBUG: [Task {task_id}] Upload URL result: {success_link}")
-                        else:
-                            logger.info(f"DEBUG: [Task {task_id}] Catbox is paused/unavailable, skipping URL upload.")
-                    elif mirror_type == '0x0':
-                        success_link = await upload_url_to_0x0(tg_url)
         except Exception as e:
             err_str = str(e).lower()
             if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
