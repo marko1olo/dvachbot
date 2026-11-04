@@ -467,3 +467,16 @@ class TestAuctionFinalizationIntegration:
         async with db.execute("SELECT custom_prefix FROM Users WHERE user_id = ?", (winner_id,)) as c:
             row = await c.fetchone()
             assert row[0] == "[Архимаг Двача]"
+
+
+# =============================================================================
+# 4. CODE HEALTH TESTS: IMPORTS AND NAMESPACE SANITY
+# =============================================================================
+
+class TestAuctionEngineCodeHealth:
+    """Verifies auction_engine imports and namespace cleanliness."""
+
+    def test_unused_json_import_not_present(self):
+        """Ensure unused json module is not imported in auction_engine."""
+        import auction_engine
+        assert not hasattr(auction_engine, "json"), "'json' import should not be in auction_engine"
