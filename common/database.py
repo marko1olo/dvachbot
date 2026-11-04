@@ -1160,6 +1160,12 @@ async def _create_indices(db):
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_seller_status ON MarketListings(seller_id, status);")
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_deposits_user_status ON BankDeposits(user_id, status);")
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_deposits_status ON BankDeposits(status);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_auction_bids_user ON AuctionBids(user_id);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_auctions_board ON Auctions(board_id, status);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_buyer ON MarketListings(buyer_id);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_moneydrops_donor ON MoneyDrops(donor_id);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_moneydropmessages_chat ON MoneyDropMessages(chat_id);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bottles_sender ON Bottles(sender_id);")
         except aiosqlite.OperationalError:
             pass
 
@@ -2676,10 +2682,11 @@ async def get_op_posts_for_board(
 
             all_possible_thread_ids = list(real_thread_id_map.keys())
             all_possible_thread_ids.extend(target_ids)
-            valid_tids_str = [f"'{str(x)}'" for x in all_possible_thread_ids if x]
+            valid_tids = [str(x) for x in all_possible_thread_ids if x]
 
-            if valid_tids_str:
-                in_clause = ",".join(valid_tids_str)
+            if valid_tids:
+                in_clause = ",".join(["?"] * len(valid_tids))
+                params_count = list(valid_tids) + list(target_ids) + [viewer_id]
                 if reply_limit == 0:
                     # Fast path: lightweight reply count without reading or parsing content
                     count_query = f"""
@@ -2689,9 +2696,9 @@ async def get_op_posts_for_board(
                             thread_id IN ({in_clause}) 
                             OR reply_to_post_num IN ({id_placeholders})
                         )
-                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
                     """
-                    async with db.execute(count_query, target_ids) as cursor:
+                    async with db.execute(count_query, params_count) as cursor:
                         async for row in cursor:
                             try:
                                 t_id_raw = row[0]
@@ -2715,6 +2722,7 @@ async def get_op_posts_for_board(
                                     target['_authors'].add(a_id)
                             except Exception: continue
                 else:
+                    params_fetch = list(valid_tids) + list(target_ids) + [viewer_id]
                     replies_fetch_query = f"""
                         SELECT post_num, board_id, thread_id, reply_to_post_num, author_id, content, timestamp
                         FROM Posts
@@ -2722,10 +2730,10 @@ async def get_op_posts_for_board(
                             thread_id IN ({in_clause}) 
                             OR reply_to_post_num IN ({id_placeholders})
                         )
-                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
                         ORDER BY post_num ASC
                     """
-                    async with db.execute(replies_fetch_query, target_ids) as cursor:
+                    async with db.execute(replies_fetch_query, params_fetch) as cursor:
                         rep_columns = [desc[0] for desc in cursor.description]
                         async for row in cursor:
                             try:
@@ -3036,7 +3044,7 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
             viewer_id = observer_id if observer_id is not None else -1
 
             stream_clause = "AND stream = ?" if board_id != 'int' else ""
-            params = [board_id]
+            params = [board_id, viewer_id]
             if board_id != 'int':
                 params.append(stream)
             params.append(offset)
@@ -3046,7 +3054,7 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
                 FROM Posts 
                 WHERE board_id = ? 
                 AND thread_id IS NULL 
-                AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+                AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
                 {stream_clause}
                 ORDER BY timestamp DESC 
                 LIMIT 50 OFFSET ?
@@ -5366,18 +5374,18 @@ async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 2
     db = await get_pool()
     viewer_id = observer_id if observer_id is not None else -1
     try:
-        query = f"""
+        query = """
             SELECT post_num, board_id, thread_id, content, timestamp, author_id
             FROM Posts 
             WHERE board_id = ? 
               AND stream = ?
-              AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+              AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
               AND EXISTS (SELECT 1 FROM PostFiles pf WHERE pf.post_num = Posts.post_num)
             ORDER BY timestamp DESC
             LIMIT ? OFFSET ?
         """
         posts = []
-        async with db.execute(query, (board_id, stream, page_size, offset)) as cursor:
+        async with db.execute(query, (board_id, stream, viewer_id, page_size, offset)) as cursor:
             cols = [d[0] for d in cursor.description]
             async for row in cursor:
                 if hasattr(row, 'keys'):
@@ -9712,7 +9720,9 @@ async def apply_daily_wealth_tax(db, current_ts: Optional[float] = None) -> tupl
             LEFT JOIN w ON a.user_id = w.user_id
             LEFT JOIN b ON a.user_id = b.user_id
             LEFT JOIN m ON a.user_id = m.user_id
+            LEFT JOIN (SELECT user_id, MAX(is_isolated) as is_iso FROM Users GROUP BY user_id) iso ON a.user_id = iso.user_id
             WHERE (COALESCE(w.wallet_bal, 0.0) + COALESCE(b.bank_total, 0.0) + COALESCE(m.market_total, 0.0)) > 5000
+              AND COALESCE(iso.is_iso, 0) = 0
         """
         async with db.execute(query, (now_ts, now_ts)) as c:
             rich_users = await c.fetchall()

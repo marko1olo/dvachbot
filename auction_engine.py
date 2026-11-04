@@ -445,8 +445,12 @@ async def cb_raid_join(callback: types.CallbackQuery):
             return
         raid["voters"].append(user_id)
         cnt = len(raid["voters"])
+        should_execute = False
+        if cnt >= 5:
+            _ACTIVE_RAIDS.pop(raid_id, None)
+            should_execute = True
 
-    if cnt < 5:
+    if not should_execute:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🚩 Вступить в рейд ОБЭП ({cnt}/5)", callback_data=f"raid_join_{raid_id}")]
         ])
@@ -475,10 +479,7 @@ async def cb_raid_join(callback: types.CallbackQuery):
         await callback.answer(f"🚩 Ты вступил в рейд ОБЭП! ({cnt}/5)")
         return
 
-    # 5 voters gathered! Execute!
-    async with _raid_lock:
-        _ACTIVE_RAIDS.pop(raid_id, None)
-
+    # 5 voters gathered! Execute raid!
     res = await execute_oligarch_raid(db, raid["voters"], raid["target_id"], raid["board_id"])
 
     if not res.get("ok"):

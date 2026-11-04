@@ -606,6 +606,10 @@ async def safe_commit(db, started_by_caller: bool = True):
             raise
     finally:
         _task_tx_depth.set(max(0, depth - 1))
+        if depth <= 1:
+            is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+            if callable(is_owned_fn) and is_owned_fn():
+                db_lock.release()
 
 
 async def safe_rollback(db, started_by_caller: bool = True):
@@ -626,6 +630,10 @@ async def safe_rollback(db, started_by_caller: bool = True):
         pass
     finally:
         _task_tx_depth.set(max(0, depth - 1))
+        if depth <= 1:
+            is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+            if callable(is_owned_fn) and is_owned_fn():
+                db_lock.release()
 
 
 async def sqlite_wal_checkpoint_task(interval_seconds: int = 600):

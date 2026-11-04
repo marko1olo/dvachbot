@@ -557,16 +557,17 @@ async def callback_combat_bail(callback: types.CallbackQuery):
         sess._is_processing_bail = False
         active_combat_appeals.pop(session_id, None)
 
-    # Record ledger transaction and Abu Fund contribution
+    # Record ledger transaction and Abu Fund contribution atomically
     try:
         from common.database import record_user_transaction, add_to_abu_fund
+        from common.db_pool import db_transaction
         target_anon = get_anon_id(sess.target_id)
-        await record_user_transaction(
-            db, payer_id, -bail_cost, 'bail',
-            f'Выкуп из-под ареста анона [{target_anon}]'
-        )
-        await add_to_abu_fund(db, int(bail_cost))
-        await db.commit()
+        async with db_transaction(db):
+            await record_user_transaction(
+                db, payer_id, -bail_cost, 'bail',
+                f'Выкуп из-под ареста анона [{target_anon}]'
+            )
+            await add_to_abu_fund(db, int(bail_cost))
     except Exception as e:
         logger.warning(f"Failed to record bail tx or abu fund: {e}")
 
