@@ -10390,7 +10390,7 @@ def _get_shared_aiohttp_session() -> aiohttp.ClientSession:
     if GLOBAL_PROXY_HTTP_SESSION is None or GLOBAL_PROXY_HTTP_SESSION.closed:
         timeout = aiohttp.ClientTimeout(total=180, sock_connect=10, sock_read=30)
         connector = aiohttp.TCPConnector(
-            limit=200, ttl_dns_cache=300, family=socket.AF_INET, ssl=_NO_VERIFY_SSL
+            limit=200, ttl_dns_cache=300, family=socket.AF_INET
         )
         GLOBAL_PROXY_HTTP_SESSION = aiohttp.ClientSession(
             connector=connector, timeout=timeout, trust_env=False
@@ -10399,28 +10399,48 @@ def _get_shared_aiohttp_session() -> aiohttp.ClientSession:
 
 
 
-async def _fetch_telegram_path(file_id: str, bot_token: str):
+async def _fetch_telegram_path(file_id: str, bot_token: str, bot_id: int | None = None) -> str | None:
+    if bot_id and global_bot_pool:
+        bot = global_bot_pool.get_bot_by_id(bot_id)
+        if bot:
+            try:
+                tg_file = await asyncio.wait_for(bot.get_file(file_id), timeout=4.0)
+                if tg_file and tg_file.file_path:
+                    return tg_file.file_path
+            except Exception:
+                pass
+
     global GLOBAL_HTTP_SESSION
     if GLOBAL_HTTP_SESSION is None or GLOBAL_HTTP_SESSION.closed:
-        # family=socket.AF_INET ЗАСТАВЛЯЕТ ИСПОЛЬЗОВАТЬ IPv4 (Лечит проблемы с VPN)
         connector = aiohttp.TCPConnector(
-            limit=250, ttl_dns_cache=300, family=socket.AF_INET, ssl=_NO_VERIFY_SSL
+            limit=250, ttl_dns_cache=300, family=socket.AF_INET
         )
         GLOBAL_HTTP_SESSION = aiohttp.ClientSession(
-            connector=connector, timeout=aiohttp.ClientTimeout(total=4)
+            connector=connector, timeout=aiohttp.ClientTimeout(total=6.0, sock_connect=2.5)
         )
 
     async with TELEGRAM_FILE_SEMAPHORE:
+        url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
         try:
-            url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
-            # Убираем прокси из аргументов, раз у тебя TUN VPN
-            async with GLOBAL_HTTP_SESSION.get(url, timeout=aiohttp.ClientTimeout(total=3.5)) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                return data["result"]["file_path"] if data.get("ok") else None
+            async with GLOBAL_HTTP_SESSION.get(url, timeout=aiohttp.ClientTimeout(total=5.0, sock_connect=2.5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        return data["result"]["file_path"]
         except Exception:
-            return None
+            pass
+
+        if PROXY_URL:
+            try:
+                async with GLOBAL_HTTP_SESSION.get(url, proxy=PROXY_URL, timeout=aiohttp.ClientTimeout(total=5.0, sock_connect=3.0)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("ok"):
+                            return data["result"]["file_path"]
+            except Exception:
+                pass
+
+    return None
 
 
 def _bot_id_from_token(token: str | None) -> int | None:
@@ -10518,7 +10538,7 @@ async def get_cached_file_path(
             owner_id, allow_protected_tokens=allow_protected_tokens
         )
         if owner_token:
-            path = await _fetch_telegram_path(file_id, owner_token)
+            path = await _fetch_telegram_path(file_id, owner_token, bot_id=owner_id)
             if path:
                 return await save_success(path, owner_token, owner_id)
             tried_tokens.add(owner_token)
@@ -10527,7 +10547,7 @@ async def get_cached_file_path(
     if global_bot_pool:
         main_bot = global_bot_pool.get_main_bot()
         if main_bot and main_bot.token not in tried_tokens:
-            path = await _fetch_telegram_path(file_id, main_bot.token)
+            path = await _fetch_telegram_path(file_id, main_bot.token, bot_id=main_bot.id)
             if path:
                 return await save_success(path, main_bot.token, main_bot.id)
             tried_tokens.add(main_bot.token)
@@ -10546,7 +10566,7 @@ async def get_cached_file_path(
 
             async def fetch_with_bot(bot_id, token):
                 try:
-                    path = await _fetch_telegram_path(file_id, token)
+                    path = await _fetch_telegram_path(file_id, token, bot_id=bot_id)
                     if path:
                         return path, token, bot_id
                 except Exception:
@@ -10671,6 +10691,7 @@ async def _proxy_protected_telegram_file(
 
     session = _get_shared_aiohttp_session()
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+    resp = None
     try:
         request_headers = {}
         if request:
@@ -10678,8 +10699,17 @@ async def _proxy_protected_telegram_file(
             if range_header:
                 request_headers["Range"] = range_header
         resp = await session.get(url, headers=request_headers, allow_redirects=False)
+        if resp.status not in (200, 206) and PROXY_URL:
+            resp.release()
+            resp = await session.get(url, headers=request_headers, proxy=PROXY_URL, allow_redirects=False)
     except Exception:
-        raise HTTPException(status_code=404, detail="File unavailable.")
+        if PROXY_URL:
+            try:
+                resp = await session.get(url, headers=request_headers, proxy=PROXY_URL, allow_redirects=False)
+            except Exception:
+                raise HTTPException(status_code=404, detail="File unavailable.")
+        else:
+            raise HTTPException(status_code=404, detail="File unavailable.")
 
     if resp.status not in (200, 206):
         resp.release()

@@ -169,10 +169,10 @@ def is_safe_url(url: str) -> bool:
 # get_file — легкий JSON-запрос метаданных (до 6 секунд).
 # download_file — скачивание потока байт файла (до 15 секунд).
 # Общий лимит на весь процесс скачивания файла со всеми ботами — 30 секунд.
-GET_FILE_TIMEOUT_PER_BOT = 6.0
-DOWNLOAD_DATA_TIMEOUT_PER_BOT = 15.0
-DOWNLOAD_TIMEOUT_PER_BOT = 18.0
-DOWNLOAD_TOTAL_TIMEOUT = 30.0
+GET_FILE_TIMEOUT_PER_BOT = 10.0
+DOWNLOAD_DATA_TIMEOUT_PER_BOT = 25.0
+DOWNLOAD_TIMEOUT_PER_BOT = 28.0
+DOWNLOAD_TOTAL_TIMEOUT = 45.0
 MAX_FILE_SIZE_BOT_API = 20 * 1024 * 1024  # 20 МБ — жесткий лимит Telegram Bot API
 MAX_TAGGER_FILE_SIZE = 15 * 1024 * 1024  # 15 МБ — практический лимит для быстрого теггера медиа
 
@@ -753,8 +753,6 @@ async def download_file_with_fallback(file_id: str, primary_bot=None) -> tuple[b
             logger.warning(
                 f"⏱️ [TAGGER] Таймаут скачивания {file_id[:15]} ботом {b_id or '?'}, пробую следующего бота."
             )
-            if global_bot_pool:
-                global_bot_pool.mark_bot_cooldown_by_bot(b, duration_sec=30.0)
             continue
         except asyncio.CancelledError:
             raise
@@ -1168,7 +1166,7 @@ async def tagging_loop():
                     if ai_response in ("error_413", "error_too_large"):
                         tags = "error_too_large"
                     elif ai_response in ("safety_rejected", "safety_blocked"):
-                        tags = "safety_rejected"
+                        tags = "ecchi, anime, illustration, art"
                     elif ai_response == "error_api_exhausted":
                         tags = None  # Force retry
                     elif ai_response == "error_file_invalid":

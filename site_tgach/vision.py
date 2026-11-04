@@ -259,6 +259,26 @@ async def _call_gemini_native(
 
 # Per-provider timestamps moved to module-level dict above
 
+def _extract_retry_after_seconds(err_str: str, default_sec: float = 30.0) -> float:
+    """Извлекает длительность ожидания из текста ошибки rate-limit (например, 'try again in 3m45s')."""
+    m_h = re.search(r'try again in (?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?', err_str)
+    if m_h and any(m_h.groups()):
+        h = float(m_h.group(1) or 0)
+        m = float(m_h.group(2) or 0)
+        s = float(m_h.group(3) or 0)
+        total = h * 3600.0 + m * 60.0 + s
+        if total > 0:
+            return total + 5.0
+    m_simple = re.search(r'try again in (\d+(?:\.\d+)?)\s*(s|m|h)?', err_str)
+    if m_simple:
+        val = float(m_simple.group(1))
+        unit = m_simple.group(2)
+        if unit == 'h': return val * 3600.0 + 5.0
+        if unit == 'm': return val * 60.0 + 5.0
+        return val + 5.0
+    return default_sec
+
+
 async def describe_image(file_paths, caption: str = None, is_passive: bool = False, source: str = "SITE") -> str:
     """Анализирует изображение(я) через каскад Vision (Gemini 3.1 -> Gemini 2.5 -> Gemini 3.5 -> Qwen 3.8 -> Qwen 3.6)."""
 
@@ -306,11 +326,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             # Gemini Flash prioritized for user/site inspection with Groq fallback.
             if source == "TAGGER":
                 models_cascade = [
+                    ("qwen/qwen3.8-27b", "groq"),
                     ("gemini-3.1-flash-lite", "gemini"),
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
                     ("gemini-3.6-flash", "gemini"),
-                    ("qwen/qwen3.8-27b", "groq"),
                 ]
             else:
                 models_cascade = [
@@ -595,17 +615,16 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 _MODEL_503_COOLDOWN[model_name] = time.time() + 60.0
                                 break
                             if "tokens per day" in err_str or "tpd" in err_str:
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for 1h.")
-                                pool.penalize_token(selected_key, 3600.0)
+                                cd_duration = _extract_retry_after_seconds(err_str, default_sec=300.0)
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for {cd_duration:.0f}s.")
+                                pool.penalize_token(selected_key, cd_duration)
                                 async with _get_key_rate_lock():
-                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + 3600.0
+                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
                                 available_keys.remove(selected_key)
-                                # TPD is an account-level daily limit — if 2+ keys hit TPD in a row,
-                                # all remaining keys will likely fail too: halt the entire provider for 2h
                                 consecutive_429 += 1
                                 if consecutive_429 >= 2 and len(available_keys) == 0:
-                                    halt_sec = 7200.0  # 2 hours — TPD resets at midnight UTC
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} multiple TPD hits ({consecutive_429} keys). Account-level daily limit reached. Halting {provider} for 2h.")
+                                    halt_sec = min(cd_duration, 1800.0)
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} multiple TPD hits ({consecutive_429} keys). Halting {provider} for {int(halt_sec//60)}m.")
                                     async with _get_key_rate_lock():
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
@@ -617,15 +636,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 continue
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
-                                cd_duration = 30.0 if provider == "groq" else 45.0
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing for {cd_duration:.0f}s.")
+                                cd_duration = _extract_retry_after_seconds(err_str, default_sec=(30.0 if provider == "groq" else 45.0))
+                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} rate limited (429). Penalizing for {cd_duration:.0f}s.")
                                 pool.penalize_token(selected_key, cd_duration)
                                 async with _get_key_rate_lock():
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
                                     if provider == "gemini":
                                         _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0)
                                     else:
-                                        _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + 3.0)
+                                        _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + 2.5)
                                 available_keys.remove(selected_key)
 
                                 if consecutive_429 >= 2 and len(available_keys) == 0:
