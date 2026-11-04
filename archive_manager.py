@@ -1106,12 +1106,12 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     text_to_send = _format_archive_text_content(content, header_text) or header_text
 
     db_updated = False
+    from common.database import get_pool
+    db = await get_pool()
     for channel_id in MIRROR_CHANNELS:
         if not channel_id or channel_id == 0 or channel_id in _INACCESSIBLE_CHANNELS:
             continue
         try:
-            from common.database import get_pool
-            db = await get_pool()
             async with db.execute("SELECT 1 FROM ChannelCopies WHERE post_num = ? AND channel_id = ? LIMIT 1", (post_num, channel_id)) as cur:
                 if await cur.fetchone():
                     continue
