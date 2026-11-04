@@ -950,11 +950,11 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
 
     if not post_num:
         try:
-            from common.text_utils import extract_post_num_from_message_text
+            from common.text_utils import decode_post_num_zw
             reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
-            extracted_pnum, _ = extract_post_num_from_message_text(reply_text)
-            if extracted_pnum:
-                post_num = extracted_pnum
+            zw_num = decode_post_num_zw(reply_text)
+            if zw_num:
+                post_num = zw_num
         except Exception:
             pass
 

@@ -1226,8 +1226,9 @@ def _get_random_header_prefix(lang: str = 'ru') -> str:
     return ""
 
 async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru') -> str:
-    board_data[board_id].setdefault('board_post_count', 0)
-    board_data[board_id]['board_post_count'] += 1
+    b_data = board_data.setdefault(board_id, {})
+    b_data.setdefault('board_post_count', 0)
+    b_data['board_post_count'] += 1
     post_num_formatted = str(post_num)
     msk_now = datetime.now(UTC) + timedelta(hours=3)
     hour = msk_now.hour
@@ -1254,7 +1255,7 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
         if stream == 'jp':
             return f"{circle}{prefix}レス番 {post_num_formatted}"
         return f"{circle}{prefix}Post No.{post_num_formatted}"
-    b_data = board_data[board_id]
+    b_data = board_data.setdefault(board_id, {})
     if b_data.get('slavaukraine_mode'):
         headers = [f"💙💛 Пiст №{post_num_formatted}", f"🇺🇦 Повiдомлення №{post_num_formatted}"]
         return random.choice(headers)

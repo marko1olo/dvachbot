@@ -6895,7 +6895,10 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
             f"Стрелок оглушен пороховыми газами и отправлен в мут на <b>30 минут</b>!\n"
             f"<i>(Шанс разрыва ствола от спама атаками составлял {int(backfire_chance * 100)}%)</i>"
         )
-        await message.bot.send_message(message.chat.id, misfire_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        try:
+            await message.bot.send_message(message.chat.id, misfire_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        except TelegramBadRequest:
+            await message.bot.send_message(message.chat.id, misfire_msg, parse_mode="HTML")
         try: await message.delete()
         except Exception: pass
         return
@@ -6996,7 +6999,10 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
                 f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\n"
                 f"В тебя выстрелили из Мут-Гана! Шапочка из фольги спасла тебя от мута, но потеряла 6ч прочности (осталось {tinfoil_left_h}ч {tinfoil_left_m}мин)."
             )
-        await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        try:
+            await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        except TelegramBadRequest:
+            await message.bot.send_message(message.chat.id, shoot_msg, parse_mode="HTML")
         try:
             await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
         except TelegramForbiddenError:
@@ -7034,13 +7040,21 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         f"⏳ <b>Длительность мута:</b> {dur_str}\n"
         f"<i>(Время сбалансировано с учетом активности цели и частоты стрельбы)</i>"
     )
-    sent_msg = await message.bot.send_message(
-        message.chat.id,
-        shoot_msg,
-        reply_to_message_id=message.reply_to_message.message_id,
-        reply_markup=appeal_kb,
-        parse_mode="HTML"
-    )
+    try:
+        sent_msg = await message.bot.send_message(
+            message.chat.id,
+            shoot_msg,
+            reply_to_message_id=message.reply_to_message.message_id,
+            reply_markup=appeal_kb,
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        sent_msg = await message.bot.send_message(
+            message.chat.id,
+            shoot_msg,
+            reply_markup=appeal_kb,
+            parse_mode="HTML"
+        )
     if session_id in active_combat_appeals and sent_msg:
         active_combat_appeals[session_id].announcement_msg_id = sent_msg.message_id
 
@@ -7522,20 +7536,20 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         stolen_red = t_stats.get("rob_stolen_reduction_pct", 0.0)
         if stolen_red > 0:
             stolen = max(1, int(round(stolen * (1.0 - stolen_red))))
-        ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
-        if ok:
-            await add_user_global_balance(db, user_id, board_id, stolen)
-            await add_user_transaction(db, target_id, -stolen, 'rob', f'Тебя ограбил анон с заточкой (грабитель: {user_id})')
-            await add_user_transaction(db, user_id, stolen, 'rob', f'Успешное ограбление анона (жертва: {target_id})')
-            set_victim_rob_cooldown(target_id)
-        else:
-            active_items["knife_gun"] = True
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (user_id, board_id, json.dumps(active_items))
-        )
-        await db.commit()
+        async with db_transaction(db):
+            ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
+            if ok:
+                await add_user_global_balance(db, user_id, board_id, stolen)
+                await add_user_transaction(db, target_id, -stolen, 'rob', f'Тебя ограбил анон с заточкой (грабитель: {user_id})')
+                await add_user_transaction(db, user_id, stolen, 'rob', f'Успешное ограбление анона (жертва: {target_id})')
+                set_victim_rob_cooldown(target_id)
+            else:
+                active_items["knife_gun"] = True
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
+            )
     if ok:
         await log_global_event('bot', f"🔪 ROB: Юзер {user_id} ограбил {target_id} на /{board_id}/ на {stolen} ₪")
     if not ok:
@@ -8596,9 +8610,9 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
 
     async with db_lock:
         await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items, cursed_until) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items, cursed_until = excluded.cursed_until",
-            (user_id, board_id, json.dumps(active_items), 0)
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
         )
         await db.execute(
             "INSERT INTO Users (user_id, board_id, active_items, cursed_until) VALUES (?, ?, ?, ?) "
@@ -8945,7 +8959,10 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             f"Спецназ развернул автозак и <b>упаковал самого доносчика в КПЗ на 2 часа</b> по статье о заведомо ложном вызове специализированных служб!\n"
             f"<i>(Риск ложного вызова составлял {int(backfire_chance * 100)}%)</i>"
         )
-        await message.bot.send_message(message.chat.id, backfire_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        try:
+            await message.bot.send_message(message.chat.id, backfire_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        except TelegramBadRequest:
+            await message.bot.send_message(message.chat.id, backfire_msg, parse_mode="HTML")
         try: await message.delete()
         except Exception: pass
         return
@@ -9064,13 +9081,21 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         f"⏳ <b>Срок ареста в КПЗ:</b> {dur_str}\n"
         f"<i>(Время сбалансировано с учетом активности цели и частоты вызовов)</i>"
     )
-    sent_msg = await message.bot.send_message(
-        message.chat.id,
-        announcement_text,
-        reply_to_message_id=message.reply_to_message.message_id,
-        reply_markup=appeal_kb,
-        parse_mode="HTML"
-    )
+    try:
+        sent_msg = await message.bot.send_message(
+            message.chat.id,
+            announcement_text,
+            reply_to_message_id=message.reply_to_message.message_id,
+            reply_markup=appeal_kb,
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        sent_msg = await message.bot.send_message(
+            message.chat.id,
+            announcement_text,
+            reply_markup=appeal_kb,
+            parse_mode="HTML"
+        )
     if session_id in active_combat_appeals and sent_msg:
         active_combat_appeals[session_id].announcement_msg_id = sent_msg.message_id
 
@@ -9158,12 +9183,15 @@ async def cmd_bribe(message: types.Message, board_id: str | None = None, stream:
         await message.answer(f"❌ Недостаточно шекелей на взятку! Нужно <b>{cost} ₪</b>, у тебя <code>{int(balance)} ₪</code>. Напиши /work.", parse_mode="HTML")
         return
 
-    await deduct_user_global_balance(db, user_id, board_id, cost)
+    ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, cost)
+    if not ok:
+        await message.answer(f"❌ Недостаточно шекелей на взятку! Нужно <b>{cost} ₪</b>, у тебя <code>{int(new_bal)} ₪</code>. Напиши /work.", parse_mode="HTML")
+        return
     async with db_transaction(db):
         await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'", (user_id, board_id))
+        await record_user_transaction(db, user_id, -cost, 'bribe', 'Покупка индульгенции /bribe')
+        await add_to_abu_fund(db, cost, donor_id=user_id, reason="Взятка /bribe")
     b_data.get('mutes', {}).pop(user_id, None)
-    await record_user_transaction(db, user_id, -cost, 'bribe', 'Покупка индульгенции /bribe')
-    await add_to_abu_fund(db, cost, donor_id=user_id, reason="Взятка /bribe")
     await log_global_event('bot', f"🕊️ BRIBE: Юзер {user_id} дал взятку {cost} ₪ на /{board_id}/ (досрочный размут + 1ч иммунитет)")
 
     # Иммунитет жертвы: 1 час после досрочного освобождения из пативэна
@@ -20214,13 +20242,14 @@ async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int
         reply_to_post=None, is_shadow_muted=False, stream=stream
     ))
     enter_phrases = thread_messages.get(lang, {}).get('enter_thread_prompt', [])
+    safe_title = html.escape(title)
     if lang == 'en':
-        default_enter_text = f"You have entered the thread: {title}"
+        default_enter_text = f"You have entered the thread: {safe_title}"
     elif lang == 'jp':
-        default_enter_text = f"スレッドに入室しました: {title}"
+        default_enter_text = f"スレッドに入室しました: {safe_title}"
     else:
-        default_enter_text = f"Вы вошли в тред: {title}"
-    enter_message = random.choice(enter_phrases).format(title=title) if enter_phrases else default_enter_text
+        default_enter_text = f"Вы вошли в тред: {safe_title}"
+    enter_message = random.choice(enter_phrases).format(title=safe_title) if enter_phrases else default_enter_text
     entry_keyboard = _get_thread_entry_keyboard(board_id, stream=stream)
     try:
         await callback.bot.send_message(user_id, enter_message, reply_markup=entry_keyboard, parse_mode="HTML")
@@ -22149,13 +22178,14 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
     was_missed, show_history_button = await send_missed_messages(bot, board_id, user_id, thread_id, stream=stream)
     if not was_missed:
         thread_title = threads_data[thread_id].get('title', '...')
+        safe_thread_title = html.escape(thread_title)
         seen_threads = user_s.setdefault('last_seen_threads', {})
         if thread_id not in seen_threads:
-            prompt_phrases = tm_lang.get('enter_thread_prompt', [f"Entered: {thread_title}"])
-            response_text = random.choice(prompt_phrases).format(title=thread_title)
+            prompt_phrases = tm_lang.get('enter_thread_prompt', [f"Entered: {safe_thread_title}"])
+            response_text = random.choice(prompt_phrases).format(title=safe_thread_title)
         else:
-            success_phrases = tm_lang.get('enter_thread_success', [f"Returned: {thread_title}"])
-            response_text = random.choice(success_phrases).format(title=thread_title)
+            success_phrases = tm_lang.get('enter_thread_success', [f"Returned: {safe_thread_title}"])
+            response_text = random.choice(success_phrases).format(title=safe_thread_title)
         entry_keyboard = _get_thread_entry_keyboard(board_id, show_history_button, stream=stream)
         try:
             await bot.send_message(user_id, response_text, reply_markup=entry_keyboard, parse_mode="HTML")
@@ -26419,13 +26449,8 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
         return
     wait_txt = "🚮 Сношу посты этого юзера..." if lang != 'en' else "🚮 Wiping posts..."
     wait_msg = await message.answer(wait_txt)
-    tasks = []
-    for recipient_id, message_id in all_copies:
-        if recipient_id != author_id:
-            task = message.bot.delete_message(recipient_id, message_id)
-            tasks.append(task)
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    deleted_count = sum(1 for res in results if res is True)
+    copies_to_delete = [(recipient_id, message_id, board_id) for recipient_id, message_id in all_copies if recipient_id != author_id]
+    deleted_count = await _delete_posts_from_pm_api(copies_to_delete, message.bot)
 
     # Сносим пост из каналов архива и зеркал
     channel_copies = await get_all_channel_copies(post_num)

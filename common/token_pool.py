@@ -86,6 +86,7 @@ class TokenRotator:
         self._last_used: dict[str, float] = {}
         self._cooldown_until: dict[str, float] = {}
         self._banned: set[str] = set()
+        self._banned_until: dict[str, float] = {}
 
     @staticmethod
     def _clean_token_str(token: str) -> str:
@@ -122,15 +123,37 @@ class TokenRotator:
             if self._index >= len(self.tokens):
                 self._index = 0
 
-    def ban_token(self, token: str):
-        self.remove_token(token)
+    def _prune_expired_bans(self, now: float):
+        if not self._banned_until:
+            return
+        expired = [t for t, until in self._banned_until.items() if now >= until]
+        for t in expired:
+            self._banned_until.pop(t, None)
+            self._banned.discard(t)
+            if t not in self.tokens:
+                self.tokens.append(t)
+
+    def ban_token(self, token: str, duration: float = 3600.0):
+        with self._lock:
+            clean = self._clean_token_str(token)
+            if not clean:
+                return
+            if clean in self.tokens:
+                self.tokens.remove(clean)
+            self._banned.add(clean)
+            self._banned_until[clean] = time.time() + float(duration)
+            self._cooldown_until.pop(clean, None)
+            self._last_used.pop(clean, None)
+            if self._index >= len(self.tokens):
+                self._index = 0
 
     def unban_token(self, token: str) -> bool:
         """Снимает бан с токена и возвращает его в активный пул."""
         with self._lock:
             clean = self._clean_token_str(token)
-            was_banned = clean in self._banned
+            was_banned = clean in self._banned or clean in self._banned_until
             self._banned.discard(clean)
+            self._banned_until.pop(clean, None)
             self._cooldown_until.pop(clean, None)
             if clean and clean not in self.tokens:
                 self.tokens.append(clean)
@@ -154,6 +177,7 @@ class TokenRotator:
         Пропускает забаненные токены и приоритезирует токены, не находящиеся на штрафном кулдауне.
         """
         with self._lock:
+            self._prune_expired_bans(time.time())
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return None
@@ -183,6 +207,7 @@ class TokenRotator:
         Приоритезирует готовые токены, а остывающие сортирует по времени скорейшего завершения кулдауна.
         """
         with self._lock:
+            self._prune_expired_bans(time.time())
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return []
@@ -214,6 +239,7 @@ class TokenRotator:
         now = time.time()
 
         with self._lock:
+            self._prune_expired_bans(now)
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return None, 0.0

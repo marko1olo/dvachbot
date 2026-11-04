@@ -6352,7 +6352,9 @@ async def api_makaba_posting(
             await request.app.state.broadcast_queue.put(broadcast_post)
 
     if post_mode == "new_thread":
-        title = content["text"][:100] or t("default_thread_title")
+        raw_title = content["text"][:100] or t("default_thread_title")
+        clean_title = re.sub(r'<[^>]+>', '', raw_title).strip()
+        title = clean_title if clean_title else t("default_thread_title")
         await create_thread_entry(
             new_post_num,
             board,
