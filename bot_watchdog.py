@@ -730,20 +730,29 @@ def main() -> int:
                 return 0
             live_pid = _locked_live_bot_pid()
             if live_pid:
-                log(
-                    f"bot.lock/process table points to live pid={live_pid}; another bot is already running; supervisor exits"
-                )
-                log(
-                    "Existing live bot stdout is not attached to this window; "
-                    f"delivery stdout log={STDOUT_LOG}"
-                )
-                log(
-                    f"Runtime JSON/health log={LOG_DIR / 'bot_runtime.log'}; heartbeat={HEARTBEAT_LOG}"
-                )
-                log(
-                    "Use stop_bot.bat for controlled stop, or stop_bot.bat /force only if queue loss is accepted"
-                )
-                return 0
+                healthy, details = _health_probe()
+                if healthy:
+                    log(
+                        f"bot.lock/process table points to live pid={live_pid} (health probe OK: {details[:60]}); another bot is already running; supervisor exits"
+                    )
+                    log(
+                        "Existing live bot stdout is not attached to this window; "
+                        f"delivery stdout log={STDOUT_LOG}"
+                    )
+                    log(
+                        f"Runtime JSON/health log={LOG_DIR / 'bot_runtime.log'}; heartbeat={HEARTBEAT_LOG}"
+                    )
+                    log(
+                        "Use stop_bot.bat for controlled stop, or stop_bot.bat /force only if queue loss is accepted"
+                    )
+                    return 0
+                else:
+                    log(
+                        f"bot.lock/process table points to pid={live_pid}, but health probe failed: {details}. "
+                        "Treating existing process as stale/zombie; killing process tree and starting fresh child."
+                    )
+                    _kill_pid_tree(live_pid, f"startup_health_failed: {details}")
+                    _clear_bot_lock()
             child = _start_child()
             should_exit = _monitor_child(child)
             if should_exit:

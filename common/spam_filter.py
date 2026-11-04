@@ -856,10 +856,11 @@ def check_flood(
 _top_active_users_cache: set[int] = set()
 _top_active_users_cache_ts: float = 0.0
 
-def get_top_active_monthly_users(ttl: float = 600.0) -> set[int]:
+def get_top_active_monthly_users(ttl: float = 3600.0) -> set[int]:
     """
     Returns the user IDs of the top 15 most active users for the last 30 days.
     These users receive an indulgence against emergency anti-dox TG link filters.
+    Uses read-only URI mode to prevent lock contention with WAL mode.
     """
     global _top_active_users_cache, _top_active_users_cache_ts
     now = time.time()
@@ -868,7 +869,8 @@ def get_top_active_monthly_users(ttl: float = 600.0) -> set[int]:
     try:
         from common.config import DB_NAME
         import sqlite3
-        conn = sqlite3.connect(str(DB_NAME), timeout=3.0)
+        db_path = str(DB_NAME).replace("\\", "/")
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
         c = conn.cursor()
         month_ago = now - (30 * 86400)
         c.execute("""
@@ -876,7 +878,6 @@ def get_top_active_monthly_users(ttl: float = 600.0) -> set[int]:
             FROM Posts
             WHERE timestamp > ?
               AND author_id > 0
-              AND author_id NOT IN (8758394244, 9020568224, 8959719321, 8973793918, 8385226024)
               AND is_shadow = 0
             GROUP BY author_id
             ORDER BY count(*) DESC
@@ -888,11 +889,7 @@ def get_top_active_monthly_users(ttl: float = 600.0) -> set[int]:
     except Exception as e:
         logger.error(f"Error fetching top active monthly users: {e}")
         if not _top_active_users_cache:
-            _top_active_users_cache = {
-                5264555563, 5489746335, 6557599214, 7716348189, 5780136258,
-                1229015404, 6817120667, 7414244332, 8612598423, 8983482049,
-                7161855695, 6925451988, 597708036, 7208625308, 8500120330
-            }
+            _top_active_users_cache = set()
     return _top_active_users_cache
 
 
@@ -1750,177 +1747,230 @@ def prune_stale_spam_filter_state(now_ts: float | None = None) -> dict[str, int]
     """
     Sanitizes all in-memory spam filter trackers (TTL and LRU cleanup).
     Prevents memory leaks when 50,000+ users interact with the bot.
+    Each cleanup stage is wrapped in try/except to prevent partial failures from aborting the prune cycle.
     Returns dictionary with counts of pruned entries.
     """
     now = float(now_ts) if now_ts is not None else time.time()
     pruned: dict[str, int] = {}
 
     # 1. user_spam_locks
-    pruned["user_spam_locks"] = prune_idle_user_spam_locks(max_keep=1000)
+    try:
+        pruned["user_spam_locks"] = prune_idle_user_spam_locks(max_keep=1000)
+    except Exception as e:
+        logger.debug(f"Stage 1 prune_idle_user_spam_locks error: {e}")
+        pruned["user_spam_locks"] = 0
 
     # 2. _seen_media_groups: {user_id: {mg_id: {'first_ts': float, ...}}}
-    stale_mg_users = []
-    for uid, mg_map in list(_seen_media_groups.items()):
-        if not mg_map:
-            stale_mg_users.append(uid)
-            continue
-        expired = [
-            mg for mg, entry in list(mg_map.items())
-            if now - (entry['first_ts'] if isinstance(entry, dict) else (entry if isinstance(entry, (int, float)) else 0.0)) > MEDIA_GROUP_WINDOW
-        ]
-        for mg in expired:
-            mg_map.pop(mg, None)
-        if not mg_map:
-            stale_mg_users.append(uid)
-    for uid in stale_mg_users:
-        _seen_media_groups.pop(uid, None)
-    pruned["_seen_media_groups"] = len(stale_mg_users)
+    try:
+        stale_mg_users = []
+        for uid, mg_map in list(_seen_media_groups.items()):
+            if not mg_map:
+                stale_mg_users.append(uid)
+                continue
+            expired = [
+                mg for mg, entry in list(mg_map.items())
+                if now - (entry['first_ts'] if isinstance(entry, dict) else (entry if isinstance(entry, (int, float)) else 0.0)) > MEDIA_GROUP_WINDOW
+            ]
+            for mg in expired:
+                mg_map.pop(mg, None)
+            if not mg_map:
+                stale_mg_users.append(uid)
+        for uid in stale_mg_users:
+            _seen_media_groups.pop(uid, None)
+        pruned["_seen_media_groups"] = len(stale_mg_users)
+    except Exception as e:
+        logger.debug(f"Stage 2 _seen_media_groups error: {e}")
+        pruned["_seen_media_groups"] = 0
 
     # 3. _seen_repost_media_groups: {user_id: {mg_id: {'first_ts': float, ...}}}
-    stale_rmg_users = []
-    for uid, rmg_map in list(_seen_repost_media_groups.items()):
-        if not rmg_map:
-            stale_rmg_users.append(uid)
-            continue
-        expired = [
-            k for k, v in list(rmg_map.items())
-            if now - (v.get('first_ts', 0.0) if isinstance(v, dict) else 0.0) > REPOST_WINDOW_SEC
-        ]
-        for k in expired:
-            rmg_map.pop(k, None)
-        if not rmg_map:
-            stale_rmg_users.append(uid)
-    for uid in stale_rmg_users:
-        _seen_repost_media_groups.pop(uid, None)
-    pruned["_seen_repost_media_groups"] = len(stale_rmg_users)
+    try:
+        stale_rmg_users = []
+        for uid, rmg_map in list(_seen_repost_media_groups.items()):
+            if not rmg_map:
+                stale_rmg_users.append(uid)
+                continue
+            expired = [
+                k for k, v in list(rmg_map.items())
+                if now - (v.get('first_ts', 0.0) if isinstance(v, dict) else 0.0) > REPOST_WINDOW_SEC
+            ]
+            for k in expired:
+                rmg_map.pop(k, None)
+            if not rmg_map:
+                stale_rmg_users.append(uid)
+        for uid in stale_rmg_users:
+            _seen_repost_media_groups.pop(uid, None)
+        pruned["_seen_repost_media_groups"] = len(stale_rmg_users)
+    except Exception as e:
+        logger.debug(f"Stage 3 _seen_repost_media_groups error: {e}")
+        pruned["_seen_repost_media_groups"] = 0
 
     # 4. _user_request_timestamps: {user_id: deque}
-    stale_req_users = []
-    for uid, tracker in list(_user_request_timestamps.items()):
-        while tracker and (now - float(tracker[0]) > MINUTE_FLOOD_WINDOW):
-            tracker.popleft()
-        if not tracker:
-            stale_req_users.append(uid)
-    for uid in stale_req_users:
-        _user_request_timestamps.pop(uid, None)
-    pruned["_user_request_timestamps"] = len(stale_req_users)
+    try:
+        stale_req_users = []
+        for uid, tracker in list(_user_request_timestamps.items()):
+            while tracker and (now - float(tracker[0]) > MINUTE_FLOOD_WINDOW):
+                tracker.popleft()
+            if not tracker:
+                stale_req_users.append(uid)
+        for uid in stale_req_users:
+            _user_request_timestamps.pop(uid, None)
+        pruned["_user_request_timestamps"] = len(stale_req_users)
+    except Exception as e:
+        logger.debug(f"Stage 4 _user_request_timestamps error: {e}")
+        pruned["_user_request_timestamps"] = 0
 
     # 5. _bayan_tracker: {user_id: deque}
-    stale_bayan_users = []
-    for uid, tracker in list(_bayan_tracker.items()):
-        while tracker and (now - tracker[0][0] > BAYAN_WINDOW_SEC):
-            tracker.popleft()
-        if not tracker:
-            stale_bayan_users.append(uid)
-    for uid in stale_bayan_users:
-        _bayan_tracker.pop(uid, None)
-    pruned["_bayan_tracker"] = len(stale_bayan_users)
+    try:
+        stale_bayan_users = []
+        for uid, tracker in list(_bayan_tracker.items()):
+            while tracker and (now - tracker[0][0] > BAYAN_WINDOW_SEC):
+                tracker.popleft()
+            if not tracker:
+                stale_bayan_users.append(uid)
+        for uid in stale_bayan_users:
+            _bayan_tracker.pop(uid, None)
+        pruned["_bayan_tracker"] = len(stale_bayan_users)
+    except Exception as e:
+        logger.debug(f"Stage 5 _bayan_tracker error: {e}")
+        pruned["_bayan_tracker"] = 0
 
     # 6. _bayan_mute_count & _bayan_mute_last_ts
-    stale_bayan_mutes = []
-    for uid, last_ts in list(_bayan_mute_last_ts.items()):
-        if now - last_ts > BAYAN_RESET_SEC:
-            stale_bayan_mutes.append(uid)
-    for uid in stale_bayan_mutes:
-        _bayan_mute_last_ts.pop(uid, None)
-        _bayan_mute_count.pop(uid, None)
-    pruned["_bayan_mute_counters"] = len(stale_bayan_mutes)
+    try:
+        stale_bayan_mutes = []
+        for uid, last_ts in list(_bayan_mute_last_ts.items()):
+            if now - last_ts > BAYAN_RESET_SEC:
+                stale_bayan_mutes.append(uid)
+        for uid in stale_bayan_mutes:
+            _bayan_mute_last_ts.pop(uid, None)
+            _bayan_mute_count.pop(uid, None)
+        pruned["_bayan_mute_counters"] = len(stale_bayan_mutes)
+    except Exception as e:
+        logger.debug(f"Stage 6 _bayan_mute_counters error: {e}")
+        pruned["_bayan_mute_counters"] = 0
 
     # 7. _user_link_timestamps & _user_repost_timestamps
-    stale_links = []
-    for uid, tracker in list(_user_link_timestamps.items()):
-        while tracker and (now - float(tracker[0][0] if isinstance(tracker[0], tuple) else tracker[0]) > 60.0):
-            tracker.popleft()
-        if not tracker:
-            stale_links.append(uid)
-    for uid in stale_links:
-        _user_link_timestamps.pop(uid, None)
-    pruned["_user_link_timestamps"] = len(stale_links)
+    try:
+        stale_links = []
+        for uid, tracker in list(_user_link_timestamps.items()):
+            while tracker and (now - float(tracker[0][0] if isinstance(tracker[0], tuple) else tracker[0]) > 60.0):
+                tracker.popleft()
+            if not tracker:
+                stale_links.append(uid)
+        for uid in stale_links:
+            _user_link_timestamps.pop(uid, None)
+        pruned["_user_link_timestamps"] = len(stale_links)
+    except Exception as e:
+        logger.debug(f"Stage 7a _user_link_timestamps error: {e}")
+        pruned["_user_link_timestamps"] = 0
 
-    stale_reposts = []
-    for uid, tracker in list(_user_repost_timestamps.items()):
-        while tracker and (now - float(tracker[0]) > REPOST_WINDOW_SEC):
-            tracker.popleft()
-        if not tracker:
-            stale_reposts.append(uid)
-    for uid in stale_reposts:
-        _user_repost_timestamps.pop(uid, None)
-    pruned["_user_repost_timestamps"] = len(stale_reposts)
+    try:
+        stale_reposts = []
+        for uid, tracker in list(_user_repost_timestamps.items()):
+            while tracker and (now - float(tracker[0]) > REPOST_WINDOW_SEC):
+                tracker.popleft()
+            if not tracker:
+                stale_reposts.append(uid)
+        for uid in stale_reposts:
+            _user_repost_timestamps.pop(uid, None)
+        pruned["_user_repost_timestamps"] = len(stale_reposts)
+    except Exception as e:
+        logger.debug(f"Stage 7b _user_repost_timestamps error: {e}")
+        pruned["_user_repost_timestamps"] = 0
 
     # 8. _user_media_burst_tracker: {user_id: dict}
-    stale_bursts = []
-    for uid, burst in list(_user_media_burst_tracker.items()):
-        if burst.get('last_ts', 0.0) == 0.0 or (now - burst.get('last_ts', 0.0) > MEDIA_BURST_GAP * 3):
-            stale_bursts.append(uid)
-    for uid in stale_bursts:
-        _user_media_burst_tracker.pop(uid, None)
-    pruned["_user_media_burst_tracker"] = len(stale_bursts)
+    try:
+        stale_bursts = []
+        for uid, burst in list(_user_media_burst_tracker.items()):
+            if burst.get('last_ts', 0.0) == 0.0 or (now - burst.get('last_ts', 0.0) > MEDIA_BURST_GAP * 3):
+                stale_bursts.append(uid)
+        for uid in stale_bursts:
+            _user_media_burst_tracker.pop(uid, None)
+        pruned["_user_media_burst_tracker"] = len(stale_bursts)
+    except Exception as e:
+        logger.debug(f"Stage 8 _user_media_burst_tracker error: {e}")
+        pruned["_user_media_burst_tracker"] = 0
 
     # 9. _shadow_mute_applied_ts: {user_id: float}
-    stale_mute_grace = []
-    for uid, applied_ts in list(_shadow_mute_applied_ts.items()):
-        if now - applied_ts > MUTE_GRACE_PERIOD_SEC * 10:
-            stale_mute_grace.append(uid)
-    for uid in stale_mute_grace:
-        _shadow_mute_applied_ts.pop(uid, None)
-    pruned["_shadow_mute_applied_ts"] = len(stale_mute_grace)
+    try:
+        stale_mute_grace = []
+        for uid, applied_ts in list(_shadow_mute_applied_ts.items()):
+            if now - applied_ts > MUTE_GRACE_PERIOD_SEC * 10:
+                stale_mute_grace.append(uid)
+        for uid in stale_mute_grace:
+            _shadow_mute_applied_ts.pop(uid, None)
+        pruned["_shadow_mute_applied_ts"] = len(stale_mute_grace)
+    except Exception as e:
+        logger.debug(f"Stage 9 _shadow_mute_applied_ts error: {e}")
+        pruned["_shadow_mute_applied_ts"] = 0
 
     # 10. _user_posts_count_cache: {user_id: (ts, count)}
-    stale_cache = []
-    for uid, val in list(_user_posts_count_cache.items()):
-        if isinstance(val, tuple) and len(val) >= 1:
-            if now - val[0] > USER_POSTS_CACHE_TTL:
+    try:
+        stale_cache = []
+        for uid, val in list(_user_posts_count_cache.items()):
+            if isinstance(val, tuple) and len(val) >= 1:
+                if now - val[0] > USER_POSTS_CACHE_TTL:
+                    stale_cache.append(uid)
+            else:
                 stale_cache.append(uid)
-        else:
-            stale_cache.append(uid)
-    for uid in stale_cache:
-        _user_posts_count_cache.pop(uid, None)
-    pruned["_user_posts_count_cache"] = len(stale_cache)
+        for uid in stale_cache:
+            _user_posts_count_cache.pop(uid, None)
+        pruned["_user_posts_count_cache"] = len(stale_cache)
+    except Exception as e:
+        logger.debug(f"Stage 10 _user_posts_count_cache error: {e}")
+        pruned["_user_posts_count_cache"] = 0
 
     # 11. _spam_violations: {board_id: {user_id: {'level': int, 'last_reset': datetime}}}
-    now_dt = datetime.now(UTC)
-    clean_v_count = 0
-    for b_id, v_map in list(_spam_violations.items()):
-        stale_v_users = []
-        for uid, v in list(v_map.items()):
-            lr = v.get('last_reset')
-            if lr is not None:
-                if isinstance(lr, (int, float)):
-                    if now - lr > 300 and v.get('level', 0) == 0:
+    try:
+        now_dt = datetime.now(UTC)
+        clean_v_count = 0
+        for b_id, v_map in list(_spam_violations.items()):
+            stale_v_users = []
+            for uid, v in list(v_map.items()):
+                lr = v.get('last_reset')
+                if lr is not None:
+                    age_sec = (now - lr) if isinstance(lr, (int, float)) else ((now_dt - (lr if getattr(lr, 'tzinfo', None) else lr.replace(tzinfo=UTC))).total_seconds() if hasattr(lr, 'tzinfo') else 0.0)
+                    # Level 0 pruned after 5m (300s); violations of any level expired after 24h (86400s)
+                    if (v.get('level', 0) == 0 and age_sec > 300) or age_sec > 86400:
                         stale_v_users.append(uid)
-                elif hasattr(lr, 'tzinfo'):
-                    if lr.tzinfo is None:
-                        lr = lr.replace(tzinfo=UTC)
-                    if now_dt - lr > timedelta(minutes=5) and v.get('level', 0) == 0:
-                        stale_v_users.append(uid)
-        for uid in stale_v_users:
-            v_map.pop(uid, None)
-        clean_v_count += len(stale_v_users)
-    pruned["_spam_violations"] = clean_v_count
+            for uid in stale_v_users:
+                v_map.pop(uid, None)
+            clean_v_count += len(stale_v_users)
+        pruned["_spam_violations"] = clean_v_count
+    except Exception as e:
+        logger.debug(f"Stage 11 _spam_violations error: {e}")
+        pruned["_spam_violations"] = 0
 
     # 12. _spam_trackers: {board_id: {user_id: [timestamps]}}
-    clean_st_count = 0
-    for b_id, u_map in list(_spam_trackers.items()):
-        stale_st_users = []
-        for uid, timestamps in list(u_map.items()):
-            u_map[uid] = [t for t in timestamps if now - t <= 60.0]
-            if not u_map[uid]:
-                stale_st_users.append(uid)
-        for uid in stale_st_users:
-            u_map.pop(uid, None)
-        clean_st_count += len(stale_st_users)
-    pruned["_spam_trackers"] = clean_st_count
+    try:
+        clean_st_count = 0
+        for b_id, u_map in list(_spam_trackers.items()):
+            stale_st_users = []
+            for uid, timestamps in list(u_map.items()):
+                u_map[uid] = [t for t in timestamps if now - t <= 60.0]
+                if not u_map[uid]:
+                    stale_st_users.append(uid)
+            for uid in stale_st_users:
+                u_map.pop(uid, None)
+            clean_st_count += len(stale_st_users)
+        pruned["_spam_trackers"] = clean_st_count
+    except Exception as e:
+        logger.debug(f"Stage 12 _spam_trackers error: {e}")
+        pruned["_spam_trackers"] = 0
 
     # 13. cross_board_spam_tracker: {user_id: deque}
-    stale_cb_users = []
-    for uid, tracker in list(cross_board_spam_tracker.items()):
-        while tracker and (now - tracker[0][0] > CROSS_BOARD_WINDOW):
-            tracker.popleft()
-        if not tracker:
-            stale_cb_users.append(uid)
-    for uid in stale_cb_users:
-        cross_board_spam_tracker.pop(uid, None)
-    pruned["cross_board_spam_tracker"] = len(stale_cb_users)
+    try:
+        stale_cb_users = []
+        for uid, tracker in list(cross_board_spam_tracker.items()):
+            while tracker and (now - tracker[0][0] > CROSS_BOARD_WINDOW):
+                tracker.popleft()
+            if not tracker:
+                stale_cb_users.append(uid)
+        for uid in stale_cb_users:
+            cross_board_spam_tracker.pop(uid, None)
+        pruned["cross_board_spam_tracker"] = len(stale_cb_users)
+    except Exception as e:
+        logger.debug(f"Stage 13 cross_board_spam_tracker error: {e}")
+        pruned["cross_board_spam_tracker"] = 0
 
     return pruned
 

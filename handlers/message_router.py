@@ -1110,7 +1110,10 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             return
         if message.content_type == 'text' and not (message.text and message.text.strip()):
             logger.warning(f"🚫 [MSG DROPPED: EMPTY_TEXT] user={user_id} board={board_id}")
-            await message.delete()
+            try:
+                await message.delete()
+            except (TelegramBadRequest, TelegramForbiddenError, Exception):
+                pass
             return
 
         # Exploit Sticker Guard ('Сдохбин' / Lottie crash protection)
@@ -1142,14 +1145,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 logger.warning(f"🚫 [MSG DROPPED: BANNED_USER] user={user_id} board={board_id}")
                 try:
                     await message.delete()
-                except TelegramBadRequest: pass
+                except (TelegramBadRequest, TelegramForbiddenError, Exception): pass
                 return
             mute_until = b_data.get('mutes', {}).get(user_id)
             if mute_until and mute_until > datetime.now(UTC):
                 logger.warning(f"🚫 [MSG DROPPED: MUTE_ACTIVE] user={user_id} board={board_id} mute_until={mute_until}")
                 try:
                     await message.delete()
-                except TelegramBadRequest: pass
+                except (TelegramBadRequest, TelegramForbiddenError, Exception): pass
 
                 last_warn = b_data.get('last_mute_warn', {}).get(user_id, 0)
                 now_ts = time.time()

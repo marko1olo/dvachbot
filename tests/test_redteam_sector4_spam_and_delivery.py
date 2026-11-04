@@ -215,7 +215,7 @@ async def test_broadcaster_unauthorized_token_stops_immediately():
 
 
 @pytest.mark.asyncio
-async def test_broadcaster_realtime_circuit_breaker_halts_mass_blocks():
+async def test_broadcaster_realtime_circuit_breaker_halts_mass_blocks(isolated_test_db):
     """
     If blocks exceed the threshold in real time, the circuit breaker must trip mid-broadcast
     and halt remaining queue items to protect subscribers.
