@@ -1100,10 +1100,6 @@ async def _create_indices(db):
 
         # High-frequency activity & message indices
         try:
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread_num ON Posts(thread_num);")
-        except aiosqlite.OperationalError:
-            pass
-        try:
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_user_id ON user_activity(user_id);")
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_timestamp ON user_activity(timestamp);")
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_user_ts ON user_activity(user_id, timestamp);")
@@ -1989,12 +1985,17 @@ async def create_thread(thread_id: str, board_id: str, op_id: int, title: str, c
             db = await get_pool()
             await db.execute("BEGIN IMMEDIATE")
 
+            try:
+                t_num = int(thread_id)
+            except (ValueError, TypeError):
+                t_num = op_id if isinstance(op_id, int) and op_id > 0 else 0
+
             await db.execute(
                 """
                 INSERT INTO Threads (thread_id, thread_num, board_id, op_id, title, created_at, last_updated_at, is_archived, stream)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
-                (thread_id, int(thread_id), board_id, op_id, title, created_at, created_at, stream)
+                (str(thread_id), t_num, board_id, op_id, title, created_at, created_at, stream)
             )
             await db.execute(
                 "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
@@ -2002,7 +2003,7 @@ async def create_thread(thread_id: str, board_id: str, op_id: int, title: str, c
             )
             await db.execute(
                 "UPDATE Users SET location = ? WHERE user_id = ? AND board_id = ?",
-                (thread_id, op_id, board_id)
+                (str(thread_id), op_id, board_id)
             )
 
             await db.execute("COMMIT")
@@ -2142,7 +2143,8 @@ async def create_post(
                             elif post_mode == 'reply' and not final_thread_id:
                                 final_thread_id = inherited_thread_id
                         else:
-                            final_thread_id = thread_id_from_bot
+                            if not final_thread_id and inherited_thread_id is not None:
+                                final_thread_id = str(inherited_thread_id)
 
                         post_query = """
                             INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
@@ -2153,6 +2155,19 @@ async def create_post(
                             (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
                         ) as cursor:
                             post_num = cursor.lastrowid
+
+                        if final_thread_id and not is_shadow_muted:
+                            try:
+                                t_id_int = int(final_thread_id)
+                            except (ValueError, TypeError):
+                                t_id_int = 0
+                            try:
+                                await db.execute(
+                                    "UPDATE Threads SET last_updated_at = ? WHERE (thread_id = ? OR (thread_num != 0 AND thread_num = ?)) AND is_archived = 0",
+                                    (timestamp, str(final_thread_id), t_id_int)
+                                )
+                            except Exception:
+                                pass
 
                         if author_id and author_id > 0:
                             await db.execute(
@@ -3134,7 +3149,7 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
                 if row:
                     thread_id, reply_to = row
                     if thread_id:
-                        return int(thread_id)
+                        return str(thread_id)
                     if reply_to is None:
                         async with db.execute(
                             "SELECT 1 FROM Threads WHERE thread_id = ? OR op_id = ? LIMIT 1",
@@ -4174,7 +4189,7 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
         return []
 def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
     total_deleted = 0
-    con.execute("PRAGMA busy_timeout = 5000;")
+    con.execute("PRAGMA busy_timeout = 30000;")
 
     while True:
         # Используем IMMEDIATE транзакцию даже в синхронном коде
@@ -5672,10 +5687,14 @@ async def delete_posts_in_thread_after(thread_id: str, post_num_start: int):
                 )
 
                 # Обновляем last_updated_at треда на время последнего живого поста
+                try:
+                    t_num = int(thread_id)
+                except (ValueError, TypeError):
+                    t_num = 0
                 async with db.execute("SELECT timestamp FROM Posts WHERE thread_id = ? ORDER BY post_num DESC LIMIT 1", (str(thread_id),)) as cursor:
                     row = await cursor.fetchone()
                     if row:
-                        await db.execute("UPDATE Threads SET last_updated_at = ? WHERE thread_num = ?", (row[0], int(thread_id)))
+                        await db.execute("UPDATE Threads SET last_updated_at = ? WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)", (row[0], str(thread_id), t_num))
 
                 await db.execute("COMMIT")
                 return True
@@ -5960,9 +5979,13 @@ async def restore_thread_from_archive(thread_id: str):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
 
+                try:
+                    t_num = int(thread_id)
+                except (ValueError, TypeError):
+                    t_num = 0
                 await db.execute(
-                    "UPDATE Threads SET is_archived = 0, last_updated_at = ? WHERE thread_num = ?",
-                    (time.time(), int(thread_id))
+                    "UPDATE Threads SET is_archived = 0, last_updated_at = ? WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)",
+                    (time.time(), str(thread_id), t_num)
                 )
 
                 await db.execute("COMMIT")
@@ -6097,9 +6120,13 @@ async def toggle_thread_pin(thread_id: str, pinned: bool):
         try:
             db = await get_pool()
             await db.execute("BEGIN IMMEDIATE")
+            try:
+                t_num = int(thread_id)
+            except (ValueError, TypeError):
+                t_num = 0
             await db.execute(
-                "UPDATE Threads SET is_pinned = ? WHERE thread_num = ?",
-                (1 if pinned else 0, int(thread_id))
+                "UPDATE Threads SET is_pinned = ? WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)",
+                (1 if pinned else 0, str(thread_id), t_num)
             )
             await db.execute("COMMIT")
             return True
@@ -8063,13 +8090,17 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
                 await db.execute("BEGIN IMMEDIATE")
 
                 # 1. Проверяем, существует ли тред
-                async with db.execute("SELECT 1 FROM Threads WHERE thread_num = ?", (int(thread_id),)) as cursor:
+                try:
+                    t_num = int(thread_id)
+                except (ValueError, TypeError):
+                    t_num = 0
+                async with db.execute("SELECT 1 FROM Threads WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)", (str(thread_id), t_num)) as cursor:
                     if not await cursor.fetchone():
                         await db.execute("COMMIT")
                         return False
 
                 # 2. Обновляем таблицу Threads
-                await db.execute("UPDATE Threads SET board_id = ? WHERE thread_num = ?", (new_board_id, int(thread_id)))
+                await db.execute("UPDATE Threads SET board_id = ? WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)", (new_board_id, str(thread_id), t_num))
 
                 # 3. Обновляем таблицу Posts
                 await db.execute("UPDATE Posts SET board_id = ? WHERE thread_id = ? OR post_num = ?",
@@ -8428,12 +8459,16 @@ async def toggle_thread_endless(thread_id: str, endless: bool):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
 
+                try:
+                    t_num = int(thread_id)
+                except (ValueError, TypeError):
+                    t_num = 0
                 await db.execute(
-                    "UPDATE Threads SET is_endless = ? WHERE thread_num = ?",
-                    (1 if endless else 0, int(thread_id))
+                    "UPDATE Threads SET is_endless = ? WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)",
+                    (1 if endless else 0, str(thread_id), t_num)
                 )
                 if endless:
-                    await db.execute("UPDATE Threads SET is_archived = 0 WHERE thread_num = ?", (int(thread_id),))
+                    await db.execute("UPDATE Threads SET is_archived = 0 WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?)", (str(thread_id), t_num))
 
                 await db.execute("COMMIT")
                 return True
@@ -8929,7 +8964,11 @@ async def get_thread_type_and_unlock_status(thread_id: str, user_id: int) -> tup
         for attempt in range(10):
             try:
                 db = await get_pool()
-                async with db.execute("SELECT thread_type FROM Threads WHERE thread_num = ? LIMIT 1", (int(thread_id),)) as cursor:
+                try:
+                    t_num = int(thread_id)
+                except (ValueError, TypeError):
+                    t_num = 0
+                async with db.execute("SELECT thread_type FROM Threads WHERE thread_id = ? OR (thread_num != 0 AND thread_num = ?) LIMIT 1", (str(thread_id), t_num)) as cursor:
                     row = await cursor.fetchone()
                     if not row:
                         return 'default', False

@@ -443,16 +443,8 @@ class db_transaction:
                     break
                 except Exception as e:
                     err_str = str(e).lower()
-                    # Если предыдущий отмененный запрос в воркере aiosqlite успел включить транзакцию
-                    if "cannot start a transaction within a transaction" in err_str and not self._is_nested:
-                        logger.warning("⚠️ [DB_POOL] 'cannot start a transaction' на верхнем уровне! Сбрасываем зомби-транзакцию...")
-                        try:
-                            await self.db.execute("ROLLBACK")
-                        except Exception:
-                            pass
-                        if attempt < self.max_retries - 1:
-                            await asyncio.sleep(self.base_delay * (attempt + 1))
-                            continue
+                    if "cannot start a transaction within a transaction" in err_str:
+                        raise RuntimeError("Database transaction collision: connection already in transaction") from e
 
                     if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
                         if self._lock_acquired:
@@ -506,19 +498,15 @@ class db_transaction:
                             break
                         except Exception as commit_err:
                             err_msg = str(commit_err).lower()
-                            if "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
-                                logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
-                                break
-                            elif "statements in progress" in err_msg and commit_attempt < 2:
+                            if "statements in progress" in err_msg and commit_attempt < 2:
                                 logger.warning(f"⚠️ [DB_POOL] Statements in progress during COMMIT, retrying ({commit_attempt + 1}/3)...")
                                 await asyncio.sleep(0.05)
                                 continue
+                            elif "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
+                                logger.error(f"❌ [DB_POOL] COMMIT failed, no active transaction: {commit_err}")
+                                raise RuntimeError("Database transaction collision: connection already in transaction") from commit_err
                             else:
                                 logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
-                                try:
-                                    await self.db.execute("ROLLBACK")
-                                except Exception:
-                                    pass
                                 raise
         finally:
             if self._lock_acquired:
