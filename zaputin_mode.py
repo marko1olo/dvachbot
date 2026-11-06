@@ -922,7 +922,7 @@ _ideological_pattern = r'\b(' + '|'.join(re.escape(key) for key in _ideological_
 _ideological_regex = re.compile(_ideological_pattern, flags=re.IGNORECASE)
 
 # Предкомпилированные регулярки для _apply_kancelarit
-_ENGLISH_PATTERN = re.compile(r'\b[a-zA-Z]{2,}\b')
+_ENGLISH_PATTERN = re.compile(r'\b(?!(?:lt|gt|amp|quot)\b)[a-zA-Z]{2,}\b', flags=re.IGNORECASE)
 _CAPS_IMPORTANT_PATTERN = re.compile(r'\b[а-яА-ЯёЁ]{6,}\b')
 _KANCELARIT_MAP_COMPILED = [
     (re.compile(pattern, flags=re.IGNORECASE), repl)
@@ -962,6 +962,8 @@ def _apply_kancelarit(text: str) -> str:
     # 1. Ловим ЛЮБЫЕ слова на латинице (английские) и клеймим их!
     # Игнорируем слова короче 2 букв, чтобы не трогать случайные символы
     def _quote_english(m):
+        if m.group(0).lower() in {'lt', 'gt', 'amp', 'quot'}:
+            return m.group(0)
         word = m.group(0)
         # Грубая проверка на множественное число в английском (на конце "s")
         is_plural = word.lower().endswith('s')

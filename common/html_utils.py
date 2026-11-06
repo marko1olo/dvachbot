@@ -5,10 +5,49 @@ import re
 from common.latex_utils import normalize_latex
 
 
+def balance_html_tags(text: str) -> str:
+    """Balances unclosed tags and strips orphan closing tags for Telegram HTML parse safety."""
+    if not text:
+        return ""
+    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji', 'blockquote', 'em', 'strong'}
+    parts = re.split(r'(</?[a-zA-Z0-9_-]+\b[^>]*>)', text)
+    stack = []
+    out = []
+    for part in parts:
+        if part.startswith('<') and part.endswith('>'):
+            m = re.match(r'<(/)?([a-zA-Z0-9_-]+)\b([^>]*)>', part)
+            if m:
+                is_closing = bool(m.group(1))
+                tag_name = m.group(2).lower()
+                if tag_name in allowed:
+                    if not is_closing:
+                        stack.append(tag_name)
+                        out.append(part)
+                    else:
+                        if stack and stack[-1] == tag_name:
+                            stack.pop()
+                            out.append(part)
+                        elif tag_name in stack:
+                            while stack and stack[-1] != tag_name:
+                                out.append(f'</{stack.pop()}>')
+                            stack.pop()
+                            out.append(part)
+                else:
+                    out.append(part)
+            else:
+                out.append(part)
+        else:
+            out.append(part)
+    while stack:
+        out.append(f'</{stack.pop()}>')
+    return "".join(out)
+
+
 def apply_greentext_formatting(text: str) -> str:
     """
     Применяет форматирование 'Greentext'.
     Работает с уже экранированным HTML-текстом (где > может быть &gt;).
+    Предотвращает пересечение тегов с кодовыми блоками (например, <code><b></code></b>).
     """
     if not text:
         return text
@@ -17,10 +56,11 @@ def apply_greentext_formatting(text: str) -> str:
     for line in lines:
         stripped_line = line.lstrip()
         if stripped_line.startswith('>') or stripped_line.startswith('&gt;'):
-            processed_lines.append(f"<code>{line}</code>")
+            wrapped = balance_html_tags(f"<code>{line}</code>")
+            processed_lines.append(wrapped)
         else:
             processed_lines.append(line)
-    return '\n'.join(processed_lines)
+    return balance_html_tags('\n'.join(processed_lines))
 
 
 def escape_html(text: str) -> str:

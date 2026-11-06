@@ -732,7 +732,9 @@ _VOWELS = set('аеёиоуыэюяАЕЁИОУЫЭЮЯ')
 _WORD_BOUNDARY_RE = re.compile(r'(\b\w+\b)([^\w]*)')
 
 _SORTED_KEYS = sorted(UKRAINIAN_WORD_REPLACEMENTS.keys(), key=len, reverse=True)
-_COMPILED_DICT = {k: re.compile(r'\b' + re.escape(k) + r'\b', re.IGNORECASE) for k in _SORTED_KEYS}
+_UKRAINIAN_PATTERN = r'\b(' + '|'.join(re.escape(k) for k in _SORTED_KEYS) + r')\b'
+_UKRAINIAN_REGEX = re.compile(_UKRAINIAN_PATTERN, flags=re.IGNORECASE)
+_COMPILED_DICT = {}
 
 
 def _get_replacement(key):
@@ -754,35 +756,34 @@ def _match_case(original: str, replacement: str) -> str:
 
 def _stage1_dict_replace(text: str) -> tuple[str, set]:
     replaced_spans = set()
-    result = text
+    parts = []
+    last_idx = 0
+    current_len = 0
 
-    result_lower = result.lower()
+    for m in _UKRAINIAN_REGEX.finditer(text):
+        start, end = m.span()
+        if start > last_idx:
+            chunk = text[last_idx:start]
+            parts.append(chunk)
+            current_len += len(chunk)
 
-    for key in _SORTED_KEYS:
-        if key.lower() not in result_lower:
-            continue
+        original = m.group(0)
+        key = original.lower()
+        replacement = _get_replacement(key)
+        replacement = _match_case(original, replacement)
 
-        pattern = _COMPILED_DICT[key]
+        repl_len = len(replacement)
+        for i in range(current_len, current_len + repl_len):
+            replaced_spans.add(i)
 
+        parts.append(replacement)
+        current_len += repl_len
+        last_idx = end
 
-        match_found = False
-        offset = 0
-        for m in pattern.finditer(result):
-            match_found = True
-            start = m.start() + offset
-            end = m.end() + offset
-            original = m.group(0)
-            replacement = _get_replacement(key)
-            replacement = _match_case(original, replacement)
-            result = result[:start] + replacement + result[end:]
-            diff = len(replacement) - len(original)
-            offset += diff
-            for i in range(start, start + len(replacement)):
-                replaced_spans.add(i)
+    if last_idx < len(text):
+        parts.append(text[last_idx:])
 
-        if match_found:
-            result_lower = result.lower()
-
+    result = "".join(parts)
     return result, replaced_spans
 
 

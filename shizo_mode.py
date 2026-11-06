@@ -1165,7 +1165,7 @@ _REPLACEMENT_PATTERN: re.Pattern = re.compile(
 _DIGIT_PATTERN: re.Pattern = re.compile(r'\d+')
 _WORD_PATTERN: re.Pattern = re.compile(r'\b\w{4,}\b')
 _LONG_WORD_PATTERN: re.Pattern = re.compile(r'\b[а-яёА-ЯЁa-zA-Z]{8,}\b')
-_PUNCTUATION_PATTERN: re.Pattern = re.compile(r'[.,;:!?—–\-\(\)\[\]{}]')
+_PUNCTUATION_PATTERN: re.Pattern = re.compile(r'[.,:!?—–\-\(\)\[\]{}]')
 _MIRROR_PATTERN: re.Pattern = re.compile(r'\b[А-Яа-яЁё]{5,}\b')
 _REDACT_PATTERN: re.Pattern = re.compile(r'\b[А-Яа-яЁё]{4,}\b')
 
@@ -1352,7 +1352,7 @@ def _apply_neologisms(text: str) -> str:
             mid1 = len(w1) // 2
             mid2 = len(w2) // 2
             neologism = w1[:mid1] + w2[mid2:]
-            words[idx] = f"**{neologism}**"
+            words[idx] = f"<b>{neologism}</b>"
             del words[idx + 1]
             return ' '.join(words)
 

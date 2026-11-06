@@ -121,6 +121,27 @@ FONTS_POOL = [
     'C:/Windows/Fonts/arialbd.ttf'
 ]
 
+RE_UNSUPPORTED_GLYPHS = re.compile(
+    r'['
+    r'\U00010000-\U0010ffff'  # High-plane emojis & pictographs
+    r'\u2600-\u27bf'          # Misc Symbols & Dingbats
+    r'\u2300-\u23ff'          # Misc Technical
+    r'\u2b50\u2b55\u231a\u231b\u25aa\u25ab\u25fe\u25fd'
+    r'\ufe00-\ufe0f'          # Variation Selectors
+    r'\u200d'                 # Zero Width Joiner
+    r']+',
+    flags=re.UNICODE
+)
+
+def clean_unsupported_glyphs(text: str) -> str:
+    """Очищает эмодзи, HTML-теги и неподдерживаемые глифы, предотвращая рендеринг 'тофу'."""
+    if not text:
+        return ""
+    t = re.sub(r'<[^>]+>', '', text)
+    t = RE_UNSUPPORTED_GLYPHS.sub('', t)
+    t = re.sub(r'[ \t]+', ' ', t)
+    return t.strip()
+
 def _wrap_text_by_pixel(draw, text, font, max_width):
     wrapped_lines = []
     user_lines = text.split('\n')
@@ -128,16 +149,36 @@ def _wrap_text_by_pixel(draw, text, font, max_width):
         if not line:
             wrapped_lines.append('')
             continue
-        words = line.split()
-        if not words: continue
-        current_line = words[0]
-        for word in words[1:]:
-            if draw.textlength(current_line + " " + word, font=font) <= max_width:
-                current_line += " " + word
+        raw_words = line.split()
+        if not raw_words: continue
+        words = []
+        for w in raw_words:
+            if len(w) > 80:
+                words.extend([w[i:i + 80] for i in range(0, len(w), 80)])
             else:
-                wrapped_lines.append(current_line)
-                current_line = word
-        wrapped_lines.append(current_line)
+                words.append(w)
+        current_line = ""
+        for word in words:
+            test = f"{current_line} {word}".strip() if current_line else word
+            if draw.textlength(test, font=font) <= max_width:
+                current_line = test
+            else:
+                if current_line:
+                    wrapped_lines.append(current_line)
+                if draw.textlength(word, font=font) > max_width:
+                    sub_w = ""
+                    for ch in word:
+                        if draw.textlength(sub_w + ch, font=font) <= max_width:
+                            sub_w += ch
+                        else:
+                            if sub_w:
+                                wrapped_lines.append(sub_w)
+                            sub_w = ch
+                    current_line = sub_w
+                else:
+                    current_line = word
+        if current_line:
+            wrapped_lines.append(current_line)
     return "\n".join(wrapped_lines)
 
 def _find_best_font_size(draw, text, fit_config: FontFitConfig):
@@ -168,7 +209,14 @@ def _draw_text_with_shadow(draw, position, text, **kwargs):
     draw.multiline_text(position, text, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill, **kwargs)
 
 def create_visual_post(mode, text, header=None):
+    img = None
     try:
+        text = clean_unsupported_glyphs(text)
+        if not text:
+            return None
+        if header:
+            header = clean_unsupported_glyphs(header)
+
         img_path = None
         config = None
 
@@ -209,18 +257,29 @@ def create_visual_post(mode, text, header=None):
 
         if not img_path or not os.path.exists(img_path): return None
 
-        img = Image.open(img_path).convert("RGBA")
+        with Image.open(img_path) as raw_img:
+            img = raw_img.convert("RGBA")
+
         if img.size != (1024, 1024):
             # Guarantee 1024x1024 1:1 square
             if abs(img.width - img.height) > 20:
                 img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
                 new_sq = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
                 new_sq.paste(img, ((1024 - img.width) // 2, (1024 - img.height) // 2))
+                img.close()
                 img = new_sq
             else:
-                img = img.resize((1024, 1024), Image.Resampling.LANCZOS)
+                resized_img = img.resize((1024, 1024), Image.Resampling.LANCZOS)
+                img.close()
+                img = resized_img
 
         draw = ImageDraw.Draw(img)
+
+        def apply_overlay(base_img, ov):
+            res = Image.alpha_composite(base_img, ov)
+            base_img.close()
+            ov.close()
+            return res
 
         if mode in DYNAMIC_MODES:
             def get_font_by_size(size: int, bold: bool = True):
@@ -238,7 +297,7 @@ def create_visual_post(mode, text, header=None):
                 clean_h = header.replace("<i>", "").replace("</i>", "").replace("###", "").strip()
                 for em in ["💙", "💛", "🇺🇦", "🚜", "🐷", "🔥", "✈️", "💥", "👑", "⚡", "🎯", "🇵🇱", "🧠", "🇷🇺"]:
                     clean_h = clean_h.replace(em, "").strip()
-                clean_h = re.sub(r'[\U00010000-\U0010ffff]', '', clean_h).strip()
+                clean_h = clean_unsupported_glyphs(clean_h)
 
             # If header didn't specify a reply, but text contains >>12345, reflect it in clean_h
             if not re.search(r'>>\d+|#\d+', clean_h):
@@ -251,17 +310,41 @@ def create_visual_post(mode, text, header=None):
                 text = re.sub(r'^(?:>>\d+\s*)+', '', text).strip()
 
             def wrap_text_str(odraw, txt, font, max_w):
-                words = txt.split()
-                lines, curr = [], ""
-                for w in words:
-                    test = f"{curr} {w}".strip()
-                    if odraw.textlength(test, font=font) <= max_w:
-                        curr = test
-                    else:
-                        if curr: lines.append(curr)
-                        curr = w
-                if curr: lines.append(curr)
-                return "\n".join(lines)
+                result_lines = []
+                for u_line in txt.split('\n'):
+                    if not u_line:
+                        result_lines.append('')
+                        continue
+                    raw_words = u_line.split()
+                    words = []
+                    for w in raw_words:
+                        if len(w) > 80:
+                            words.extend([w[i:i + 80] for i in range(0, len(w), 80)])
+                        else:
+                            words.append(w)
+                    curr = ""
+                    for w in words:
+                        test = f"{curr} {w}".strip() if curr else w
+                        if odraw.textlength(test, font=font) <= max_w:
+                            curr = test
+                        else:
+                            if curr:
+                                result_lines.append(curr)
+                            if odraw.textlength(w, font=font) > max_w:
+                                sub_w = ""
+                                for ch in w:
+                                    if odraw.textlength(sub_w + ch, font=font) <= max_w:
+                                        sub_w += ch
+                                    else:
+                                        if sub_w:
+                                            result_lines.append(sub_w)
+                                        sub_w = ch
+                                curr = sub_w
+                            else:
+                                curr = w
+                    if curr:
+                        result_lines.append(curr)
+                return "\n".join(result_lines)
 
             # Pick style from 8 elite meme layout styles
             available_styles = [
@@ -296,7 +379,7 @@ def create_visual_post(mode, text, header=None):
                 odraw.text((32, 572), banner_title, font=f_ticker, fill=(255, 255, 255, 255))
 
                 wrapped = wrap_text_str(odraw, text, f_text, 960)
-                img = Image.alpha_composite(img, overlay)
+                img = apply_overlay(img, overlay)
                 draw = ImageDraw.Draw(img)
                 draw.multiline_text((32, 626), wrapped, font=f_text, fill=(255, 235, 60, 255))
 
@@ -321,7 +404,7 @@ def create_visual_post(mode, text, header=None):
                 odraw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=22, fill=(255, 255, 255, 245), outline=border_c, width=3)
                 odraw.polygon([(bx + 80, by), (bx + 110, by - 30), (bx + 140, by)], fill=(255, 255, 255, 245), outline=border_c)
 
-                img = Image.alpha_composite(img, overlay)
+                img = apply_overlay(img, overlay)
                 draw = ImageDraw.Draw(img)
                 tx = bx + (bw - tw)/2
                 ty = by + (bh - th)/2
@@ -331,8 +414,10 @@ def create_visual_post(mode, text, header=None):
             elif style == 'demotivator':
                 canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
                 inner_w, inner_h = 860, 580
-                inner_img = img.resize((inner_w, inner_h), Image.Resampling.LANCZOS)
-                canvas.paste(inner_img, (82, 60))
+                with img.resize((inner_w, inner_h), Image.Resampling.LANCZOS) as inner_img:
+                    canvas.paste(inner_img, (82, 60))
+                img.close()
+                img = canvas
                 draw = ImageDraw.Draw(canvas)
                 draw.rectangle([78, 56, 78 + inner_w + 8, 56 + inner_h + 8], outline=(255, 255, 255, 255), width=2)
 

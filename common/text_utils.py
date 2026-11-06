@@ -1,7 +1,7 @@
 import re
 import html
 import json
-from common.html_utils import escape_html
+from common.html_utils import escape_html, balance_html_tags
 
 RE_HTML_TAGS = re.compile(r'<[^>]+>')
 RE_YOU_PATTERN = re.compile(r">>(\d+)")
@@ -117,44 +117,6 @@ def sanitize_html(text: str) -> str:
     result = re.sub(r'&amp;(lt|gt|amp|quot|#\d+);', r'&\1;', result)
     return balance_html_tags(result)
 
-def balance_html_tags(text: str) -> str:
-    """Balances unclosed tags and strips orphan closing tags for Telegram HTML parse safety."""
-    if not text:
-        return ""
-    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji', 'blockquote', 'em', 'strong'}
-    parts = re.split(r'(</?[a-zA-Z0-9_-]+\b[^>]*>)', text)
-    stack = []
-    out = []
-    for part in parts:
-        if part.startswith('<') and part.endswith('>'):
-            m = re.match(r'<(/)?([a-zA-Z0-9_-]+)\b([^>]*)>', part)
-            if m:
-                is_closing = bool(m.group(1))
-                tag_name = m.group(2).lower()
-                attrs = m.group(3)
-                if tag_name in allowed:
-                    if not is_closing:
-                        stack.append(tag_name)
-                        out.append(part)
-                    else:
-                        if stack and stack[-1] == tag_name:
-                            stack.pop()
-                            out.append(part)
-                        elif tag_name in stack:
-                            while stack and stack[-1] != tag_name:
-                                out.append(f'</{stack.pop()}>')
-                            stack.pop()
-                            out.append(part)
-                else:
-                    out.append(part)
-            else:
-                out.append(part)
-        else:
-            out.append(part)
-    while stack:
-        out.append(f'</{stack.pop()}>')
-    return "".join(out)
-
 def clean_html_for_tg(text: str) -> str:
     if not text: return ''
 
@@ -182,7 +144,7 @@ def clean_html_for_tg(text: str) -> str:
 
     # Markdown -> HTML
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+    text = re.sub(r'(?<!\*)\*([^\*\n]+)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
 
     # Convert layout/semantic tags to whitespace BEFORE stripping
