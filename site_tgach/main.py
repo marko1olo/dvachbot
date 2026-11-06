@@ -1728,10 +1728,14 @@ class ConnectionManager:
                 del self.active_connections[key]
 
         if hasattr(websocket, "state_client_ip"):
-            ip = websocket.state_client_ip
-            if self.ip_counts[ip] > 0:
+            ip = getattr(websocket, "state_client_ip")
+            try:
+                del websocket.state_client_ip
+            except AttributeError:
+                pass
+            if self.ip_counts.get(ip, 0) > 0:
                 self.ip_counts[ip] -= 1
-            if self.ip_counts[ip] <= 0:
+            if self.ip_counts.get(ip, 0) <= 0:
                 v_logger.info(f"[EXIT] {ip}")
                 self.ip_counts.pop(ip, None)
 
@@ -1802,10 +1806,25 @@ class ConnectionManager:
             await asyncio.wait_for(connection.send_text(message), timeout=0.4)
         except Exception:
             try:
-                if key in self.active_connections:
-                    self.active_connections[key].discard(connection)
-                    if not self.active_connections[key]:
-                        del self.active_connections[key]
+                parts = key.split("/", 2)
+                if len(parts) == 3:
+                    self.disconnect(connection, parts[0], parts[1], parts[2])
+                else:
+                    if key in self.active_connections:
+                        self.active_connections[key].discard(connection)
+                        if not self.active_connections[key]:
+                            del self.active_connections[key]
+                    if hasattr(connection, "state_client_ip"):
+                        ip = getattr(connection, "state_client_ip")
+                        try:
+                            del connection.state_client_ip
+                        except AttributeError:
+                            pass
+                        if self.ip_counts.get(ip, 0) > 0:
+                            self.ip_counts[ip] -= 1
+                        if self.ip_counts.get(ip, 0) <= 0:
+                            v_logger.info(f"[EXIT] {ip}")
+                            self.ip_counts.pop(ip, None)
             except Exception:
                 pass
             try:
@@ -1850,10 +1869,11 @@ class ConnectionManager:
                         tasks.append(self._safe_send(connection, message_str, k))
                     await asyncio.gather(*tasks)
                     await asyncio.sleep(0.01)
-        if "admin_feed" in self.active_connections:
-            admin_conns = list(self.active_connections["admin_feed"])
+        if "admin_feed/feed/ru" in self.active_connections:
+            admin_conns = list(self.active_connections["admin_feed/feed/ru"])
             admin_tasks = [
-                self._safe_send(ac, message_str, "admin_feed") for ac in admin_conns
+                self._safe_send(ac, message_str, "admin_feed/feed/ru")
+                for ac in admin_conns
             ]
             if admin_tasks:
                 await asyncio.gather(*admin_tasks, return_exceptions=True)
@@ -4023,13 +4043,69 @@ templates.env.filters.update(
 )
 
 
+async def get_posts_from_broadcast_queue_by_post_num(last_post_num: int) -> tuple[list[dict], int]:
+    """
+    Извлекает новые посты из BroadcastQueue со строгой монотонностью post_num > ? (ORDER BY post_num ASC).
+    Предотвращает потерю постов из-за немонотонных float-таймстемпов.
+    """
+    db = await get_pool()
+    try:
+        query = (
+            "SELECT b.post_num AS b_post_num, p.* "
+            "FROM BroadcastQueue b "
+            "LEFT JOIN Posts p ON b.post_num = p.post_num "
+            "WHERE b.post_num > ? "
+            "ORDER BY b.post_num ASC"
+        )
+        async with db.execute(query, (last_post_num,)) as cursor:
+            columns = [description[0] for description in cursor.description]
+            rows = await cursor.fetchall()
+        if not rows:
+            return [], last_post_num
+
+        max_post_num = last_post_num
+        processed_posts = []
+        for row in rows:
+            post_dict = dict(zip(columns, row))
+            b_pnum = post_dict.pop("b_post_num", None)
+            if b_pnum is not None and b_pnum > max_post_num:
+                max_post_num = b_pnum
+            p_num = post_dict.get("post_num")
+            if p_num is None:
+                continue
+            try:
+                if isinstance(post_dict.get("content"), str):
+                    post_dict["content"] = json.loads(post_dict["content"])
+                processed_posts.append(post_dict)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        return processed_posts, max_post_num
+    except Exception as e:
+        logger.error(f"Queue listener DB fetch error: {e}", exc_info=True)
+        return [], last_post_num
+
+
 async def queue_listener(manager: "ConnectionManager"):
-    last_ts = time.time()
-    logger.info(f"INFO:     DB Queue listener started. Timestamp base: {last_ts}")
+    last_post_num = 0
+    try:
+        db = await get_pool()
+        async with db.execute("SELECT COALESCE(MAX(post_num), 0) FROM Posts") as cursor:
+            row = await cursor.fetchone()
+            last_post_num = row[0] if row else 0
+        async with db.execute("SELECT COALESCE(MAX(post_num), 0) FROM BroadcastQueue") as cursor:
+            row = await cursor.fetchone()
+            bq_max = row[0] if row else 0
+            if bq_max > last_post_num:
+                last_post_num = bq_max
+    except Exception as e:
+        logger.warning(f"Could not initialize last_post_num from DB: {e}")
+
+    logger.info(f"INFO:     DB Queue listener started. Last post_num base: {last_post_num}")
     try:
         while True:
             try:
-                new_posts, new_ts = await get_posts_from_broadcast_queue(last_ts)
+                new_posts, new_post_num = await get_posts_from_broadcast_queue_by_post_num(last_post_num)
                 if new_posts:
                     affected_boards = set()
                     affected_threads = set()
@@ -4062,8 +4138,8 @@ async def queue_listener(manager: "ConnectionManager"):
                     for post in new_posts:
                         await manager.broadcast_post(post, post["board_id"])
                         await asyncio.sleep(0.05)
-                if new_ts > last_ts:
-                    last_ts = new_ts
+                if new_post_num > last_post_num:
+                    last_post_num = new_post_num
                 await asyncio.sleep(1)
             except asyncio.CancelledError:
                 raise
@@ -8646,8 +8722,6 @@ async def api_create_post(
     broadcast_post = None
     if not is_shadow_final:
         broadcast_post = await get_post_for_broadcast(new_post_num)
-        if broadcast_post:
-            await request.app.state.broadcast_queue.put(broadcast_post)
 
     local_logger.info("--- END api_create_post ---")
     if broadcast_post:

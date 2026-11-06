@@ -824,6 +824,8 @@ class ThreadImporter:
                         pass
                     self._cpu_executor = None
 
+    import_thread = process_thread
+
     async def _queue_posts_for_simulation(
         self,
         posts: List[Dict],
@@ -1079,6 +1081,20 @@ class ThreadImporter:
                         await conn.executemany(
                             "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
                             all_backlink_pairs,
+                        )
+
+                if self.created_post_ids:
+                    now_ts = time.time()
+                    bq_items = [(pid, now_ts) for pid in self.created_post_ids]
+                    try:
+                        await conn.executemany(
+                            "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at, is_sent_to_tg) VALUES (?, ?, 0)",
+                            bq_items,
+                        )
+                    except Exception:
+                        await conn.executemany(
+                            "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
+                            bq_items,
                         )
 
                 await conn.commit()
