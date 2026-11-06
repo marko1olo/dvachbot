@@ -474,6 +474,56 @@ def _drop_post_copy_maps_unlocked(post_num: int, drop_reverse: bool = True) -> i
                 removed += 1
     return removed
 
+def _drop_user_copy_maps_unlocked(uids: set[int]) -> int:
+    """
+    Удаляет записи указанных пользователей из post_to_messages и message_to_post.
+    Вызывается под storage_lock.
+    """
+    if not uids:
+        return 0
+    removed = 0
+    for post_num, copies_map in list(post_to_messages.items()):
+        if not isinstance(copies_map, dict):
+            continue
+        for uid in uids:
+            mid_or_list = copies_map.pop(uid, None)
+            if mid_or_list is not None:
+                for mid in _iter_message_ids_for_copy(mid_or_list):
+                    if message_to_post.pop((uid, mid), None) is not None:
+                        removed += 1
+    return removed
+
+async def remove_blocked_user_copies(uids: int | list[int] | set[int]) -> None:
+    """
+    Удаляет записи заблокировавших бота пользователей из post_to_messages,
+    message_to_post и таблицы PostCopies в SQLite.
+    """
+    if isinstance(uids, int):
+        uid_set = {uids} if uids > 0 else set()
+    elif isinstance(uids, (list, set, tuple)):
+        uid_set = {int(u) for u in uids if int(u) > 0}
+    else:
+        return
+    if not uid_set:
+        return
+
+    async with storage_lock:
+        _drop_user_copy_maps_unlocked(uid_set)
+
+    try:
+        from common.db_pool import get_pool, db_lock
+        db = await get_pool()
+        uid_list = list(uid_set)
+        chunk_size = 500
+        async with db_lock:
+            for i in range(0, len(uid_list), chunk_size):
+                chunk = uid_list[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                await db.execute(f"DELETE FROM PostCopies WHERE recipient_id IN ({placeholders})", chunk)
+                await db.commit()
+    except Exception as e:
+        runtime_logger.warning("Error deleting PostCopies for blocked users: %s", e)
+
 def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     if max_posts < 0:
         return 0, 0
@@ -713,7 +763,14 @@ async def enqueue_board_message(board_id: str, item: dict) -> bool:
             ",".join(sorted(message_queues)),
         )
         return False
-    await queue.put(_prepare_queue_item(board_id, item))
+    prepared = _prepare_queue_item(board_id, item)
+    if isinstance(prepared, dict) and not prepared.get("durable_delivery_id"):
+        try:
+            from delivery_manager import _persist_durable_delivery_item
+            await _persist_durable_delivery_item(board_id, prepared, "enqueue_fresh")
+        except Exception as e:
+            runtime_logger.warning("Failed to persist durable delivery item on enqueue: %s", e)
+    await queue.put(prepared)
     return True
 # (pending_edit_tasks and pending_edit_lock are defined at top of shared_state.py)
 
@@ -961,6 +1018,8 @@ __all__ = [
     '_media_group_state_key',
     '_iter_message_ids_for_copy',
     '_drop_post_copy_maps_unlocked',
+    '_drop_user_copy_maps_unlocked',
+    'remove_blocked_user_copies',
     '_trim_post_copy_maps_unlocked',
     '_trim_messages_storage_unlocked',
     'is_shutting_down',

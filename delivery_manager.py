@@ -18,11 +18,18 @@ from common.board_config import BOARD_CONFIG
 from post_helpers import format_header
 from common.thread_manager import get_threads_data, get_thread_info
 from thread_texts import thread_messages
-from common.bot_helpers import process_new_post, is_ai_slop_content
+from common.bot_helpers import process_new_post, is_ai_slop_content, is_admin
 from archive_manager import _site_public_url, _site_file_source, _site_file_send_type, _forward_post_to_realtime_archive
 from datetime import timezone, datetime
 import html
-import __main__ as main
+import sys
+if '__main__' in sys.modules and hasattr(sys.modules['__main__'], 'sanitize_html'):
+    main = sys.modules['__main__']
+else:
+    try:
+        import main
+    except ImportError:
+        import __main__ as main
 UTC = timezone.utc
 
 PRIORITY_PASSIVE_MEDIA_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE)
@@ -77,7 +84,8 @@ def _queue_item_can_be_durable(item: dict) -> bool:
         return False
     if item.get("thread_id"):
         return False
-    if item.get("delivery_phase") != "passive":
+    phase = item.get("delivery_phase")
+    if phase not in (None, "full", "priority", "passive", "passive_slice"):
         return False
     content = item.get("content")
     if not isinstance(content, dict):
@@ -248,7 +256,7 @@ async def _persist_durable_delivery_item(board_id: str, item: dict, reason: str)
         post_num=int(item["post_num"]),
         recipients=_durable_recipients_from_item(item),
         content=item["content"],
-        delivery_phase=item.get("delivery_phase", "passive"),
+        delivery_phase=item.get("delivery_phase") or "full",
         original_recipients=int(item.get("original_recipients") or 0),
         thread_id=item.get("thread_id"),
         enqueued_at=float(item.get("enqueued_at") or time.time()),
@@ -666,7 +674,11 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     delay = min(delay * 2, 10)
                     continue
                 return
-            except main.TelegramForbiddenError:
+            except (main.TelegramForbiddenError, TelegramForbiddenError):
+                await remove_blocked_user_copies(user_id)
+                b_users = board_data.get(board_id, {}).get('users', {}).get('active')
+                if isinstance(b_users, set):
+                    b_users.discard(user_id)
                 return
             except Exception as e:
                 runtime_logger.warning(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
@@ -911,19 +923,6 @@ class MessageDeliveryTask:
             if self.post_num in post_to_messages:
                 reply_info_copy = post_to_messages[self.post_num].copy()
 
-        current_deliveries[self.board_id] = {
-            "post_num": self.post_num,
-            "started_at": self.started_at,
-            "enqueued_at": self.enqueued_at,
-            "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
-            "recipients": len(recipients_to_send),
-            "original_recipients": original_recipients_for_post,
-            "passive_deferred": len(passive_recipients_for_later),
-            "passive_slice_size": self.passive_slice_size,
-            "phase": delivery_phase_for_send,
-            "thread_id": self.thread_id,
-        }
-
         planned_passive_durable_id = None
         planned_passive_item = None
         if passive_recipients_for_later and not self.msg_data.get("durable_delivery_id"):
@@ -966,6 +965,18 @@ class MessageDeliveryTask:
                 except Exception as e:
                     runtime_logger.warning("Error fetching prior copies for durable restore post %s: %s", self.post_num, e)
         try:
+            current_deliveries[self.board_id] = {
+                "post_num": self.post_num,
+                "started_at": self.started_at,
+                "enqueued_at": self.enqueued_at,
+                "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
+                "recipients": len(recipients_to_send),
+                "original_recipients": original_recipients_for_post,
+                "passive_deferred": len(passive_recipients_for_later),
+                "passive_slice_size": self.passive_slice_size,
+                "phase": delivery_phase_for_send,
+                "thread_id": self.thread_id,
+            }
             delivery_results = await send_message_to_users(BroadcastConfig(
                 bot_instance=self.bot_instance,
                 board_id=self.board_id,
@@ -1043,6 +1054,7 @@ class MessageDeliveryTask:
                 current_deliveries.pop(self.board_id, None)
 
         if passive_recipients_for_later:
+            old_durable_id = self.msg_data.get("durable_delivery_id")
             passive_item = _build_passive_queue_item(
                 PassiveQueueItemParams(
                     source_item=self.msg_data,
@@ -1055,7 +1067,9 @@ class MessageDeliveryTask:
             )
             if planned_passive_durable_id:
                 passive_item["durable_delivery_id"] = planned_passive_durable_id
-            await _persist_durable_delivery_item(self.board_id, passive_item, "deferred_after_send")
+            new_id = await _persist_durable_delivery_item(self.board_id, passive_item, "deferred_after_send")
+            if old_durable_id and old_durable_id != new_id and old_durable_id != planned_passive_durable_id:
+                await _delete_durable_delivery_item(old_durable_id, "replaced_by_passive")
             await self.queue.put(passive_item)
             runtime_logger.debug(
                 "delivery_passive_deferred %s",
@@ -1128,10 +1142,11 @@ class MessageDeliveryTask:
     def _resolve_active_recipients(self):
         """Определяет список активных получателей."""
         active_recipients = set()
+        banned_users = self.b_data.get('users', {}).get('banned', set())
         if self.thread_id:
             active_recipients = {
                 uid for uid in self.initial_recipients
-                if uid > 0 and uid not in self.b_data['users']['banned']
+                if uid > 0 and uid not in banned_users
             }
         else:
             user_states = self.b_data.get('user_state', {})
@@ -1139,7 +1154,7 @@ class MessageDeliveryTask:
                 uid for uid in self.initial_recipients
                 if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
             }
-            active_recipients = {uid for uid in recipients_on_main if uid not in self.b_data['users']['banned']}
+            active_recipients = {uid for uid in recipients_on_main if uid not in banned_users}
         if is_ai_slop_content(self.content):
             users_settings = self.b_data.get('user_settings', {})
             active_recipients = {
@@ -1534,23 +1549,29 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
     """
     try:
         await asyncio.sleep(delay)
-        group = current_media_groups.pop(media_group_key, None)
+        group = current_media_groups.get(media_group_key)
         if not group:
             runtime_logger.warning(f"⚠️ [MEDIAGRP] {media_group_key}: group уже удалена (race/duplicate timer), пропускаем.")
             return
-        if media_group_key in sent_media_groups:
+        if media_group_key in sent_media_groups or group.get('status') == 'processing':
             runtime_logger.info(f"ℹ️ [MEDIAGRP] {media_group_key}: уже обработана (dedup), пропускаем.")
             return
+        group['status'] = 'processing'
         raw_messages = group.get('raw_messages', [])
         if not raw_messages:
             runtime_logger.warning(f"⚠️ [MEDIAGRP] {media_group_key}: raw_messages пустой! board={group.get('board_id')} author={group.get('author_id')} — альбом потерян.")
+            current_media_groups.pop(media_group_key, None)
             return
         raw_messages.sort(key=lambda m: m.message_id)
         found_caption = ""
         for msg in raw_messages:
             if msg.caption:
                 raw_caption_html = getattr(msg, 'caption_html_text', msg.caption)
-                found_caption = main.sanitize_html(raw_caption_html)
+                sanitize_fn = getattr(main, 'sanitize_html', None)
+                if sanitize_fn:
+                    found_caption = sanitize_fn(raw_caption_html)
+                else:
+                    found_caption = html.escape(raw_caption_html)
                 break
         group['caption'] = found_caption
         final_media_list = []
@@ -1648,6 +1669,7 @@ async def _roast_album_tracks_sequentially(bot, audio_msgs, board_id, stream, po
 
 async def process_complete_media_group(media_group_key: str, group: dict, bot_instance: Bot):
     if not group or not group.get('media'):
+        current_media_groups.pop(media_group_key, None)
         return
     if hasattr(main, 'sent_media_groups') and getattr(main, 'sent_media_groups') is not None:
         try:
@@ -1660,7 +1682,6 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     stream = group.get('stream', 'ru')
     b_data = board_data[board_id]
     from common.database import is_shadow_muted as check_db_shadow_muted
-    from bot_helpers import is_admin
     is_shadow_muted = (not is_admin(user_id, board_id) and
                        ((user_id in b_data.get('shadow_mutes', {}) and
                          b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
@@ -1692,7 +1713,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
 
     for i, chunk in enumerate(media_chunks):
         if not chunk: continue
-        reply_to_post = group.get('reply_to_post') if i == 0 else None
+        reply_to_post = group.get('reply_to_post')
         caption_for_chunk = original_caption if not send_caption_separately else None
         content = {
             'type': 'media_group',
@@ -1778,25 +1799,31 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         should_reply = False
         if is_reply_to_bot:
             now_t = time.time()
-            last_user_t = main._last_persona_dialogue_user_ts.get(user_id, 0)
-            if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
-                should_reply = True
-                main._last_persona_dialogue_user_ts[user_id] = now_t
+            dialogue_dict = getattr(main, '_last_persona_dialogue_user_ts', None)
+            if dialogue_dict is not None:
+                last_user_t = dialogue_dict.get(user_id, 0)
+                if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
+                    should_reply = True
+                    dialogue_dict[user_id] = now_t
         elif user_id in b_data.get('persona_favorites', {}):
             now_t_fav = time.time()
-            if (now_t_fav - main._last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.08:
+            board_ts_dict = getattr(main, '_last_persona_board_ts', None)
+            if board_ts_dict is not None and (now_t_fav - board_ts_dict.get(board_id, 0) >= 90.0) and random.random() < 0.08:
                 should_reply = True
         else:
             # Глобальный пассивный тригер: 4% на любой пост на борде
             now_t_glob = time.time()
-            if (now_t_glob - main._last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
+            board_ts_dict = getattr(main, '_last_persona_board_ts', None)
+            if board_ts_dict is not None and (now_t_glob - board_ts_dict.get(board_id, 0) >= 120.0) and random.random() < 0.04:
                 should_reply = True
 
         is_pure_audio_album = bool(audio_msgs and len(audio_msgs) == len(raw_msgs))
         if should_reply and not (is_pure_audio_album and not original_caption):
-            main._last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
+            if hasattr(main, '_last_persona_board_ts'):
+                main._last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
             text_chunk = original_caption or "[альбом изображений]"
-            spawn_task(main.schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
+            if hasattr(main, 'schedule_persona_reply'):
+                spawn_task(main.schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
             # --- THE ANCHOR (Мудрый Чед) ---
         from anchor_bot import anchor_tick, trigger_anchor_post
         if anchor_tick(board_id):

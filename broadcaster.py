@@ -854,6 +854,9 @@ class MessageBroadcaster:
             from common.database import remove_users_from_board_batch
             await remove_users_from_board_batch(users_to_remove_db, self.board_id)
 
+        # Очистка PostCopies в SQLite и маппингов post_to_messages/message_to_post
+        await remove_blocked_user_copies(self.blocked_users)
+
         if freed > 0:
             runtime_logger.debug(
                 f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} заблокировавших пользователей. Освобождено RAM: {freed}."
