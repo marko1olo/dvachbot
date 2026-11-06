@@ -106,6 +106,7 @@ class NewPostProcessor:
         self.b_data = board_data.get(self.board_id, {})
         self.current_post_num = None
         self.thread_id = None
+        self.referenced_thread_id = None
         self.recipients = set()
         self.reply_info_for_author = {self.user_id: self.reply_to_message_id} if (self.reply_to_message_id and self.user_id > 0) else {}
         self.author_content = {}
@@ -304,7 +305,7 @@ class NewPostProcessor:
             reply_to=self.reply_to_post,
             is_shadow_muted=self.is_shadow_muted,
             is_from_site=False,
-            thread_id_from_bot=self.thread_id,
+            thread_id_from_bot=self.thread_id or getattr(self, 'referenced_thread_id', None),
             stream=self.stream
         )
 
@@ -327,7 +328,7 @@ class NewPostProcessor:
                     reply_to=self.reply_to_post,
                     is_shadow_muted=self.is_shadow_muted,
                     is_from_site=False,
-                    thread_id_from_bot=self.thread_id,
+                    thread_id_from_bot=self.thread_id or getattr(self, 'referenced_thread_id', None),
                     stream=self.stream
                 )
                 if self.current_post_num is not None:
@@ -553,10 +554,15 @@ class NewPostProcessor:
     async def _save_to_memory(self, now_dt):
         async with storage_lock:
             state['post_counter'] = max(state.get('post_counter', 0), self.current_post_num)
-            if self.thread_id:
-                thread_info_safe = self.b_data.get('threads_data', {}).get(self.thread_id)
-                if thread_info_safe:
-                    thread_info_safe['posts'].append(self.current_post_num)
+            effective_tid = self.thread_id or getattr(self, 'referenced_thread_id', None)
+            if effective_tid:
+                thread_info_safe = self.b_data.get('threads_data', {}).get(effective_tid)
+                if not thread_info_safe:
+                    from common.thread_manager import get_thread_info
+                    thread_info_safe = get_thread_info(self.board_id, str(effective_tid))
+                if thread_info_safe and 'posts' in thread_info_safe:
+                    if self.current_post_num not in thread_info_safe['posts']:
+                        thread_info_safe['posts'].append(self.current_post_num)
                     thread_info_safe['last_activity_at'] = time.time()
             content_for_ram = self.final_content.copy()
             content_for_ram.pop('image_bytes', None)
@@ -605,86 +611,86 @@ class NewPostProcessor:
                 except Exception as e:
                     print(f"Error triggering auto_roast: {e}")
 
-        # Вторая фаза вынесена из-под storage_lock: внутри неё идёт
-        # update_post_content — запись в БД, а это ГОРЯЧИЙ путь, он исполняется
-        # на КАЖДЫЙ пост. Раньше на время этого запроса замирал весь доступ к
-        # messages_storage / main.post_to_messages / main.message_to_post, то есть
-        # доставка и реакции на всех досках.
         if self.author_results and self.author_results[0] and self.author_results[0][1]:
-                sent_messages = self.author_results[0][1]
-                messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                if self.final_content.get('type') == 'media_group' and messages_to_process:
-                    new_media_items = []
-                    for msg in messages_to_process:
-                        item = {}
-                        p_attr = getattr(msg, 'photo', None)
-                        v_attr = getattr(msg, 'video', None)
-                        d_attr = getattr(msg, 'document', None)
-                        a_attr = getattr(msg, 'audio', None)
-                        if p_attr and hasattr(p_attr[-1], 'file_id') and isinstance(p_attr[-1].file_id, str):
-                            item = {'type': 'photo', 'file_id': p_attr[-1].file_id}
-                        elif v_attr and hasattr(v_attr, 'file_id') and isinstance(v_attr.file_id, str):
-                            item = {'type': 'video', 'file_id': v_attr.file_id}
-                        elif d_attr and hasattr(d_attr, 'file_id') and isinstance(d_attr.file_id, str):
-                            item = {'type': 'document', 'file_id': d_attr.file_id}
-                        elif a_attr and hasattr(a_attr, 'file_id') and isinstance(a_attr.file_id, str):
-                            item = {'type': 'audio', 'file_id': a_attr.file_id}
-                        if item: new_media_items.append(item)
-                    if new_media_items:
-                        self.final_content['media'] = new_media_items
-                        self.final_content.pop('image_url', None)
-                        self.final_content.pop('image_bytes', None)
-                        self.final_content.pop('voice_bytes', None)
-                        async with storage_lock:
-                            if self.current_post_num in messages_storage:
-                                stored_msg = messages_storage[self.current_post_num]
-                                if isinstance(stored_msg.get('content'), dict):
-                                    stored_msg['content']['media'] = new_media_items
-                elif messages_to_process:
-                    msg = messages_to_process[0]
-                    file_id_to_persist = None
-                    p_attr = getattr(msg, 'photo', None)
-                    v_attr = getattr(msg, 'video', None)
-                    anim_attr = getattr(msg, 'animation', None)
-                    voice_attr = getattr(msg, 'voice', None)
-                    a_attr = getattr(msg, 'audio', None)
-                    if p_attr and hasattr(p_attr[-1], 'file_id') and isinstance(p_attr[-1].file_id, str):
-                        file_id_to_persist = p_attr[-1].file_id
-                    elif v_attr and hasattr(v_attr, 'file_id') and isinstance(v_attr.file_id, str):
-                        file_id_to_persist = v_attr.file_id
-                    elif anim_attr and hasattr(anim_attr, 'file_id') and isinstance(anim_attr.file_id, str):
-                        file_id_to_persist = anim_attr.file_id
-                    elif voice_attr and hasattr(voice_attr, 'file_id') and isinstance(voice_attr.file_id, str):
-                        file_id_to_persist = voice_attr.file_id
-                    elif a_attr and hasattr(a_attr, 'file_id') and isinstance(a_attr.file_id, str):
-                        file_id_to_persist = a_attr.file_id
-                    if file_id_to_persist:
-                        self.final_content['file_id'] = file_id_to_persist
-                        self.final_content.pop('image_url', None)
-                        self.final_content.pop('image_bytes', None)
-                        self.final_content.pop('voice_bytes', None)
-                await update_post_content(self.current_post_num, self.final_content)
-                author_message_ids_to_archive = [
-                    m.message_id if hasattr(m, 'message_id') else int(m)
-                    for m in messages_to_process if m is not None
-                ]
-                messages_to_save = messages_to_process
-                if author_message_ids_to_archive and self.user_id > 0:
-                    spawn_task(add_post_copies(self.current_post_num, [(self.user_id, mid) for mid in author_message_ids_to_archive]))
+            await self._process_author_results()
+
+    async def _process_author_results(self):
+        if not (self.author_results and self.author_results[0] and self.author_results[0][1]):
+            return
+        sent_messages = self.author_results[0][1]
+        messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
+        if self.final_content.get('type') == 'media_group' and messages_to_process:
+            new_media_items = []
+            for msg in messages_to_process:
+                item = {}
+                p_attr = getattr(msg, 'photo', None)
+                v_attr = getattr(msg, 'video', None)
+                d_attr = getattr(msg, 'document', None)
+                a_attr = getattr(msg, 'audio', None)
+                if p_attr and hasattr(p_attr[-1], 'file_id') and isinstance(p_attr[-1].file_id, str):
+                    item = {'type': 'photo', 'file_id': p_attr[-1].file_id}
+                elif v_attr and hasattr(v_attr, 'file_id') and isinstance(v_attr.file_id, str):
+                    item = {'type': 'video', 'file_id': v_attr.file_id}
+                elif d_attr and hasattr(d_attr, 'file_id') and isinstance(d_attr.file_id, str):
+                    item = {'type': 'document', 'file_id': d_attr.file_id}
+                elif a_attr and hasattr(a_attr, 'file_id') and isinstance(a_attr.file_id, str):
+                    item = {'type': 'audio', 'file_id': a_attr.file_id}
+                if item: new_media_items.append(item)
+            if new_media_items:
+                self.final_content['media'] = new_media_items
+                self.final_content.pop('image_url', None)
+                self.final_content.pop('image_bytes', None)
+                self.final_content.pop('voice_bytes', None)
                 async with storage_lock:
-                    stored = messages_storage.get(self.current_post_num)
-                    if stored is not None:
-                        stored['author_message_id'] = author_message_ids_to_archive
-                        clean_content = self.final_content.copy()
-                        clean_content.pop('image_bytes', None)
-                        clean_content.pop('voice_bytes', None)
-                        stored['content'] = clean_content
-                    post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
-                        author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
-                    )
-                    for m in messages_to_save:
-                        mid = m.message_id if hasattr(m, 'message_id') else int(m)
-                        message_to_post[(self.user_id, mid)] = self.current_post_num
+                    if self.current_post_num in messages_storage:
+                        stored_msg = messages_storage[self.current_post_num]
+                        if isinstance(stored_msg.get('content'), dict):
+                            stored_msg['content']['media'] = new_media_items
+        elif messages_to_process:
+            msg = messages_to_process[0]
+            file_id_to_persist = None
+            p_attr = getattr(msg, 'photo', None)
+            v_attr = getattr(msg, 'video', None)
+            anim_attr = getattr(msg, 'animation', None)
+            voice_attr = getattr(msg, 'voice', None)
+            a_attr = getattr(msg, 'audio', None)
+            if p_attr and hasattr(p_attr[-1], 'file_id') and isinstance(p_attr[-1].file_id, str):
+                file_id_to_persist = p_attr[-1].file_id
+            elif v_attr and hasattr(v_attr, 'file_id') and isinstance(v_attr.file_id, str):
+                file_id_to_persist = v_attr.file_id
+            elif anim_attr and hasattr(anim_attr, 'file_id') and isinstance(anim_attr.file_id, str):
+                file_id_to_persist = anim_attr.file_id
+            elif voice_attr and hasattr(voice_attr, 'file_id') and isinstance(voice_attr.file_id, str):
+                file_id_to_persist = voice_attr.file_id
+            elif a_attr and hasattr(a_attr, 'file_id') and isinstance(a_attr.file_id, str):
+                file_id_to_persist = a_attr.file_id
+            if file_id_to_persist:
+                self.final_content['file_id'] = file_id_to_persist
+                self.final_content.pop('image_url', None)
+                self.final_content.pop('image_bytes', None)
+                self.final_content.pop('voice_bytes', None)
+        await update_post_content(self.current_post_num, self.final_content)
+        author_message_ids_to_archive = [
+            m.message_id if hasattr(m, 'message_id') else int(m)
+            for m in messages_to_process if m is not None
+        ]
+        messages_to_save = messages_to_process
+        if author_message_ids_to_archive and self.user_id > 0:
+            spawn_task(add_post_copies(self.current_post_num, [(self.user_id, mid) for mid in author_message_ids_to_archive]))
+        async with storage_lock:
+            stored = messages_storage.get(self.current_post_num)
+            if stored is not None:
+                stored['author_message_id'] = author_message_ids_to_archive
+                clean_content = self.final_content.copy()
+                clean_content.pop('image_bytes', None)
+                clean_content.pop('voice_bytes', None)
+                stored['content'] = clean_content
+            post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
+                author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
+            )
+            for m in messages_to_save:
+                mid = m.message_id if hasattr(m, 'message_id') else int(m)
+                message_to_post[(self.user_id, mid)] = self.current_post_num
 
     async def _enqueue_and_notify(self):
         p_num = self.current_post_num
@@ -717,7 +723,7 @@ class NewPostProcessor:
             })
 
         # If a board user replied to a thread post or notification, deliver also to thread subscribers inside thread
-        if not self.is_shadow_muted and self.referenced_thread_id and not self.thread_id:
+        if not self.is_shadow_muted and getattr(self, 'referenced_thread_id', None) and not self.thread_id:
             thread_info = self.b_data.get('threads_data', {}).get(self.referenced_thread_id)
             if not thread_info:
                 from common.thread_manager import get_thread_info
@@ -829,14 +835,14 @@ class NewPostProcessor:
             if not await self._determine_recipients_and_thread():
                 return None
 
-            now_dt = datetime.now(UTC)
             await self._apply_content_transformations()
 
             # Per-board dispatch lock guarantees strict monotonic sequence:
-            # Post creation -> Header formatting -> Memory store -> Author confirmation -> Queue enqueue
-            # This completely prevents timeline inversion where concurrent posts overtake each other.
+            # Post creation -> Header formatting -> Memory store
+            # Telegram network dispatch is moved outside the lock to prevent blocking the board.
             board_dispatch_lock = _BOARD_DISPATCH_LOCKS[self.board_id]
             async with board_dispatch_lock:
+                now_dt = datetime.now(UTC)
                 if not await self._create_post_record(now_dt):
                     return None
 
@@ -846,19 +852,21 @@ class NewPostProcessor:
                     print(f"⚠️ Ошибка при форматировании заголовков для поста #{self.current_post_num}: {e}")
 
                 try:
-                    await self._send_to_author_with_fallback()
-                except Exception as e:
-                    print(f"⚠️ Ошибка при отправке подтверждения автору поста #{self.current_post_num}: {e}")
-
-                try:
                     await self._save_to_memory(now_dt)
                 except Exception as e:
                     print(f"⚠️ Ошибка при сохранении в память поста #{self.current_post_num}: {e}")
 
-                try:
-                    await self._enqueue_and_notify()
-                except Exception as e:
-                    print(f"⚠️ Ошибка при добавлении в очередь поста #{self.current_post_num}: {e}")
+            # Network send to author is executed outside the board dispatch lock
+            try:
+                await self._send_to_author_with_fallback()
+                await self._process_author_results()
+            except Exception as e:
+                print(f"⚠️ Ошибка при отправке подтверждения автору поста #{self.current_post_num}: {e}")
+
+            try:
+                await self._enqueue_and_notify()
+            except Exception as e:
+                print(f"⚠️ Ошибка при добавлении в очередь поста #{self.current_post_num}: {e}")
 
             return self.current_post_num
         except Exception as e:

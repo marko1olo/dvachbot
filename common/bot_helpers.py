@@ -318,9 +318,12 @@ async def check_user_is_muted(db, user_id: int, board_id: str | None = None) -> 
     now_dt = datetime.now(UTC)
 
     # 1. RAM check
-    import sys
-    main_mod = sys.modules.get('__main__')
-    b_data = getattr(main_mod, 'board_data', {})
+    try:
+        from shared_state import board_data as b_data
+    except Exception:
+        import sys
+        main_mod = sys.modules.get('__main__')
+        b_data = getattr(main_mod, 'board_data', {})
     b_id = board_id or 'b'
 
     board_mutes = b_data.get(b_id, {}).get('mutes', {})

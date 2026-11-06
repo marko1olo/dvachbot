@@ -46,11 +46,11 @@ from common.tts_engine import synthesize_cyberchad_voice_with_meta
 RE_ARCHIVE_LINK = re.compile(
     r'^\s*(?:https?://)?(?:'
     r't(?:elegram)?\.me/(?:tgchan_archive|tgach_archive|c/\d+)/(\d+)/?(?:\?[^\s]*)?(?:#[^\s]*)?|'
-    r'tgach\.top/[a-z0-9]+/res/\d+(?:\.html)?(?:\?[^\s#]*)?#(?:post-)?(\d+)|'
-    r'tgach\.top/[a-z0-9]+/res/(\d+)(?:\.html)?/?(?:\?[^\s]*)?(?:#[^\s]*)?|'
+    r'tgach\.top/[a-z0-9]+/res/([a-f0-9]+)(?:\.html)?(?:\?[^\s#]*)?#(?:post-)?(\d+)|'
+    r'tgach\.top/[a-z0-9]+/res/([a-f0-9]+)(?:\.html)?/?(?:\?[^\s]*)?(?:#[^\s]*)?|'
     r'(?:>>|&gt;&gt;|#|№|Post\s*#?)\s*(\d+)'
     r')',
-    re.IGNORECASE
+    re.IGNORECASE | re.MULTILINE
 )
 
 async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
@@ -66,10 +66,24 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
     if not match:
         return None, text
 
-    raw_id_str = match.group(1) or match.group(2) or match.group(3) or match.group(4)
+    raw_id_str = match.group(3) or match.group(1) or match.group(4) or match.group(5) or match.group(2)
     if not raw_id_str:
         return None, text
-    raw_id = int(raw_id_str)
+
+    if raw_id_str.isdigit():
+        raw_id = int(raw_id_str)
+    else:
+        try:
+            db = await get_pool()
+            async with db.execute("SELECT op_id FROM Threads WHERE thread_id = ? LIMIT 1", (raw_id_str,)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    raw_id = int(row[0])
+                else:
+                    return None, text
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при разрешении hex thread_id: {e}")
+            return None, text
     resolved_post_num = None
 
     try:
@@ -1108,7 +1122,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             except Exception:
                 pass
             return
-        if message.content_type == 'text' and not (message.text and message.text.strip()):
+        text_for_check = re.sub(r'[\u200b-\u200d\u2060\ufeff]', '', message.text or '').strip()
+        if message.content_type == 'text' and not text_for_check:
             logger.warning(f"🚫 [MSG DROPPED: EMPTY_TEXT] user={user_id} board={board_id}")
             try:
                 await message.delete()

@@ -6753,6 +6753,14 @@ def _get_stealth_admin_miss_text() -> str:
 async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
+    db = await get_pool()
+    from common.database import is_shadow_muted as _sm_shoot
+    if await _sm_shoot(user_id, board_id, db=db):
+        return
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(db, user_id, board_id):
+        await message.answer("⛔ <b>В муте стрелять запрещено!</b> Отбывай наказание спокойно.", parse_mode="HTML")
+        return
     if not message.reply_to_message:
         await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
@@ -8789,6 +8797,14 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
 async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
+    db = await get_pool()
+    from common.database import is_shadow_muted as _sm_pv
+    if await _sm_pv(user_id, board_id, db=db):
+        return
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(db, user_id, board_id):
+        await message.answer("⛔ <b>В муте вызывать пативэн запрещено!</b> Отбывай наказание спокойно.", parse_mode="HTML")
+        return
     if not message.reply_to_message:
         await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
@@ -19647,6 +19663,23 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
     """
     if not board_id or board_id not in THREAD_BOARDS:
         return
+    lang = 'en' if board_id == 'int' else 'ru'
+    db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    b_data = board_data.get(board_id, {})
+    mute_until = b_data.get('mutes', {}).get(message.from_user.id)
+    is_regular_muted = bool((mute_until and mute_until > datetime.now(UTC)) or await check_user_is_muted(db, message.from_user.id, board_id))
+    is_sm = bool((message.from_user.id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][message.from_user.id] > datetime.now(UTC)) or await check_db_shadow_muted(message.from_user.id, board_id))
+    if is_regular_muted or is_sm:
+        if is_regular_muted:
+            err_msg = "🔇 Вы замучены и не можете создавать треды." if lang != 'en' else "🔇 You are muted and cannot create threads."
+            try:
+                await message.answer(err_msg)
+                await message.delete()
+            except Exception:
+                pass
+        return
     current_state = await state.get_state()
     lang = 'en' if board_id == 'int' else 'ru'
     if current_state is not None:
@@ -20237,9 +20270,12 @@ async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int
     else:
         formatted_op_text = f"<b>ОП-ПОСТ</b>\n_______________________________\n{op_post_text}"
     op_post_content = {'type': 'text', 'text': formatted_op_text}
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    b_data_op = board_data.get(board_id, {})
+    is_sm = bool((user_id in b_data_op.get('shadow_mutes', {}) and b_data_op['shadow_mutes'][user_id] > datetime.now(UTC)) or await check_db_shadow_muted(user_id, board_id))
     await process_new_post(NewPostParams(
         bot_instance=callback.bot, board_id=board_id, user_id=user_id, content=op_post_content,
-        reply_to_post=None, is_shadow_muted=False, stream=stream
+        reply_to_post=None, is_shadow_muted=is_sm, stream=stream
     ))
     enter_phrases = thread_messages.get(lang, {}).get('enter_thread_prompt', [])
     safe_title = html.escape(title)
@@ -20272,11 +20308,30 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         await callback.answer()
     except TelegramBadRequest:
         pass # Игнорируем, если запрос устарел, продолжаем выполнение
-    if not isinstance(callback.message, types.Message):
+    if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
         return
     user_id = callback.from_user.id
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    db = await get_pool()
+    mute_until = b_data.get('mutes', {}).get(user_id)
+    is_regular_muted = bool((mute_until and mute_until > datetime.now(UTC)) or await check_user_is_muted(db, user_id, board_id))
+    is_sm = bool((user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or await check_db_shadow_muted(user_id, board_id))
+    if is_regular_muted or is_sm:
+        await state.clear()
+        if is_regular_muted:
+            err_msg = "🔇 Вы замучены и не можете создавать треды." if lang != 'en' else "🔇 You are muted and cannot create threads."
+            try:
+                await callback.message.answer(err_msg)
+            except Exception:
+                pass
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        return
     user_s = b_data['user_state'].setdefault(user_id, {})
     if await _check_create_thread_cooldown(callback, user_s, lang, now_ts):
         return
