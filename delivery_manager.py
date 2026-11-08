@@ -8,7 +8,34 @@ from common.config import (
 
 import os
 import shared_state
-from shared_state import *
+from shared_state import (
+    BroadcastConfig,
+    ENABLE_MULTILANG,
+    MAX_MESSAGES_IN_MEMORY,
+    PRIORITY_DELIVERY_ENABLED,
+    THREAD_BOARDS,
+    _trim_messages_storage_unlocked,
+    board_data,
+    current_deliveries,
+    current_media_groups,
+    durable_delivery_stats,
+    enqueue_board_message,
+    locally_created_posts,
+    media_group_timers,
+    message_queues,
+    messages_storage,
+    normalize_storage_timestamp,
+    pending_edit_lock,
+    pending_edit_tasks,
+    post_to_messages,
+    posts_pending_deletion,
+    remove_blocked_user_copies,
+    runtime_logger,
+    sent_media_groups,
+    state,
+    storage_lock,
+    weekly_active_users,
+)
 from common.database import (
     upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies,
     create_post, update_post_content, get_stream_active_users,
@@ -776,20 +803,23 @@ async def _supervise_message_worker(worker_name: str, board_id: str, bot_instanc
     перезапуска процесса. Теперь каждый воркер поднимается отдельно.
     """
     delay = WORKER_RESTART_DELAY_SEC
-    while not (is_shutting_down or drain_shutdown_requested):
+    while not (shared_state.is_shutting_down or shared_state.drain_shutdown_requested):
         start_time = time.time()
         try:
             await message_worker(worker_name, board_id, bot_instance)
-            if is_shutting_down or drain_shutdown_requested:
+            if shared_state.is_shutting_down or shared_state.drain_shutdown_requested:
                 return
             runtime_logger.warning(f"⚠️ {worker_name} завершился без запроса остановки. Перезапуск через {delay:.0f} с.")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            if is_shutting_down or drain_shutdown_requested:
+            if shared_state.is_shutting_down or shared_state.drain_shutdown_requested:
                 return
             runtime_logger.error(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
             runtime_logger.exception("message_worker_crashed board=%s", board_id)
+
+        if shared_state.is_shutting_down or shared_state.drain_shutdown_requested:
+            return
 
         if time.time() - start_time >= 120:
             delay = WORKER_RESTART_DELAY_SEC
@@ -1217,9 +1247,9 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            if is_shutting_down:
+            if shared_state.is_shutting_down:
                 break
-            if drain_shutdown_requested:
+            if shared_state.drain_shutdown_requested:
                 runtime_logger.warning(
                     f"{worker_name} | ⚠️ Ошибка при дренаже поста #{msg_data.get('post_num')}: {e}. Сохраняю в durable storage и продолжаю разгребать очередь."
                 )
@@ -1566,7 +1596,9 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         found_caption = ""
         for msg in raw_messages:
             if msg.caption:
-                raw_caption_html = getattr(msg, 'caption_html_text', msg.caption)
+                raw_caption_html = getattr(msg, 'caption_html_text', None)
+                if not isinstance(raw_caption_html, str):
+                    raw_caption_html = msg.caption if isinstance(msg.caption, str) else str(msg.caption or "")
                 sanitize_fn = getattr(main, 'sanitize_html', None)
                 if sanitize_fn:
                     found_caption = sanitize_fn(raw_caption_html)
@@ -1948,7 +1980,9 @@ async def site_posts_broadcaster():
     await asyncio.sleep(15)  # Начальная задержка при запуске бота
     while True:
         try:
-            if drain_shutdown_requested:
+            if shared_state.is_shutting_down:
+                break
+            if shared_state.drain_shutdown_requested:
                 await asyncio.sleep(2)
                 continue
             import common.database

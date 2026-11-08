@@ -449,7 +449,6 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                             )
             except Exception:
                 pass
-            await db.commit()
 
     if ans_text:
         clean_toast = re.sub(r'<[^>]+>', '', ans_text)
@@ -523,7 +522,6 @@ async def cb_work_claim_quests(callback: types.CallbackQuery, board_id: str | No
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
                 (user_id, board_id, json.dumps(active_items))
             )
-            await db.commit()
             ans_text = "🎉 Премия от Абу успешно получена!"
         else:
             ans_text = msg

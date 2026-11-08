@@ -181,7 +181,7 @@ async def register_extreme_strike(author_id: int, post_num: int, category: str, 
     # 2. Персистим в Users.active_items
     try:
         db = await get_pool()
-        async with db_lock:
+        async with db_transaction(db):
             async with db.execute(
                 "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
                 (author_id, board_id)
@@ -201,7 +201,6 @@ async def register_extreme_strike(author_id: int, post_num: int, category: str, 
                 "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                 (json.dumps(items, ensure_ascii=False), author_id, board_id)
             )
-            await db.commit()
     except Exception as e:
         logger.warning(f"Failed to persist extreme strike for user {author_id}: {e}")
 
@@ -234,12 +233,11 @@ async def execute_extreme_lockdown(
     # 1. Авто-тоггл медиа (shadow_ban_media = 1, nsfw_spoiler = 1)
     try:
         db = await get_pool()
-        async with db_lock:
+        async with db_transaction(db):
             await db.execute(
                 "UPDATE Users SET shadow_ban_media = 1, nsfw_spoiler = 1 WHERE user_id = ?",
                 (author_id,)
             )
-            await db.commit()
 
         # Синхронизация в RAM для всех досок
         try:

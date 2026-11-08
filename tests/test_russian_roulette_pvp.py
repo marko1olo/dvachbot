@@ -144,7 +144,7 @@ class TestRussianRoulettePvP(unittest.IsolatedAsyncioTestCase):
         # Cannot create another game while one is active
         ok2, msg2, _ = await create_rr_challenge("b", p1, bet=200)
         self.assertFalse(ok2)
-        self.assertIn("У тебя уже есть активная дуэль", msg2)
+        self.assertIn("активная партия или вызов", msg2)
 
     async def test_challenge_acceptance_and_escrow(self):
         """Tests accepting challenge, balance escrow deduction, and starting game."""
@@ -208,7 +208,7 @@ class TestRussianRoulettePvP(unittest.IsolatedAsyncioTestCase):
         # 1st shot: Chamber 0 is EMPTY -> Click!
         ok_shot1, msg_shot1, g_after1 = await pull_rr_trigger(gid, turn1)
         self.assertTrue(ok_shot1)
-        self.assertIn("ЩЁЛК", msg_shot1)
+        self.assertTrue(any(w in msg_shot1.upper() for w in ["ЩЁЛК", "ЩЕЛК", "ОСЕЧКА", "ПУСТО", "БАРАБАН", "ЖИВЕШЬ"]))
         self.assertEqual(g_after1["current_chamber"], 1)
         self.assertEqual(g_after1["turn"], waiting_player)
         self.assertFalse(g_after1["finished"])

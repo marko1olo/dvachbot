@@ -360,7 +360,7 @@ async def _get_user_active_items(db, user_id: int, board_id: str | None = None) 
     """
     Asynchronously loads and merges user active_items across all boards.
     """
-    from common.db_pool import db_lock
+    from common.db_pool import db_lock, db_transaction
     try:
         async with asyncio.timeout(2.0):
             async def _fetch_and_merge():
@@ -419,10 +419,9 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             now = time.time()
             if now - duel.get("ts", 0) > _DUEL_TIMEOUT:
                 if duel.get("escrowed"):
-                    async with db_lock:
+                    async with db_transaction(db):
                         await add_user_global_balance(db, challenger_id, duel.get("board_id", board_id), duel.get("amount", 0))
                         await record_user_transaction(db, challenger_id, duel.get("amount", 0), 'duel', 'Возврат ставки: таймаут дуэли')
-                        await db.commit()
                 _active_duels.pop(challenger_id, None)
                 reject_msg = "⚔️ Эта дуэль уже истекла."
             else:
@@ -435,14 +434,13 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                     # Мут-гард для создателя дуэли: если его замутили пока вызов висел
                     if await check_db_shadow_muted(challenger_id, board_id, db=db) or await check_user_is_muted(db, challenger_id, board_id):
                         if ch_escrowed:
-                            async with db_lock:
+                            async with db_transaction(db):
                                 await add_user_global_balance(db, challenger_id, board_id, amount)
                                 await record_user_transaction(db, challenger_id, amount, 'duel', 'Возврат ставки: создатель замучен')
-                                await db.commit()
                         _active_duels.pop(challenger_id, None)
                         reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] был замучен — дуэль отменена."
                     else:
-                        async with db_lock:
+                        async with db_transaction(db):
                             # 1. Verify and escrow challenger stake if not already escrowed
                             if not ch_escrowed:
                                 ch_bal = await get_user_global_balance(db, challenger_id)
@@ -501,7 +499,6 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                                                                  (json.dumps(w_items), winner_id, board_id))
                                         except Exception:
                                             pass
-                                        await db.commit()
 
                                         duel_result = {
                                             "winner_id": winner_id,
@@ -669,10 +666,9 @@ async def decline_duel_logic(message: types.Message, challenger_id: int, user_id
 
     if refund_amount > 0:
         db = await get_pool()
-        async with db_lock:
+        async with db_transaction(db):
             await add_user_global_balance(db, challenger_id, duel_board_id, refund_amount)
             await record_user_transaction(db, challenger_id, refund_amount, 'duel', 'Возврат ставки: отмена дуэли')
-            await db.commit()
 
     bot = getattr(message, "bot", None)
     if bot and broadcast_msgs:
@@ -705,12 +701,15 @@ async def decline_duel_logic(message: types.Message, challenger_id: int, user_id
 
 
 
-async def handle_cyberchad_counter_action(message: types.Message, action: str, user_id: int, board_id: str, db) -> bool:
+async def handle_cyberchad_counter_action(message: types.Message, action: str, user_id: int, board_id: str, db=None) -> bool:
     """
     Handles hilarious counter-attacks / excuses when users target AI / Cyberchad posts (author_id == 0).
     Returns True if handled.
     """
     import time, json
+    from common.db_pool import get_pool, db_transaction
+    if db is None:
+        db = await get_pool()
     from common.database import (
         record_user_transaction,
         get_user_global_balance, deduct_user_global_balance, add_to_abu_fund
@@ -724,12 +723,14 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
             await apply_regular_mute(user_id, board_id, mute_sec)
         except Exception:
             pass
-        async with db_lock:
-            await db.execute(
-                "INSERT INTO UserTransactions (user_id, amount, category, description, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (user_id, 0.0, 'combat', 'Рикошет Мут-Гана от Киберчеда (мут 15м)', current_time)
-            )
-            await db.commit()
+        try:
+            async with db_transaction(db):
+                await db.execute(
+                    "INSERT INTO UserTransactions (user_id, amount, category, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, 0.0, 'combat', 'Рикошет Мут-Гана от Киберчеда (мут 15м)', current_time)
+                )
+        except Exception:
+            pass
         await message.answer(
             "🔇 <b>РИКОШЕТ МУТ-ГАНА!</b>\n\n"
             "Ты выстрелил из Мут-Гана в Киберчеда. Луч со звоном отскочил от его адамантиевых скул прямо тебе в лоб!\n\n"
@@ -740,14 +741,17 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
 
     elif action == "rob": # /rob (Knife robbery)
         fine = 500
-        async with db_lock:
-            user_bal = await get_user_global_balance(db, user_id)
-            actual_fine = min(int(user_bal), fine)
-            if actual_fine > 0:
-                await deduct_user_global_balance(db, user_id, board_id, actual_fine)
-                await add_to_abu_fund(db, actual_fine)
-                await record_user_transaction(db, user_id, -actual_fine, 'rob', 'Попытка ограбить Киберчеда (штраф за наглость)')
-                await db.commit()
+        actual_fine = 0
+        try:
+            async with db_transaction(db):
+                user_bal = await get_user_global_balance(db, user_id)
+                actual_fine = min(int(user_bal), fine)
+                if actual_fine > 0:
+                    await deduct_user_global_balance(db, user_id, board_id, actual_fine)
+                    await add_to_abu_fund(db, actual_fine)
+                    await record_user_transaction(db, user_id, -actual_fine, 'rob', 'Попытка ограбить Киберчеда (штраф за наглость)')
+        except Exception:
+            pass
         await message.answer(
             "🔪 <b>ОГРАБЛЕНИЕ ПРОВАЛЕНО!</b>\n\n"
             "Киберчед перехватывает твой нож двумя пальцами, завязывает его в узел и выворачивает твои карманы одной рукой, пока жмёт сотку другой.\n\n"
@@ -759,15 +763,17 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
     elif action == "shit": # /shit (Throw poop)
         from shared_state import register_attacker_effect
         register_attacker_effect("shit", user_id, user_id, 3600)
-        async with db_lock:
-            u_items = await _get_user_active_items(db, user_id, board_id)
-            u_items["shit_until"] = current_time + 3600
-            await db.execute("""
-                INSERT INTO Users (user_id, board_id, active_items)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
-            """, (user_id, board_id, json.dumps(u_items)))
-            await db.commit()
+        try:
+            async with db_transaction(db):
+                u_items = await _get_user_active_items(db, user_id, board_id)
+                u_items["shit_until"] = current_time + 3600
+                await db.execute("""
+                    INSERT INTO Users (user_id, board_id, active_items)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                """, (user_id, board_id, json.dumps(u_items)))
+        except Exception:
+            pass
         await message.answer(
             "💩 <b>КРИТИЧЕСКИЙ САМООБСЁР!</b>\n\n"
             "Ты попытался метнуть говно в Киберчеда, но оно сгорело в плотных слоях его гигачад-ауры, а остатки ветром сдуло тебе прямо в лицо!\n\n"
@@ -779,15 +785,17 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
     elif action == "vomit": # /vomit (Vomit)
         from shared_state import register_attacker_effect
         register_attacker_effect("vomit", user_id, user_id, 3600)
-        async with db_lock:
-            u_items = await _get_user_active_items(db, user_id, board_id)
-            u_items["vomit_until"] = current_time + 3600
-            await db.execute("""
-                INSERT INTO Users (user_id, board_id, active_items)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
-            """, (user_id, board_id, json.dumps(u_items)))
-            await db.commit()
+        try:
+            async with db_transaction(db):
+                u_items = await _get_user_active_items(db, user_id, board_id)
+                u_items["vomit_until"] = current_time + 3600
+                await db.execute("""
+                    INSERT INTO Users (user_id, board_id, active_items)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                """, (user_id, board_id, json.dumps(u_items)))
+        except Exception:
+            pass
         await message.answer(
             "🤮 <b>ОБРАТНЫЙ РЕФЛЮКС!</b>\n\n"
             "Ты попытался блевануть на Киберчеда, но от одного его надменного взгляда подавился собственной желчью и залил свои же штаны!\n\n"
@@ -799,15 +807,17 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
     elif action == "pepperspray": # /pepperspray
         from shared_state import register_attacker_effect
         register_attacker_effect("pepperspray", user_id, user_id, 1800)
-        async with db_lock:
-            u_items = await _get_user_active_items(db, user_id, board_id)
-            u_items["peppersprayed_until"] = current_time + 1800
-            await db.execute("""
-                INSERT INTO Users (user_id, board_id, active_items)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
-            """, (user_id, board_id, json.dumps(u_items)))
-            await db.commit()
+        try:
+            async with db_transaction(db):
+                u_items = await _get_user_active_items(db, user_id, board_id)
+                u_items["peppersprayed_until"] = current_time + 1800
+                await db.execute("""
+                    INSERT INTO Users (user_id, board_id, active_items)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items
+                """, (user_id, board_id, json.dumps(u_items)))
+        except Exception:
+            pass
         await message.answer(
             "🧯 <b>ПЕРЦОВЫЙ ИНГАЛЯТОР!</b>\n\n"
             "Ты выпустил струю перцовки в Киберчеда. Он глубоко вдохнул её ноздрями: <i>«Приятный ментол, сыч. Держи сдачу»</i> — и дунул струю тебе обратно в глаза!\n\n"
@@ -823,12 +833,14 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
             await apply_regular_mute(user_id, board_id, mute_sec)
         except Exception:
             pass
-        async with db_lock:
-            await db.execute(
-                "INSERT INTO UserTransactions (user_id, amount, category, description, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (user_id, 0.0, 'combat', 'Арест за ложный донос на Киберчеда (2ч)', current_time)
-            )
-            await db.commit()
+        try:
+            async with db_transaction(db):
+                await db.execute(
+                    "INSERT INTO UserTransactions (user_id, amount, category, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, 0.0, 'combat', 'Арест за ложный донос на Киберчеда (2ч)', current_time)
+                )
+        except Exception:
+            pass
         await message.answer(
             "🚔 <b>ЛОЖНЫЙ ДОНОС НА КИБЕРЧЕДА!</b>\n\n"
             "ОМОН с автоматами ворвался на хату Киберчеда, но увидев его бицепсы и пресс, майор извинился, взял автограф, а тебя упаковали в автозак за ложный вызов.\n\n"
@@ -877,41 +889,61 @@ async def delete_message_after_delay(message: types.Message, delay: int):
             print(f"🔥 Ошибка в delete_message_after_delay: {type(e).__name__}: {e}")
 
 
-async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int = 1800):
-    """Applies mute in board_data in-memory and database."""
+async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int = 1800, reason: str | None = None):
+    """Applies mute in board_data in-memory, SQLite Mutes table, and Users.cursed_until."""
     from datetime import datetime, timedelta, UTC
     now_dt = datetime.now(UTC)
     expire_dt = now_dt + timedelta(seconds=duration_seconds)
-    if board_id in board_data and 'mutes' in board_data[board_id]:
-        board_data[board_id]['mutes'][user_id] = expire_dt
+    b_id = board_id or 'b'
+    if b_id in board_data and 'mutes' in board_data[b_id]:
+        board_data[b_id]['mutes'][user_id] = expire_dt
     else:
-        board_data[board_id]['mutes'] = {user_id: expire_dt}
+        board_data[b_id]['mutes'] = {user_id: expire_dt}
     try:
-        from common.db_pool import get_pool, db_lock
+        from common.db_pool import get_pool, db_transaction
         db = await get_pool()
-        async with db_lock:
+        async with db_transaction(db):
+            await db.execute(
+                "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
+                (user_id, b_id)
+            )
+            try:
+                await db.execute(
+                    "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at, reason) VALUES (?, ?, 'mute', ?, ?)",
+                    (user_id, b_id, int(expire_dt.timestamp()), reason)
+                )
+            except Exception:
+                await db.execute(
+                    "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
+                    (user_id, b_id, int(expire_dt.timestamp()))
+                )
             await db.execute(
                 "UPDATE Users SET cursed_until = MAX(COALESCE(cursed_until, 0), ?) WHERE user_id = ? AND board_id = ?",
-                (int(expire_dt.timestamp()), user_id, board_id)
+                (int(expire_dt.timestamp()), user_id, b_id)
             )
-            await db.commit()
     except Exception:
         pass
 
 
 async def remove_regular_mute(user_id: int, board_id: str):
-    """Removes mute from board_data and database."""
-    if board_id in board_data and 'mutes' in board_data[board_id]:
-        board_data[board_id]['mutes'].pop(user_id, None)
+    """Removes mute from board_data, SQLite Mutes table, and Users.cursed_until."""
+    b_id = board_id or 'b'
+    if b_id in board_data and 'mutes' in board_data[b_id]:
+        board_data[b_id]['mutes'].pop(user_id, None)
+    if 'ALL' in board_data and 'mutes' in board_data['ALL']:
+        board_data['ALL']['mutes'].pop(user_id, None)
     try:
-        from common.db_pool import get_pool, db_lock
+        from common.db_pool import get_pool, db_transaction
         db = await get_pool()
-        async with db_lock:
+        async with db_transaction(db):
+            await db.execute(
+                "DELETE FROM Mutes WHERE user_id = ? AND (board_id = ? OR board_id = 'ALL' OR board_id IS NULL) AND mute_type = 'mute'",
+                (user_id, b_id)
+            )
             await db.execute(
                 "UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?",
-                (user_id, board_id)
+                (user_id, b_id)
             )
-            await db.commit()
     except Exception:
         pass
 

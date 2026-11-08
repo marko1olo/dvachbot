@@ -524,7 +524,6 @@ async def record_drop_message_db(db_conn, drop_id: str, chat_id: int, message_id
                 "INSERT OR IGNORE INTO MoneyDropMessages (drop_id, chat_id, message_id) VALUES (?, ?, ?)",
                 (drop_id, chat_id, message_id)
             )
-            await db_conn.commit()
         except Exception:
             pass
 
@@ -535,7 +534,6 @@ async def clear_drop_messages_db(db_conn, drop_id: str):
     if db_conn:
         try:
             await db_conn.execute("DELETE FROM MoneyDropMessages WHERE drop_id = ?", (drop_id,))
-            await db_conn.commit()
         except Exception:
             pass
 
@@ -586,12 +584,16 @@ async def init_drop_engine(db_conn) -> int:
                     )
                     loaded += 1
                 else:
-                    await db_conn.execute(
-                        "UPDATE MoneyDrops SET status = 'expired', refunded_at = ? WHERE drop_id = ?",
-                        (now, d_id),
-                    )
-                    await add_user_global_balance(db_conn, donor, board, int(amt))
-            await db_conn.commit()
+                    try:
+                        from common.db_pool import db_transaction
+                        async with db_transaction(db_conn):
+                            await db_conn.execute(
+                                "UPDATE MoneyDrops SET status = 'expired', refunded_at = ? WHERE drop_id = ?",
+                                (now, d_id),
+                            )
+                            await add_user_global_balance(db_conn, donor, board, int(amt))
+                    except Exception:
+                        pass
 
         # Load persisted messages for active drops
         async with db_conn.execute("SELECT drop_id, chat_id, message_id FROM MoneyDropMessages") as c:
@@ -674,8 +676,9 @@ async def create_money_drop(
         fee = 0
     effective_amount = amount - fee
 
-    async with db_lock:
-        try:
+    from common.db_pool import db_transaction
+    try:
+        async with db_transaction(db_conn):
             ok, new_bal = await deduct_user_global_balance(db_conn, donor_id, board_id, amount)
             if not ok:
                 current_bal = await get_user_global_balance(db_conn, donor_id)
@@ -691,9 +694,8 @@ async def create_money_drop(
                 await add_to_abu_fund(db_conn, fee)
             else:
                 await record_user_transaction(db_conn, donor_id, -amount, 'drop', f'Сброс чека в тред (#{drop_id})')
-            await db_conn.commit()
-        except Exception as e:
-            return False, f"❌ Ошибка базы данных при создании дропа: {e}", None
+    except Exception as e:
+        return False, f"❌ Ошибка базы данных при создании дропа: {e}", None
 
     record = DropRecord(
         drop_id=drop_id,
@@ -829,31 +831,33 @@ async def claim_money_drop(
 
     # Atomically credit claimer in DB and update MoneyDrops record
     from common.database import add_user_global_balance, record_user_transaction
-    async with db_lock:
-        try:
+    from common.db_pool import db_transaction
+    try:
+        async with db_transaction(db_conn):
+            async with db_conn.execute(
+                "UPDATE MoneyDrops SET status = 'claimed', claimed_by = ?, claimed_board_id = ?, claimed_at = ? WHERE drop_id = ? AND status = 'active'",
+                (claimer_id, claimer_board_id, record.claimed_at, drop_id),
+            ) as cur:
+                if getattr(cur, "rowcount", 0) == 0:
+                    raise RuntimeError("Drop already claimed or inactive in database")
             await add_user_global_balance(db_conn, claimer_id, claimer_board_id, record.amount)
             await record_user_transaction(db_conn, claimer_id, record.amount, 'drop', f'Активация чека из треда от {record.donor_name}')
-            await db_conn.execute(
-                "UPDATE MoneyDrops SET status = 'claimed', claimed_by = ?, claimed_board_id = ?, claimed_at = ? WHERE drop_id = ?",
-                (claimer_id, claimer_board_id, record.claimed_at, drop_id),
-            )
-            await db_conn.commit()
-        except Exception as e:
-            # Revert status on severe db failure
-            async with drop_lock:
-                record.status = "active"
-                record.claimed_by = None
-                record.claimed_name = None
-                record.claimed_at = None
-                if _user_claim_history[claimer_id] and _user_claim_history[claimer_id][-1] == now:
-                    _user_claim_history[claimer_id].pop()
-                if record.donor_id and _pair_claim_history[(record.donor_id, claimer_id)] and _pair_claim_history[(record.donor_id, claimer_id)][-1] == now:
-                    _pair_claim_history[(record.donor_id, claimer_id)].pop()
-                if _last_board_claims.get(claimer_board_id) == (claimer_id, now):
-                    _last_board_claims.pop(claimer_board_id, None)
-                if _global_last_claim == (claimer_id, now):
-                    _global_last_claim = (0, 0.0)
-            return False, f"❌ Ошибка начисления выигрыша: {e}", None
+    except Exception as e:
+        # Revert status on severe db failure
+        async with drop_lock:
+            record.status = "active"
+            record.claimed_by = None
+            record.claimed_name = None
+            record.claimed_at = None
+            if _user_claim_history[claimer_id] and _user_claim_history[claimer_id][-1] == now:
+                _user_claim_history[claimer_id].pop()
+            if record.donor_id and _pair_claim_history[(record.donor_id, claimer_id)] and _pair_claim_history[(record.donor_id, claimer_id)][-1] == now:
+                _pair_claim_history[(record.donor_id, claimer_id)].pop()
+            if _last_board_claims.get(claimer_board_id) == (claimer_id, now):
+                _last_board_claims.pop(claimer_board_id, None)
+            if _global_last_claim == (claimer_id, now):
+                _global_last_claim = (0, 0.0)
+        return False, f"❌ Ошибка начисления выигрыша: {e}", None
 
     return True, f"🎉 Ты успешно перехватил дроп на {record.amount} ₪!", record
 
@@ -879,17 +883,19 @@ async def cancel_money_drop(
         record.status = "cancelled"
 
     from common.database import add_user_global_balance
+    from common.db_pool import db_transaction
     now = time.time()
-    async with db_lock:
-        try:
+    try:
+        async with db_transaction(db_conn):
             await add_user_global_balance(db_conn, record.donor_id, record.board_id, record.amount)
             await db_conn.execute(
                 "UPDATE MoneyDrops SET status = 'cancelled', refunded_at = ? WHERE drop_id = ?",
                 (now, drop_id),
             )
-            await db_conn.commit()
-        except Exception as e:
-            return False, f"❌ Ошибка возврата средств: {e}"
+    except Exception as e:
+        async with drop_lock:
+            record.status = "active"
+        return False, f"❌ Ошибка возврата средств: {e}"
 
     return True, f"✅ Дроп на {record.amount} ₪ отменен, средства возвращены на баланс."
 
@@ -899,6 +905,7 @@ async def expire_unclaimed_drops_step(db_lock: asyncio.Lock, db_conn) -> List[Dr
     Background step: refunds drops older than their expiration timestamp.
     """
     from common.database import add_user_global_balance
+    from common.db_pool import db_transaction
     now = time.time()
     expired_list: List[DropRecord] = []
 
@@ -911,18 +918,14 @@ async def expire_unclaimed_drops_step(db_lock: asyncio.Lock, db_conn) -> List[Dr
     if not expired_list:
         return []
 
-    async with db_lock:
-        for rec in expired_list:
-            try:
+    for rec in expired_list:
+        try:
+            async with db_transaction(db_conn):
                 await add_user_global_balance(db_conn, rec.donor_id, rec.board_id, rec.amount)
                 await db_conn.execute(
                     "UPDATE MoneyDrops SET status = 'expired', refunded_at = ? WHERE drop_id = ?",
                     (now, rec.drop_id),
                 )
-            except Exception:
-                pass
-        try:
-            await db_conn.commit()
         except Exception:
             pass
 

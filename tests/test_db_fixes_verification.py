@@ -14,29 +14,32 @@ from common.database import (
 
 
 @pytest.mark.asyncio
-async def test_transaction_collision_raises_runtime_error_no_blind_rollback(tmp_path):
+async def test_transaction_collision_heals_via_rollback_and_retry(tmp_path):
     """
-    Верифицирует, что при ошибке 'cannot start a transaction within a transaction'
-    db_transaction НЕ вызывает ROLLBACK чужой транзакции, а немедленно выбрасывает
-    RuntimeError("Database transaction collision: connection already in transaction").
+    Верифицирует, что при коллизии транзакции ('cannot start a transaction within a transaction')
+    db_transaction выполняет ROLLBACK зависшей транзакции и повторяет попытку BEGIN IMMEDIATE,
+    предотвращая падение хэндлера (устранение 26 крашей production).
     """
     db_path = str(tmp_path / "test_collision.db")
     db = await aiosqlite.connect(db_path, isolation_level=None)
     try:
-        with patch.object(
-            db,
-            "execute",
-            side_effect=aiosqlite.OperationalError("cannot start a transaction within a transaction")
-        ) as mock_execute:
-            with pytest.raises(RuntimeError) as exc_info:
-                async with db_transaction(db):
-                    pass
+        # Симулируем: первый вызов BEGIN IMMEDIATE падает с ошибкой коллизии,
+        # последующие ROLLBACK и повторный BEGIN IMMEDIATE проходят успешно.
+        calls = []
+        original_execute = db.execute
 
-            assert "Database transaction collision: connection already in transaction" in str(exc_info.value)
+        async def mocked_execute(sql, *args, **kwargs):
+            calls.append(sql)
+            if sql == "BEGIN IMMEDIATE" and len([c for c in calls if c == "BEGIN IMMEDIATE"]) == 1:
+                raise aiosqlite.OperationalError("cannot start a transaction within a transaction")
+            return await original_execute(sql, *args, **kwargs)
 
-            # Проверяем, что ROLLBACK НЕ был вызван внутри блока обработки коллизии!
-            called_statements = [call.args[0] for call in mock_execute.call_args_list if call.args]
-            assert "ROLLBACK" not in called_statements
+        with patch.object(db, "execute", side_effect=mocked_execute):
+            async with db_transaction(db):
+                pass
+
+        assert "ROLLBACK" in calls
+        assert calls.count("BEGIN IMMEDIATE") >= 2
     finally:
         await db.close()
 

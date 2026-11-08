@@ -138,6 +138,7 @@ async def test_remove_blocked_user_copies_cleans_ram_and_db():
 @pytest.mark.asyncio
 async def test_media_group_split_race_and_processing_status():
     """Verify complete_media_group_after_delay holds 'processing' status and pops only after sent."""
+    sent_media_groups.clear()
     mg_key = "chat123:mg999"
     current_media_groups[mg_key] = {
         "status": "collecting",

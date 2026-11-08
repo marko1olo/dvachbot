@@ -313,6 +313,8 @@ class MessageBroadcaster:
         self.media_url_text_fallback = False
         self.media_url_fallback_logged = False
         self.html_plain_fallback_logged = False
+        self.media_group_fallback_to_text = False
+        self.media_group_invalid_dimensions = False
         self.all_results = []
         self.blocked_users = set()
         self.mentioned_authors = {}
@@ -526,6 +528,25 @@ class MessageBroadcaster:
         consecutive_success_chunks = 0
 
         while queue:
+            if shared_state.is_shutting_down or shared_state.drain_shutdown_requested:
+                remaining_recipients_for_later.update(queue)
+                queue.clear()
+                interrupted_reason = "shutdown_drain"
+                runtime_logger.info(
+                    "delivery_interrupted_by_shutdown %s",
+                    json.dumps(
+                        {
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
+                            "remaining_recipients": len(remaining_recipients_for_later),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                break
+
             if phase_deadline is not None:
                 remaining_phase_sec = phase_deadline - time.time()
                 if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC:
@@ -1090,6 +1111,50 @@ class MessageBroadcaster:
             self.stats['success'] += 1
             return sent_msgs
 
+        def _get_thread_or_board_link() -> str:
+            from common.config import SITE_PUBLIC_BASE_URL
+            board = self.board_id or "b"
+            thread_id = None
+            if self.post_data_copy:
+                thread_id = self.post_data_copy.get('thread_id')
+            if not thread_id and isinstance(self.content, dict):
+                thread_id = self.content.get('thread_id')
+            if not thread_id and self.post_num:
+                thread_id = messages_storage.get(self.post_num, {}).get('thread_id')
+
+            base_url = (SITE_PUBLIC_BASE_URL or "https://tgach.top").rstrip('/')
+            if thread_id:
+                link = f"{base_url}/{board}/res/{thread_id}.html"
+                if self.post_num:
+                    link += f"#{self.post_num}"
+            else:
+                link = f"{base_url}/{board}/"
+                if self.post_num:
+                    link += f"#{self.post_num}"
+            return link
+
+        async def _send_media_group_text_link_fallback(reason: str):
+            plain_text = _plain_delivery_text()
+            ref_link = _get_thread_or_board_link()
+            link_line = f"🔗 {ref_link}"
+            final_text = f"{plain_text}\n\n{link_line}" if plain_text else link_line
+            runtime_logger.warning(
+                "delivery_media_group_invalid_dimensions_fallback %s",
+                json.dumps(
+                    {
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": self.delivery_phase,
+                        "uid": uid,
+                        "reason": reason,
+                        "ref_link": ref_link,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            return await _send_plain_text_parts(reason, text=final_text)
+
         async def _send_text_fallback(reason: str):
             fallback_text = full_text
             media_url = current_content.get("image_url")
@@ -1199,6 +1264,8 @@ class MessageBroadcaster:
                 self.stats['success'] += 1
                 return res
             if ct == "media_group":
+                if getattr(self, 'media_group_invalid_dimensions', False) or getattr(self, 'media_group_fallback_to_text', False):
+                    return await _send_media_group_text_link_fallback(reason)
                 media_group_build = []
                 can_fit_caption = len(plain_text) <= 1024
                 caption_for_group = plain_text if can_fit_caption else None
@@ -1265,7 +1332,15 @@ class MessageBroadcaster:
                             res = media_msg
                         self.stats['success'] += 1
                         return res
-                    except TelegramBadRequest:
+                    except TelegramBadRequest as s_err:
+                        err_s = s_err.message.lower()
+                        if "user_is_blocked" in err_s:
+                            self.blocked_users.add(uid)
+                            raise TelegramForbiddenError(method=s_err.method, message=s_err.message)
+                        if "photo_invalid_dimensions" in err_s or "webpage_media_empty" in err_s:
+                            self.media_group_fallback_to_text = True
+                            self.media_group_invalid_dimensions = True
+                            return await _send_media_group_text_link_fallback("plain_single_invalid_dimensions")
                         return await _send_plain_text_parts(reason, plain_text)
                 elif len(media_group_build) < 1:
                     return await _send_plain_text_parts(reason, plain_text)
@@ -1278,6 +1353,14 @@ class MessageBroadcaster:
                         request_timeout=request_timeout,
                     )
                 except TelegramBadRequest as mg_err:
+                    err_mg = mg_err.message.lower()
+                    if "user_is_blocked" in err_mg:
+                        self.blocked_users.add(uid)
+                        raise TelegramForbiddenError(method=mg_err.method, message=mg_err.message)
+                    if "photo_invalid_dimensions" in err_mg or "webpage_media_empty" in err_mg:
+                        self.media_group_fallback_to_text = True
+                        self.media_group_invalid_dimensions = True
+                        return await _send_media_group_text_link_fallback("plain_fallback_invalid_dimensions")
                     runtime_logger.warning(f"⚠️ Media group plain fallback failed for user {uid}: {mg_err}")
                     return await _send_plain_text_parts("media_group_plain_failed", plain_text)
                 _log_plain_fallback(reason)
@@ -1447,6 +1530,8 @@ class MessageBroadcaster:
                         self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
+                    if getattr(self, 'media_group_invalid_dimensions', False):
+                        return await _send_media_group_text_link_fallback("cached_media_group_invalid_dimensions")
                     if getattr(self, 'media_group_fallback_to_text', False):
                         return await _send_text_fallback("media_group_failed_previous_attempt")
 
@@ -1526,6 +1611,14 @@ class MessageBroadcaster:
                             self.stats['success'] += 1
                             return res
                         except TelegramBadRequest as single_err:
+                            err_single = single_err.message.lower()
+                            if "user_is_blocked" in err_single:
+                                self.blocked_users.add(uid)
+                                raise TelegramForbiddenError(method=single_err.method, message=single_err.message)
+                            if "photo_invalid_dimensions" in err_single or "webpage_media_empty" in err_single:
+                                self.media_group_fallback_to_text = True
+                                self.media_group_invalid_dimensions = True
+                                return await _send_media_group_text_link_fallback("single_media_invalid_dimensions")
                             runtime_logger.warning(f"⚠️ [SINGLE_MEDIA_FALLBACK] Failed to send single media item: {single_err}. Falling back to text.")
                             self.media_group_fallback_to_text = True
                             return await _send_text_fallback("single_media_failed_fallback")
@@ -1543,6 +1636,17 @@ class MessageBroadcaster:
                         )
                     except TelegramBadRequest as mg_err:
                         err_low = mg_err.message.lower()
+                        if "user_is_blocked" in err_low:
+                            self.blocked_users.add(uid)
+                            raise TelegramForbiddenError(method=mg_err.method, message=mg_err.message)
+                        if "photo_invalid_dimensions" in err_low or "webpage_media_empty" in err_low:
+                            runtime_logger.warning(
+                                f"⚠️ [MEDIA_GROUP_INVALID_DIMENSIONS] Post #{self.post_num} rejected by Telegram: {mg_err.message}. "
+                                f"Switching to resilient plain text with thread/board link (plain fallback prohibited)."
+                            )
+                            self.media_group_fallback_to_text = True
+                            self.media_group_invalid_dimensions = True
+                            return await _send_media_group_text_link_fallback("photo_invalid_dimensions_or_webpage_empty")
                         if any(bad_id in err_low for bad_id in [
                             "media_invalid", "wrong remote file identifier", "unserialize",
                             "invalid file_id", "wrong file identifier", "file_parts_invalid",
@@ -1638,6 +1742,13 @@ class MessageBroadcaster:
                     return res
             except TelegramBadRequest as e:
                 err_low = e.message.lower()
+                if "user_is_blocked" in err_low:
+                    self.blocked_users.add(uid)
+                    raise TelegramForbiddenError(method=e.method, message=e.message)
+                if "photo_invalid_dimensions" in err_low or "webpage_media_empty" in err_low:
+                    self.media_group_fallback_to_text = True
+                    self.media_group_invalid_dimensions = True
+                    return await _send_media_group_text_link_fallback("outer_photo_invalid_dimensions_or_webpage_empty")
                 if _telegram_parse_error(err_low):
                     return await _send_plain_media_fallback("telegram_rejected_html")
                 if (
@@ -1698,7 +1809,8 @@ class MessageBroadcaster:
                 if "message to be replied not found" in err_low:
                     reply_to_mid = None
                     continue
-                elif "chat not found" in err_low or "user not found" in err_low or "bot was blocked by the user" in err_low or "user is deactivated" in err_low or "bot_to_bot" in err_low or "user_bot_to_bot_disabled" in err_low or "group chat was deactivated" in err_low:
+                elif "user_is_blocked" in err_low or "chat not found" in err_low or "user not found" in err_low or "bot was blocked by the user" in err_low or "user is deactivated" in err_low or "bot_to_bot" in err_low or "user_bot_to_bot_disabled" in err_low or "group chat was deactivated" in err_low:
+                    self.blocked_users.add(uid)
                     raise TelegramForbiddenError(method=e.method, message=e.message)
                 elif "flood control" in err_low or "retry after" in err_low:
                     wait_sec = int(re.search(r'\d+', e.message).group()) if re.search(r'\d+', e.message) else 15

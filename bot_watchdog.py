@@ -349,6 +349,10 @@ def _kill_tree(process: subprocess.Popen, reason: str) -> None:
 
 
 def _start_child() -> subprocess.Popen:
+    try:
+        BOT_RESTART_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -712,8 +716,13 @@ def _monitor_child(child: subprocess.Popen) -> bool:
             except subprocess.TimeoutExpired:
                 pass
     except KeyboardInterrupt:
-        log("Supervisor stopped by user (KeyboardInterrupt)")
-        _kill_tree(child, "supervisor_keyboard_interrupt")
+        log("Supervisor stopped by user (KeyboardInterrupt), waiting up to 5.0s for child shutdown...")
+        try:
+            child.wait(timeout=5.0)
+            log(f"Child exited cleanly (pid={child.pid}) on KeyboardInterrupt")
+        except subprocess.TimeoutExpired:
+            log(f"Child pid={child.pid} did not exit within 5.0s on KeyboardInterrupt; killing process tree...")
+            _kill_tree(child, "supervisor_keyboard_interrupt")
         _close_child_log(child)
         return True
     except Exception as exc:

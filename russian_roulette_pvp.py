@@ -1185,16 +1185,16 @@ async def _finish_rr_game(
         try:
             from common.bot_helpers import _get_user_active_items
             from achievements_engine import check_and_unlock_achievement
-            w_items = await _get_user_active_items(db, winner_id, board_id)
-            unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
-            if unlocked and ach_info:
-                await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
-                await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
-                await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(w_items), winner_id, board_id)
-                )
-                await db.commit()
+            async with db_transaction(db):
+                w_items = await _get_user_active_items(db, winner_id, board_id)
+                unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
+                if unlocked and ach_info:
+                    await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
+                    await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
+                    await db.execute(
+                        "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                        (json.dumps(w_items), winner_id, board_id)
+                    )
         except Exception as e:
             logger.error(f"Error checking achievement in Russian Roulette: {e}")
 

@@ -564,6 +564,19 @@ market_state = {
 }
 is_shutting_down = False
 drain_shutdown_requested = False
+shutdown_event = None
+
+
+def request_drain_shutdown() -> None:
+    global drain_shutdown_requested
+    drain_shutdown_requested = True
+
+
+def mark_shutting_down() -> None:
+    global is_shutting_down
+    is_shutting_down = True
+    if 'shutdown_event' in globals() and shutdown_event is not None:
+        shutdown_event.set()
 durable_delivery_stats = {
     'enabled': True,
     'persisted': 0,
@@ -1024,6 +1037,9 @@ __all__ = [
     '_trim_messages_storage_unlocked',
     'is_shutting_down',
     'drain_shutdown_requested',
+    'shutdown_event',
+    'request_drain_shutdown',
+    'mark_shutting_down',
     'durable_delivery_stats',
     'weekly_active_users',
     '_prepare_queue_item',

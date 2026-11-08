@@ -306,6 +306,11 @@ async def synthesize_cyberchad_voice_with_meta(
             async with _TTS_SYNTH_LOCK:
                 for attempt_idx, (cand_voice, rate_cfg, pitch_cfg, attempt_timeout) in enumerate(attempts_cfg, start=1):
                     try:
+                        if os.path.exists(raw_mp3):
+                            try:
+                                os.remove(raw_mp3)
+                            except OSError:
+                                pass
                         communicate = edge_tts.Communicate(
                             clean_text,
                             cand_voice,
@@ -315,9 +320,18 @@ async def synthesize_cyberchad_voice_with_meta(
                             receive_timeout=20
                         )
                         await asyncio.wait_for(communicate.save(raw_mp3), timeout=attempt_timeout)
-                        if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 0:
+                        if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) >= min_voice_size:
                             edge_success = True
                             break
+                        else:
+                            sz = os.path.getsize(raw_mp3) if os.path.exists(raw_mp3) else 0
+                            logger.warning(
+                                f"⚠️ [TTS] Edge-TTS attempt {attempt_idx} ({cand_voice}) produced undersized audio ({sz} < {min_voice_size} bytes)"
+                            )
+                            if attempt_idx < len(attempts_cfg):
+                                pause_sec = 0.5 * attempt_idx
+                                logger.info(f"🔄 [TTS] Retrying with next tier in {pause_sec}s...")
+                                await asyncio.sleep(pause_sec)
                     except (asyncio.TimeoutError, TimeoutError, Exception) as attempt_err:
                         if attempt_idx < len(attempts_cfg):
                             pause_sec = 0.5 * attempt_idx
@@ -325,6 +339,8 @@ async def synthesize_cyberchad_voice_with_meta(
                             await asyncio.sleep(pause_sec)
                         else:
                             raise attempt_err
+                if not edge_success:
+                    raise RuntimeError(f"Edge-TTS failed to produce valid audio >= {min_voice_size} bytes after {len(attempts_cfg)} attempts")
         except Exception as edge_err:
             err_desc = f"{type(edge_err).__name__}: {edge_err}" if str(edge_err).strip() else type(edge_err).__name__
             logger.warning(f"⚠️ [TTS] edge-tts error ({err_desc}) after all attempts.")

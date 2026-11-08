@@ -584,6 +584,7 @@ reply_coverage_stats = {}
 reply_coverage_updated_at = 0.0
 network_retry_state = defaultdict(lambda: {'attempt': 0, 'last_error_time': 0})
 shutdown_event = threading.Event()
+shared_state.shutdown_event = shutdown_event
 drain_shutdown_requested_at = 0.0
 event_loop_stall_watchdog_started = False
 stream_cache = {} # {(user_id, board_id): 'ru'}
@@ -2045,6 +2046,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     if is_shutting_down:
         return
     is_shutting_down = True
+    shared_state.mark_shutting_down()
     shutdown_event.set()
 
     # Возврат ставок всем участникам активных PvP-игр (до закрытия пула)
@@ -4040,25 +4042,81 @@ async def cmd_global_pin(message: types.Message, board_id: str | None, stream: s
 # 🏬 ТОРГОВЫЙ ХАБ «ДВАЧ-ПЛАЗА», БУТИК ОДЕЖДЫ, ЛУТБОКСЫ И RPG АВАТАРИЯ
 # =============================================================================
 
+async def safe_callback_answer(callback: types.CallbackQuery, *args, **kwargs) -> bool:
+    """
+    Безопасный ответ на CallbackQuery: глушит TelegramBadRequest при устаревании
+    или невалидном callback_query_id ('query is too old').
+    """
+    try:
+        await callback.answer(*args, **kwargs)
+        return True
+    except TelegramBadRequest as e:
+        logger.debug("safe_callback_answer: query expired or invalid: %s", e)
+        return False
+    except Exception as e:
+        logger.debug("safe_callback_answer error: %s", e)
+        return False
+
+
 class SafeMessageProxy:
-    def __init__(self, original_msg, user):
+    def __init__(self, original_msg, user, bot=None):
         self._msg = original_msg
         self.from_user = user
-        self.bot = original_msg.bot
-        self.chat = original_msg.chat
-        self.date = original_msg.date
-        self.message_id = original_msg.message_id
+        self.bot = getattr(original_msg, 'bot', None) or bot
+        self.chat = getattr(original_msg, 'chat', None)
+        self.date = getattr(original_msg, 'date', None)
+        self.message_id = getattr(original_msg, 'message_id', 0)
         self.text = "/command"
+        self.caption = ""
+        self.html_text = "/command"
+        self.caption_html_text = ""
+        self.reply_to_message = None
+
     async def answer(self, *args, **kwargs):
-        return await self._msg.answer(*args, **kwargs)
+        if self._msg and hasattr(self._msg, 'answer') and not isinstance(self._msg, types.InaccessibleMessage):
+            try:
+                return await self._msg.answer(*args, **kwargs)
+            except Exception:
+                pass
+        target_chat_id = self.chat.id if (self.chat and hasattr(self.chat, 'id')) else (self.from_user.id if self.from_user else None)
+        if self.bot and target_chat_id:
+            text = args[0] if args else kwargs.pop('text', '')
+            return await self.bot.send_message(chat_id=target_chat_id, text=text, **kwargs)
+        return None
+
     async def reply(self, *args, **kwargs):
-        return await self._msg.answer(*args, **kwargs)
+        return await self.answer(*args, **kwargs)
+
     async def answer_photo(self, *args, **kwargs):
-        return await self._msg.answer_photo(*args, **kwargs)
+        if self._msg and hasattr(self._msg, 'answer_photo') and not isinstance(self._msg, types.InaccessibleMessage):
+            try:
+                return await self._msg.answer_photo(*args, **kwargs)
+            except Exception:
+                pass
+        target_chat_id = self.chat.id if (self.chat and hasattr(self.chat, 'id')) else (self.from_user.id if self.from_user else None)
+        if self.bot and target_chat_id:
+            photo = args[0] if args else kwargs.pop('photo', None)
+            return await self.bot.send_photo(chat_id=target_chat_id, photo=photo, **kwargs)
+        return None
+
     async def delete(self):
-        pass
+        if self._msg and hasattr(self._msg, 'delete') and not isinstance(self._msg, types.InaccessibleMessage):
+            try:
+                await self._msg.delete()
+            except Exception:
+                pass
+
     def __getattr__(self, name):
-        return getattr(self._msg, name)
+        if self._msg is not None:
+            try:
+                return getattr(self._msg, name)
+            except AttributeError:
+                pass
+        if name in ('caption', 'text', 'html_text', 'caption_html_text'):
+            return ""
+        if name == 'reply_to_message':
+            return None
+        raise AttributeError(f"'SafeMessageProxy' has no attribute '{name}'")
 
 from wardrobe_engine import CLOTHING_CATALOG, get_equipped_gear, equip_item
 import avatar_generator
@@ -4849,7 +4907,7 @@ def _record_menu_owner(chat_id: int, message_id: int, owner_id: int) -> None:
     _MENU_MESSAGE_OWNERS[(chat_id, message_id)] = owner_id
 
 def _check_menu_owner(callback: types.CallbackQuery) -> bool:
-    if not callback.message:
+    if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
         return True
     owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id))
     if owner_id and callback.from_user.id != owner_id:
@@ -4880,7 +4938,7 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
     except Exception: pass
 
 
-@dp.message(Command("wardrobe", "boutique", "clothes", "гардероб", "бутик", "шмот"))
+@dp.message(Command("wardrobe", "boutique", "clothes", "гардероб", "бутик", "шмот", ignore_case=True, ignore_mention=True))
 async def cmd_wardrobe(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -5085,7 +5143,7 @@ async def cmd_amulet(message: types.Message, board_id: str | None, stream: str =
 async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужое меню оберега!", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужое меню оберега!", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
@@ -5095,7 +5153,7 @@ async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
         am_exp = active_items.get("cyberchad_amulet_expires", 0)
         has_amulet = (am_exp > now) or bool(active_items.get("cyberchad_amulet") and am_exp == 0)
         if not has_amulet:
-            await callback.answer("У тебя нет активного оберега!", show_alert=True)
+            await safe_callback_answer(callback, "У тебя нет активного оберега!", show_alert=True)
             return
 
         current_enabled = active_items.get("cyberchad_amulet_enabled", True)
@@ -5105,9 +5163,9 @@ async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
 
     if new_enabled:
-        await callback.answer("🧿 Оберег надет! Киберчед восхваляет тебя.", show_alert=True)
+        await safe_callback_answer(callback, "🧿 Оберег надет! Киберчед восхваляет тебя.", show_alert=True)
     else:
-        await callback.answer("⚪ Оберег снят в карман! Киберчед снова роастит тебя.", show_alert=True)
+        await safe_callback_answer(callback, "⚪ Оберег снят в карман! Киберчед снова роастит тебя.", show_alert=True)
 
     days_left = max(0.0, round((am_exp - now) / 86400, 1)) if am_exp > now else 0
     status_text = "🟢 <b>НАДЕТ (Киберчед преклоняется)</b>" if new_enabled else "⚪ <b>В КАРМАНЕ (Киберчед роастит тебя)</b>"
@@ -5123,11 +5181,21 @@ async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
         f"• <code>/amulet off</code> (или <code>/снятьоберег</code>) — убрать оберег в карман и вернуть токсичные разъёбы Киберчеда.\n"
         f"• <code>/amulet on</code> — снова надеть оберег."
     )
+    if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=reply_msg, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+
     try:
-        await callback.message.edit_caption(caption=reply_msg, reply_markup=kb, parse_mode="HTML")
+        if getattr(callback.message, 'photo', None) or getattr(callback.message, 'caption', None) is not None:
+            await callback.message.edit_caption(caption=reply_msg, reply_markup=kb, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=reply_msg, reply_markup=kb, parse_mode="HTML")
     except Exception:
         try:
-            await callback.message.edit_text(text=reply_msg, reply_markup=kb, parse_mode="HTML")
+            await callback.message.answer(reply_msg, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
 
@@ -5136,7 +5204,7 @@ async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
 async def cb_amulet_discard(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужое меню оберега!", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужое меню оберега!", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
@@ -5148,13 +5216,23 @@ async def cb_amulet_discard(callback: types.CallbackQuery, board_id: str | None)
         async with db_transaction(db):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
 
-    await callback.answer("🗑️ Оберег выброшен навсегда!", show_alert=True)
+    await safe_callback_answer(callback, "🗑️ Оберег выброшен навсегда!", show_alert=True)
     discard_msg = "🗑️ <b>Оберег от Киберчеда уничтожен!</b>\nКиберчед снова готов уничтожать твою самооценку в тредах."
+    if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=discard_msg, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+
     try:
-        await callback.message.edit_caption(caption=discard_msg, parse_mode="HTML")
+        if getattr(callback.message, 'photo', None) or getattr(callback.message, 'caption', None) is not None:
+            await callback.message.edit_caption(caption=discard_msg, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=discard_msg, parse_mode="HTML")
     except Exception:
         try:
-            await callback.message.edit_text(text=discard_msg, parse_mode="HTML")
+            await callback.message.answer(discard_msg, parse_mode="HTML")
         except Exception:
             pass
 
@@ -5220,17 +5298,32 @@ async def cmd_avatar(message: types.Message, board_id: str | None, stream: str =
 async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, category: str = "shop"):
     """
     Universally renders or edits shop/wardrobe/wiki subviews whether the source message
-    is a text message or a photo banner with caption.
+    is a text message or a photo banner with caption. Safe against None and InaccessibleMessage.
     """
+    if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
+        target_chat_id = callback.message.chat.id if (callback.message and hasattr(callback.message, 'chat')) else callback.from_user.id
+        from banner_manager import send_banner_message
+        try:
+            await send_banner_message(bot=callback.bot, chat_id=target_chat_id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+        except Exception:
+            try:
+                await callback.bot.send_message(chat_id=target_chat_id, text=text, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
+        return
+
     try:
         if len(text) > 1024:
-            await callback.message.delete()
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
             await callback.bot.send_message(chat_id=callback.message.chat.id, text=text, reply_markup=kb, parse_mode="HTML")
             return
 
-        if callback.message.caption is not None or callback.message.photo:
+        if getattr(callback.message, 'caption', None) is not None or getattr(callback.message, 'photo', None):
             await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-        elif callback.message.text:
+        elif getattr(callback.message, 'text', None):
             await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
         else:
             from banner_manager import send_banner_message
@@ -5238,10 +5331,16 @@ async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: Inl
     except Exception:
         try:
             from banner_manager import send_banner_message
-            await callback.message.delete()
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
             await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
         except Exception:
-            pass
+            try:
+                await callback.bot.send_message(chat_id=callback.message.chat.id, text=text, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
 
 
 @dp.callback_query(F.data == "avatar_view")
@@ -5290,7 +5389,7 @@ async def cb_avatar_view(callback: types.CallbackQuery, board_id: str | None):
     ])
 
     await _render_shop_subview(callback, text, kb, category="avatar")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "avatar_refresh")
@@ -5306,63 +5405,63 @@ async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None)
 async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_main_shop_hub(user_id, balance)
     await _render_shop_subview(callback, text, kb, category="shop")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "shop_cat_weapons")
 async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_weapons_shop_content(user_id, balance)
     await _render_shop_subview(callback, text, kb, category="weapons")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "shop_cat_clothes")
 async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_clothes_shop_content(user_id, balance)
     await _render_shop_subview(callback, text, kb, category="clothes")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "shop_cat_pharma")
 async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_pharma_shop_content(user_id, balance)
     await _render_shop_subview(callback, text, kb, category="pharma")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "shop_cat_lootbox")
 async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
@@ -5370,14 +5469,14 @@ async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
     active_items = await _get_user_active_items(db, user_id, board_id)
     text, kb = _build_lootbox_shop_content(user_id, balance, active_items)
     await _render_shop_subview(callback, text, kb, category="lootbox")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "shop_cat_color")
 async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     if not _check_menu_owner(callback):
-        await callback.answer("⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужой магазин! Открой свой магазин командой /shop", show_alert=True)
         return
     user_id = callback.from_user.id
     db = await get_pool()
@@ -5385,7 +5484,7 @@ async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None)
     active_items = await _get_user_active_items(db, user_id, board_id)
     text, kb = _build_color_picker_content(user_id, balance, active_items)
     await _render_shop_subview(callback, text, kb, category="shop")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data.startswith("color_set_"))
@@ -5401,14 +5500,14 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
             active_items["badge_color"] = None
             async with db_transaction(db):
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
-        await callback.answer("⚪ Цветной кружок снят! Посты снова без цветного бейджа.", show_alert=True)
+        await safe_callback_answer(callback, "⚪ Цветной кружок снят! Посты снова без цветного бейджа.", show_alert=True)
         new_bal = await get_user_global_balance(db, user_id)
         text, kb = _build_color_picker_content(user_id, new_bal, active_items)
         await _render_shop_subview(callback, text, kb, category="shop")
         return
 
     if color_key not in avatar_generator.COLOR_PALETTE:
-        await callback.answer("Неверный цвет.", show_alert=True)
+        await safe_callback_answer(callback, "Неверный цвет.", show_alert=True)
         return
 
     async with db_lock:
@@ -5422,11 +5521,11 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
 
         if not has_color_pass:
             if balance < price:
-                await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+                await safe_callback_answer(callback, f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
                 return
             ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
             if not ok:
-                await callback.answer("Ошибка списания баланса.", show_alert=True)
+                await safe_callback_answer(callback, "Ошибка списания баланса.", show_alert=True)
                 return
             await record_user_transaction(db, user_id, -price, 'shop', f'Покупка цвета: {color_key}')
             active_items["badge_color_active"] = True
@@ -5437,7 +5536,7 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
 
     col_info = avatar_generator.COLOR_PALETTE[color_key]
-    await callback.answer(f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден перед номерами твоих постов.", show_alert=True)
+    await safe_callback_answer(callback, f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден перед номерами твоих постов.", show_alert=True)
 
     # Re-render color picker view
     new_bal = await get_user_global_balance(db, user_id)
@@ -5454,7 +5553,7 @@ async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str
     active_items = await _get_user_active_items(db, user_id, board_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
     await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data.startswith("wardrobe_equip_"))
@@ -5475,7 +5574,7 @@ async def cb_wardrobe_equip(callback: types.CallbackQuery, board_id: str | None)
                 await record_user_transaction(db, user_id, ach["reward_cash"], 'achievements', f'Сет-достижение: {ach["name"]}')
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
             await db.commit()
-    await callback.answer(msg, show_alert=True)
+    await safe_callback_answer(callback, msg, show_alert=True)
 
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
@@ -5498,7 +5597,7 @@ async def cb_wardrobe_unequip(callback: types.CallbackQuery, board_id: str | Non
             # Update ALL board rows for this user to keep wardrobe in sync
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (items_json, user_id))
             await db.commit()
-    await callback.answer(msg, show_alert=True)
+    await safe_callback_answer(callback, msg, show_alert=True)
 
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
@@ -5558,7 +5657,7 @@ async def cb_wiki_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     text, kb = _build_wiki_hub_content()
     await _render_shop_subview(callback, text, kb, category="wiki")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "wiki_cat_weapons")
@@ -5590,7 +5689,7 @@ async def cb_wiki_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
     await _render_shop_subview(callback, text, kb, category="weapons")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "wiki_cat_clothes")
@@ -5616,7 +5715,7 @@ async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
     await _render_shop_subview(callback, text, kb, category="clothes")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "wiki_cat_sets")
@@ -5646,7 +5745,7 @@ async def cb_wiki_cat_sets(callback: types.CallbackQuery, board_id: str | None):
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
     await _render_shop_subview(callback, text, kb, category="wardrobe")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "wiki_cat_pharma")
@@ -5668,7 +5767,7 @@ async def cb_wiki_cat_pharma(callback: types.CallbackQuery, board_id: str | None
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
     await _render_shop_subview(callback, text, kb, category="pharma")
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "wiki_cat_lootbox")
@@ -5694,7 +5793,7 @@ async def cb_wiki_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
     await _render_shop_subview(callback, text, kb, category="lootbox")
-    await callback.answer()
+    await safe_callback_answer(callback)
 # -----------------------------------------------------------------------------
 # ДОСТИЖЕНИЯ И ТРОФЕИ (/achievements, /ach, /ачивки, /достижения)
 # -----------------------------------------------------------------------------
@@ -7090,6 +7189,14 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
+    db = await get_pool()
+    from common.database import is_shadow_muted as _sm_pepper
+    if await _sm_pepper(user_id, board_id, db=db):
+        return
+    from common.bot_helpers import check_user_is_muted
+    if await check_user_is_muted(db, user_id, board_id):
+        await message.answer("⛔ <b>В муте пшикать перцовкой запрещено!</b> Отбывай наказание спокойно.", parse_mode="HTML")
+        return
     if not message.reply_to_message:
         await message.answer("⚠️ Ответь этой командой на сообщение цели (Reply)!")
         return
@@ -7098,9 +7205,9 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     from shared_state import (
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
+    from combat_moderation_engine import check_pair_attack_cooldown, record_combat_attack
     target_id = await get_author_id_by_reply(message)
     if target_id == 0:
-        db = await get_pool()
         from common.bot_helpers import handle_cyberchad_counter_action
         if await handle_cyberchad_counter_action(message, "pepperspray", user_id, board_id, db):
             return
@@ -7110,8 +7217,23 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     if target_id == user_id:
         await message.answer("Пшикнуть перцовкой себе в лицо? Ты нормальный вообще?")
         return
+    if await check_isolation_combat_guard(message, user_id, target_id, board_id):
+        return
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
+    is_pair_blocked, pair_rem = check_pair_attack_cooldown(user_id, target_id, cooldown_seconds=120.0)
+    if is_pair_blocked:
+        rem_min = pair_rem // 60
+        rem_sec = pair_rem % 60
+        time_str = f"{rem_min}м {rem_sec}с" if rem_min > 0 else f"{rem_sec}с"
+        await message.reply(
+            f"⏳ <b>Нельзя пшикать перцовкой одному и тому же анону подряд!</b>\n"
+            f"Повторный пшик по этой цели доступен через <b>{time_str}</b>.\n"
+            f"<i>(Перцовка осталась в твоем рюкзаке)</i>",
+            parse_mode="HTML"
+        )
         return
 
     db = await get_pool()
@@ -7152,7 +7274,7 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     t_items = await _get_user_active_items(db, target_id, board_id)
     action_type = None
 
-    async with db_lock:
+    async with db_transaction(db):
         active_items = await _get_user_active_items(db, user_id, board_id)
         if not active_items.get("pepperspray_gun"):
             action_type = "no_gun"
@@ -7167,7 +7289,7 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
                              (json.dumps(t_items), target_id, board_id))
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
-            await db.commit()
+            record_combat_attack(user_id, target_id, "pepperspray")
             register_target_attack(target_id)
             set_combat_cooldown(user_id, 30)
         elif t_items.get("equipped_head") == "hat_helmet":
@@ -7175,7 +7297,7 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
             active_items["pepperspray_gun"] = False
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
-            await db.commit()
+            record_combat_attack(user_id, target_id, "pepperspray")
             register_target_attack(target_id)
             set_combat_cooldown(user_id, 30)
         else:
@@ -7186,7 +7308,7 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
                              (json.dumps(t_items), target_id, board_id))
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
-            await db.commit()
+            record_combat_attack(user_id, target_id, "pepperspray")
             register_target_attack(target_id)
             set_combat_cooldown(user_id, 30)
 
@@ -7217,10 +7339,9 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     from achievements_engine import check_and_unlock_achievement
     unlocked, _ = check_and_unlock_achievement(active_items, "ach_pepperspray")
     if unlocked:
-        async with db_lock:
+        async with db_transaction(db):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
-            await db.commit()
 
     anon_target = generate_anon_name(target_id)
     await message.bot.send_message(
@@ -9256,12 +9377,11 @@ async def cmd_mega(message: types.Message, board_id: str | None = None, stream: 
             return
 
         active_items["megaphone_gun"] = False
-        async with db_lock:
+        async with db_transaction(db):
             await db.execute(
                 "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                 (json.dumps(active_items), user_id, board_id)
             )
-            await db.commit()
 
         b_data['active_pin'] = post_num
         await update_board_settings(board_id, {'active_pin': post_num})
@@ -9600,7 +9720,7 @@ _stats_cooldown_tracker = {}
 _STATS_TTL = 300  # 5 минут кэш графиков статистики
 
 
-@dp.message(Command("stats", "stat", "activity", "heatmap"))
+@dp.message(Command("stats", "stat", "activity", "heatmap", "статистика", ignore_case=True, ignore_mention=True))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
 
@@ -9628,7 +9748,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     else:
         await message.answer("📊 Генерирую статистику, подожди пару секунд...")
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         photos = await loop.run_in_executor(None, _generate_stats_charts, board_id)
         _stats_cache[board_id] = {'ts': now, 'photos': photos}
 
@@ -10182,7 +10302,7 @@ def get_leaderboard_keyboard(board_id: str, current_mode: str, caller_id: int | 
         ]
     ])
 
-@dp.message(Command("top", "leaderboard", "топ", "лидеры"))
+@dp.message(Command("top", "leaderboard", "топ", "лидеры", ignore_case=True, ignore_mention=True))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
 
@@ -10234,20 +10354,24 @@ async def cb_top_switch(callback: types.CallbackQuery, board_id: str | None):
         photo_buf, caption_text = await loop.run_in_executor(None, generate_leaderboard_payload, board_id, mode, caller_id)
 
         photo = BufferedInputFile(photo_buf.getvalue(), filename=f"leaderboard_{mode}.png")
-        owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id), caller_id) if callback.message else caller_id
+        owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id), caller_id) if (callback.message and not isinstance(callback.message, types.InaccessibleMessage)) else caller_id
         kb = get_leaderboard_keyboard(board_id, mode, caller_id=owner_id)
 
-        if callback.message.photo:
-            await callback.message.edit_media(
-                media=InputMediaPhoto(media=photo, caption=caption_text, parse_mode="HTML"),
-                reply_markup=kb
-            )
+        if callback.message and not isinstance(callback.message, types.InaccessibleMessage):
+            if getattr(callback.message, 'photo', None):
+                await callback.message.edit_media(
+                    media=InputMediaPhoto(media=photo, caption=caption_text, parse_mode="HTML"),
+                    reply_markup=kb
+                )
+            else:
+                await callback.message.edit_text(caption_text, reply_markup=kb, parse_mode="HTML")
         else:
-            await callback.message.edit_text(caption_text, reply_markup=kb, parse_mode="HTML")
-        await callback.answer()
+            target_chat = callback.message.chat.id if (callback.message and hasattr(callback.message, 'chat')) else callback.from_user.id
+            await callback.bot.send_photo(chat_id=target_chat, photo=photo, caption=caption_text, reply_markup=kb, parse_mode="HTML")
+        await safe_callback_answer(callback)
     except Exception as e:
         runtime_logger.warning("Error switching leaderboard: %s", e)
-        await callback.answer("⚠️ Ошибка переключения топа.")
+        await safe_callback_answer(callback, "⚠️ Ошибка переключения топа.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /duel — вызов на дуэль (PvP ставка)
@@ -10709,10 +10833,9 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
         if duel.get("escrowed"):
             try:
                 db = await get_pool()
-                async with db_lock:
+                async with db_transaction(db):
                     await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
                     await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: таймаут дуэли')
-                    await db.commit()
             except Exception as ex:
                 logger.error(f"Failed to refund expired duel bet to {ch_id}: {ex}")
 
@@ -10798,13 +10921,12 @@ async def solo_casino_watchdog_step(bot: Bot | None = None):
                 actual_payout = session_bet + int(actual_profit)
                 board_id = session.get("board_id", "b")
 
-                async with db_lock:
+                async with db_transaction(db):
                     if tax_amt > 0:
                         await add_to_abu_fund(db, int(tax_amt))
                     new_bal = await add_user_global_balance(db, user_id, board_id, actual_payout)
                     await record_user_transaction(db, user_id, int(actual_profit), 'casino', f'Авто-кэшаут по таймауту в Русской Рулетке (x{mult:.2f})')
                     casino_engine.record_win_streak(user_id, True)
-                    await db.commit()
                 runtime_logger.info(f"🎰 [Solo Watchdog] Авто-кэшаут рулетки для user {user_id}: +{actual_payout} ₪")
             except Exception as re_err:
                 runtime_logger.warning(f"⚠️ [Solo Watchdog] Ошибка авто-кэшаута рулетки {user_id}: {re_err}")
@@ -10823,20 +10945,18 @@ async def solo_casino_watchdog_step(bot: Bot | None = None):
                     profit = max(0, payout - bet)
                     tax_amt, actual_profit = calculate_win_tax(profit)
                     actual_payout = bet + int(actual_profit) if outcome == "win" else payout
-                    async with db_lock:
+                    async with db_transaction(db):
                         if tax_amt > 0:
                             await add_to_abu_fund(db, int(tax_amt))
                         new_bal = await add_user_global_balance(db, user_id, board_id, actual_payout)
                         desc = f'Авто-завершение Блэкджека ({outcome.upper()})'
                         await record_user_transaction(db, user_id, int(actual_profit), 'casino', desc)
                         casino_engine.record_win_streak(user_id, outcome == "win")
-                        await db.commit()
                 else:
-                    async with db_lock:
+                    async with db_transaction(db):
                         await add_to_abu_fund(db, bet)
                         await record_user_transaction(db, user_id, -bet, 'casino', 'Авто-завершение Блэкджека (Поражение)')
                         casino_engine.record_win_streak(user_id, False)
-                        await db.commit()
                 runtime_logger.info(f"🃏 [Solo Watchdog] Авто-завершение блэкджека для user {user_id}: {outcome} ({payout} ₪)")
             except Exception as bj_err:
                 runtime_logger.warning(f"⚠️ [Solo Watchdog] Ошибка авто-завершения блэкджека {user_id}: {bj_err}")
@@ -10861,7 +10981,7 @@ async def start_solo_casino_watchdog_loop(bot: Bot):
 #  russian_roulette_pvp_router, and votemute_router included at Dispatcher level)
 # =============================================================================
 
-@dp.message(Command("wallet", "balance", "money", "кошелек", "баланс", "шекели", "деньги", "cash", ignore_case=True, ignore_mention=True))
+@dp.message(Command("wallet", "balance", "money", "кошелек", "кошелёк", "баланс", "шекели", "деньги", "cash", ignore_case=True, ignore_mention=True))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -10881,13 +11001,12 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     if balance == 0 and is_verified == 0 and last_failed == 0:
         start_bal = float(random.randint(8, 15))
         is_new_wallet = True
-        async with db_lock:
+        async with db_transaction(db):
             await db.execute(
                 "INSERT INTO Users (user_id, board_id, balance, is_verified_b) VALUES (?, ?, ?, 0) "
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = ?",
                 (user_id, board_id, start_bal, start_bal)
             )
-            await db.commit()
         balance, is_verified = start_bal, 0
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -10945,9 +11064,8 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
 
     bot_user = await message.bot.get_me()
     ref_code = get_referral_code(user_id)
-    async with db_lock:
+    async with db_transaction(db):
         await db.execute("INSERT OR IGNORE INTO ReferralAliases (code, user_id) VALUES (?, ?)", (ref_code, user_id))
-        await db.commit()
     ref_link = f"https://t.me/{bot_user.username}?start=ref_{ref_code}"
 
     if lang == 'en':
@@ -11136,12 +11254,11 @@ async def _run_delayed_prank(params: DelayedPrankParams):
     await asyncio.sleep(5)
 
     db_p = await get_pool()
-    async with db_lock:
+    async with db_transaction(db_p):
         await db_p.execute(
             "UPDATE Users SET balance = 0, last_failed_amount = ? WHERE user_id = ?",
             (params.amount, params.user_id)
         )
-        await db_p.commit()
 
     uid_raw = str(params.user_id)
     if len(uid_raw) >= 6:
@@ -11722,12 +11839,12 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
             except Exception:
                 pass
 
-            await db.execute(
-                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                (user_id, board_id, json.dumps(items))
-            )
-            await db.commit()
+            async with db_transaction(db):
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                    (user_id, board_id, json.dumps(items))
+                )
             ans_text = outcome_msg + (drop_note if dropped_item else "")
         else:
             # Failure with penalty (soft overdraft defence)
@@ -11739,12 +11856,12 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
                     await record_user_transaction(db, user_id, -cur_bal, 'work', f'Частичный штраф на работе ({job_id})')
             else:
                 await record_user_transaction(db, user_id, -amount_change, 'work', f'Штраф на работе ({job_id})')
-            await db.execute(
-                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                (user_id, board_id, json.dumps(items))
-            )
-            await db.commit()
+            async with db_transaction(db):
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                    (user_id, board_id, json.dumps(items))
+                )
             ans_text = outcome_msg
 
     if ans_text:
@@ -11830,12 +11947,11 @@ async def cb_work_toggle_alerts(callback: types.CallbackQuery, board_id: str | N
     if not board_id: return
     user_id = callback.from_user.id
     db = await get_pool()
-    async with db_lock:
+    async with db_transaction(db):
         items = await _get_user_active_items(db, user_id, board_id)
         current = items.get("work_alerts_disabled", False)
         items["work_alerts_disabled"] = not current
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
-        await db.commit()
 
     new_state = items["work_alerts_disabled"]
     toast = "🔕 Уведомления о работе отключены." if new_state else "🔔 Уведомления о работе включены!"
@@ -11856,11 +11972,10 @@ async def cb_work_alert_toggle_off(callback: types.CallbackQuery, board_id: str 
     board_id = board_id or "b"
     user_id = callback.from_user.id
     db = await get_pool()
-    async with db_lock:
+    async with db_transaction(db):
         items = await _get_user_active_items(db, user_id, board_id)
         items["work_alerts_disabled"] = True
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
-        await db.commit()
 
     await callback.answer("🔕 Напоминалки о работе отключены! Бот больше не будет писать в ЛС.", show_alert=True)
     try:
@@ -11910,13 +12025,12 @@ async def cb_economy_daily(callback: types.CallbackQuery, board_id: str | None):
     bonus = 75
     streak_bonus = min(streak - 1, 7) * 10
     total_bonus = bonus + streak_bonus
-    async with db_lock:
-        new_balance = await add_user_global_balance(db, user_id, board_id, total_bonus)
+    new_balance = await add_user_global_balance(db, user_id, board_id, total_bonus)
+    async with db_transaction(db):
         await db.execute(
             "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
             (json.dumps(ai), user_id, board_id)
         )
-        await db.commit()
     await callback.answer(f"✅ Получено +{total_bonus} ₪! Баланс: {int(new_balance)} ₪", show_alert=True)
 
 @dp.callback_query(F.data == "economy_work")
@@ -12642,7 +12756,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         return
 
     db = await get_pool()
-    async with db_lock:
+    async with db_transaction(db):
         balance = await get_user_global_balance(db, user_id)
         if balance < bet:
             no_funds_caption = f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку."
@@ -12671,7 +12785,6 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         if not ok:
             return
         await record_user_transaction(db, user_id, -bet, 'casino', f'Ставка в Слоты 777 (ставка {bet} ₪)')
-        await db.commit()
 
     # 1-second slot spinning animation in place
     if message_to_edit:
@@ -12694,7 +12807,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
 
     tax_note = ""
     rake_note = ""
-    async with db_lock:
+    async with db_transaction(db):
 
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
@@ -12783,7 +12896,6 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
                     pass
         else:
             new_balance = await get_user_global_balance(db, user_id)
-        await db.commit()
 
     kb = casino_engine.get_slots_keyboard(bet, balance=int(new_balance))
     reel_display = f"║  {reels[0]}  │  {reels[1]}  │  {reels[2]}  ║"
@@ -12893,7 +13005,7 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         return
 
     db = await get_pool()
-    async with db_lock:
+    async with db_transaction(db):
         balance = await get_user_global_balance(db, user_id)
         if balance < bet:
             no_funds_caption = f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
@@ -12922,7 +13034,6 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         if not ok:
             return
         await record_user_transaction(db, user_id, -bet, 'casino', f'Ставка в Монетку (ставка {bet} ₪)')
-        await db.commit()
 
     # In-place coinflip animation
     if message_to_edit:
@@ -12943,7 +13054,7 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
     ach_note = ""
     tax_note = ""
     rake_note = ""
-    async with db_lock:
+    async with db_transaction(db):
         # VIP Table Rake
         rake, active_bet = casino_engine.calculate_vip_table_rake(bet)
         if rake > 0:
@@ -13018,7 +13129,6 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
                     pass
         else:
             new_balance = await get_user_global_balance(db, user_id)
-        await db.commit()
 
     kb = casino_engine.get_coinflip_keyboard(bet, balance=int(new_balance))
     chosen_label = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл"] else "👑 РЕШКА"
@@ -13114,8 +13224,20 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         )
         return
 
+    async with casino_engine.session_lock:
+        if user_id in casino_engine.active_bj_sessions:
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=bot,
+                chat_id=chat_id,
+                caption="⚠️ <b>У тебя уже есть активная партия в Блэкджек!</b>\nЗаверши текущую партию перед началом новой.",
+                category="blackjack",
+                parse_mode="HTML"
+            )
+            return
+
     db = await get_pool()
-    async with db_lock:
+    async with db_transaction(db):
         balance = await get_user_global_balance(db, user_id)
         if balance < bet:
             from banner_manager import send_banner_message
@@ -13152,7 +13274,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
         if not ok:
             return
-        await db.commit()
+        await record_user_transaction(db, user_id, -bet, 'casino', f'Ставка в Блэкджек (ставка {bet} ₪)')
 
     deck = casino_engine.create_deck()
     player_hand = [deck.pop(), deck.pop()]
@@ -13164,28 +13286,23 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
     # Check natural Blackjack
     if player_score == 21:
         payout = int(active_bet * 2.5)
-        async with db_lock:
-            new_bal = await add_user_global_balance(db, user_id, board_id, payout)
-            await record_user_transaction(db, user_id, payout, 'casino', f'Блэкджек 3:2 (ставка {bet} ₪)')
+        tax_note = ""
+        tax_amt, actual_profit = calculate_win_tax(payout - active_bet)
+        final_payout = payout - int(tax_amt)
+        async with db_transaction(db):
+            if tax_amt > 0:
+                await add_to_abu_fund(db, int(tax_amt))
+                tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
+            new_bal = await add_user_global_balance(db, user_id, board_id, final_payout)
+            await record_user_transaction(db, user_id, final_payout, 'casino', f'Блэкджек 3:2 (ставка {bet} ₪)')
             ach_note = ""
             user_items = await _get_user_active_items(db, user_id, board_id)
             from achievements_engine import check_and_unlock_achievement
             unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_blackjack_natural")
             if unlocked and ach_info:
-                await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                new_bal = await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
                 ach_note = f"\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
-            await db.commit()
-
-        tax_note = ""
-        tax_amt, actual_profit = calculate_win_tax(payout - active_bet)
-        if tax_amt > 0:
-            async with db_lock:
-                await add_to_abu_fund(db, int(tax_amt))
-                await deduct_user_global_balance(db, user_id, board_id, int(tax_amt))
-                new_bal = await get_user_global_balance(db, user_id)
-                await db.commit()
-            tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу."
 
         caption = (
             f"🃏 <b>БЛЭКДЖЕК 21: НАТУРАЛЬНЫЙ БЛЭКДЖЕК!</b>\n\n"
@@ -13278,7 +13395,7 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
 
         if not session:
             # First shot: deduct initial bet
-            async with db_lock:
+            async with db_transaction(db):
                 ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
                 if not ok:
                     balance = await get_user_global_balance(db, user_id)
@@ -13303,7 +13420,7 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
                         parse_mode="HTML"
                     )
                     return
-                await db.commit()
+                await record_user_transaction(db, user_id, -bet, 'casino', f'Ставка в Русскую Рулетку ({bet} ₪)')
         else:
             # Subsequent shots: strictly retain initial session bet
             bet = session.get("bet", bet)
@@ -13591,6 +13708,10 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             if not session:
                 await callback.answer("❌ Сессия блэкджека завершена или не найдена. Начни новую игру!", show_alert=True)
                 return
+            if session.get("busy"):
+                await callback.answer("⏳ Ход обрабатывается...")
+                return
+            session["busy"] = True
 
             bet = session["bet"]
             deck = session["deck"]
@@ -13604,7 +13725,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             if p_score > 21:
                 # Bust
                 casino_engine.active_bj_sessions.pop(user_id, None)
-                async with db_lock:
+                async with db_transaction(db):
                     await add_to_abu_fund(db, bet)
                     await record_user_transaction(db, user_id, -bet, 'casino', 'Перебор в Блэкджеке (>21)')
                     casino_engine.record_win_streak(user_id, False)
@@ -13636,18 +13757,20 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 await callback.message.edit_caption(caption=caption, parse_mode="HTML", reply_markup=kb)
             except Exception:
                 pass
+            session["busy"] = False
             await callback.answer()
             return
 
         elif action in ["stand", "double"]:
             if action == "double":
                 # Check balance for double
-                async with db_lock:
+                async with db_transaction(db):
                     ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
                     if not ok:
+                        session["busy"] = False
                         await callback.answer("❌ Недостаточно средств для дабла!", show_alert=True)
                         return
-                    await db.commit()
+                    await record_user_transaction(db, user_id, -bet, 'casino', f'Удвоение ставки (Дабл) в Блэкджеке (+{bet} ₪)')
                 bet *= 2
                 session["bet"] = bet
                 p_hand.append(deck.pop())
@@ -13657,7 +13780,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
 
             if p_score > 21:
                 # Double bust
-                async with db_lock:
+                async with db_transaction(db):
                     await add_to_abu_fund(db, bet)
                     await record_user_transaction(db, user_id, -bet, 'casino', 'Перебор на дабле в Блэкджеке')
                     casino_engine.record_win_streak(user_id, False)
@@ -13708,7 +13831,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 actual_profit = -bet
                 tax_amt = 0
 
-            async with db_lock:
+            async with db_transaction(db):
                 if payout > 0:
                     if tax_amt > 0: await add_to_abu_fund(db, int(tax_amt))
                     new_bal = await add_user_global_balance(db, user_id, board_id, payout)
@@ -13722,7 +13845,6 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                     await record_user_transaction(db, user_id, -bet, 'casino', f'Слив в Блэкджеке ({p_score} vs {d_score})')
                     casino_engine.record_win_streak(user_id, False)
                     new_bal = await get_user_global_balance(db, user_id)
-                await db.commit()
 
             caption = (
                 f"🃏 <b>БЛЭКДЖЕК: ИТОГИ РАЗДАЧИ</b>\n\n"
@@ -13741,12 +13863,11 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             casino_engine.active_bj_sessions.pop(user_id, None)
             refund = bet // 2
             lost = bet - refund
-            async with db_lock:
+            async with db_transaction(db):
                 await add_to_abu_fund(db, lost)
                 await record_user_transaction(db, user_id, -lost, 'casino', 'Сдача в Блэкджеке (-50%)')
                 casino_engine.record_win_streak(user_id, False)
                 new_bal = await add_user_global_balance(db, user_id, board_id, refund)
-                await db.commit()
             caption = (
                 f"🏳️ <b>БЛЭКДЖЕК: СДАЧА</b>\n\n"
                 f"Ты сбросил карты и вернул половину ставки (<code>+{refund} ₪</code>).\n"
@@ -13787,12 +13908,11 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             actual_payout = session_bet + int(actual_profit)
             tax_note = f"\n💸 <b>Налог на занос:</b> -{int(tax_amt)} ₪ удержано в казну Абу." if tax_amt > 0 else ""
 
-            async with db_lock:
+            async with db_transaction(db):
                 if tax_amt > 0: await add_to_abu_fund(db, int(tax_amt))
                 new_bal = await add_user_global_balance(db, user_id, board_id, actual_payout)
                 await record_user_transaction(db, user_id, int(actual_profit), 'casino', f'Куш в Русской Рулетке (x{mult:.2f})')
                 casino_engine.record_win_streak(user_id, True)
-                await db.commit()
 
             if actual_payout >= 300000:
                 try:
@@ -14044,7 +14164,7 @@ def _generate_passport_text(ctx: PassportContext) -> str:
         f"<code>{'—'*22}</code>\n"
     )
 
-@dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я"))
+@dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я", ignore_case=True, ignore_mention=True))
 async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
     Генерирует паспорт анона — сразу красивая PNG-карточка с кнопками навигации.
@@ -14119,10 +14239,10 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
         owner_id = _MENU_MESSAGE_OWNERS.get((callback.message.chat.id, callback.message.message_id))
 
     if owner_id and user_id != owner_id:
-        await callback.answer("⛔ Это чужая карточка! Вызови свой паспорт командой /top или /profile", show_alert=True)
+        await safe_callback_answer(callback, "⛔ Это чужая карточка! Вызови свой паспорт командой /top или /profile", show_alert=True)
         return
 
-    await callback.answer("🔄 Обновляю паспорт...", show_alert=False)
+    await safe_callback_answer(callback, "🔄 Обновляю паспорт...", show_alert=False)
 
     from stats_generator import generate_user_stats_card
     from aiogram.types import BufferedInputFile
@@ -14156,13 +14276,20 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
         photo_buf, text_report = await loop.run_in_executor(None, generate_user_stats_card, user_id, board_id, username)
         if photo_buf:
             photo = BufferedInputFile(photo_buf.getvalue(), filename='passport.png')
-            try:
-                await callback.message.edit_media(
-                    media=types.InputMediaPhoto(media=photo, caption=text_report, parse_mode="HTML"),
-                    reply_markup=kb
-                )
-            except Exception:
-                pass
+            if callback.message and not isinstance(callback.message, types.InaccessibleMessage):
+                try:
+                    await callback.message.edit_media(
+                        media=types.InputMediaPhoto(media=photo, caption=text_report, parse_mode="HTML"),
+                        reply_markup=kb
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    target_chat = callback.message.chat.id if (callback.message and hasattr(callback.message, 'chat')) else callback.from_user.id
+                    await callback.bot.send_photo(chat_id=target_chat, photo=photo, caption=text_report, reply_markup=kb, parse_mode="HTML")
+                except Exception:
+                    pass
     except Exception as e:
         runtime_logger.warning("cb_prof_card: failed regenerating stats card: %s", e)
 
@@ -14170,24 +14297,24 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
 @dp.callback_query(F.data == "prof_dossier")
 async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
-    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
     await cmd_dossier(fake_msg, board_id=board_id)
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dp.callback_query(F.data == "prof_wallet")
 async def cb_prof_wallet(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
-    await callback.answer()
-    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await safe_callback_answer(callback)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
     await cmd_wallet(fake_msg, board_id=board_id, stream=stream)
 
 
 @dp.callback_query(F.data == "prof_shop")
 async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
-    await callback.answer()
-    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await safe_callback_answer(callback)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
     await cmd_shop(fake_msg, board_id=board_id, stream=stream)
 
 
@@ -19559,7 +19686,7 @@ async def cmd_nuke_pins_surgical(message: types.Message, board_id: str | None, s
         f"🚫 Блоков: {stats['block']}\n"
         f"❌ Ошибок: {stats['error']}"
     )
-@dp.message(Command("graph"))
+@dp.message(Command("graph", "график", ignore_case=True, ignore_mention=True))
 async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     if not board_id: return
@@ -19656,7 +19783,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
             await message.answer(error_text)
         except Exception:
             pass
-@dp.message(Command("create"))
+@dp.message(Command("create", "создать", "тред", ignore_case=True, ignore_mention=True))
 async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
     Обрабатывает команду /create и служит точкой входа в FSM-сценарий создания треда.
@@ -19712,10 +19839,14 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
         else:
             confirmation_text = f"Вы хотите создать тред с таким ОП-постом:\n\n---\n{safe_html_text}\n---\n\nСоздаем?"
             button_create, button_edit = "✅ Создать тред", "✏️ Редактировать"
+        cancel_btn_text = "❌ Cancel" if lang == 'en' else "❌ Отмена"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text=button_create, callback_data="create_thread_confirm"),
                 InlineKeyboardButton(text=button_edit, callback_data="create_thread_edit")
+            ],
+            [
+                InlineKeyboardButton(text=cancel_btn_text, callback_data="create_thread_cancel")
             ]
         ])
         await message.answer(confirmation_text, reply_markup=keyboard, parse_mode="HTML")
@@ -20309,6 +20440,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
     except TelegramBadRequest:
         pass # Игнорируем, если запрос устарел, продолжаем выполнение
     if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
+        await state.clear()
         return
     user_id = callback.from_user.id
     b_data = board_data[board_id]
@@ -20333,7 +20465,9 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             pass
         return
     user_s = b_data['user_state'].setdefault(user_id, {})
+    now_ts = time.time()
     if await _check_create_thread_cooldown(callback, user_s, lang, now_ts):
+        await state.clear()
         return
 
     # Начисляем автору 150 RUB за создание полезного треда
@@ -20570,13 +20704,34 @@ async def cb_create_thread_edit(callback: types.CallbackQuery, state: FSMContext
     else:
         default_prompt = "Хорошо, отправьте новый текст для вашего ОП-поста."
     prompt_text = random.choice(prompt_phrases) if prompt_phrases else default_prompt
-    try:
-        await callback.answer()
-        if isinstance(callback.message, types.Message):
-            await callback.message.edit_text(prompt_text)
-    except TelegramBadRequest:
+    await safe_callback_answer(callback)
+    if callback.message and not isinstance(callback.message, types.InaccessibleMessage):
         try:
-            await callback.message.answer(prompt_text)
+            await callback.message.edit_text(prompt_text)
+        except Exception:
+            try:
+                await callback.message.answer(prompt_text)
+            except Exception: pass
+    else:
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=prompt_text)
+        except Exception: pass
+
+
+@dp.callback_query(F.data == "create_thread_cancel", ThreadCreateStates.waiting_for_confirmation)
+@dp.callback_query(F.data == "create_thread_cancel", ThreadCreateStates.waiting_for_op_post)
+async def cb_create_thread_cancel(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
+    """
+    Отменяет создание треда и гарантированно очищает FSM состояние.
+    """
+    await state.clear()
+    lang = 'en' if board_id == 'int' else 'ru'
+    cancel_phrases = thread_messages.get(lang, {}).get('create_cancelled', [])
+    cancel_text = random.choice(cancel_phrases) if cancel_phrases else ("Creation cancelled." if lang == 'en' else "Создание треда отменено.")
+    await safe_callback_answer(callback, cancel_text)
+    if callback.message and not isinstance(callback.message, types.InaccessibleMessage):
+        try:
+            await callback.message.delete()
         except Exception: pass
 THREADS_PER_PAGE = 10
 @dp.message(Command("threads"))
@@ -21103,7 +21258,7 @@ def _contextual_reply_allowed(user_id: int, board_id: str) -> tuple[bool, str | 
     contextual_reply_stats["sent"] += 1
     return True, None
 
-@dp.message(Command("cancel"))
+@dp.message(Command("cancel", "отмена", ignore_case=True, ignore_mention=True))
 async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
     Отменяет любое FSM состояние, в котором находится пользователь.
@@ -21118,8 +21273,12 @@ async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: st
     await state.clear()
     if board_id:
         lang = 'en' if board_id == 'int' else 'ru'
-        response_text = random.choice(thread_messages[lang]['create_cancelled'])
-        await message.answer(response_text)
+        cancel_phrases = thread_messages.get(lang, {}).get('create_cancelled', [])
+        response_text = random.choice(cancel_phrases) if cancel_phrases else ("Action cancelled." if lang == 'en' else "Действие отменено.")
+        try:
+            await message.answer(response_text)
+        except Exception:
+            pass
     try:
         await message.delete()
     except TelegramBadRequest:
@@ -21998,10 +22157,14 @@ async def process_op_post_text(message: types.Message, state: FSMContext, board_
         confirmation_text = f"Вы хотите создать тред с таким ОП-постом:\n\n---\n{safe_html_text}\n---\n\nСоздаем?"
         button_create = "✅ Создать тред"
         button_edit = "✏️ Редактировать"
+    cancel_btn_text = "❌ Cancel" if lang == 'en' else "❌ Отмена"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=button_create, callback_data="create_thread_confirm"),
             InlineKeyboardButton(text=button_edit, callback_data="create_thread_edit")
+        ],
+        [
+            InlineKeyboardButton(text=cancel_btn_text, callback_data="create_thread_cancel")
         ]
     ])
     await message.answer(confirmation_text, reply_markup=keyboard, parse_mode="HTML")
@@ -22037,10 +22200,7 @@ async def cb_create_thread_start(callback: types.CallbackQuery, state: FSMContex
     else:
         default_prompt = "Отправьте текст для вашего ОП-поста."
     prompt_text = random.choice(prompt_phrases) if prompt_phrases else default_prompt
-    try:
-        await callback.answer()
-    except TelegramBadRequest:
-        pass # Игнорируем, если кнопка устарела, главное отправить сообщение
+    await safe_callback_answer(callback)
     if isinstance(callback.message, types.Message):
         try:
             await callback.message.answer(prompt_text)
@@ -28344,6 +28504,7 @@ async def controlled_stop_watcher_task():
                     pass
             if not drain_shutdown_requested:
                 drain_shutdown_requested = True
+                shared_state.request_drain_shutdown()
                 drain_shutdown_requested_at = time.time()
                 action_name = "Controlled restart" if is_restart else "Controlled stop"
                 print(
@@ -29970,27 +30131,50 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     from help_text import get_help_hub_page
     text = get_help_hub_page(cat, lang=lang)
+    kb = get_help_keyboard(cat, board_id, stream)
+
+    if not callback.message or isinstance(callback.message, types.InaccessibleMessage):
+        target_chat = callback.message.chat.id if (callback.message and hasattr(callback.message, 'chat')) else callback.from_user.id
+        try:
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=callback.bot,
+                chat_id=target_chat,
+                caption=text,
+                reply_markup=kb,
+                category="help",
+                parse_mode="HTML"
+            )
+        except Exception:
+            try:
+                await callback.bot.send_message(chat_id=target_chat, text=text, reply_markup=kb, parse_mode="HTML")
+            except Exception: pass
+        await safe_callback_answer(callback)
+        return
 
     try:
-        if callback.message.photo:
-            await callback.message.edit_caption(caption=text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML")
+        if getattr(callback.message, 'photo', None):
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
         else:
-            await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
         try:
             from banner_manager import send_banner_message
-            await callback.message.delete()
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
             await send_banner_message(
-                bot=callback.message.bot,
+                bot=callback.bot,
                 chat_id=callback.message.chat.id,
                 caption=text,
-                reply_markup=get_help_keyboard(cat, board_id, stream),
+                reply_markup=kb,
                 category="help",
                 parse_mode="HTML"
             )
         except Exception as e:
             runtime_logger.warning("Error editing help text: %s", e)
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 try:
     from wordcloud import WordCloud
@@ -30596,7 +30780,7 @@ async def main():
         import traceback
         print(f"🔥 Критическая ошибка в main: {e}\n{traceback.format_exc()}")
     finally:
-        if drain_shutdown_requested:
+        if drain_shutdown_requested or shared_state.drain_shutdown_requested:
             await wait_for_delivery_queues_to_drain(
                 CONTROLLED_STOP_DRAIN_TIMEOUT_SEC,
                 CONTROLLED_STOP_LOG_INTERVAL_SEC,
@@ -30605,8 +30789,15 @@ async def main():
         for task in background_tasks:
             task.cancel()
         if background_tasks:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-        if not is_shutting_down:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*background_tasks, return_exceptions=True),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                print("⚠️ [Shutdown] Таймаут (10.0с) ожидания завершения фоновых задач истек. Продолжаем graceful_shutdown.")
+                runtime_logger.warning("background_tasks_shutdown_timeout: tasks did not cancel within 10.0s")
+        if not is_shutting_down and not shared_state.is_shutting_down:
             bots_to_close = []
             if 'active_bots_list' in locals() and active_bots_list:
                 bots_to_close = active_bots_list

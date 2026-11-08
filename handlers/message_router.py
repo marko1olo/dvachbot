@@ -710,7 +710,9 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         chat_id = reaction.chat.id
         message_id = reaction.message_id
         if not board_id: return
-        b_data = board_data[board_id]
+        b_data = board_data.get(board_id)
+        if not b_data:
+            return
 
         if not is_admin(user_id, board_id):
             from common.database import is_shadow_muted as check_db_shadow_muted
@@ -1045,7 +1047,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try: await message.delete()
             except TelegramBadRequest: pass
             return
-    b_data = board_data[board_id]
+    b_data = board_data.get(board_id)
+    if not b_data:
+        return False
 
     is_reply_to_bot = False
     if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == message.bot.id:
@@ -1803,7 +1807,9 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     now = datetime.now(UTC)
     violations = _spam_violations[board_id].setdefault(user_id, {'level': 0, 'last_reset': now})
 
-    b_data = board_data[board_id]
+    b_data = board_data.get(board_id)
+    if not b_data:
+        return False
     if not _check_repeats(user_id, b_data, (content, msg_type), rules, violations):
         logger.warning(f"🚫 [CHECK_SPAM: REPEAT_SPAM] user={user_id} board={board_id} type={msg_type}")
         from common.database import apply_shadow_mute
@@ -1884,7 +1890,9 @@ async def ensure_user_in_valid_thread(bot: Bot, board_id: str, user_id: int) -> 
     Если тред не существует (удалён), переводит пользователя на main и отправляет уведомление.
     Возвращает True, если перевод был выполнен (user был в невалидном треде).
     """
-    b_data = board_data[board_id]
+    b_data = board_data.get(board_id)
+    if not b_data:
+        return False
     user_s = b_data['user_state'].setdefault(user_id, {})
     location = user_s.get('location', 'main')
     if location != 'main':
@@ -1995,7 +2003,9 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
 
     if media_group_key in sent_media_groups:
         return
-    b_data = board_data[board_id]
+    b_data = board_data.get(board_id)
+    if not b_data:
+        return False
     if not is_admin(user_id, board_id):
         # Shadow mute — silent drop (resilient to DB lock/timeouts)
         try:

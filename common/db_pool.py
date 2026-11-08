@@ -358,26 +358,22 @@ async def reset_orphaned_transaction(db=None) -> bool:
     """
     Проверяет наличие зависшей/осиротевшей транзакции на соединении и принудительно
     сбрасывает её через ROLLBACK.
+    Учитывает, что при isolation_level=None свойство conn.in_transaction может быть False
+    даже при незавершенной активной транзакции в SQLite.
     Возвращает True, если был выполнен ROLLBACK.
     """
     global _db_connection
     conn = db or _db_connection
     if not conn:
         return False
-    in_tx = getattr(conn, "in_transaction", False)
-    if not in_tx:
-        core = getattr(conn, "_conn", None)
-        if core:
-            in_tx = getattr(core, "in_transaction", False)
-    if in_tx:
-        try:
-            await conn.execute("ROLLBACK")
-            logger.warning("🔄 [DB_POOL] Успешно сброшена зависшая транзакция на соединении через ROLLBACK.")
-            return True
-        except Exception as e:
-            err_msg = str(e).lower()
-            if "no transaction is active" not in err_msg:
-                logger.error(f"❌ [DB_POOL] Ошибка сброса зависшей транзакции: {e}")
+    try:
+        await conn.execute("ROLLBACK")
+        logger.warning("🔄 [DB_POOL] Успешно сброшена зависшая транзакция на соединении через ROLLBACK.")
+        return True
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "no transaction is active" not in err_msg and "cannot rollback" not in err_msg:
+            logger.error(f"❌ [DB_POOL] Ошибка сброса зависшей транзакции: {e}")
     return False
 
 
@@ -444,7 +440,23 @@ class db_transaction:
                 except Exception as e:
                     err_str = str(e).lower()
                     if "cannot start a transaction within a transaction" in err_str:
-                        raise RuntimeError("Database transaction collision: connection already in transaction") from e
+                        logger.warning(
+                            "⚠️ [DB_POOL] Обнаружена незакрытая транзакция при BEGIN IMMEDIATE (isolation_level=None). "
+                            "Выполняем ROLLBACK и повторяем попытку..."
+                        )
+                        try:
+                            await self.db.execute("ROLLBACK")
+                        except Exception as rb_err:
+                            logger.error(f"❌ [DB_POOL] Ошибка ROLLBACK при сбросе транзакции: {rb_err}")
+
+                        if self._is_nested:
+                            await self.db.execute(f"SAVEPOINT {self._savepoint_name}")
+                        else:
+                            if self.immediate:
+                                await self.db.execute("BEGIN IMMEDIATE")
+                            else:
+                                await self.db.execute("BEGIN")
+                        break
 
                     if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
                         if self._lock_acquired:
@@ -503,8 +515,8 @@ class db_transaction:
                                 await asyncio.sleep(0.05)
                                 continue
                             elif "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
-                                logger.error(f"❌ [DB_POOL] COMMIT failed, no active transaction: {commit_err}")
-                                raise RuntimeError("Database transaction collision: connection already in transaction") from commit_err
+                                logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
+                                break
                             else:
                                 logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
                                 raise
@@ -569,7 +581,14 @@ async def safe_begin_immediate(db) -> bool:
     except Exception as e:
         err_str = str(e).lower()
         if "cannot start a transaction within a transaction" in err_str:
-            return False
+            logger.warning("⚠️ [DB_POOL] safe_begin_immediate: незакрытая транзакция, выполняем ROLLBACK и повторяем BEGIN IMMEDIATE...")
+            try:
+                await db.execute("ROLLBACK")
+            except Exception:
+                pass
+            await db.execute("BEGIN IMMEDIATE")
+            _task_tx_depth.set(depth + 1)
+            return True
         raise
 
 
