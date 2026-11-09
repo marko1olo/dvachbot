@@ -466,15 +466,17 @@ async def is_rate_limit_rejection_target(reply_to_post: int | None, target_post_
 
 
 CYBERCHAD_DIRECT_TRIGGER_REGEX = re.compile(
-    r'(?i)\b('
-    r'кибер[\s_-]*чед[а-яa-z]*|'
-    r'кибер[\s_-]*чат[а-яa-z]*|'
-    r'кибер[\s_-]*дед[а-яa-z]*|'
-    r'кибер[\s_-]*сыч[а-яa-z]*|'
-    r'нейро[\s_-]*чед[а-яa-z]*|'
-    r'cyber[\s_-]*chad[a-z]*|'
-    r'cyberchad'
-    r')\b'
+    r'(?i)(?:'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*чед[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*чат[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*дед[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*сыч[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*п[её]с[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*котлет[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])нейро[\s_-]*чед[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])нейро[\s_-]*чат[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])cyber[\s_-]*chad[a-z]*(?![а-яa-z0-9])'
+    r')'
 )
 
 
@@ -668,12 +670,23 @@ async def trigger_cyberchad_with_rate_limit(
     # Normal intervention handler invocation
     await register_post_and_maybe_trigger_cyberchad_intervention(
         bot, board_id, user_id, text,
-        post_num=post_num, reply_to_post=reply_to_post, stream=stream
+        post_num=post_num, reply_to_post=reply_to_post, stream=stream,
+        is_rate_checked=is_direct
     )
     return True
 
 
 handle_cyberchad_rate_limit_and_trigger = trigger_cyberchad_with_rate_limit
+
+
+@message_router.callback_query(F.data.startswith("snitch:"))
+async def on_snitch_callback_query(callback: types.CallbackQuery):
+    """
+    Автостукач (Auto-Snitch): обработка действий админа в 1 клик
+    (бан/сжечь, подтвердить мут 24ч, запретить медиа, размутить/оправдать).
+    """
+    from admin_manager import handle_snitch_callback
+    await handle_snitch_callback(callback)
 
 # Duel logic
 
@@ -1024,6 +1037,67 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
     except Exception as e:
         print(f"❌ Ошибка в handle_message_reaction: {e}")
 
+_last_shadow_echo_ts: dict[int, float] = {}
+
+def _build_shadow_echo_content(message: Message) -> dict:
+    c_type = str(getattr(message.content_type, 'value', message.content_type)).lower()
+    content = {'type': c_type}
+    if c_type == 'text':
+        content['text'] = sanitize_html(message.text or "")
+    elif c_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+        file_obj = getattr(message, c_type, None)
+        if isinstance(file_obj, list) and file_obj:
+            file_obj = file_obj[-1]
+        if file_obj:
+            content['file_id'] = getattr(file_obj, 'file_id', None)
+            fn = getattr(file_obj, 'file_name', None)
+            mt = getattr(file_obj, 'mime_type', None)
+            if fn:
+                content['filename'] = fn
+            if mt:
+                content['mime_type'] = mt
+        content['caption'] = sanitize_html(message.caption or "")
+    elif c_type in ['sticker', 'video_note']:
+        file_obj = getattr(message, c_type, None)
+        if file_obj:
+            content['file_id'] = getattr(file_obj, 'file_id', None)
+    return content
+
+async def _is_user_shadow_muted_early(user_id: int, board_id: str, message: Message) -> bool:
+    if is_admin(user_id, board_id):
+        return False
+    b_data = board_data.get(board_id, {})
+    now_dt = datetime.now(UTC)
+    now_ts = time.time()
+
+    # 1. RAM check (zero latency)
+    for b_key in (board_id, 'ALL'):
+        sm_dict = board_data.get(b_key, {}).get('shadow_mutes', {})
+        exp = sm_dict.get(user_id)
+        if exp:
+            if isinstance(exp, datetime) and exp > now_dt:
+                return True
+            elif isinstance(exp, (int, float)) and exp > now_ts:
+                return True
+
+    # 2. Content-specific shadow settings
+    u_settings = b_data.get('user_settings', {}).get(user_id, {})
+    c_type = str(getattr(message.content_type, 'value', message.content_type)).lower()
+    if (c_type == 'animation' and u_settings.get('shadow_gif')) or \
+       (c_type == 'sticker' and u_settings.get('shadow_sticker')) or \
+       (c_type != 'text' and u_settings.get('shadow_media')):
+        return True
+
+    # 3. Fast DB check (cached in aiosqlite pool)
+    try:
+        from common.database import is_shadow_muted as check_db_shadow_muted
+        if await check_db_shadow_muted(user_id, board_id):
+            return True
+    except Exception:
+        pass
+
+    return False
+
 @message_router.message(~F.media_group_id, ~(F.text.startswith("/") | F.caption.startswith("/")))
 async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
     user_id = message.from_user.id
@@ -1050,6 +1124,28 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     b_data = board_data.get(board_id)
     if not b_data:
         return False
+
+    # Early Shadow-Mute Drop & Echo (bypass heavy pipeline, LLM, SQLite and thread verification)
+    if await _is_user_shadow_muted_early(user_id, board_id, message):
+        logger.info(f"👻 [SHADOW_EARLY_DROP] user={user_id} board={board_id} type={message.content_type}")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        now = time.time()
+        # Cooldown: send at most 1 echo per 1.5s to prevent private chat 429 FloodWait from Telegram API
+        if now - _last_shadow_echo_ts.get(user_id, 0.0) >= 1.5:
+            _last_shadow_echo_ts[user_id] = now
+            echo_content = _build_shadow_echo_content(message)
+            spawn_task(process_shadow_reject(shared_state.ShadowRejectContext(
+                bot=message.bot,
+                board_id=board_id,
+                user_id=user_id,
+                content=echo_content,
+                reply_to_post=None,
+                stream=stream
+            )))
+        return
 
     is_reply_to_bot = False
     if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == message.bot.id:
@@ -1293,7 +1389,10 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             except Exception as e:
                 print(f"⚠️ [{board_id}] Ошибка добавления пользователя {user_id}: {e}")
         if board_id != 'trash':
-            if not await check_spam(user_id, message, board_id):
+            spam_res = await check_spam(user_id, message, board_id)
+            if spam_res == "DROP":
+                return
+            elif not spam_res:
                 msg_type = message.content_type
                 if msg_type in ['photo', 'video', 'document'] and message.caption:
                     msg_type = 'text'
@@ -1773,7 +1872,31 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         media_group_id=media_group_id
     )
     if should_mute:
+        if mute_exp == 0.0 or mute_reason == "double_tap_drop" or "Сетевой дубль" in mute_reason:
+            logger.info(f"👻 [CHECK_SPAM: DOUBLE_TAP_SILENT_DROP] user={user_id} board={board_id}")
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            return "DROP"
+
         logger.warning(f"🚫 [CHECK_SPAM: SHADOW_MUTE_TRIGGERED] user={user_id} board={board_id} reason='{mute_reason}' exp={mute_exp}")
+        from common.database import log_global_event
+        spawn_task(log_global_event('bot', f"🚫 AUTO-SPAM: Шедоумут юзера {user_id} на /{board_id}/: {mute_reason}"))
+        try:
+            from extreme_defense_engine import send_auto_snitch_alert
+            exp_str = f"Истекает: {datetime.fromtimestamp(mute_exp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}" if mute_exp else "Длительность: 24h"
+            spawn_task(send_auto_snitch_alert(
+                bot=msg.bot,
+                user_id=user_id,
+                board_id=board_id,
+                post_num=None,
+                reason=f"Авто-шедоумут спам-фильтра: {mute_reason}",
+                details=content[:250] if content else "(Медиа / файл)",
+                extra_info=exp_str
+            ))
+        except Exception as snitch_err:
+            logger.warning(f"Failed to send snitch alert for spam filter: {snitch_err}")
         return True
 
     # 2. Legacy / rate limit analysis
@@ -1784,6 +1907,19 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         print(msg_str)
         from common.database import update_shadow_mute, log_global_event
         spawn_task(log_global_event('bot', msg_str))
+        try:
+            from extreme_defense_engine import send_auto_snitch_alert
+            spawn_task(send_auto_snitch_alert(
+                bot=msg.bot,
+                user_id=user_id,
+                board_id=board_id,
+                post_num=None,
+                reason="Глобальный рейд-бот / спамер (мут 7 дней)",
+                details=content[:250] if content else "(Медиа / файл)",
+                extra_info="Мут применен на всех досках, кроме /b/."
+            ))
+        except Exception:
+            pass
         expires_dt = datetime.now(UTC) + timedelta(days=7)
         for b in BOARD_CONFIG.keys():
             if b != 'b':
@@ -1795,8 +1931,22 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         return True  # Route to process_shadow_reject!
     elif result == SpamResult.BAN_REQUIRED:
         logger.warning(f"🚫 [CHECK_SPAM: RATE_LIMIT_BAN] user={user_id} board={board_id} type={msg_type}")
-        from common.database import apply_shadow_mute
+        from common.database import apply_shadow_mute, log_global_event
         await apply_shadow_mute(user_id, board_id, duration_seconds=300.0, reason=f"Рейт-лимит спама {msg_type}", is_exponential=False)
+        spawn_task(log_global_event('bot', f"🚫 RATE-LIMIT: Теневой мут 5 мин юзера {user_id} на /{board_id}/ ({msg_type})"))
+        try:
+            from extreme_defense_engine import send_auto_snitch_alert
+            spawn_task(send_auto_snitch_alert(
+                bot=msg.bot,
+                user_id=user_id,
+                board_id=board_id,
+                post_num=None,
+                reason=f"Превышение рейт-лимита {msg_type} (мут 5 мин)",
+                details=content[:250] if content else f"Тип: {msg_type}",
+                extra_info="Временный мут на 300 секунд."
+            ))
+        except Exception:
+            pass
         return True  # Route to process_shadow_reject!
 
     rules = SPAM_RULES.get(msg_type)

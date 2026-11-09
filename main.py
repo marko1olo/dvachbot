@@ -810,11 +810,26 @@ logging.basicConfig(
 )
 install_logging_redaction()
 class WindowsSafeRotatingFileHandler(RotatingFileHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rollover_retry_after = 0.0
+
+    def shouldRollover(self, record):
+        if self._rollover_retry_after and time.time() < self._rollover_retry_after:
+            return 0
+        return super().shouldRollover(record)
+
     def doRollover(self):
         try:
             super().doRollover()
-        except PermissionError as e:
-            sys.stderr.write(f"[Logging] Warning: bot_runtime.log rollover deferred: {e}\n")
+            self._rollover_retry_after = 0.0
+        except (PermissionError, OSError) as e:
+            now = time.time()
+            if now >= self._rollover_retry_after:
+                sys.stderr.write(
+                    f"[Logging] Warning: bot_runtime.log rollover deferred (retry in 300s): {e}\n"
+                )
+            self._rollover_retry_after = now + 300.0
             if self.stream is None:
                 self.stream = self._open()
 
@@ -4046,8 +4061,13 @@ async def safe_callback_answer(callback: types.CallbackQuery, *args, **kwargs) -
     """
     Безопасный ответ на CallbackQuery: глушит TelegramBadRequest при устаревании
     или невалидном callback_query_id ('query is too old').
+    Обрезает текст до 195 символов для предотвращения 'text is too long'.
     """
     try:
+        if 'text' in kwargs and kwargs['text'] and len(str(kwargs['text'])) > 195:
+            kwargs['text'] = str(kwargs['text'])[:192] + "..."
+        elif len(args) > 0 and isinstance(args[0], str) and len(args[0]) > 195:
+            args = (args[0][:192] + "...",) + args[1:]
         await callback.answer(*args, **kwargs)
         return True
     except TelegramBadRequest as e:
@@ -15466,17 +15486,18 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     for b_id in BOARDS:
         b_data = board_data[b_id]
         status = []
-        if target_id in b_data['users']['banned']:
+        b_users = b_data.get('users', {})
+        if target_id in b_users.get('banned', set()):
             status.append("🚫 BAN")
-        elif target_id in b_data['users']['active']:
+        elif target_id in b_users.get('active', set()):
             status.append("✅ Active")
 
-        mute_end = b_data['mutes'].get(target_id, datetime.min.replace(tzinfo=UTC))
+        mute_end = b_data.get('mutes', {}).get(target_id, datetime.min.replace(tzinfo=UTC))
         if mute_end > now_dt:
             td = mute_end - now_dt
             status.append(f"🔇 Mute ({int(td.total_seconds()//60)}m)")
 
-        smute_end = b_data['shadow_mutes'].get(target_id, datetime.min.replace(tzinfo=UTC))
+        smute_end = b_data.get('shadow_mutes', {}).get(target_id, datetime.min.replace(tzinfo=UTC))
         if smute_end > now_dt:
             td = smute_end - now_dt
             status.append(f"👻 Shadow ({int(td.total_seconds()//60)}m)")
@@ -27283,7 +27304,10 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
         await message.delete()
         return
     b_data['last_activity'][user_id] = datetime.now(UTC)
-    if not await check_spam(user_id, message, board_id):
+    spam_res = await check_spam(user_id, message, board_id)
+    if spam_res == "DROP":
+        return
+    elif not spam_res:
         try:
             await message.delete()
             await apply_penalty(message.bot, user_id, 'audio', board_id)
@@ -27375,7 +27399,10 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
         except TelegramBadRequest: pass
         return
     b_data['last_activity'][user_id] = datetime.now(UTC)
-    if not await check_spam(user_id, message, board_id):
+    spam_res = await check_spam(user_id, message, board_id)
+    if spam_res == "DROP":
+        return
+    elif not spam_res:
         try:
             await message.delete()
             await apply_penalty(message.bot, user_id, 'voice', board_id) # Voice often treated similarly for spam
@@ -27440,7 +27467,10 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
         except TelegramBadRequest: pass
         return
     b_data['last_activity'][user_id] = datetime.now(UTC)
-    if not await check_spam(user_id, message, board_id):
+    spam_res = await check_spam(user_id, message, board_id)
+    if spam_res == "DROP":
+        return
+    elif not spam_res:
         try:
             await message.delete()
             await apply_penalty(message.bot, user_id, 'video_note', board_id)
@@ -29284,6 +29314,7 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="flag_ru", description="🇷🇺 Повесить флаг РФ на пост"),
         BotCommand(command="flag_ua", description="🇺🇦 Повесить флаг Украины"),
         BotCommand(command="votemute", description="🗳️ Народный шизо-мут"),
+        BotCommand(command="voteban", description="🔨 Народный вотебан / вотум"),
         BotCommand(command="dopros", description="📋 Допрос в Отделе «К»"),
         BotCommand(command="fine", description="🪪 Штраф от дружинника"),
         BotCommand(command="heist", description="🦹 Теневое AI-ограбление"),
