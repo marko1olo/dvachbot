@@ -480,13 +480,12 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
     if not qualified:
         logger.warning("[DailyAirdrop] No qualified users today.")
         # Обновляем timestamp чтобы не крутиться
-        async with db_lock:
+        async with db_transaction(db):
             await db.execute(
                 "INSERT INTO GlobalStats (key, value) VALUES ('last_daily_airdrop_run', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = ?",
                 (str(now_ts), str(now_ts))
             )
-            await db.commit()
         return {"status": "skipped", "reason": "no_qualified_users"}
 
     # ── 3. Выбор победителей ─────────────────────────────────────────────────

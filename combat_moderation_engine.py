@@ -33,6 +33,21 @@ APPEAL_WINDOW_SEC = 600.0   # 10 minutes for community appeal
 APPEAL_VOTES_REQUIRED = 3   # 3 uninvolved anons needed to overturn
 ATTACKER_FALSE_REPORT_FINE = 500.0  # ₪ fine for overturned abuse
 
+
+def calculate_attacker_false_report_fine(attacker_balance: Optional[Union[float, int]] = None) -> float:
+    """
+    Масштабирует штраф за ложный донос / сорванную атаку от капитала атакующего:
+    max(500, int(attacker_balance * 0.05)) с жестким потолком (cap) 200,000 ₪.
+    """
+    if attacker_balance is None or attacker_balance <= 0:
+        return float(ATTACKER_FALSE_REPORT_FINE)
+    b = float(attacker_balance)
+    fine = max(float(ATTACKER_FALSE_REPORT_FINE), float(int(b * 0.05)))
+    return float(min(fine, 200000.0))
+
+
+calculate_bail_cost = calculate_attacker_false_report_fine
+
 # 24-hour weapon usage records: attacker_id -> list of (timestamp, target_id, weapon_type)
 _ATTACKER_COMBAT_HISTORY: Dict[int, List[Tuple[float, int, str]]] = defaultdict(list)
 _COMBAT_ENGINE_LOCK = asyncio.Lock()
@@ -447,10 +462,24 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
     from shared_state import set_partyvan_victim_immunity
     set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)
 
-    # Fine the false accuser / abusive attacker
+    # Fine the false accuser / abusive attacker (scaled by attacker capital)
+    fine_amount = float(ATTACKER_FALSE_REPORT_FINE)
+    try:
+        from common.database import get_user_global_balance
+        attacker_bal = await get_user_global_balance(db, sess.attacker_id)
+        fine_amount = calculate_attacker_false_report_fine(attacker_bal)
+    except Exception:
+        try:
+            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (sess.attacker_id, sess.board_id)) as cur:
+                row = await cur.fetchone()
+                if row and row[0] is not None:
+                    fine_amount = calculate_attacker_false_report_fine(row[0])
+        except Exception:
+            fine_amount = float(ATTACKER_FALSE_REPORT_FINE)
+
     try:
         from main import deduct_user_global_balance
-        await deduct_user_global_balance(db, sess.attacker_id, sess.board_id, ATTACKER_FALSE_REPORT_FINE)
+        await deduct_user_global_balance(db, sess.attacker_id, sess.board_id, fine_amount)
     except Exception as e:
         logger.error(f"Error fining attacker {sess.attacker_id}: {e}")
 
@@ -461,7 +490,7 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
         f"Аноны треда признали применение оружия <b>необоснованной истерикой</b> ({APPEAL_VOTES_REQUIRED}/{APPEAL_VOTES_REQUIRED} голосов).\n"
         f"• С жертвы <b>[ID:{sess.target_id}]</b> немедленно сняты все наручники и ограничения!\n"
         f"• Выдан полный иммунитет от повторных атак на 1 час.\n"
-        f"• С доносчика <b>[ID:{sess.attacker_id}]</b> удержан штраф <code>-{int(ATTACKER_FALSE_REPORT_FINE)} ₪</code> за клевету и телефонный терроризм!"
+        f"• С доносчика <b>[ID:{sess.attacker_id}]</b> удержан штраф <code>-{int(fine_amount)} ₪</code> за клевету и телефонный терроризм!"
     )
     kb = get_combat_appeal_keyboard(session_id, current_votes, APPEAL_VOTES_REQUIRED, is_appealed=True)
     try:
@@ -500,14 +529,31 @@ async def callback_combat_bail(callback: types.CallbackQuery):
 
     db = await get_pool()
 
-    # Determine bail price (using shop price of bribe or standard 500₪)
+    # Determine bail / bribe price (scaled by attacker capital: max(500, int(bal * 0.05)) cap 200k)
+    attacker_bal = None
+    try:
+        from common.database import get_user_global_balance
+        attacker_bal = await get_user_global_balance(db, sess.attacker_id)
+    except Exception:
+        try:
+            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (sess.attacker_id, sess.board_id)) as cur:
+                row = await cur.fetchone()
+                if row and row[0] is not None:
+                    attacker_bal = row[0]
+        except Exception:
+            attacker_bal = None
+
+    scaled_bail = calculate_attacker_false_report_fine(attacker_bal)
+
     try:
         from main import get_current_item_price
-        bail_cost = float(get_current_item_price("bribe"))
-        if bail_cost <= 0:
-            bail_cost = 600.0
+        shop_bail = float(get_current_item_price("bribe", user_id=sess.attacker_id, balance=attacker_bal))
+        if shop_bail <= 0:
+            bail_cost = scaled_bail
+        else:
+            bail_cost = max(shop_bail, scaled_bail)
     except Exception:
-        bail_cost = 600.0
+        bail_cost = scaled_bail
 
     try:
         from common.database import get_user_global_balance

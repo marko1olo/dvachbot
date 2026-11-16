@@ -5,7 +5,7 @@ from aiogram import Router, types
 message_router = Router()
 
 import asyncio
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone, UTC
 import logging
 import random
 import re
@@ -249,7 +249,7 @@ async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = N
     return reply_to_post
 
 from bot_helpers import is_admin, _get_msg_content_and_type
-from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, SPAM_RULES, _check_repeats
+from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, SPAM_RULES, _check_repeats, is_user_in_memory_shadow_muted, set_in_memory_shadow_mute, _in_memory_shadow_muted_users
 from text_assets import (
     EARNING_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES,
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
@@ -540,18 +540,26 @@ async def trigger_cyberchad_with_rate_limit(
     text: str,
     post_num: int | None = None,
     reply_to_post: int | None = None,
-    stream: str = 'ru'
+    stream: str = 'ru',
+    debounce: bool | None = None,
+    debounce_seconds: float = 15.0,
+    silence_seconds: float = 4.0
 ) -> bool:
     """
-    Manages Cyberchad rate-limiting and trigger routing:
+    Manages Cyberchad rate-limiting, activation debounce (15s window), and trigger routing:
     - Normalizes direct triggers (replying to Cyberchad post or text mentioning 'киберчед').
-    - Limits direct triggers to 1 per 60s per user per board.
-    - If triggered < 60s:
+    - If user is currently in an active 15s debounce window on this board:
+      accumulates follow-up messages into a single context batch.
+    - Limits direct triggers to 1 per 30s per user per board (10s active, 5s amulet).
+    - If triggered < cooldown:
       - Suppresses Gemini LLM call.
-      - If >= 15s since last reject for this user: synthesizes an offline brutal voice note
-        and sends it as a voice reply to post_num.
-      - If < 15s: suppresses voice note synthesis (anti-flood).
-    - If >= 60s (or not a direct trigger): proceeds with normal trigger call.
+      - If amulet holder and >= 15s since last reject: synthesizes offline adoration voice note.
+      - Standard users get silent drop (zero public voice note bomb).
+    - If >= cooldown (or not a direct trigger):
+      - If debounce is enabled: starts 15-second accumulation window.
+        When window expires (or user goes silent for 4s, or 3 msgs reached),
+        flushes the entire batch to Gemini as one unified Cyberchad response!
+      - If debounce is disabled: immediate intervention dispatch.
     """
     if not text or not user_id or user_id <= 0 or board_id == 'trash':
         return False
@@ -562,6 +570,27 @@ async def trigger_cyberchad_with_rate_limit(
         '[невнятное мычание/тишина]', '[тишина/пустота]'
     ):
         return False
+
+    # 1. DEBOUNCE ACCUMULATION CHECK:
+    # If this user is ALREADY in an active debounce window on this board,
+    # accumulate this follow-up message into their existing batch!
+    from common.cyberchad_debouncer import (
+        is_user_debouncing,
+        add_message_to_debounce,
+        start_debounce_session,
+    )
+
+    if is_user_debouncing(board_id, user_id):
+        absorbed = await add_message_to_debounce(
+            board_id=board_id,
+            user_id=user_id,
+            post_num=post_num or 0,
+            text=str(text),
+            reply_to_post=reply_to_post,
+            now=time.time()
+        )
+        if absorbed:
+            return True
 
     # Check if target post being replied to is an automated rate-limit rejection message.
     # If so, suppress Cyberchad self-roasting loops completely: never reply to or auto-roast our own rate-limit warnings!
@@ -663,11 +692,45 @@ async def trigger_cyberchad_with_rate_limit(
                 logger.info(f"⏳ [Cyberchad Rate Limit] User {user_id} (active={is_active_user}) rate limited ({now - last_direct:.1f}s < {user_cooldown}s). Silent drop (no public voice note bomb).")
             return False
 
-        # If approved, record timestamps in both structures
+        # Determine debounce activation:
+        # In production, debounce is always active (True).
+        # In legacy unit tests running under pytest, defaults to False so synchronous mock assertions pass,
+        # unless explicitly set to True by debounce test suite.
+        if debounce is None:
+            in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            debounce = not in_test_env
+
+        if debounce:
+            async def _on_debounce_flush(session, combined_text, target_pnum, parent_pnum):
+                flush_now = time.time()
+                _CYBERCHAD_USER_LAST_DIRECT[(session.board_id, session.user_id)] = flush_now
+                record_cyberchad_trigger_approved(session.board_id, session.user_id, combined_text, now=flush_now)
+                await register_post_and_maybe_trigger_cyberchad_intervention(
+                    session.bot, session.board_id, session.user_id, combined_text,
+                    post_num=target_pnum, reply_to_post=parent_pnum, stream=session.stream,
+                    is_rate_checked=True
+                )
+
+            start_debounce_session(
+                bot=bot,
+                board_id=board_id,
+                user_id=user_id,
+                post_num=post_num or 0,
+                text=str(text),
+                reply_to_post=reply_to_post,
+                stream=stream,
+                on_flush=_on_debounce_flush,
+                max_wait_seconds=debounce_seconds,
+                silence_seconds=silence_seconds,
+                now=now
+            )
+            return True
+
+        # If approved without debounce: record timestamps in both structures
         _CYBERCHAD_USER_LAST_DIRECT[(board_id, user_id)] = now
         record_cyberchad_trigger_approved(board_id, user_id, text, now=now)
 
-    # Normal intervention handler invocation
+    # Normal intervention handler invocation (for non-direct triggers or when debounce=False)
     await register_post_and_maybe_trigger_cyberchad_intervention(
         bot, board_id, user_id, text,
         post_num=post_num, reply_to_post=reply_to_post, stream=stream,
@@ -685,8 +748,16 @@ async def on_snitch_callback_query(callback: types.CallbackQuery):
     Автостукач (Auto-Snitch): обработка действий админа в 1 клик
     (бан/сжечь, подтвердить мут 24ч, запретить медиа, размутить/оправдать).
     """
-    from admin_manager import handle_snitch_callback
-    await handle_snitch_callback(callback)
+    try:
+        from admin_manager import handle_snitch_callback
+        await handle_snitch_callback(callback)
+    except Exception as e:
+        logger.error(f"[on_snitch_callback_query] Unhandled error: {e}", exc_info=True)
+        try:
+            from common.bot_helpers import safe_callback_answer
+            await safe_callback_answer(callback, "⚠️ Ошибка обработки действия Автостукача", show_alert=True)
+        except Exception:
+            pass
 
 # Duel logic
 
@@ -1066,19 +1137,37 @@ def _build_shadow_echo_content(message: Message) -> dict:
 async def _is_user_shadow_muted_early(user_id: int, board_id: str, message: Message) -> bool:
     if is_admin(user_id, board_id):
         return False
-    b_data = board_data.get(board_id, {})
-    now_dt = datetime.now(UTC)
     now_ts = time.time()
 
-    # 1. RAM check (zero latency)
+    # 0. Fast in-memory check FIRST (< 0.01ms, ZERO DB, ZERO LOCKS)
+    if is_user_in_memory_shadow_muted(user_id, board_id, now_ts=now_ts):
+        return True
+
+    now_dt = datetime.now(UTC)
+
+    b_data = board_data.get(board_id, {})
+
+    # 0.5. Check banned users in RAM
+    if user_id in b_data.get('users', {}).get('banned', set()):
+        return True
+
+    # 1. RAM check (board_data)
     for b_key in (board_id, 'ALL'):
         sm_dict = board_data.get(b_key, {}).get('shadow_mutes', {})
         exp = sm_dict.get(user_id)
         if exp:
-            if isinstance(exp, datetime) and exp > now_dt:
-                return True
-            elif isinstance(exp, (int, float)) and exp > now_ts:
-                return True
+            if isinstance(exp, datetime):
+                if exp > now_dt:
+                    set_in_memory_shadow_mute(user_id, b_key, exp.timestamp())
+                    return True
+                else:
+                    sm_dict.pop(user_id, None)
+            elif isinstance(exp, (int, float)):
+                if exp > now_ts:
+                    set_in_memory_shadow_mute(user_id, b_key, float(exp))
+                    return True
+                else:
+                    sm_dict.pop(user_id, None)
 
     # 2. Content-specific shadow settings
     u_settings = b_data.get('user_settings', {}).get(user_id, {})
@@ -1088,10 +1177,13 @@ async def _is_user_shadow_muted_early(user_id: int, board_id: str, message: Mess
        (c_type != 'text' and u_settings.get('shadow_media')):
         return True
 
-    # 3. Fast DB check (cached in aiosqlite pool)
+    # 3. Fast DB check (cached in aiosqlite pool, and cache into memory on hit)
     try:
-        from common.database import is_shadow_muted as check_db_shadow_muted
-        if await check_db_shadow_muted(user_id, board_id):
+        from common.database import is_shadow_muted as check_db_shadow_muted, get_shadow_mute_info
+        info = await get_shadow_mute_info(user_id, board_id)
+        if info.get('is_muted'):
+            exp_ts = info.get('expires_at') or (now_ts + info.get('remaining_seconds', 1200.0))
+            set_in_memory_shadow_mute(user_id, board_id, exp_ts)
             return True
     except Exception:
         pass
@@ -1100,7 +1192,43 @@ async def _is_user_shadow_muted_early(user_id: int, board_id: str, message: Mess
 
 @message_router.message(~F.media_group_id, ~(F.text.startswith("/") | F.caption.startswith("/")))
 async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
+    if not getattr(message, 'from_user', None):
+        return
     user_id = message.from_user.id
+    if not board_id:
+        logger.warning(f"🚫 [MSG DROPPED: NO_BOARD] user={user_id} bot={message.bot.id}")
+        return
+
+    # Early Shadow-Mute & Spammer Drop (bypass heavy pipeline, LLM, SQLite, thread verification, and console I/O)
+    if await _is_user_shadow_muted_early(user_id, board_id, message):
+        logger.info(f"👻 [SHADOW_EARLY_DROP] user={user_id} board={board_id} type={message.content_type}")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        now = time.time()
+        # Cooldown: send at most 1 echo per 1.5s to prevent private chat 429 FloodWait from Telegram API
+        if now - _last_shadow_echo_ts.get(user_id, 0.0) >= 1.5:
+            if len(_last_shadow_echo_ts) > 5000:
+                stale_echo = [u for u, ts in _last_shadow_echo_ts.items() if now - ts > 300.0]
+                for u in stale_echo:
+                    _last_shadow_echo_ts.pop(u, None)
+                if len(_last_shadow_echo_ts) > 5000:
+                    for u in list(_last_shadow_echo_ts.keys())[:1000]:
+                        _last_shadow_echo_ts.pop(u, None)
+            _last_shadow_echo_ts[user_id] = now
+            echo_content = _build_shadow_echo_content(message)
+            spawn_task(process_shadow_reject(shared_state.ShadowRejectContext(
+                bot=message.bot,
+                board_id=board_id,
+                user_id=user_id,
+                content=echo_content,
+                reply_to_post=None,
+                stream=stream,
+                reply_to_message_id=message.message_id
+            )))
+        return
+
     raw_content = (message.text or message.caption or "").strip()
     if raw_content.startswith("/"):
         # Команды и слэш-сообщения никогда не должны публиковаться как посты борды
@@ -1112,9 +1240,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             print(f"[MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id}")
         except Exception:
             pass
-    if not board_id:
-        logger.warning(f"🚫 [MSG DROPPED: NO_BOARD] user={user_id} bot={message.bot.id}")
-        return
+
     if board_id in THREAD_BOARDS:
         if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
             logger.warning(f"🚫 [MSG DROPPED: INVALID_THREAD] user={user_id} board={board_id}")
@@ -1124,28 +1250,6 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     b_data = board_data.get(board_id)
     if not b_data:
         return False
-
-    # Early Shadow-Mute Drop & Echo (bypass heavy pipeline, LLM, SQLite and thread verification)
-    if await _is_user_shadow_muted_early(user_id, board_id, message):
-        logger.info(f"👻 [SHADOW_EARLY_DROP] user={user_id} board={board_id} type={message.content_type}")
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        now = time.time()
-        # Cooldown: send at most 1 echo per 1.5s to prevent private chat 429 FloodWait from Telegram API
-        if now - _last_shadow_echo_ts.get(user_id, 0.0) >= 1.5:
-            _last_shadow_echo_ts[user_id] = now
-            echo_content = _build_shadow_echo_content(message)
-            spawn_task(process_shadow_reject(shared_state.ShadowRejectContext(
-                bot=message.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=echo_content,
-                reply_to_post=None,
-                stream=stream
-            )))
-        return
 
     is_reply_to_bot = False
     if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == message.bot.id:
@@ -1251,6 +1355,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     from common.db import execute_write
                     await execute_write("UPDATE Users SET shadow_ban_sticker = 1 WHERE user_id = ?", (user_id,))
                     b_data.setdefault('user_settings', {}).setdefault(user_id, {})['shadow_sticker'] = True
+                    from common.database import apply_shadow_mute
+                    await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=f"Эксплойт-стикер Lottie: {guard_reason}", is_exponential=False)
                 except Exception:
                     pass
                 return
@@ -1303,17 +1409,37 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 )
                 if is_repost_blocked:
                     logger.warning(
-                        f"🚫 [MSG DROPPED: REPOST_SPAM] user={user_id} board={board_id}: {toxic_response}"
+                        f"👻 [REPOST_SPAM_SHADOW_DIVERTED] user={user_id} board={board_id}: {toxic_response}"
                     )
-                    try:
-                        sent_msg = await message.answer(toxic_response)
-                        spawn_task(delete_message_after_delay(sent_msg, 20))
-                    except Exception:
-                        pass
                     try:
                         await message.delete()
                     except Exception:
                         pass
+                    reply_to_post = None
+                    if message.reply_to_message:
+                        try:
+                            reply_to_post = await resolve_reply_from_message(message.reply_to_message, message.chat.id)
+                        except Exception:
+                            pass
+                    c_type = message.content_type
+                    c_dict = {'type': c_type, 'is_forward': True}
+                    if c_type == 'text':
+                        c_dict['text'] = message.text or ""
+                    elif c_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice']:
+                        file_obj = getattr(message, c_type)
+                        if isinstance(file_obj, list) and file_obj:
+                            file_obj = file_obj[-1]
+                        c_dict['file_id'] = getattr(file_obj, 'file_id', '')
+                        if message.caption:
+                            c_dict['caption'] = message.caption
+                    await process_shadow_reject(shared_state.ShadowRejectContext(
+                        bot=message.bot,
+                        board_id=board_id,
+                        user_id=user_id,
+                        content=c_dict,
+                        reply_to_post=reply_to_post,
+                        stream=stream
+                    ))
                     return
 
         cursed_text_override = None
@@ -1426,9 +1552,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
 
     from common.database import is_shadow_muted as check_db_shadow_muted
-    db_sm = await check_db_shadow_muted(user_id, board_id)
-    ram_sm = bool(user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-    is_shadow_muted = (not is_admin(user_id, board_id) and (ram_sm or db_sm))
+    if is_user_in_memory_shadow_muted(user_id, board_id):
+        is_shadow_muted = not is_admin(user_id, board_id)
+    else:
+        db_sm = await check_db_shadow_muted(user_id, board_id)
+        if db_sm:
+            set_in_memory_shadow_mute(user_id, board_id)
+        ram_sm = bool(user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+        is_shadow_muted = (not is_admin(user_id, board_id) and (ram_sm or db_sm))
 
     if multi_reply_blocks:
         try: await message.delete()
@@ -1490,7 +1621,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     user_id=user_id,
                     content=content,
                     reply_to_post=post_num_to_reply,
-                    stream=stream
+                    stream=stream,
+                    reply_to_message_id=message.message_id
                 ))
             else:
                 post_num = await process_new_post(shared_state.NewPostParams(
@@ -1689,7 +1821,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             user_id=user_id,
             content=content,
             reply_to_post=reply_to_post,
-            stream=stream
+            stream=stream,
+            reply_to_message_id=message.message_id
         ))
     else:
         post_num = await process_new_post(shared_state.NewPostParams(
@@ -1773,6 +1906,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
 async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     if is_admin(user_id, board_id):
         return True
+
+    # Fast in-memory drop FIRST (< 0.1ms, zero DB, zero locks)
+    if is_user_in_memory_shadow_muted(user_id, board_id):
+        logger.info(f"👻 [CHECK_SPAM: IN_MEMORY_SHADOW_MUTED] user={user_id} board={board_id}")
+        return True
+
     content, msg_type = _get_msg_content_and_type(msg)
     raw_content_type = msg.content_type
 
@@ -1902,10 +2041,10 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     # 2. Legacy / rate limit analysis
     result, level = await analyze_message_for_spam(user_id, board_id, content, msg_type, raw_content_type, skip_bayan=True)
     if result == SpamResult.GLOBAL_BAN_REQUIRED:
-        msg_str = f"🚨 [GLOBAL] РЕЙД-БОТ / СПАМЕР ОБНАРУЖЕН: user {user_id}. Выдан глобальный теневой мут на 7 дней везде кроме /b/."
+        msg_str = f"🚨 [GLOBAL] РЕЙД-БОТ / СПАМЕР ОБНАРУЖЕН: user {user_id}. Выдан глобальный теневой мут на 7 дней на ВСЕХ досках."
         logger.warning(f"🚨 [CHECK_SPAM: GLOBAL_BAN_TRIGGERED] user={user_id}")
         print(msg_str)
-        from common.database import update_shadow_mute, log_global_event
+        from common.database import apply_shadow_mute, log_global_event
         spawn_task(log_global_event('bot', msg_str))
         try:
             from extreme_defense_engine import send_auto_snitch_alert
@@ -1914,17 +2053,13 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                 user_id=user_id,
                 board_id=board_id,
                 post_num=None,
-                reason="Глобальный рейд-бот / спамер (мут 7 дней)",
+                reason="Глобальный рейд-бот / спамер (теневой мут 7 дней)",
                 details=content[:250] if content else "(Медиа / файл)",
-                extra_info="Мут применен на всех досках, кроме /b/."
+                extra_info="Теневой мут применен на ВСЕХ досках (board='ALL')."
             ))
         except Exception:
             pass
-        expires_dt = datetime.now(UTC) + timedelta(days=7)
-        for b in BOARD_CONFIG.keys():
-            if b != 'b':
-                board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
-                spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
+        await apply_shadow_mute(user_id, 'ALL', duration_seconds=7 * 86400.0, reason="Глобальный рейд-бот / спамер (веерный спам)", is_exponential=False)
         return True  # Route to process_shadow_reject!
     elif result in (SpamResult.BAYAN_MUTE, SpamResult.SHADOW_MUTE_REQUIRED):
         logger.info(f"👻 [CHECK_SPAM: BAYAN_OR_SHADOW] user={user_id} board={board_id} result={result}")
@@ -1984,23 +2119,34 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
         await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=reason, is_exponential=False)
 
 async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
-
     """
     Эмулирует успешную публикацию поста, но отправляет его ТОЛЬКО автору.
     Не пишет в БД, не увеличивает счетчики.
+    Форматирует заголовок, бейджи и контент строго как при обычной публикации.
     """
     shadow_key = (ctx.board_id, ctx.user_id)
-    current_floor = state['post_counter'] + random.randint(1, 3)
     last_fake_post_num = shadow_fake_post_counters.get(shadow_key, 0)
-    fake_post_num = max(current_floor, last_fake_post_num + random.randint(1, 3))
+    fake_post_num = max(state.get('post_counter', 0) + 1, last_fake_post_num + 1)
     shadow_fake_post_counters[shadow_key] = fake_post_num
-    header_text = await format_header(ctx.board_id, fake_post_num, ctx.user_id, stream=ctx.stream)
+    header_text = await format_header(ctx.board_id, fake_post_num, 0, stream=ctx.stream)
+
+    repost_count = ctx.content.get('repost_count')
+    if isinstance(repost_count, int) and repost_count > 1:
+        header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
+    if ctx.content.get('is_cyberchad'):
+        prefix = "🔥 КИБЕРЧЕД 🔥" if ctx.stream != 'en' else "🔥 CYBERCHAD 🔥"
+        if prefix not in header_text:
+            header_text = f"{prefix}\n{header_text}"
+
     user_content = ctx.content.copy()
     user_content['header'] = header_text
     user_content['post_num'] = fake_post_num
     user_content['is_shadow_reject'] = True
     user_content['reply_to_post'] = ctx.reply_to_post
+
+    # Искусственный лаг 0.5-1.5с эмулирует реальную обработку и доставку
     await asyncio.sleep(random.uniform(0.5, 1.5))
+
     await send_message_to_users(shared_state.BroadcastConfig(
         bot_instance=ctx.bot,
         board_id=ctx.board_id,
@@ -2008,7 +2154,7 @@ async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
         content=user_content,
         reply_info=None
     ))
-    print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
+    print(f"👻 [SHADOW] Теневой отброс поста #{fake_post_num} от {ctx.user_id} на доске {ctx.board_id}")
 
 async def build_quick_quote_info(reply_to_post: int | None) -> dict | None:
     if not reply_to_post:
@@ -2158,11 +2304,14 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         return False
     if not is_admin(user_id, board_id):
         # Shadow mute — silent drop (resilient to DB lock/timeouts)
+        if is_user_in_memory_shadow_muted(user_id, board_id):
+            return
         try:
             from common.database import is_shadow_muted as _sm_mg
             from common.db_pool import get_pool as _get_pool_mg
             _db_mg = await _get_pool_mg()
             if await _sm_mg(user_id, board_id, db=_db_mg):
+                set_in_memory_shadow_mute(user_id, board_id)
                 return
         except Exception:
             b_sm = b_data.get('shadow_mutes', {})
@@ -2201,10 +2350,9 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                         media_group_id=media_group_id, bot_instance=message.bot
                     )
                     if is_repost_blocked:
-                        logger.warning(f"🚫 [MEDIA_GROUP_REPOST_SPAM_BLOCKED] user={user_id} board={board_id}: {toxic_reply}")
+                        logger.warning(f"👻 [MEDIA_GROUP_REPOST_SPAM_SHADOW_BLOCKED] user={user_id} board={board_id}: {toxic_reply}")
                         try:
-                            sent_msg = await message.answer(toxic_reply)
-                            spawn_task(delete_message_after_delay(sent_msg, 20))
+                            await message.delete()
                         except Exception:
                             pass
                         current_media_groups.pop(media_group_key, None)

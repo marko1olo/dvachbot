@@ -14,10 +14,10 @@ from common.config import DB_NAME
 
 
 
-def clean_old_postcopies(con, retention_days: int = 3):
+def clean_old_postcopies(con, retention_days: int = 3, batch_size: int = 500):
     """
-    Удаляет устаревшие связки доставки PostCopies перед VACUUM,
-    чтобы освобожденные страницы были возвращены операционной системе.
+    Удаляет устаревшие связки доставки PostCopies перед VACUUM небольшими порциями (по 500 строк),
+    чтобы освобожденные страницы были возвращены операционной системе и не создавалась монопольная блокировка.
     """
     try:
         cutoff_ts = time.time() - (retention_days * 86400)
@@ -26,9 +26,23 @@ def clean_old_postcopies(con, retention_days: int = 3):
         row = cur.fetchone()
         if row and isinstance(row[0], (int, float)):
             thresh = int(row[0])
-            cur.execute("DELETE FROM PostCopies WHERE post_num < ?", (thresh,))
-            con.commit()
-            print(f"🗑️ Удалены устаревшие связки PostCopies (до поста #{thresh}).")
+            total_deleted = 0
+            while True:
+                cur.execute("""
+                    DELETE FROM PostCopies
+                    WHERE rowid IN (
+                        SELECT rowid FROM PostCopies
+                        WHERE post_num < ?
+                        LIMIT ?
+                    )
+                """, (thresh, batch_size))
+                deleted = cur.rowcount
+                con.commit()
+                total_deleted += deleted
+                if deleted < batch_size:
+                    break
+                time.sleep(0.01)
+            print(f"🗑️ Удалены устаревшие связки PostCopies ({total_deleted:,} строк, до поста #{thresh}).")
     except Exception as ex:
         print(f"⚠️ Пропуск очистки PostCopies: {ex}")
 
@@ -40,7 +54,20 @@ def run_maintenance():
     """
     if not os.path.exists(DB_NAME):
         print(f"Ошибка: Файл базы данных не найден по пути: {DB_NAME}")
-        return
+        return False
+
+    # Защита от запуска при работающем боте (проверка bot.lock)
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(DB_NAME)), "bot.lock")
+    if os.path.exists(lock_path):
+        try:
+            with open(lock_path, "r", encoding="utf-8") as lf:
+                live_pid = int(lf.read().strip())
+            import psutil
+            if psutil.pid_exists(live_pid):
+                print(f"⛔ ОШИБКА: Бот всё ещё работает (PID={live_pid}). Запуск обслуживания отменён во избежание дедлока БД.")
+                return False
+        except Exception:
+            pass
 
     print(f"Подключение к базе данных: {DB_NAME}")
     try:

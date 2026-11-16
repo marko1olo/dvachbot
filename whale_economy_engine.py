@@ -872,7 +872,7 @@ async def execute_oligarch_raid(
     - Requires exactly 5 qualified proletarian voters (balance < 5,000 ₪, posts >= 25).
     - Identifies top oligarch (highest balance) if target_id not specified.
     - Checks oligarch defensive gear (extinguisher_obep / diplomatic_passport).
-    - Confiscates 10% of target balance (capped at 200,000 ₪).
+    - Confiscates 10% of target balance (capped at 1,000,000 ₪).
     - Burns 70% to abu_yacht_fund, distributes remaining 30% equally among the 5 proletarian voters.
     - Sterilizes money from M0 permanently.
     """
@@ -1044,8 +1044,8 @@ async def execute_oligarch_raid(
                     "error": "🧯 Олигарх применил Огнетушитель ОБЭП! Раскулачивание успешно потушено, заряд огнетушителя израсходован."
                 }
 
-            # 4. Confiscation calculations (10% capped at 200,000 ₪)
-            confiscated = min(round(total_oligarch_wealth * 0.10, 2), 200000.0)
+            # 4. Confiscation calculations (10% capped at 1,000,000 ₪)
+            confiscated = min(round(total_oligarch_wealth * 0.10, 2), 1000000.0)
 
             # Deduct from oligarch: wallet first, then active bank deposits
             rem_to_deduct = confiscated

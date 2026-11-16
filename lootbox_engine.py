@@ -92,8 +92,11 @@ NON_BUYABLE_TITLES = ["[Золотой Кит]", "[Шекелевый Барон
 EXCLUSIVE_RELICS = ["hat_golden_foil", "hat_cyber_ushanka", "body_dva_ch_mantle"]
 
 # -----------------------------------------------------------------------------
-# Scrap Recycling Values (F2.2)
+# Scrap Recycling Values (F2.2) & Scrap Tax (40% burn, recovery <= 60%)
 # -----------------------------------------------------------------------------
+SCRAP_TAX_RATE = 0.40  # 40% сгорает в пыль
+MAX_SCRAP_RECOVERY_RATE = 0.60  # Не более 50-60% от номинала предмета
+
 WEAPON_SCRAP_PRICES = {
     "trash": {
         "shit": 15,
@@ -122,6 +125,14 @@ WEAPON_SCRAP_PRICES = {
 }
 
 
+def calculate_scrap_value(item_nominal: int, max_rate: float = 0.60) -> int:
+    """
+    Рассчитывает стоимость переработки утиля/мусора с учетом scrap tax 40% (не более 50-60% от номинала).
+    """
+    effective_rate = min(max_rate, 1.0 - SCRAP_TAX_RATE)
+    return int(item_nominal * effective_rate)
+
+
 def calculate_duplicate_cashback(case_price: int, item_price: int, is_weapon: bool = False) -> int:
     """
     Contract formula from PROJECT.md:
@@ -131,17 +142,83 @@ def calculate_duplicate_cashback(case_price: int, item_price: int, is_weapon: bo
     return min(int(case_price * 0.30), int(item_price * 0.20))
 
 
+# -----------------------------------------------------------------------------
+# Pity System & Anti-Bad-Luck Engine
+# -----------------------------------------------------------------------------
+LOOTBOX_PITY_THRESHOLD = 10  # После 10 пустых открытий 11-е гарантирует носимый предмет
+
+
+def format_pity_counter(active_items: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Formats the wardrobe pity counter status:
+    `🛡️ Гарант гардероба: X/10 (через {10 - X} кейсов гарантирован шмот)`
+    """
+    pity_counter = active_items.get("lootbox_pity_counter", 0) if active_items else 0
+    rem = max(0, LOOTBOX_PITY_THRESHOLD - pity_counter)
+    return f"🛡️ Гарант гардероба: {pity_counter}/{LOOTBOX_PITY_THRESHOLD} (через {rem} кейсов гарантирован шмот)"
+
+TRASH_PITY_WARDROBE_POOL = [
+    ("hat_bag", "📦 Пакет из Пятерочки (на 7 дней)", "Головной убор труъ-анонима! Дает шанс выбивать лутбоксы на работе.", "head", 168),
+    ("face_clown_nose", "🤡 Клоунский Нос (на 7 дней)", "Красный нос на 7 дней. +35 к Токсичности и троллингу в тредах.", "face", 168),
+    ("face_thug_glasses", "🕶️ Очки Thug Life (на 7 дней)", "Пиксельные очки крутости (+5% в слотах).", "face", 168),
+    ("feet_slippers", "🩴 Сланцы с носками (на 7 дней)", "Домашний уют на 7 дней. Сокращает кулдаун смен /work на 20%.", "feet", 168),
+]
+
+GOLD_PITY_WARDROBE_POOL = [
+    ("body_cloak", "🧥 Плащ Нео / Анонима", "Стильный кожаный плащ. +30 к защите и скрытности.", "torso"),
+    ("hat_helmet", "🪖 Шлем ОМОНа", "Тяжелая титановая броня силовика.", "head"),
+    ("body_wasserman", "🦺 Жилетка Вассермана", "Легендарная жилетка с 28 карманами (+25% зарплаты).", "torso"),
+    ("hat_cat_ears", "🐱 Неко-Ушки", "Кавайные аниме ушки для аватарки (+30 рассудка).", "head"),
+    ("body_hoodie", "👘 Худи с Аской", "Теплая толстовка анимешника (+25 рассудка).", "torso"),
+    ("face_thug_glasses", "🕶️ Очки Thug Life", "Пиксельные очки крутости (+5% в слотах).", "face"),
+    ("face_wasserman_glasses", "🥽 Очки Онотоле", "Очки эрудита (+15% зарплаты на работе).", "face"),
+    ("feet_boots", "🥾 Берцы ОМОНа", "Тяжелая армейская обувь (иммунитет к /shit).", "feet"),
+    ("feet_sneakers", "👟 Стоптанные берцы", "Тяги битарда (+30% побега от /partyvan).", "feet"),
+    ("hat_crown", "👑 Корона VIP-Сыча", "Золотая корона (+20% к чаевым на работе).", "head"),
+    ("face_anon_mask", "🎭 Маска Анонимуса", "Маска Гая Фокса (скрывает баланс в карточке).", "face"),
+    ("hat_tophat", "🎩 Цилиндр Джентльмена", "Викторианский цилиндр на 30 дней. +25 к Рассудку.", "head"),
+    ("hat_cyber_ushanka", "🛸 Кибер-Ушанка", "Неоновая ушанка силовика будущего.", "head"),
+    ("body_dva_ch_mantle", "👘 Мантия Олдфага", "Олдфажный балахон двачера навсегда.", "torso"),
+]
+
+
+def is_wearable_reward(payload: Optional[Dict[str, Any]]) -> bool:
+    """
+    Проверяет, содержит ли награда носимый предмет гардероба (шапка, очки, обувь, одежда).
+    """
+    if not payload or not isinstance(payload, dict):
+        return False
+    if "item_id" in payload:
+        return True
+    if payload.get("equipped_head") or payload.get("owned_hat_tinfoil") or payload.get("tinfoil_hat"):
+        return True
+    if any(k.startswith("equipped_") for k in payload):
+        return True
+    return False
+
+
 def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, Dict[str, Any], int]:
     """
     Rolls a 150 ₪ Trash Case.
-    Nominal RTP <= 55% <= 85%, Cash RTP ~17%.
-    - Tier 4 Jackpot (3% chance): 50% 350 ₪, 35% Mute-gun, 15% Partyvan.
-    - Tier 3 Rare (15% chance): avg scrap 30 ₪, includes title [Сборщик стеклотары].
-    - Tier 2 Consumables (32% chance): scrap avg 24.25 ₪.
-    - Tier 1 Trash (50% chance): avg 14.28 ₪.
+    Nominal RTP <= 55% <= 60%, Cash RTP ~14.6% <= 25% (avg cash <= 35 ₪).
+    Pity System: after 10 consecutive openings without wearable item,
+    the 11th opening guarantees a 7-day wardrobe drop (hat, glasses, shoes).
     """
-    roll = random.random()
     now = int(time.time())
+
+    # Pity System check (10 openings without wearable -> 11th is guaranteed)
+    pity_counter = active_items.get("lootbox_pity_counter", 0) if active_items else 0
+    if pity_counter >= LOOTBOX_PITY_THRESHOLD:
+        cid, base_name, desc, slot, dur = random.choice(TRASH_PITY_WARDROBE_POOL)
+        return (
+            "👗 ГАРАНТ: БАЗОВЫЙ ШМОТ (7 ДНЕЙ)",
+            base_name,
+            f"{desc} (Сработал Гарант: 10 открытий без шмота!)",
+            {"item_id": cid, "dur_hours": dur, "slot": slot, "pity_triggered": True},
+            0
+        )
+
+    roll = random.random()
 
     # Tier 4: JACKPOT (3% chance)
     if roll < 0.03:
@@ -271,19 +348,51 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
 def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, Dict[str, Any], int]:
     """
     Rolls a 500 ₪ Premium Gold Safe.
-    Nominal RTP <= 65% <= 85%, Cash RTP ~23%.
-    - Tier 4 Jackpot (5% chance): 40% 1500 ₪, 30% Partyvan + Tinfoil 12h, 20% Golden Tinfoil Hat [Perm], 10% 3000 ₪ + [Золотой Кит] title (30d).
-    - Tier 3 Apparel (35% chance): 10% perm, 90% 30d.
-    - Tier 2 Combat kit (25% chance): Shield 6h + (knife or pepperspray) + pills, bundle_type="combat_kit".
+    Nominal RTP ~59.4% <= 60%, Cash RTP ~21.2% <= 25% (avg cash <= 110 ₪).
+    - Tier 4 Jackpot (5% chance): 35% 1500 ₪, 30% Partyvan + Tinfoil 12h, 30% Golden Tinfoil Hat [Perm], 5% 3000 ₪ + [Золотой Кит] title (30d).
+    - Tier 3 Apparel (30% chance): 10% perm, 90% 30d.
+    - Tier 2 Combat kit (30% chance): Shield 6h + (knife or pepperspray) + pills, bundle_type="combat_kit".
     - Tier 1 Premium junk (35% chance): avg 90 ₪.
+    Pity System: after 10 consecutive openings without wearable item,
+    the 11th opening guarantees an apparel drop (head, face, feet, torso).
     """
-    roll = random.random()
     now = int(time.time())
+
+    # Pity System check (10 openings without wearable -> 11th is guaranteed)
+    pity_counter = active_items.get("lootbox_pity_counter", 0) if active_items else 0
+    if pity_counter >= LOOTBOX_PITY_THRESHOLD:
+        cid, base_name, desc, slot = random.choice(GOLD_PITY_WARDROBE_POOL)
+        is_permanent_drop = (random.random() < 0.10)
+        if is_permanent_drop:
+            title = "🌟 ГАРАНТ: ЛЕГЕНДАРНЫЙ ШМОТ (НАВСЕГДА)"
+            item_name = f"{base_name} 🌟 [НАВСЕГДА]"
+            payload = {
+                "item_id": cid,
+                "is_permanent": True,
+                "dur_hours": 0,
+                "slot": slot,
+                "grant_title": "[Шекелевый Барон]",
+                "title_days": 1,
+                "pity_triggered": True,
+            }
+        else:
+            title = "👗 ГАРАНТ: ЭЛИТНЫЙ ШМОТ (30 ДНЕЙ)"
+            item_name = f"{base_name} [на 30 дней]"
+            payload = {
+                "item_id": cid,
+                "is_permanent": False,
+                "dur_hours": 720,
+                "slot": slot,
+                "pity_triggered": True,
+            }
+        return title, item_name, f"{desc} (Сработал Гарант: 10 открытий без шмота!)", payload, 0
+
+    roll = random.random()
 
     # Tier 4: МИФИЧЕСКИЙ ДЖЕКПОТ (5% chance)
     if roll < 0.05:
         jp_sub = random.random()
-        if jp_sub < 0.40:
+        if jp_sub < 0.25:
             return (
                 "🌟 МИФИЧЕСКИЙ ДЖЕКПОТ",
                 "💰 Золотой Слиток Абу (+1 500 ₪)!",
@@ -291,7 +400,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 {},
                 1500
             )
-        elif jp_sub < 0.70:
+        elif jp_sub < 0.65:
             return (
                 "🌟 МИФИЧЕСКИЙ ДЖЕКПОТ",
                 "🚔 Пативэн-Ган + 👽 Шапочка из фольги (12ч)!",
@@ -303,7 +412,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 },
                 0
             )
-        elif jp_sub < 0.90:
+        elif jp_sub < 0.95:
             return (
                 "🌟 МИФИЧЕСКИЙ ДЖЕКПОТ",
                 "👑 Золотая Шапочка из Фольги 🌟 [НАВСЕГДА]",
@@ -328,25 +437,9 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 3000
             )
 
-    # Tier 3: Exclusive Clothing & Apparel (35% chance -> roll < 0.40)
-    elif roll < 0.40:
-        clothes_pool = [
-            ("body_cloak", "🧥 Плащ Нео / Анонима", "Стильный кожаный плащ. +30 к защите и скрытности.", "torso"),
-            ("hat_helmet", "🪖 Шлем ОМОНа", "Тяжелая титановая броня силовика.", "head"),
-            ("body_wasserman", "🦺 Жилетка Вассермана", "Легендарная жилетка с 28 карманами (+25% зарплаты).", "torso"),
-            ("hat_cat_ears", "🐱 Неко-Ушки", "Кавайные аниме ушки для аватарки (+30 рассудка).", "head"),
-            ("body_hoodie", "👘 Худи с Аской", "Теплая толстовка анимешника (+25 рассудка).", "torso"),
-            ("face_thug_glasses", "🕶️ Очки Thug Life", "Пиксельные очки крутости (+5% в слотах).", "face"),
-            ("face_wasserman_glasses", "🥽 Очки Онотоле", "Очки эрудита (+15% зарплаты на работе).", "face"),
-            ("feet_boots", "🥾 Берцы ОМОНа", "Тяжелая армейская обувь (иммунитет к /shit).", "feet"),
-            ("feet_sneakers", "👟 Стоптанные берцы", "Тяги битарда (+30% побега от /partyvan).", "feet"),
-            ("hat_crown", "👑 Корона VIP-Сыча", "Золотая корона (+20% к чаевым на работе).", "head"),
-            ("face_anon_mask", "🎭 Маска Анонимуса", "Маска Гая Фокса (скрывает баланс в карточке).", "face"),
-            ("hat_tophat", "🎩 Цилиндр Джентльмена", "Викторианский цилиндр на 30 дней. +25 к Рассудку.", "head"),
-            ("hat_cyber_ushanka", "🛸 Кибер-Ушанка", "Неоновая ушанка силовика будущего.", "head"),
-            ("body_dva_ch_mantle", "👘 Мантия Олдфага", "Олдфажный балахон двачера навсегда.", "torso"),
-        ]
-        cid, base_name, desc, slot = random.choice(clothes_pool)
+    # Tier 3: Exclusive Clothing & Apparel (25% chance -> roll < 0.30)
+    elif roll < 0.30:
+        cid, base_name, desc, slot = random.choice(GOLD_PITY_WARDROBE_POOL)
 
         # 10% Chance to drop PERMANENT (🌟 НАВСЕГДА), 90% 30 days
         is_permanent_drop = (random.random() < 0.10)
@@ -373,8 +466,8 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
 
         return title, item_name, desc, payload, 0
 
-    # Tier 2: Heavy Combat Kit (25% chance -> roll < 0.65)
-    elif roll < 0.65:
+    # Tier 2: Heavy Combat Kit (30% chance -> roll < 0.60)
+    elif roll < 0.60:
         w_choice = "pepperspray_gun" if random.random() < 0.5 else "knife_gun"
         w_name = "🧯 Перцовка" if w_choice == "pepperspray_gun" else "🔪 Заточка"
         return (
@@ -391,7 +484,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
             0
         )
 
-    # Tier 1: Premium Cash & Artifact (35% chance -> roll >= 0.65)
+    # Tier 1: Premium Cash & Artifact (40% chance -> roll >= 0.60)
     else:
         name, desc, cashback = random.choice(PREMIUM_JUNK)
         return (
@@ -567,9 +660,58 @@ def apply_lootbox_reward(
         if active_items.get(prot_key, 0) > max_protection_cap:
             active_items[prot_key] = max_protection_cap
 
+    # 5. Pity System Tracking (Guarantee after 10 openings without wearable item)
+    if is_wearable_reward(payload):
+        active_items["lootbox_pity_counter"] = 0
+        if payload.get("pity_triggered"):
+            pity_note = "🛡️ <b>Сработала защита от невезения (Гарант 10):</b> получен гарантированный предмет гардероба!"
+            recycle_msg = (recycle_msg + "\n" + pity_note) if recycle_msg else pity_note
+    else:
+        active_items["lootbox_pity_counter"] = active_items.get("lootbox_pity_counter", 0) + 1
+
     return active_items, final_cash, recycle_msg
 
 
+
+
+# -----------------------------------------------------------------------------
+# Abu Yacht Fund 50% Burn & Lootbox Pricing
+# -----------------------------------------------------------------------------
+LOOTBOX_PRICES = {
+    "trash": 150,
+    "lootbox_trash": 150,
+    "trash_lootbox": 150,
+    "gold": 500,
+    "lootbox_gold": 500,
+    "gold_safe": 500,
+    "whale": 50000,
+    "lootbox_whale": 50000,
+    "whale_safe": 50000,
+}
+
+LOOTBOX_ABU_BURN_RATE = 0.50  # 50% сжигается в Фонд Абу
+
+
+def get_lootbox_price(case_type: str) -> int:
+    """Возвращает базовую цену покупки лутбокса."""
+    key = normalize_lootbox_key(case_type)
+    return LOOTBOX_PRICES.get(key, LOOTBOX_PRICES.get(case_type, 150))
+
+
+def calculate_abu_burn_amount(case_type: str, custom_price: Optional[int] = None) -> float:
+    """Вычисляет сумму сжигания в Фонд Абу (50% от стоимости покупки кейса)."""
+    price = custom_price if custom_price is not None else get_lootbox_price(case_type)
+    return round(price * LOOTBOX_ABU_BURN_RATE, 2)
+
+
+async def burn_lootbox_to_abu(db, case_type: str, donor_id: int = 0, custom_price: Optional[int] = None) -> float:
+    """
+    Сжигает 50% от стоимости покупки кейса в Фонд Яхты Абу (GlobalStats['abu_yacht_fund']).
+    """
+    from common.database import add_to_abu_fund
+    burn_amount = calculate_abu_burn_amount(case_type, custom_price=custom_price)
+    reason = f"Сжигание 50% от покупки кейса {case_type}"
+    return await add_to_abu_fund(db, burn_amount, donor_id=donor_id, reason=reason)
 
 
 # -----------------------------------------------------------------------------
@@ -630,12 +772,18 @@ def record_lootbox_purchase(user_id: int, case_type: str):
     shared_state.record_shop_purchase(user_id, key)
 
 
-async def record_lootbox_purchase_persistent(db, user_id: int, case_type: str) -> int:
+async def record_lootbox_purchase_persistent(db, user_id: int, case_type: str, burn_to_abu: bool = True) -> int:
     """
     Асинхронно фиксирует открытие/покупку лутбокса в памяти и SQLite (UserDailyLimits).
+    Также сжигает 50% стоимости кейса в Фонд Яхты Абу (GlobalStats['abu_yacht_fund']).
     Возвращает актуальный счетчик за сегодня.
     """
     import shared_state
+    if burn_to_abu and db is not None:
+        try:
+            await burn_lootbox_to_abu(db, case_type, donor_id=user_id)
+        except Exception:
+            pass
     key = normalize_lootbox_key(case_type)
     return await shared_state.record_shop_purchase_async(db, user_id, key)
 

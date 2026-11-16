@@ -177,6 +177,8 @@ async def _call_gemini_native_rest(
     user_text: str,
     temperature: float = 0.8,
     timeout: float = 15.0,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
 ) -> tuple[str | None, str | None]:
     """
     Вызывает нативный REST API Google Gemini (generateContent) с BLOCK_NONE для полного снятия цензуры.
@@ -188,14 +190,20 @@ async def _call_gemini_native_rest(
     last_resp = None
     
     for safety_settings in thresholds_to_try:
+        gen_config = {
+            "temperature": temperature,
+            "maxOutputTokens": 2048,
+        }
+        # Note: Google Gemini REST API (v1beta generateContent) does NOT support
+        # presencePenalty or frequencyPenalty on Flash / Flash-Lite models, throwing
+        # HTTP 400: "Penalty is not enabled for this model".
+        # Therefore, we do NOT include them in gen_config for Gemini REST calls.
+
         payload = {
             "contents": [
                 {"role": "user", "parts": [{"text": user_text}]}
             ],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": 2048,
-            },
+            "generationConfig": gen_config,
             "safetySettings": safety_settings
         }
         if system_instruction:
@@ -205,6 +213,18 @@ async def _call_gemini_native_rest(
             
         resp = await http_client.post(url, json=payload, timeout=timeout)
         last_resp = resp
+
+        # Defensive fallback: if Gemini rejects with 400 "Penalty is not enabled",
+        # strip presencePenalty / frequencyPenalty from gen_config and retry immediately once.
+        resp_text = getattr(resp, "text", "") or ""
+        if resp.status_code == 400 and ("Penalty is not enabled" in resp_text or "penalty is not enabled" in resp_text.lower()):
+            logger.warning(f"⚠️ Gemini 400 'Penalty is not enabled' on {model_name}. Retrying without penalties...")
+            gen_config.pop("presencePenalty", None)
+            gen_config.pop("frequencyPenalty", None)
+            payload["generationConfig"] = gen_config
+            resp = await http_client.post(url, json=payload, timeout=timeout)
+            last_resp = resp
+
         if resp.status_code == 400 and safety_settings is GEMINI_SAFETY_SETTINGS_BLOCK_NONE:
             logger.warning(f"⚠️ Gemini 400 with BLOCK_NONE on {model_name}. Retrying with BLOCK_ONLY_HIGH...")
             continue
@@ -255,6 +275,10 @@ async def _call_gemini_native_rest(
         return text_content, "safety"
         
     return text_content, finish_reason or "stop"
+
+
+# Alias for external callers/tests
+call_gemini_rest = _call_gemini_native_rest
 
 
 async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference: str | None = None) -> str:
@@ -377,14 +401,15 @@ summarize_text_with_hf = dispatch_llm_completion
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference in ("persona", "persona_gemini"):
         top_candidates = [
+            ("gemini-3.7-flash", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
         ]
         # Weighted random selection of the primary model per request
         chosen_first = random.choices(
             top_candidates,
-            weights=[0.45, 0.45, 0.10],
+            weights=[0.35, 0.35, 0.20, 0.10],
             k=1
         )[0]
         # All remaining top candidates become immediate fallbacks (shuffled)
@@ -396,11 +421,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             + remaining_top
             + [
                 (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
-                ("gemini-3.6-flash", "gemini"),
-                ("gemini-3.7-flash", "gemini"),
-                ("qwen/qwen3.8-27b", "groq"),
                 ("llama-3.3-70b-versatile", "groq"),
+                ("qwen/qwen3.8-27b", "groq"),
                 ("openai/gpt-oss-120b", "groq"),
+                ("gemini-3.1-flash-lite", "gemini"),
                 ("llama-3.1-8b-instant", "groq"),
                 ("openai/gpt-oss-20b", "groq"),
             ]
@@ -618,14 +642,17 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 is_mock_env = hasattr(AsyncOpenAI, "assert_called") or "mock" in type(AsyncOpenAI).__name__.lower()
 
                 if provider == "gemini" and not is_mock_env:
+                    is_persona = model_preference in ("persona", "persona_gemini")
                     raw_text, finish_reason = await _call_gemini_native_rest(
                         http_client=http_client,
                         model_name=model_name,
                         api_key=api_key,
                         system_instruction=effective_sys,
                         user_text=effective_dump,
-                        temperature=persona_temperature if model_preference in ("persona", "persona_gemini") else 0.8,
-                        timeout=25.0 if model_preference in ("persona", "persona_gemini") else 15.0,
+                        temperature=persona_temperature if is_persona else 0.8,
+                        timeout=25.0 if is_persona else 15.0,
+                        presence_penalty=0.35 if is_persona else None,
+                        frequency_penalty=0.45 if is_persona else None,
                     )
                     if raw_text:
                         result = clean_ai_thinking(raw_text)
@@ -726,6 +753,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         temperature=persona_temperature if model_preference in ("persona", "persona_gemini") else 0.8,
                         timeout=15.0,
                     )
+                    if model_preference in ("persona", "persona_gemini"):
+                        create_kwargs["presence_penalty"] = 0.35
+                        create_kwargs["frequency_penalty"] = 0.45
                     if model_max_tokens is not None:
                         create_kwargs["max_tokens"] = model_max_tokens
                     completion = await client.chat.completions.create(**create_kwargs)
@@ -761,7 +791,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                     skip_model = True
                                     break
             except Exception as e:
-                err_str = str(e)
+                err_str = str(e).strip() or repr(e)
                 logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
                 if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")

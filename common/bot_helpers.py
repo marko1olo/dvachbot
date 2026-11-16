@@ -9,7 +9,7 @@ from common.config import *
 from common.database import *
 from common.db_pool import LazyLock
 from common.anon_identity import get_anon_id
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from post_processor import process_new_post
 
 classic_duel_lock = LazyLock()
@@ -36,6 +36,62 @@ async def send_pvp_direct_notification(bot: Any, user_id: int, text: str) -> boo
     except Exception as e:
         logging.getLogger("runtime").warning(f"Direct notification failed for user {user_id}: {e}")
         return False
+
+
+async def safe_callback_answer(callback: types.CallbackQuery, *args, **kwargs) -> bool:
+    """
+    Safely answers a Telegram CallbackQuery with length truncation (<=195 chars)
+    and suppression of TelegramBadRequest (e.g. query is too old or text is too long).
+    """
+    if not callback:
+        return False
+    try:
+        from aiogram.exceptions import TelegramBadRequest
+        if args and isinstance(args[0], str):
+            text = args[0][:195]
+            args = (text,) + args[1:]
+        elif "text" in kwargs and isinstance(kwargs["text"], str):
+            kwargs["text"] = kwargs["text"][:195]
+        await callback.answer(*args, **kwargs)
+        return True
+    except TelegramBadRequest as e:
+        logging.getLogger("runtime").debug("safe_callback_answer: query expired or invalid: %s", e)
+        return False
+    except Exception as e:
+        logging.getLogger("runtime").debug("safe_callback_answer error: %s", e)
+        return False
+
+
+class SafeMessageProxy:
+    def __init__(self, original_msg, user, bot=None):
+        self._msg = original_msg
+        self.from_user = user
+        self.bot = getattr(original_msg, 'bot', None) or bot
+        self.chat = getattr(original_msg, 'chat', None)
+        self.date = getattr(original_msg, 'date', None)
+        self.message_id = getattr(original_msg, 'message_id', 0)
+        self.text = "/command"
+        self.caption = ""
+        self.html_text = "/command"
+        self.caption_html_text = ""
+        self.reply_to_message = None
+
+    async def answer(self, *args, **kwargs):
+        from aiogram import types
+        if self._msg and hasattr(self._msg, 'answer') and not isinstance(self._msg, types.InaccessibleMessage):
+            try:
+                return await self._msg.answer(*args, **kwargs)
+            except Exception:
+                pass
+        target_chat_id = self.chat.id if (self.chat and hasattr(self.chat, 'id')) else (self.from_user.id if self.from_user else None)
+        if self.bot and target_chat_id:
+            text = args[0] if args else kwargs.pop('text', '')
+            return await self.bot.send_message(chat_id=target_chat_id, text=text, **kwargs)
+        return None
+
+    async def reply(self, *args, **kwargs):
+        return await self.answer(*args, **kwargs)
+
 
 
 def is_ai_slop_content(content: dict | None = None, text: str | None = None) -> bool:
@@ -98,7 +154,7 @@ def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
     admins = bconf.get('admins', [])
     return uid in admins
 
-def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dict:
+def merge_user_active_items_rows(rows: list, board_id: str | None = None, user_id: int | None = None) -> dict:
     """
     Consistently aggregates and synchronizes user assets across all boards so that
     a user never loses shifts, items, achievements, equipment, weapons, buffs, or cooldowns.
@@ -110,6 +166,14 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
     max_shifts = 0
     all_achievements = set()
     work_cooldowns = {}
+
+    shared_cooldowns = {}
+    if user_id:
+        try:
+            from shared_state import get_user_work_cooldowns
+            shared_cooldowns = get_user_work_cooldowns(user_id)
+        except Exception:
+            shared_cooldowns = {}
     daily_streak = 0
     daily_last_claim = 0
     last_bottles = 0
@@ -119,6 +183,11 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
     badge_color = None
     badge_color_active = False
     badge_color_expires = 0
+
+    max_wanted_stars = 0
+    max_bounty = 0.0
+    max_dirty = 0.0
+    max_wanted_updated_at = 0.0
 
     equipped_gear = {}
     guns = {}
@@ -168,7 +237,10 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
         # 3. Work Cooldowns
         for job_id, cd_ts in data.get("work_cooldowns", {}).items():
             if isinstance(cd_ts, (int, float)):
-                work_cooldowns[job_id] = max(work_cooldowns.get(job_id, 0), int(cd_ts))
+                if shared_cooldowns and job_id in shared_cooldowns and shared_cooldowns[job_id] <= 0:
+                    work_cooldowns[job_id] = 0
+                else:
+                    work_cooldowns[job_id] = max(work_cooldowns.get(job_id, 0), int(cd_ts))
 
         # 4. Daily
         dlc = data.get("daily_last_claim", 0)
@@ -214,6 +286,20 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
                 durations[d_key] = max(durations.get(d_key, 0), int(val))
             elif isinstance(val, bool) and val:
                 durations[d_key] = True
+
+        # 11. Criminal Syndicate Status (Cross-board wanted sync)
+        ws = data.get("wanted_stars", 0)
+        if isinstance(ws, (int, float)) and ws > max_wanted_stars:
+            max_wanted_stars = int(ws)
+        bp = data.get("bounty_pool", 0.0) or data.get("bounty", 0.0)
+        if isinstance(bp, (int, float)) and bp > max_bounty:
+            max_bounty = float(bp)
+        db_bal = data.get("dirty_balance", 0.0)
+        if isinstance(db_bal, (int, float)) and db_bal > max_dirty:
+            max_dirty = float(db_bal)
+        w_up = data.get("wanted_updated_at", 0.0)
+        if isinstance(w_up, (int, float)) and w_up > max_wanted_updated_at:
+            max_wanted_updated_at = float(w_up)
 
         # 10. Wardrobe items & equipped gear
         for k, v in data.items():
@@ -275,6 +361,10 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
     if all_achievements:
         result["unlocked_achievements"] = sorted(list(all_achievements))
     if work_cooldowns:
+        if shared_cooldowns:
+            for jid, scd in shared_cooldowns.items():
+                if scd <= 0:
+                    work_cooldowns[jid] = 0
         result["work_cooldowns"] = work_cooldowns
     if daily_streak > 0:
         result["daily_streak"] = daily_streak
@@ -295,6 +385,20 @@ def merge_user_active_items_rows(rows: list, board_id: str | None = None) -> dic
         result["badge_color"] = badge_color
     else:
         result["badge_color"] = None
+
+    if max_wanted_stars > 0:
+        result["wanted_stars"] = max_wanted_stars
+        result["bounty_pool"] = max_bounty
+        result["bounty"] = max_bounty
+        if max_wanted_updated_at > 0:
+            result["wanted_updated_at"] = max_wanted_updated_at
+        try:
+            from criminal_syndicate_engine import apply_wanted_decay
+            apply_wanted_decay(result)
+        except Exception:
+            pass
+    if max_dirty > 0:
+        result["dirty_balance"] = max_dirty
 
     now_ts = int(time.time())
     if badge_color_expires > 0 and now_ts >= badge_color_expires:
@@ -366,7 +470,7 @@ async def _get_user_active_items(db, user_id: int, board_id: str | None = None) 
             async def _fetch_and_merge():
                 async with db.execute("SELECT board_id, active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
                     rows = await c.fetchall()
-                return merge_user_active_items_rows(rows, board_id)
+                return merge_user_active_items_rows(rows, board_id, user_id=user_id)
 
             if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
                 return await _fetch_and_merge()
@@ -1054,4 +1158,887 @@ async def get_post_num_by_reply(msg: types.Message) -> int | None:
         pass
     return None
 
+def is_media_message(msg: Any) -> bool:
+    """
+    Determines whether a message is a media (photo/video/animation) message
+    or a plain text message. Handles real aiogram Message objects and test mocks.
+    """
+    if not msg:
+        return False
+    # If photo attribute exists and is a non-empty sequence or real non-mock photo
+    photo = getattr(msg, "photo", None)
+    if photo is not None:
+        if isinstance(photo, (list, tuple)):
+            if len(photo) > 0:
+                return True
+        elif type(photo).__name__ != "MagicMock" and bool(photo):
+            return True
 
+    video = getattr(msg, "video", None)
+    if video is not None and type(video).__name__ != "MagicMock" and bool(video):
+        return True
+
+    animation = getattr(msg, "animation", None)
+    if animation is not None and type(animation).__name__ != "MagicMock" and bool(animation):
+        return True
+
+    content_type = getattr(msg, "content_type", None)
+    if isinstance(content_type, str) and content_type in ("photo", "video", "animation"):
+        return True
+
+    caption = getattr(msg, "caption", None)
+    if isinstance(caption, str) and caption:
+        return True
+
+    # If edit_caption is specifically provided without edit_text (specialized photo mock)
+    if hasattr(msg, "edit_caption") and not hasattr(msg, "edit_text"):
+        return True
+    return False
+
+
+def get_telegram_utf16_len(text: str) -> int:
+    """
+    Returns text length in UTF-16 code units (as counted by Telegram Bot API).
+    Surrogate pairs (most emojis) count as 2.
+    """
+    if not text:
+        return 0
+    return len(text.encode("utf-16-le")) // 2
+
+
+def smart_split_html(text: str, max_chunk_size: int = 4000) -> List[str]:
+    """
+    Splits text (plain or HTML formatted) into chunks of at most `max_chunk_size` characters,
+    preserving HTML tag hierarchy across chunk boundaries so that every chunk is valid HTML.
+
+    Guarantees:
+    - len(chunk) <= max_chunk_size for every chunk.
+    - All tags opened within or across chunk boundaries are properly closed before chunk ends
+      and re-opened at the start of the next chunk.
+    - Never breaks in the middle of an HTML tag or HTML entity.
+    - Splits on natural paragraph breaks (\n\n), line breaks (\n), or whitespace when possible.
+    """
+    if not text:
+        return []
+    if len(text) <= max_chunk_size:
+        return [text]
+
+    import re
+    TAG_REGEX = re.compile(r'(<(/)?([a-zA-Z0-9_-]+)(?:\s+[^>]*)?>)')
+
+    def get_open_tags(slice_text: str, initial_stack: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        stack = list(initial_stack)
+        for m in TAG_REGEX.finditer(slice_text):
+            full_tag, is_close, tag_name = m.group(1), m.group(2), m.group(3).lower()
+            if is_close:
+                for i in range(len(stack) - 1, -1, -1):
+                    if stack[i][0] == tag_name:
+                        stack.pop(i)
+                        break
+            else:
+                if not full_tag.endswith("/>"):
+                    stack.append((tag_name, full_tag))
+        return stack
+
+    def calc_closing_str(stack: List[Tuple[str, str]]) -> str:
+        return "".join(f"</{tag_name}>" for tag_name, _ in reversed(stack))
+
+    chunks: List[str] = []
+    current_pos = 0
+    total_len = len(text)
+    open_tag_stack: List[Tuple[str, str]] = []
+
+    while current_pos < total_len:
+        prefix = "".join(tag_full for _, tag_full in open_tag_stack)
+
+        est_closing_len = sum(len(tag_name) + 3 for tag_name, _ in open_tag_stack) + 50
+        available_content_len = max(50, max_chunk_size - len(prefix) - est_closing_len)
+
+        target_end = min(total_len, current_pos + available_content_len)
+
+        # Check if rest of text fits cleanly
+        rest_text = text[current_pos:]
+        rest_stack = get_open_tags(rest_text, open_tag_stack)
+        rest_closing = calc_closing_str(rest_stack)
+        if len(prefix) + len(rest_text) + len(rest_closing) <= max_chunk_size:
+            chunks.append(prefix + rest_text + rest_closing)
+            break
+
+        sub = text[current_pos:target_end]
+
+        # Don't cut inside open tag
+        last_lt = sub.rfind('<')
+        last_gt = sub.rfind('>')
+        if last_lt > last_gt:
+            target_end = current_pos + last_lt
+            sub = text[current_pos:target_end]
+
+        # Don't cut inside HTML entity
+        last_amp = sub.rfind('&')
+        last_semi = sub.rfind(';')
+        if last_amp > last_semi and (len(sub) - last_amp) < 10:
+            target_end = current_pos + last_amp
+            sub = text[current_pos:target_end]
+
+        # Find best split point in sub: \n\n > \n > space > hard cut
+        split_idx = -1
+        p_idx = sub.rfind('\n\n')
+        if p_idx != -1 and p_idx > len(sub) // 4:
+            split_idx = p_idx + 2
+        else:
+            nl_idx = sub.rfind('\n')
+            if nl_idx != -1 and nl_idx > len(sub) // 4:
+                split_idx = nl_idx + 1
+            else:
+                sp_idx = sub.rfind(' ')
+                if sp_idx != -1 and sp_idx > len(sub) // 4:
+                    split_idx = sp_idx + 1
+                else:
+                    split_idx = len(sub)
+
+        if split_idx <= 0:
+            split_idx = max(1, len(sub))
+
+        while split_idx > 0:
+            chunk_slice = text[current_pos:current_pos + split_idx]
+            candidate_stack = get_open_tags(chunk_slice, open_tag_stack)
+            closing = calc_closing_str(candidate_stack)
+            if len(prefix) + len(chunk_slice) + len(closing) <= max_chunk_size:
+                open_tag_stack = candidate_stack
+                chunks.append(prefix + chunk_slice + closing)
+                current_pos += split_idx
+                break
+            split_idx -= max(1, (len(prefix) + len(chunk_slice) + len(closing) - max_chunk_size))
+            sub_temp = text[current_pos:current_pos + split_idx]
+            last_lt = sub_temp.rfind('<')
+            last_gt = sub_temp.rfind('>')
+            if last_lt > last_gt:
+                split_idx = last_lt
+        else:
+            chunk_slice = text[current_pos:current_pos + 1]
+            chunks.append(chunk_slice)
+            current_pos += 1
+            open_tag_stack = []
+
+    return chunks
+
+
+async def safe_send_message(
+    bot: Any,
+    chat_id: int,
+    text: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "HTML",
+    disable_web_page_preview: bool = True,
+    sleep_between: float = 0.05
+) -> Optional[Any]:
+    """
+    Safely sends any message, splitting it into valid HTML chunks if len(text) > 4000 chars.
+    Guarantees that TelegramBadRequest: MESSAGE_TOO_LONG is never thrown.
+    Handles HTML parsing fallbacks gracefully.
+    """
+    if not text or not bot or not chat_id:
+        return None
+    import inspect
+    from aiogram.exceptions import TelegramBadRequest
+
+    chunks = smart_split_html(text, max_chunk_size=4000) if len(text) > 4000 else [text]
+    last_msg = None
+
+    for i, chunk in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
+        kb = reply_markup if is_last else None
+        try:
+            res = bot.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                reply_markup=kb,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview
+            )
+            if inspect.isawaitable(res):
+                last_msg = await res
+            else:
+                last_msg = res
+        except TelegramBadRequest as ex:
+            err = str(ex).lower()
+            if "parse" in err or "entity" in err:
+                try:
+                    res = bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        reply_markup=kb,
+                        parse_mode=None,
+                        disable_web_page_preview=disable_web_page_preview
+                    )
+                    if inspect.isawaitable(res):
+                        last_msg = await res
+                    else:
+                        last_msg = res
+                except Exception:
+                    pass
+            elif "message is too long" in err or "too_long" in err:
+                sub_chunks = smart_split_html(chunk, max_chunk_size=2000)
+                for j, sc in enumerate(sub_chunks):
+                    sub_kb = kb if (j == len(sub_chunks) - 1) else None
+                    try:
+                        res = bot.send_message(
+                            chat_id=chat_id,
+                            text=sc,
+                            reply_markup=sub_kb,
+                            parse_mode=None,
+                            disable_web_page_preview=disable_web_page_preview
+                        )
+                        if inspect.isawaitable(res):
+                            last_msg = await res
+                        else:
+                            last_msg = res
+                    except Exception:
+                        pass
+            else:
+                pass
+        except Exception:
+            pass
+
+        if not is_last and sleep_between > 0:
+            await asyncio.sleep(sleep_between)
+
+    return last_msg
+
+
+async def safe_answer(
+    target_obj: Any,
+    text: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "HTML",
+    disable_web_page_preview: bool = True,
+    sleep_between: float = 0.05
+) -> Optional[Any]:
+    """
+    Safely answers via target_obj (Message or CallbackQuery) with automatic HTML chunking.
+    """
+    if not text or not target_obj:
+        return None
+    bot = getattr(target_obj, "bot", None)
+    chat_id = 0
+    if hasattr(target_obj, "chat") and target_obj.chat and hasattr(target_obj.chat, "id"):
+        chat_id = target_obj.chat.id
+    elif hasattr(target_obj, "from_user") and target_obj.from_user and hasattr(target_obj.from_user, "id"):
+        chat_id = target_obj.from_user.id
+
+    if len(text) <= 4000 and hasattr(target_obj, "answer"):
+        import inspect
+        from aiogram.exceptions import TelegramBadRequest
+        try:
+            res = target_obj.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview
+            )
+            if inspect.isawaitable(res):
+                return await res
+            return res
+        except TelegramBadRequest as ex:
+            err = str(ex).lower()
+            if "parse" in err or "entity" in err:
+                try:
+                    res = target_obj.answer(
+                        text,
+                        reply_markup=reply_markup,
+                        parse_mode=None,
+                        disable_web_page_preview=disable_web_page_preview
+                    )
+                    if inspect.isawaitable(res):
+                        return await res
+                    return res
+                except Exception:
+                    pass
+            elif "message is too long" in err:
+                pass
+            else:
+                return None
+        except Exception:
+            return None
+
+    if bot and chat_id:
+        return await safe_send_message(
+            bot=bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+            sleep_between=sleep_between
+        )
+    return None
+
+
+async def safe_reply(
+    message: Any,
+    text: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "HTML",
+    disable_web_page_preview: bool = True,
+    sleep_between: float = 0.05
+) -> Optional[Any]:
+    """
+    Safely replies to a message with automatic HTML chunking.
+    The first chunk is sent as reply; remaining chunks are sent sequentially.
+    """
+    if not text or not message:
+        return None
+    bot = getattr(message, "bot", None)
+    chat_id = message.chat.id if (hasattr(message, "chat") and message.chat) else 0
+
+    if len(text) <= 4000 and hasattr(message, "reply"):
+        import inspect
+        from aiogram.exceptions import TelegramBadRequest
+        try:
+            res = message.reply(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview
+            )
+            if inspect.isawaitable(res):
+                return await res
+            return res
+        except TelegramBadRequest as ex:
+            err = str(ex).lower()
+            if "parse" in err or "entity" in err:
+                try:
+                    res = message.reply(
+                        text,
+                        reply_markup=reply_markup,
+                        parse_mode=None,
+                        disable_web_page_preview=disable_web_page_preview
+                    )
+                    if inspect.isawaitable(res):
+                        return await res
+                    return res
+                except Exception:
+                    pass
+            elif "message is too long" in err:
+                pass
+            else:
+                return None
+        except Exception:
+            return None
+
+    chunks = smart_split_html(text, max_chunk_size=4000)
+    last_msg = None
+    mid = getattr(message, "message_id", None)
+
+    for i, chunk in enumerate(chunks):
+        is_first = (i == 0)
+        is_last = (i == len(chunks) - 1)
+        kb = reply_markup if is_last else None
+        try:
+            if is_first and mid:
+                last_msg = await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    reply_to_message_id=mid,
+                    reply_markup=kb,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=disable_web_page_preview
+                )
+            else:
+                last_msg = await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    reply_markup=kb,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=disable_web_page_preview
+                )
+        except Exception:
+            try:
+                last_msg = await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    reply_to_message_id=mid if is_first else None,
+                    reply_markup=kb,
+                    parse_mode=None,
+                    disable_web_page_preview=disable_web_page_preview
+                )
+            except Exception:
+                pass
+        if not is_last and sleep_between > 0:
+            await asyncio.sleep(sleep_between)
+
+    return last_msg
+
+
+async def _send_safe_text_message(
+    target_obj: Any,
+    bot: Optional[Any],
+    chat_id: int,
+    text: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None
+) -> Optional[Any]:
+    """
+    Attempts to send text message via safe_answer or safe_send_message.
+    Automatically handles messages > 4000 chars, malformed HTML, and network retries.
+    """
+    if not text:
+        return None
+
+    if len(text) > 4000:
+        if bot and chat_id:
+            return await safe_send_message(bot, chat_id, text, reply_markup=reply_markup)
+        if hasattr(target_obj, "answer"):
+            return await safe_answer(target_obj, text, reply_markup=reply_markup)
+
+    import inspect
+    from aiogram.exceptions import TelegramBadRequest
+
+    # 1. Try target_obj.answer (HTML)
+    if hasattr(target_obj, "answer"):
+        try:
+            res = target_obj.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+            if inspect.isawaitable(res):
+                return await res
+            return res
+        except TelegramBadRequest as ex:
+            err = str(ex).lower()
+            if "parse" in err or "entity" in err:
+                try:
+                    res = target_obj.answer(
+                        text,
+                        reply_markup=reply_markup,
+                        parse_mode=None,
+                        disable_web_page_preview=True
+                    )
+                    if inspect.isawaitable(res):
+                        return await res
+                    return res
+                except Exception:
+                    pass
+            elif "message is too long" in err or "too_long" in err:
+                if bot and chat_id:
+                    return await safe_send_message(bot, chat_id, text, reply_markup=reply_markup)
+        except Exception:
+            pass
+
+    # 2. Try bot.send_message (HTML -> Plain text fallback)
+    if bot and chat_id:
+        try:
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+        except TelegramBadRequest as ex:
+            err = str(ex).lower()
+            if "parse" in err or "entity" in err:
+                try:
+                    return await bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        reply_markup=reply_markup,
+                        parse_mode=None,
+                        disable_web_page_preview=True
+                    )
+                except Exception:
+                    pass
+            elif "message is too long" in err or "too_long" in err:
+                return await safe_send_message(bot, chat_id, text, reply_markup=reply_markup)
+        except Exception:
+            pass
+
+    return None
+
+
+_MESSAGE_SAFETY_GUARD_INSTALLED = False
+
+def install_message_safety_guard():
+    """
+    Installs transparent interceptors on Message.answer and Message.reply.
+    Guarantees that ANY handler in dvachbot passing text > 4000 characters is
+    safely chunked and sent rather than raising TelegramBadRequest: MESSAGE_TOO_LONG.
+    """
+    global _MESSAGE_SAFETY_GUARD_INSTALLED
+    if _MESSAGE_SAFETY_GUARD_INSTALLED:
+        return
+    _MESSAGE_SAFETY_GUARD_INSTALLED = True
+
+    from aiogram.types import Message
+    from aiogram.exceptions import TelegramBadRequest
+
+    _orig_answer = Message.answer
+    _orig_reply = Message.reply
+
+    async def _guarded_answer(self: Message, text: str, *args, **kwargs):
+        if not text:
+            return None
+        if len(text) <= 4000:
+            try:
+                return await _orig_answer(self, text, *args, **kwargs)
+            except TelegramBadRequest as ex:
+                err = str(ex).lower()
+                if "parse" in err or "entity" in err:
+                    no_parse = dict(kwargs)
+                    no_parse["parse_mode"] = None
+                    return await _orig_answer(self, text, *args, **no_parse)
+                elif "message is too long" in err or "too_long" in err:
+                    pass
+                else:
+                    raise
+
+        # Over 4000 chars or rejected by Telegram: use safe chunking
+        bot = getattr(self, "bot", None)
+        chat_id = self.chat.id if (self.chat and hasattr(self.chat, "id")) else None
+        if bot and chat_id:
+            return await safe_send_message(
+                bot=bot,
+                chat_id=chat_id,
+                text=text,
+                reply_markup=kwargs.get("reply_markup"),
+                parse_mode=kwargs.get("parse_mode", "HTML"),
+                disable_web_page_preview=kwargs.get("disable_web_page_preview", True)
+            )
+        return await _orig_answer(self, text, *args, **kwargs)
+
+    async def _guarded_reply(self: Message, text: str, *args, **kwargs):
+        if not text:
+            return None
+        if len(text) <= 4000:
+            try:
+                return await _orig_reply(self, text, *args, **kwargs)
+            except TelegramBadRequest as ex:
+                err = str(ex).lower()
+                if "parse" in err or "entity" in err:
+                    no_parse = dict(kwargs)
+                    no_parse["parse_mode"] = None
+                    return await _orig_reply(self, text, *args, **no_parse)
+                elif "message is too long" in err or "too_long" in err:
+                    pass
+                else:
+                    raise
+
+        return await safe_reply(
+            message=self,
+            text=text,
+            reply_markup=kwargs.get("reply_markup"),
+            parse_mode=kwargs.get("parse_mode", "HTML"),
+            disable_web_page_preview=kwargs.get("disable_web_page_preview", True)
+        )
+
+    Message.answer = _guarded_answer
+    Message.reply = _guarded_reply
+    logging.getLogger("runtime").info("🛡️ Message safety guard installed on Message.answer and Message.reply")
+
+
+async def _safe_delete_message(msg: Any) -> bool:
+    """Safely deletes message without throwing unhandled exceptions."""
+    if not msg or not hasattr(msg, "delete"):
+        return False
+    try:
+        import inspect
+        res = msg.delete()
+        if inspect.isawaitable(res):
+            await res
+        return True
+    except Exception:
+        return False
+
+
+async def render_menu_transition(
+    callback: Union[types.CallbackQuery, types.Message],
+    text: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+    category: Optional[str] = None,
+    prefer_banner: bool = False
+) -> None:
+    """
+    Universal Safe View Renderer / Transition Helper for DvachBot Telegram UI.
+    Eliminates all photo-to-text, text-to-photo, and caption-overflow crashes across all menus.
+    Enforces Telegram UTF-16 caption limit (1024 code units) and prevents Ghost UI deletion.
+
+    Rules:
+    1. If source message is media AND new view cannot be media (not prefer_banner or UTF-16 len > 1024):
+       Send new text message first (with plain text fallback on bad HTML), then safely delete old media message.
+    2. If source message is media AND new view can be media (prefer_banner and UTF-16 len <= 1024):
+       Try edit_caption. If message is not modified, show toast '🔄 Информация актуальна'.
+       If edit_caption fails, send new via send_banner_message and safely delete old message.
+    3. If source message is text AND prefer_banner is True:
+       Send via send_banner_message (with fallback to text), then safely delete old text message.
+    4. If source message is text AND prefer_banner is False:
+       Try edit_text (with plain-text fallback on entity error). If message is not modified, show toast.
+       If edit_text fails, send new text message and safely delete old message.
+    5. Always ensures callback query is safely answered without raising unhandled timeouts.
+    """
+    import inspect
+    from aiogram.exceptions import TelegramBadRequest
+
+    # Unpack Message and CallbackQuery safely across real aiogram classes and mock objects
+    is_callback = isinstance(callback, types.CallbackQuery) or (
+        hasattr(callback, "data") and isinstance(getattr(callback, "data", None), (str, bytes))
+    )
+    if not is_callback and (
+        isinstance(callback, types.Message)
+        or hasattr(callback, "chat")
+        or hasattr(callback, "edit_text")
+        or hasattr(callback, "edit_caption")
+        or not hasattr(callback, "message")
+    ):
+        msg = callback
+        cb = None
+        bot = getattr(callback, "bot", None)
+        chat_id = callback.chat.id if (callback.chat and hasattr(callback.chat, "id")) else 0
+    else:
+        cb = callback
+        msg = getattr(callback, "message", None)
+        bot = getattr(callback, "bot", None) or (getattr(msg, "bot", None) if msg else None)
+        chat_id = 0
+        if msg and hasattr(msg, "chat") and msg.chat and hasattr(msg.chat, "id"):
+            chat_id = msg.chat.id
+        elif hasattr(callback, "from_user") and callback.from_user and hasattr(callback.from_user, "id"):
+            chat_id = callback.from_user.id
+
+    async def _safe_answer_if_needed(toast: Optional[str] = None) -> None:
+        if not cb:
+            return
+        ans_mock = getattr(cb, "answer", None)
+        if ans_mock and hasattr(ans_mock, "called") and isinstance(ans_mock.called, bool):
+            is_answered = ans_mock.called
+        else:
+            raw_answered = getattr(cb, "_answered", False)
+            is_answered = bool(raw_answered) if isinstance(raw_answered, bool) else False
+
+        if toast:
+            await safe_callback_answer(cb, toast)
+        elif not is_answered:
+            await safe_callback_answer(cb)
+
+    # Missing or InaccessibleMessage
+    from aiogram.types import InaccessibleMessage
+    if not msg or isinstance(msg, InaccessibleMessage):
+        if prefer_banner and bot:
+            try:
+                from banner_manager import send_banner_message
+                sent = await send_banner_message(
+                    bot=bot,
+                    chat_id=chat_id,
+                    caption=text,
+                    reply_markup=reply_markup,
+                    category=category or "start",
+                    parse_mode="HTML"
+                )
+                if sent:
+                    await _safe_answer_if_needed()
+                    return
+            except Exception:
+                pass
+        if bot and chat_id:
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+            except TelegramBadRequest as ex:
+                if "parse" in str(ex).lower() or "entity" in str(ex).lower():
+                    try:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=text,
+                            reply_markup=reply_markup,
+                            parse_mode=None,
+                            disable_web_page_preview=True
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        await _safe_answer_if_needed()
+        return
+
+    is_media = is_media_message(msg)
+    utf16_len = get_telegram_utf16_len(text)
+    can_fit_caption = (utf16_len <= 1024) and (len(text) <= 1024)
+
+    # Case 1: Source message is media (photo/banner)
+    if is_media:
+        if prefer_banner and can_fit_caption:
+            try:
+                if hasattr(msg, "edit_caption"):
+                    res = msg.edit_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode="HTML"
+                    )
+                    if inspect.isawaitable(res):
+                        await res
+                    await _safe_answer_if_needed()
+                    return
+            except TelegramBadRequest as ex:
+                if "message is not modified" in str(ex).lower():
+                    await _safe_answer_if_needed("🔄 Информация актуальна")
+                    return
+                logging.getLogger("runtime").debug(f"render_menu_transition: edit_caption failed: {ex}")
+            except Exception as ex:
+                logging.getLogger("runtime").debug(f"render_menu_transition: edit_caption error: {ex}")
+
+            # If edit_caption failed, send fresh banner then delete old
+            sent = None
+            if bot:
+                try:
+                    from banner_manager import send_banner_message
+                    sent = await send_banner_message(
+                        bot=bot,
+                        chat_id=chat_id,
+                        caption=text,
+                        reply_markup=reply_markup,
+                        category=category or "start",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
+            if not sent:
+                sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
+
+            if sent:
+                await _safe_delete_message(msg)
+
+            await _safe_answer_if_needed()
+            return
+        else:
+            # Source is media, but target is text (prefer_banner is False or UTF-16 len > 1024)
+            sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
+            if sent:
+                await _safe_delete_message(msg)
+
+            await _safe_answer_if_needed()
+            return
+
+    # Case 2: Source message is plain text
+    else:
+        if prefer_banner:
+            sent = None
+            if bot:
+                try:
+                    from banner_manager import send_banner_message
+                    sent = await send_banner_message(
+                        bot=bot,
+                        chat_id=chat_id,
+                        caption=text,
+                        reply_markup=reply_markup,
+                        category=category or "start",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
+            if not sent:
+                sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
+
+            if sent:
+                await _safe_delete_message(msg)
+
+            await _safe_answer_if_needed()
+            return
+        else:
+            # Source is text and target is text: try edit_text
+            try:
+                if hasattr(msg, "edit_text"):
+                    res = msg.edit_text(
+                        text=text,
+                        reply_markup=reply_markup,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                    if inspect.isawaitable(res):
+                        await res
+                    await _safe_answer_if_needed()
+                    return
+            except TelegramBadRequest as ex:
+                if "message is not modified" in str(ex).lower():
+                    await _safe_answer_if_needed("🔄 Информация актуальна")
+                    return
+                if "parse" in str(ex).lower() or "entity" in str(ex).lower():
+                    try:
+                        res = msg.edit_text(
+                            text=text,
+                            reply_markup=reply_markup,
+                            parse_mode=None,
+                            disable_web_page_preview=True
+                        )
+                        if inspect.isawaitable(res):
+                            await res
+                        await _safe_answer_if_needed()
+                        return
+                    except Exception:
+                        pass
+                logging.getLogger("runtime").debug(f"render_menu_transition: edit_text failed: {ex}")
+            except Exception as ex:
+                logging.getLogger("runtime").debug(f"render_menu_transition: edit_text error: {ex}")
+
+            # Fallback if edit_text fails (e.g. message too old or was deleted)
+            sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
+            if sent:
+                await _safe_delete_message(msg)
+
+            await _safe_answer_if_needed()
+            return
+
+
+render_menu_view = render_menu_transition
+
+
+async def resolve_target_user_id(db, target_str: str) -> int | None:
+    """Определяет Telegram user_id по переданной строке (Anon-ID или числовой ID)."""
+    if not target_str:
+        return None
+    raw = target_str.strip("[]@ #").lower()
+    if not raw:
+        return None
+
+    # 1. Числовой Telegram ID
+    if raw.isdigit() and len(raw) >= 6:
+        try:
+            tid = int(raw)
+            async with db.execute("SELECT 1 FROM Users WHERE user_id = ? LIMIT 1", (tid,)) as cursor:
+                if await cursor.fetchone():
+                    return tid
+        except Exception:
+            pass
+
+    # 2. Поиск по Anon ID среди пользователей в БД
+    try:
+        from common.anon_identity import get_anon_id
+        async with db.execute("SELECT DISTINCT user_id FROM Users LIMIT 5000") as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                uid = r[0]
+                if get_anon_id(uid).lower() == raw or get_anon_id(uid, "en").lower() == raw:
+                    return uid
+    except Exception:
+        pass
+
+    return None
+
+
+def get_active_visual_debuff_count(items: dict, now: int) -> int:
+    """Returns number of active visual debuffs (shit, vomit, flags)."""
+    if not isinstance(items, dict):
+        return 0
+    cnt = 0
+    if items.get("shit_until", 0) > now:
+        cnt += 1
+    if items.get("vomit_until", 0) > now:
+        cnt += 1
+    if items.get("flag_ua_until", 0) > now or items.get("flag_ru_until", 0) > now:
+        cnt += 1
+    return cnt

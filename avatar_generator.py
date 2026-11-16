@@ -58,7 +58,7 @@ def build_character_card(
     """
     Generates an 800x1050px RPG Character Sheet for Telegram imageboards.
     """
-    from wardrobe_engine import CLOTHING_CATALOG, get_active_set_bonuses
+    from wardrobe_engine import CLOTHING_CATALOG, get_active_set_bonuses, get_wardrobe_total_stats
     W, H = 800, 1050
     img = Image.new("RGBA", (W, H), (14, 14, 18, 255))
     draw = ImageDraw.Draw(img)
@@ -223,17 +223,23 @@ def build_character_card(
     has_flag_ua = active_items.get("flag_ua_until", 0) > now_ts
     has_flag_ru = active_items.get("flag_ru_until", 0) > now_ts
 
-    tox_val = min(100, int(15 + posts_count * 0.04 + (30 if active_items.get("knife_gun") else 0) + (40 if active_items.get("partyvan_gun") else 0)))
-    def_val = min(100, (45 if has_tinfoil else 5) + (35 if has_shield else 0) + (25 if active_items.get("pepperspray_gun") else 0))
-    san_val = max(0, 100 - (50 if has_curse else 0) - (30 if has_shit else 0) - (25 if has_vomit else 0) - min(40, posts_count // 120))
+    w_stats = get_wardrobe_total_stats(active_items, current_time=now_ts)
+    w_tox = w_stats.get("total_toxicity", 0)
+    weapon_tox = (
+        (30 if active_items.get("knife_gun") else 0)
+        + (40 if active_items.get("partyvan_gun") else 0)
+        + (20 if active_items.get("shit_gun") else 0)
+        + (20 if active_items.get("vomit_gun") else 0)
+    )
+    base_tox = int(15 + posts_count * 0.04)
+    tox_val = min(100, max(0, base_tox + weapon_tox + w_tox))
+
+    def_val = min(100, max(0, (45 if has_tinfoil else 5) + (35 if has_shield else 0) + (25 if active_items.get("pepperspray_gun") else 0) + w_stats.get("total_defense", 0)))
+    san_val = min(100, max(0, 100 - (50 if has_curse else 0) - (30 if has_shit else 0) - (25 if has_vomit else 0) - min(40, posts_count // 120) + w_stats.get("total_sanity", 0)))
     wealth_val = min(100, int((balance / 1500) * 100))
 
     # Apply Set Bonus stats if present
     active_sets = get_active_set_bonuses(active_items)
-    for s in active_sets:
-        tox_val = max(0, min(100, tox_val + s.get("bonus_toxicity", 0)))
-        def_val = max(0, min(100, def_val + s.get("bonus_defense", 0)))
-        san_val = max(0, min(100, san_val + s.get("bonus_sanity", 0)))
 
     unl_ach = active_items.get("unlocked_achievements", [])
     ach_txt = f"🏆 Трофеи: {len(unl_ach)}/12"
@@ -317,18 +323,28 @@ def build_character_html_card(
     """
     Generates a lightning-fast formatted HTML text character sheet with zero PIL image rendering overhead.
     """
-    from wardrobe_engine import get_active_set_bonuses, CLOTHING_CATALOG
+    from wardrobe_engine import get_active_set_bonuses, get_wardrobe_total_stats, CLOTHING_CATALOG
     active_sets = get_active_set_bonuses(active_items)
 
+    now_ts = int(time.time())
     equipped_head = active_items.get("equipped_head")
     equipped_torso = active_items.get("equipped_torso")
     equipped_face = active_items.get("equipped_face")
     equipped_feet = active_items.get("equipped_feet")
 
-    has_tinfoil = active_items.get("tinfoil_hat", 0) > time.time()
-    has_shield = active_items.get("shield_active", 0) > time.time() or active_items.get("reflect_shield_until", 0) > time.time()
-    has_curse = cursed_until > time.time() or active_items.get("cursed_until", 0) > time.time()
-    has_shit = active_items.get("shit_until", 0) > time.time() or active_items.get("shit_covered_until", 0) > time.time()
+    has_tinfoil = (
+        active_items.get("tinfoil_hat", 0) > now_ts
+        or active_items.get("tinfoil_until", 0) > now_ts
+        or equipped_head == "hat_tinfoil"
+    )
+    has_shield = (
+        active_items.get("shield_active", 0) > now_ts
+        or active_items.get("reflect_shield_until", 0) > now_ts
+        or active_items.get("shield_until", 0) > now_ts
+    )
+    has_curse = cursed_until > now_ts or active_items.get("cursed_until", 0) > now_ts
+    has_shit = active_items.get("shit_until", 0) > now_ts or active_items.get("shit_covered_until", 0) > now_ts
+    has_vomit = active_items.get("vomit_until", 0) > now_ts
 
     head_name = CLOTHING_CATALOG.get(equipped_head, {}).get("name") if equipped_head in CLOTHING_CATALOG else ("👽 Шапочка из фольги" if has_tinfoil else ("👑 VIP Корона" if custom_prefix else "<i>(Пусто)</i>"))
     torso_name = CLOTHING_CATALOG.get(equipped_torso, {}).get("name", "<i>(Пусто)</i>")
@@ -346,20 +362,21 @@ def build_character_html_card(
     elif active_items.get("flag_ru_gun"): weapon_name = "🇷🇺 Флаг России"
 
     # RPG Stats calculation
-    toxicity = min(100, max(5, int(posts_count * 1.5) % 100))
-    defense = 10
-    if has_shield: defense += 40
-    if equipped_head == "hat_helmet": defense += 30
-    for s in active_sets:
-        if s.get("id") == "set_riot_police": defense += 20
-    defense = min(100, defense)
+    w_stats = get_wardrobe_total_stats(active_items, current_time=now_ts)
+    w_tox = w_stats.get("total_toxicity", 0)
+    weapon_tox = (
+        (30 if active_items.get("knife_gun") else 0)
+        + (40 if active_items.get("partyvan_gun") else 0)
+        + (20 if active_items.get("shit_gun") else 0)
+        + (20 if active_items.get("vomit_gun") else 0)
+    )
+    base_tox = int(15 + posts_count * 0.04)
+    toxicity = min(100, max(0, base_tox + weapon_tox + w_tox))
 
-    sanity = 100
-    if has_curse: sanity = 15
-    elif active_items.get("schizopill_active", 0) > time.time(): sanity = 40
-    elif equipped_torso == "body_straitjacket": sanity = 25
+    defense = min(100, max(0, (45 if has_tinfoil else 5) + (35 if has_shield else 0) + (25 if active_items.get("pepperspray_gun") else 0) + w_stats.get("total_defense", 0)))
+    sanity = min(100, max(0, 100 - (50 if has_curse else 0) - (30 if has_shit else 0) - (25 if has_vomit else 0) - min(40, posts_count // 120) + w_stats.get("total_sanity", 0)))
 
-    wealth = min(100, int(balance / 50))
+    wealth = min(100, int((balance / 1500) * 100))
 
     def make_bar(val: int) -> str:
         filled = int(val / 10)

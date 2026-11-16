@@ -238,31 +238,60 @@ class NewPostProcessor:
                                         pass
 
                         from common.debuff_phrases import get_debuff_footer
+                        target_fields = []
+                        if 'text' in self.author_content and self.author_content['text']:
+                            target_fields.append(('text', 3900))
+                        elif 'caption' in self.author_content and self.author_content['caption']:
+                            target_fields.append(('caption', 950))
+
+                        # Build ordered list of active debuffs
+                        active_footers = []
                         if is_cursed:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                curse_tag = get_debuff_footer("curse")
-                                self.author_content['text'] += f"\n\n<i>{curse_tag}</i>"
-                        if is_schizo:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                if "ШИЗО-ТАБЛЕТКА" not in self.author_content['text']:
-                                    tag = get_debuff_footer("schizo")
-                                    self.author_content['text'] = f"💊 <i>[ШИЗО-ТАБЛЕТКА]</i> {self.author_content['text']}\n\n<i>{tag}</i>"
+                            active_footers.append(get_debuff_footer("curse"))
                         if is_shat:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                shit_tag = get_debuff_footer("shit")
-                                self.author_content['text'] += f"\n\n<i>{shit_tag}</i>"
+                            active_footers.append(get_debuff_footer("shit"))
                         if is_vomited:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                vomit_tag = get_debuff_footer("vomit")
-                                self.author_content['text'] += f"\n\n<i>{vomit_tag}</i>"
+                            active_footers.append(get_debuff_footer("vomit"))
                         if is_flag_ua:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                flag_ua_tag = get_debuff_footer("flag_ua")
-                                self.author_content['text'] += f"\n\n<i>{flag_ua_tag}</i>"
-                        if is_flag_ru:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                flag_ru_tag = get_debuff_footer("flag_ru")
-                                self.author_content['text'] += f"\n\n<i>{flag_ru_tag}</i>"
+                            active_footers.append(get_debuff_footer("flag_ua"))
+                        elif is_flag_ru:
+                            active_footers.append(get_debuff_footer("flag_ru"))
+
+                        for field_name, max_units in target_fields:
+                            field_val = self.author_content[field_name]
+                            if not isinstance(field_val, str) or not field_val.strip():
+                                continue
+
+                            schizo_prefix = "💊 <i>[ШИЗО-ТАБЛЕТКА]</i> " if (is_schizo and "ШИЗО-ТАБЛЕТКА" not in field_val) else ""
+                            schizo_suffix = f"\n\n<i>{get_debuff_footer('schizo')}</i>" if (is_schizo and "ШИЗО-ТАБЛЕТКА" not in field_val) else ""
+
+                            consolidated = ""
+                            if active_footers:
+                                consolidated = "\n".join(f"<i>{tag}</i>" for tag in active_footers[:2])
+
+                            extra_footer = ""
+                            if schizo_suffix and consolidated:
+                                extra_footer = f"{schizo_suffix}\n{consolidated}"
+                            elif schizo_suffix:
+                                extra_footer = schizo_suffix
+                            elif consolidated:
+                                extra_footer = f"\n\n{consolidated}"
+
+                            # Budget author text length so debuff footer is NEVER cut off
+                            from common.bot_helpers import get_telegram_utf16_len
+                            footer_units = get_telegram_utf16_len(extra_footer) + get_telegram_utf16_len(schizo_prefix) + 10
+                            body_budget = max(100, max_units - footer_units)
+
+                            try:
+                                from common.text_chunker import safe_html_truncate
+                                from common.text_utils import balance_html_tags
+                                if get_telegram_utf16_len(field_val) > body_budget:
+                                    truncated = safe_html_truncate(field_val, max_units=body_budget)
+                                    field_val = balance_html_tags(truncated)
+                            except Exception:
+                                pass
+
+                            self.author_content[field_name] = f"{schizo_prefix}{field_val}{extra_footer}" 
             except Exception:
                 pass
 
@@ -311,13 +340,14 @@ class NewPostProcessor:
 
         # Fallback retry if create_post returned None (e.g. temporary SQLite lock/timeout)
         if self.current_post_num is None:
-            max_retries = 3
-            delays = [0.5, 1.2, 2.5]
+            max_retries = 4
+            delays = [0.3, 0.8, 1.5, 3.0]
             for attempt in range(max_retries):
-                retry_delay = delays[attempt] if attempt < len(delays) else 2.0
+                base_delay = delays[attempt] if attempt < len(delays) else 2.5
+                retry_delay = base_delay + random.uniform(0.05, 0.15)
                 logger.warning(
                     f"⚠️ [POST_RECORD_RETRY] create_post returned None for user={self.user_id} board={self.board_id}. "
-                    f"Retrying ({attempt + 1}/{max_retries}) after {retry_delay}s..."
+                    f"Retrying ({attempt + 1}/{max_retries}) after {retry_delay:.2f}s..."
                 )
                 await asyncio.sleep(retry_delay)
                 self.current_post_num = await create_post(

@@ -105,7 +105,7 @@ async def push_event_to_board(
         "raid_oligarch": "🚩 Участвовать в рейде!",
         "market_event":  "🛒 В чёрный рынок (/shop)",
         "wealth_tax":    "🏛 Посмотреть итоги",
-        "votemute_open": "🪣 Закрыть бочку (голос)",
+        "votemute_open": "⚖️ Участвовать в голосовании",
     }
     btn_text = button_labels.get(event_type, "🎮 Перейти в бот")
 
@@ -270,23 +270,23 @@ async def push_votemute_open(
     bot: Any,
     board_id: str,
     post_num: int,
-    target_anon_id: str,
+    target_anon_id: Optional[str] = None,
     votes_count: int = 1,
     votes_req: int = 5,
     exclude_uid: Optional[int] = None,
 ) -> int:
-    """Пуш при старте народного вотума (бочка с говном / суд Линча)."""
+    """Пуш при старте народного вотума (народное голосование / суд Линча)."""
     return await push_event_to_board(
         bot=bot,
         board_id=board_id,
         event_type="votemute_open",
-        headline="🪣 БОЧКА С ГОВНОМ ПЕРЕПОЛНЕНА!",
+        headline="⚖️ ОТКРЫТО НАРОДНОЕ ГОЛОСОВАНИЕ!",
         body_lines=[
-            f"💩 Главный загрязнитель: Пост №{post_num} / <code>[ID:{target_anon_id}]</code>",
-            f"👃 Жалоб от анонов: {votes_count}/{votes_req}",
-            "⏳ Крышка открыта ещё: ~10 мин.",
+            f"🎯 Выдвинут пост: <code>#{post_num}</code>",
+            f"🗳 Собрано голосов: {votes_count}/{votes_req}",
+            "⏳ Голосование активно: ~10 мин.",
             "",
-            "<i>Зажми нос и нажми кнопку! 5 жалоб = бочка закрыта: ЖЕЛЕЗНЫЙ МУТ 30 минут.</i>",
+            f"<i>Для принятия решения требуется {votes_req} голосов. Присоединяйся к голосованию!</i>",
         ],
         exclude_uid=exclude_uid,
     )

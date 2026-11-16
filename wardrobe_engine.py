@@ -125,6 +125,19 @@ CLOTHING_CATALOG = {
         "non_buyable": True,
         "desc": "Неоновая ушанка силовика будущего навсегда. +30 к Защите и Рассудку, иммунитет к поносу /curse."
     },
+    "hat_golden_crown": {
+        "id": "hat_golden_crown",
+        "slot": "head",
+        "tier": 5,
+        "name": "👑 Золотая Корона Олигарха",
+        "price": 50000,
+        "duration_days": 30,
+        "duration_hours": 720,
+        "defense": 40,
+        "toxicity": 10,
+        "sanity": 45,
+        "desc": "Корона из червонного золота с сапфирами на 30 дней. +40 к Защите, +45 к Рассудку, статус 👑👑 и +30% к чаевым на /work."
+    },
 
     # === ОДЕЖДА И ТОРС (TORSO / BODY) ===
     "body_tracksuit": {
@@ -220,6 +233,32 @@ CLOTHING_CATALOG = {
         "non_buyable": True,
         "desc": "Роскошная мантия из чистого золота. +45 к Защите, 50% шанс отражения грабежей /rob."
     },
+    "body_sheikh_mantle": {
+        "id": "body_sheikh_mantle",
+        "slot": "torso",
+        "tier": 5,
+        "name": "🦹 Мантия Золотого Падишаха",
+        "price": 100000,
+        "duration_days": 30,
+        "duration_hours": 720,
+        "defense": 60,
+        "toxicity": 5,
+        "sanity": 50,
+        "desc": "Царская мантия из золотой парчи на 30 дней. +60 к Защите, +50 к Рассудку, скрывает баланс и 50% шанс отражения грабежей /rob."
+    },
+    "body_cyber_suit": {
+        "id": "body_cyber_suit",
+        "slot": "torso",
+        "tier": 5,
+        "name": "🦾 Эксклюзивный Кибер-Костюм",
+        "price": 125000,
+        "duration_days": 30,
+        "duration_hours": 720,
+        "defense": 70,
+        "toxicity": 20,
+        "sanity": 60,
+        "desc": "Титановый боевой экзоскелет на 30 дней. +70 к Защите, +60 к Рассудку, 0 штрафов на работе и полный стелс баланса."
+    },
 
     # === ЛИЦО И ОЧКИ (FACE / GLASSES) ===
     "face_clown_nose": {
@@ -288,6 +327,19 @@ CLOTHING_CATALOG = {
         "non_buyable": True,
         "desc": "Платиновый монокль олигарха. +50 к Рассудку, бейдж [⚜️ Олигарх] в заголовке постов."
     },
+    "face_cyber_visor": {
+        "id": "face_cyber_visor",
+        "slot": "face",
+        "tier": 5,
+        "name": "🥽 Эксклюзивный Кибер-Визор",
+        "price": 35000,
+        "duration_days": 30,
+        "duration_hours": 720,
+        "defense": 25,
+        "toxicity": 15,
+        "sanity": 40,
+        "desc": "Неоновый визор кибер-синдиката на 30 дней. +25 к Защите, +40 к Рассудку, +15% к победам в казино и бейдж 🥽."
+    },
 
     # === ОБУВЬ И ПЕДАЛИ (FEET / SHOES) ===
     "feet_slippers": {
@@ -329,6 +381,20 @@ CLOTHING_CATALOG = {
         "sanity": 20,
         "desc": "Стоптанные берцы на 30 дней. 30% шанс успешно съебать при облаве пативэна /partyvan."
     }
+    ,
+    "feet_golden_sneakers": {
+        "id": "feet_golden_sneakers",
+        "slot": "feet",
+        "tier": 5,
+        "name": "👟 Золотые Тяги Олигарха",
+        "price": 75000,
+        "duration_days": 30,
+        "duration_hours": 720,
+        "defense": 30,
+        "toxicity": 10,
+        "sanity": 35,
+        "desc": "Бархатные тяги с позолотой на 30 дней. +30 к Защите, 40% шанс уворота от /partyvan и /shoot, сокращение кулдауна /work на 30%."
+    }
 }
 
 WARDROBE_CATALOG = CLOTHING_CATALOG
@@ -342,6 +408,7 @@ SET_BONUSES = {
         "name": "🦺 Сет «Анатолий Вассерман / Онотоле»",
         "items": ["body_wasserman", "face_wasserman_glasses"],
         "bonus_desc": "+40% к зарплате на всех сменах /work и полный иммунитет к проклятию шизы.",
+        "short_desc": "+40% ЗП, иммунитет к шизе",
         "salary_mult": 1.40,
         "schizo_immunity": True,
         "bonus_defense": 20,
@@ -352,6 +419,7 @@ SET_BONUSES = {
         "name": "🪖 Сет «Силовик ОМОНа»",
         "items": ["hat_helmet", "feet_boots"],
         "bonus_desc": "-70% ко времени мута от выстрела, 0 штрафов на работе и иммунитет к говну.",
+        "short_desc": "-70% мут, 0 штрафов, иммун к говну",
         "mute_reduction_pct": 70,
         "shit_immunity": True,
         "work_fine_immunity": True,
@@ -362,6 +430,7 @@ SET_BONUSES = {
         "name": "👘 Сет «Труъ-Хикка Анимешник»",
         "items": ["hat_cat_ears", "body_hoodie"],
         "bonus_desc": "+50 к Рассудку персонажа и 2x шанс выпадения редких лутбоксов на работе.",
+        "short_desc": "+50 Рассудок, 2x лутбоксы",
         "lootbox_2x_chance": True,
         "bonus_sanity": 50,
         "bonus_toxicity": -15
@@ -371,6 +440,7 @@ SET_BONUSES = {
         "name": "🩲 Сет «Подъездный Сыч»",
         "items": ["hat_crown", "body_tracksuit"],
         "bonus_desc": "40% шанс отпугнуть грабителя в /rob и +35% к чаевым на работе.",
+        "short_desc": "40% испуг /rob, +35% чаевые",
         "rob_fear_chance": 0.40,
         "tips_mult": 1.35,
         "bonus_toxicity": 25
@@ -380,6 +450,7 @@ SET_BONUSES = {
         "name": "🥼 Сет «Палата №6 / Шизофреник»",
         "items": ["body_straitjacket", "hat_tinfoil"],
         "bonus_desc": "Абсолютная невосприимчивость к Слабительному и Шизо-таблеткам.",
+        "short_desc": "Иммунитет к слабительному и шизе",
         "laxative_immunity": True,
         "schizo_immunity": True,
         "bonus_toxicity": 40
@@ -389,11 +460,36 @@ SET_BONUSES = {
         "name": "🕶️ Сет «Избранный / Нео»",
         "items": ["body_cloak", "face_anon_mask"],
         "bonus_desc": "+50 к Защите, скрытность баланса от налётов, +25% к ЗП на работе и +20% к выигрышу в казино.",
+        "short_desc": "+50 Защита, скрытность, +25% ЗП, +20% казино",
         "salary_mult": 1.25,
         "casino_bonus_pct": 20,
         "stealth": True,
         "bonus_defense": 50,
         "bonus_sanity": 30
+    }
+    ,
+    "set_oligarch": {
+        "id": "set_oligarch",
+        "name": "👑 Сет «Шекелевый Олигарх»",
+        "items": ["hat_golden_crown", "body_sheikh_mantle"],
+        "bonus_desc": "+50 к Защите, скрытность от налётов, 50% шанс отражения /rob, +30% к зарплате /work и королевский статус 👑👑 в постах.",
+        "short_desc": "+50 Защита, скрытность, 50% отражение /rob, +30% ЗП",
+        "salary_mult": 1.30,
+        "stealth": True,
+        "bonus_defense": 50,
+        "bonus_sanity": 50
+    },
+    "set_cyber_syndicate": {
+        "id": "set_cyber_syndicate",
+        "name": "🛸 Сет «Кибер-Синдикат»",
+        "items": ["face_cyber_visor", "body_cyber_suit"],
+        "bonus_desc": "+50 к Защите, 50% уворот от пативэна, +25% казино, стелс и статус 🛸 в постах.",
+        "short_desc": "+50 Защита, 50% уворот, +25% казино, стелс",
+        "evasion_chance": 0.50,
+        "casino_bonus_pct": 25,
+        "stealth": True,
+        "bonus_defense": 50,
+        "bonus_sanity": 40
     }
 }
 
@@ -536,14 +632,30 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     equipped_ids = {item["id"] for item in equipped.values()}
     active_sets = []
     for set_id, set_info in SET_BONUSES.items():
-        if all(req in equipped_ids for req in set_info["items"]):
-            active_sets.append(set_info)
+        if set_id == "set_neo":
+            if "body_cloak" in equipped_ids and bool({"face_anon_mask", "face_thug_glasses"} & equipped_ids):
+                active_sets.append(set_info)
+        else:
+            if all(req in equipped_ids for req in set_info["items"]):
+                active_sets.append(set_info)
 
     primary_set = active_sets[0] if active_sets else None
     active_set_ids = {s.get("id") for s in active_sets}
 
     # 3. Sum RPG Stats
-    tot_def = sum(item.get("defense", 0) for item in equipped.values())
+    tot_def = 0
+    for item in equipped.values():
+        item_id = item.get("id")
+        dur = items_dict.get(f"{item_id}_durability")
+        if isinstance(items_dict.get(item_id), dict):
+            dur = items_dict[item_id].get("durability", dur)
+        is_broken = (
+            items_dict.get(f"{item_id}_broken", False)
+            or (dur is not None and float(dur) <= 0.0)
+            or (isinstance(items_dict.get(item_id), dict) and items_dict[item_id].get("broken", False))
+        )
+        if not is_broken:
+            tot_def += item.get("defense", 0)
     tot_tox = sum(item.get("toxicity", 0) for item in equipped.values())
     tot_san = sum(item.get("sanity", 0) for item in equipped.values())
     for s in active_sets:
@@ -552,15 +664,21 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
         tot_san += s.get("bonus_sanity", s.get("sanity", 0))
 
     # 4. Robbery formulas
-    has_padishah = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_padishah_mantle")
+    has_padishah = bool(equipped.get("torso") and equipped["torso"]["id"] in ("body_padishah_mantle", "body_sheikh_mantle"))
     has_golden_foil = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_foil")
 
-    # P_deflect = min(0.35, max(0.0, Def * 0.0025))
-    rob_deflect = min(0.35, max(0.0, round(tot_def * 0.0025, 4)))
+    # Scaled deflection formula
+    # Deflection scaling: rob_deflect = min(0.75, max(0.0, round(tot_def * 0.005, 4)))
+    # If set bonus is active (e.g. bonus_defense > 0 or tier set), allow deflect up to 0.85 (85%)
+    has_set_bonus = bool(active_sets and len(active_sets) > 0)
+    max_deflect_cap = 0.85 if has_set_bonus else 0.75
+
+    rob_deflect = min(max_deflect_cap, max(0.0, round(tot_def * 0.005, 4)))
     if has_golden_foil:
         rob_deflect = max(rob_deflect, 0.25)
     if has_padishah:
         rob_deflect = max(rob_deflect, 0.50)
+    rob_deflect = min(max_deflect_cap, rob_deflect)
 
     # stolen_reduction = min(0.60, max(0.0, Def / 200.0))
     rob_stolen_red = min(0.60, max(0.0, round(tot_def / 200.0, 4)))
@@ -570,8 +688,12 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     rob_fear = 0.40 if has_skuf_set else (0.25 if has_tracksuit else 0.0)
 
     # 5. Combat evasion & mute reduction
-    has_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_sneakers")
-    evasion = 0.30 if has_sneakers else 0.0
+    has_golden_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_golden_sneakers")
+    has_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] in ("feet_sneakers", "feet_golden_sneakers"))
+    evasion = 0.40 if has_golden_sneakers else (0.30 if has_sneakers else 0.0)
+    for s in active_sets:
+        if s.get("evasion_chance"):
+            evasion = max(evasion, s["evasion_chance"])
 
     has_riot_set = bool("set_riot_police" in active_set_ids or "set_omon" in active_set_ids)
     has_helmet = bool(equipped.get("head") and equipped["head"]["id"] == "hat_helmet")
@@ -588,7 +710,8 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     has_wasserman = bool("set_wasserman" in active_set_ids or "set_onotole" in active_set_ids)
     lax_imm = bool(has_ward6)
     schizo_imm = bool(has_ward6 or has_wasserman or has_golden_foil)
-    work_fine_imm = bool(has_helmet or has_riot_set)
+    has_cyber_suit = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_cyber_suit")
+    work_fine_imm = bool(has_helmet or has_riot_set or has_cyber_suit)
 
     # 7. Work bonuses
     has_neo = bool("set_neo" in active_set_ids)
@@ -604,16 +727,23 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
 
     if has_neo:
         sal_mult = round(sal_mult + 0.25, 2)
+    for s in active_sets:
+        if s.get("salary_mult") and s.get("id") not in ("set_wasserman", "set_neo"):
+            sal_mult = round(sal_mult + (s["salary_mult"] - 1.0), 2)
 
+    has_golden_crown = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_crown")
     if has_skuf_set:
         tips_mult = 1.35
+    elif has_golden_crown:
+        tips_mult = 1.30
     elif equipped.get("head") and equipped["head"]["id"] == "hat_crown":
         tips_mult = 1.20
     else:
         tips_mult = 1.0
 
-    has_slippers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_slippers")
-    cool_mult = 0.80 if has_slippers else 1.0
+    has_golden_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_golden_sneakers")
+    has_slippers = bool(equipped.get("feet") and equipped["feet"]["id"] in ("feet_slippers", "feet_golden_sneakers"))
+    cool_mult = 0.70 if has_golden_sneakers else (0.80 if has_slippers else 1.0)
 
     has_bag = bool(equipped.get("head") and equipped["head"]["id"] == "hat_bag")
     loot_flat = 0.08 if has_bag else 0.0
@@ -622,7 +752,11 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     loot_mult = 2.0 if has_hikka else 1.0
 
     has_thug = bool(equipped.get("face") and equipped["face"]["id"] == "face_thug_glasses")
-    casino_bonus = 20 if has_neo else (5 if has_thug else 0)
+    has_visor = bool(equipped.get("face") and equipped["face"]["id"] == "face_cyber_visor")
+    casino_bonus = 20 if has_neo else (15 if has_visor else (5 if has_thug else 0))
+    for s in active_sets:
+        if s.get("casino_bonus_pct"):
+            casino_bonus = max(casino_bonus, s["casino_bonus_pct"])
 
     # 8. Social visibility icon
     set_icons = {
@@ -632,10 +766,13 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
         "set_gop_skuf": "👑 ",
         "set_ward6": "🥼 ",
         "set_neo": "🕶️ ",
+        "set_oligarch": "👑👑 ",
+        "set_cyber_syndicate": "🛸 ",
     }
     head_icons = {
         "hat_tinfoil": "👽 ",
         "hat_crown": "👑 ",
+        "hat_golden_crown": "👑👑 ",
         "hat_cat_ears": "🐱 ",
         "hat_helmet": "🪖 ",
         "hat_tophat": "🎩 ",
@@ -646,6 +783,7 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
         "face_clown_nose": "🤡 ",
         "face_thug_glasses": "🕶️ ",
         "face_monocle": "⚜️ ",
+        "face_cyber_visor": "🥽 ",
     }
     compact_icon = ""
     if primary_set and primary_set.get("id") in set_icons:
@@ -656,8 +794,8 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
         compact_icon = head_icons[equipped["face"]["id"]]
 
     has_anon_mask = bool(equipped.get("face") and equipped["face"]["id"] == "face_anon_mask")
-    has_mantle = bool(equipped.get("torso") and equipped["torso"]["id"] in ("body_dva_ch_mantle", "body_padishah_mantle"))
-    stealth = bool(has_anon_mask or has_neo or has_mantle)
+    has_mantle = bool(equipped.get("torso") and equipped["torso"]["id"] in ("body_dva_ch_mantle", "body_padishah_mantle", "body_sheikh_mantle", "body_cyber_suit"))
+    stealth = bool(has_anon_mask or has_neo or has_mantle or any(s.get("stealth") for s in active_sets))
 
     eq_summary_parts = [item["name"] for item in equipped.values()]
     eq_summary = ", ".join(eq_summary_parts) if eq_summary_parts else "(Ничего не надето)"
@@ -699,8 +837,12 @@ def get_active_set_bonuses(active_items: Dict[str, Any]) -> List[Dict[str, Any]]
 
     active_sets = []
     for set_id, set_info in SET_BONUSES.items():
-        if all(req_item in equipped_ids for req_item in set_info["items"]):
-            active_sets.append(set_info)
+        if set_id == "set_neo":
+            if "body_cloak" in equipped_ids and bool({"face_anon_mask", "face_thug_glasses"} & equipped_ids):
+                active_sets.append(set_info)
+        else:
+            if all(req_item in equipped_ids for req_item in set_info["items"]):
+                active_sets.append(set_info)
     return active_sets
 
 
@@ -743,6 +885,24 @@ def get_owned_wardrobe_items(active_items: Any) -> List[Dict[str, Any]]:
     return owned
 
 
+def _normalize_item_text(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _find_clothing_item(query: str) -> Tuple[Optional[str], Optional[dict]]:
+    if not query:
+        return None, None
+    if query in CLOTHING_CATALOG:
+        return query, CLOTHING_CATALOG[query]
+    q_norm = _normalize_item_text(query)
+    for cid, cinfo in CLOTHING_CATALOG.items():
+        c_norm = _normalize_item_text(cinfo.get("name", ""))
+        cid_norm = _normalize_item_text(cid)
+        if q_norm == cid_norm or q_norm == c_norm or (len(q_norm) >= 3 and (q_norm in c_norm or c_norm in q_norm or q_norm in cid_norm)):
+            return cid, cinfo
+    return None, None
+
+
 def equip_item(active_items: Any, item_id: str) -> Tuple[bool, str]:
     """
     Equips an owned item into its respective slot.
@@ -751,6 +911,11 @@ def equip_item(active_items: Any, item_id: str) -> Tuple[bool, str]:
         return False, "Неверный формат инвентаря."
 
     item = CLOTHING_CATALOG.get(item_id)
+    if not item:
+        resolved_id, resolved_item = _find_clothing_item(item_id)
+        if resolved_item:
+            item_id = resolved_id
+            item = resolved_item
     if not item:
         return False, "Предмет не найден в каталоге."
 
@@ -775,8 +940,10 @@ def equip_item(active_items: Any, item_id: str) -> Tuple[bool, str]:
     sets = get_active_set_bonuses(active_items)
     set_note = ""
     for s in sets:
-        if item_id in s["items"]:
-            set_note = f"\n✨ <b>АКТИВИРОВАН СЕТ-БОНУС:</b> {s['name']}!\n<i>{s['bonus_desc']}</i>"
+        in_set = (item_id in s["items"]) or (s.get("id") == "set_neo" and item_id in ("body_cloak", "face_anon_mask", "face_thug_glasses"))
+        if in_set:
+            bonus_short = s.get("short_desc") or s.get("bonus_desc", "")
+            set_note = f"\n✨ СЕТ: {s['name']}! {bonus_short}"
 
             # Unlock set achievement
             target_ach = SET_ACHIEVEMENT_MAP.get(s["id"])
@@ -784,21 +951,64 @@ def equip_item(active_items: Any, item_id: str) -> Tuple[bool, str]:
                 import achievements_engine
                 unlocked, ach_info = achievements_engine.check_and_unlock_achievement(active_items, target_ach)
                 if unlocked and ach_info:
-                    set_note += f"\n🏆 <b>НОВОЕ ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+                    set_note += f"\n🏆 Достижение: {ach_info['name']}!"
 
-    return True, f"Ты успешно надел <b>{item['name']}</b>!{set_note}"
+    msg = f"Ты успешно надел <b>{item['name']}</b>!{set_note}"
+    if len(msg) > 190:
+        msg = msg[:187] + "..."
+    return True, msg
+
+
+SLOT_SYNONYMS: Dict[str, str] = {
+    "head": "head",
+    "голова": "head",
+    "шапка": "head",
+    "шляпа": "head",
+    "головной_убор": "head",
+    "torso": "torso",
+    "торс": "torso",
+    "тело": "torso",
+    "body": "torso",
+    "одежда": "torso",
+    "туловище": "torso",
+    "face": "face",
+    "лицо": "face",
+    "очки": "face",
+    "маска": "face",
+    "feet": "feet",
+    "обувь": "feet",
+    "ноги": "feet",
+    "ботинки": "feet",
+    "тапки": "feet",
+    "педали": "feet",
+    "сапоги": "feet",
+    "boots": "feet",
+}
 
 
 def unequip_slot(active_items: Any, slot: str) -> Tuple[bool, str]:
     """
-    Unequips whatever is in the specified slot ('head', 'torso', 'face', 'feet').
+    Unequips whatever is in the specified slot ('head', 'torso', 'face', 'feet') or matching item.
     """
     if not isinstance(active_items, dict):
         return False, "Неверный формат инвентаря."
-    if slot not in ("head", "torso", "face", "feet"):
-        return False, "Неверный слот экипировки."
+    target = slot.lower().strip().replace("-", "_").replace(" ", "_")
+    if target in SLOT_SYNONYMS:
+        slot_key = SLOT_SYNONYMS[target]
+    elif target in CLOTHING_CATALOG:
+        slot_key = CLOTHING_CATALOG[target]["slot"]
+        if active_items.get(f"equipped_{slot_key}") != target:
+            return False, f"Предмет <b>{CLOTHING_CATALOG[target]['name']}</b> сейчас не надет."
+    else:
+        found_id, found_item = _find_clothing_item(slot)
+        if found_id and found_item:
+            slot_key = found_item["slot"]
+            if active_items.get(f"equipped_{slot_key}") != found_id:
+                return False, f"Предмет <b>{found_item['name']}</b> сейчас не надет."
+        else:
+            return False, "Неверный слот или название предмета экипировки."
 
-    current = active_items.pop(f"equipped_{slot}", None)
+    current = active_items.pop(f"equipped_{slot_key}", None)
     if current and current in CLOTHING_CATALOG:
         return True, f"Ты снял <b>{CLOTHING_CATALOG[current]['name']}</b>."
     return True, "Слот очищен."
@@ -823,6 +1033,7 @@ def check_wardrobe_set_achievements(active_items: Any) -> List[Dict[str, Any]]:
     return unlocked_achievements
 
 
+# -----------------------------------------------------------------------------
 def check_wardrobe_collection_achievements(active_items: Any) -> List[Dict[str, Any]]:
     """
     Checks wardrobe collection size (5+, 15+, 30+ items) and awards trophies:
@@ -851,3 +1062,191 @@ def check_wardrobe_collection_achievements(active_items: Any) -> List[Dict[str, 
             unlocked_achievements.append(ach_info)
 
     return unlocked_achievements
+
+
+# -----------------------------------------------------------------------------
+# Wardrobe Durability & Repair System
+# -----------------------------------------------------------------------------
+
+def apply_armor_durability_hit(
+    active_items: Dict[str, Any],
+    slot: str = "body",
+    damage_pct: float = 0.10
+) -> Tuple[bool, str]:
+    """
+    Applies durability damage to the equipped item in the specified slot.
+    - slot: 'body'/'torso', 'head', 'face', 'feet' (or direct item_id).
+    - damage_pct: fraction or percentage of durability lost (e.g. 0.10 for 10%).
+    If item durability reaches 0, it becomes broken and its stat defense is disabled.
+    """
+    if not isinstance(active_items, dict):
+        return False, "Неверный формат инвентаря."
+
+    item_id = None
+    if slot in CLOTHING_CATALOG:
+        item_id = slot
+    else:
+        normalized_slot = "torso" if slot == "body" else slot
+        item_id = (
+            active_items.get(f"equipped_{normalized_slot}")
+            or active_items.get(f"equipped_{slot}")
+        )
+        if not item_id and slot in ("body", "torso"):
+            item_id = active_items.get("equipped_torso") or active_items.get("equipped_body")
+
+    if not item_id or item_id not in CLOTHING_CATALOG:
+        return False, f"В слоте '{slot}' нет экипированного предмета."
+
+    item_info = CLOTHING_CATALOG[item_id]
+    item_name = item_info.get("name", item_id)
+    dur_key = f"{item_id}_durability"
+    broken_key = f"{item_id}_broken"
+
+    # Current durability
+    curr_dur = active_items.get(dur_key)
+    if isinstance(active_items.get(item_id), dict):
+        curr_dur = active_items[item_id].get("durability", curr_dur)
+    if curr_dur is None:
+        curr_dur = 100.0
+    else:
+        try:
+            curr_dur = float(curr_dur)
+        except (ValueError, TypeError):
+            curr_dur = 100.0
+
+    is_already_broken = (
+        bool(active_items.get(broken_key, False))
+        or curr_dur <= 0.0
+        or (isinstance(active_items.get(item_id), dict) and active_items[item_id].get("broken", False))
+    )
+    if is_already_broken:
+        active_items[dur_key] = 0.0
+        active_items[broken_key] = True
+        if isinstance(active_items.get(item_id), dict):
+            active_items[item_id]["durability"] = 0.0
+            active_items[item_id]["broken"] = True
+        return False, f"Предмет {item_name} уже сломан и требует ремонта!"
+
+    if damage_pct <= 0.0:
+        return True, f"Урон по прочности предмета {item_name} не нанесен."
+
+    dmg_points = round(damage_pct * 100.0, 2) if damage_pct <= 1.0 else round(damage_pct, 2)
+    new_dur = max(0.0, round(curr_dur - dmg_points, 2))
+    active_items[dur_key] = new_dur
+    if isinstance(active_items.get(item_id), dict):
+        active_items[item_id]["durability"] = new_dur
+
+    if new_dur <= 0.0:
+        active_items[dur_key] = 0.0
+        active_items[broken_key] = True
+        if isinstance(active_items.get(item_id), dict):
+            active_items[item_id]["broken"] = True
+        return True, f"Предмет {item_name} сломался! Защита отключена до ремонта."
+
+    active_items[broken_key] = False
+    if isinstance(active_items.get(item_id), dict):
+        active_items[item_id]["broken"] = False
+    return True, f"Прочность предмета {item_name} снизилась до {new_dur:.1f}%."
+
+
+def calculate_item_repair_cost(
+    item_id: str,
+    current_durability: float,
+    user_balance: float = 0.0
+) -> int:
+    """
+    Рассчитывает стоимость ремонта предмета гардероба.
+    Стоимость масштабируется от базовой цены предмета и недостающей прочности.
+    Для состоятельных пользователей добавляется небольшой налог на ремонт
+    (int(user_balance * 0.002), max 10,000 ₪), создавая активный sink валюты.
+    """
+    item = CLOTHING_CATALOG.get(item_id, {})
+    base_price = int(item.get("price", 100))
+
+    if current_durability is None:
+        cur_dur = 100.0
+    else:
+        try:
+            cur_dur = float(current_durability)
+        except (ValueError, TypeError):
+            cur_dur = 100.0
+
+    if cur_dur > 1.0:
+        missing_ratio = max(0.0, min(1.0, (100.0 - cur_dur) / 100.0))
+    else:
+        missing_ratio = max(0.0, min(1.0, 1.0 - cur_dur))
+
+    if missing_ratio <= 0.0001:
+        return 0
+
+    base_repair_cost = int(round(base_price * missing_ratio))
+    bal = max(0.0, float(user_balance or 0.0))
+    repair_tax = min(10000, int(bal * 0.002))
+
+    total_cost = base_repair_cost + repair_tax
+    return max(1, total_cost) if base_repair_cost > 0 or repair_tax > 0 else 0
+
+
+def repair_wardrobe_item(
+    active_items: Dict[str, Any],
+    item_id: str,
+    user_balance: float = 0.0
+) -> Tuple[bool, str, int]:
+    """
+    Восстанавливает прочность предмета гардероба до 100% и возвращает (успех, сообщение, списанную стоимость).
+    """
+    if not isinstance(active_items, dict):
+        return False, "Неверный формат инвентаря.", 0
+
+    if item_id not in CLOTHING_CATALOG:
+        return False, f"Предмет '{item_id}' не найден в каталоге гардероба.", 0
+
+    item_info = CLOTHING_CATALOG[item_id]
+    item_name = item_info.get("name", item_id)
+    slot = item_info.get("slot", "")
+
+    is_owned = (
+        active_items.get(f"owned_{item_id}", False)
+        or active_items.get(f"{item_id}_is_permanent", False)
+        or active_items.get(f"equipped_{slot}") == item_id
+        or active_items.get(f"equipped_body") == item_id
+        or active_items.get(f"{item_id}_durability") is not None
+        or active_items.get(f"{item_id}_expires") is not None
+        or (isinstance(active_items.get(item_id), dict))
+    )
+    if not is_owned:
+        return False, f"У тебя нет предмета {item_name} в гардеробе.", 0
+
+    dur_key = f"{item_id}_durability"
+    broken_key = f"{item_id}_broken"
+
+    curr_dur = active_items.get(dur_key)
+    if isinstance(active_items.get(item_id), dict):
+        curr_dur = active_items[item_id].get("durability", curr_dur)
+
+    is_broken = (
+        bool(active_items.get(broken_key, False))
+        or (isinstance(active_items.get(item_id), dict) and active_items[item_id].get("broken", False))
+    )
+
+    if curr_dur is None and not is_broken:
+        curr_dur = 100.0
+    elif curr_dur is not None:
+        try:
+            curr_dur = float(curr_dur)
+        except (ValueError, TypeError):
+            curr_dur = 100.0
+
+    if curr_dur is not None and curr_dur >= 100.0 and not is_broken:
+        return False, f"Предмет {item_name} полностью исправен и не требует ремонта.", 0
+
+    bal = float(user_balance or active_items.get("balance", 0.0))
+    cost = calculate_item_repair_cost(item_id, curr_dur if curr_dur is not None else 0.0, bal)
+
+    active_items[dur_key] = 100.0
+    active_items[broken_key] = False
+    if isinstance(active_items.get(item_id), dict):
+        active_items[item_id]["durability"] = 100.0
+        active_items[item_id]["broken"] = False
+
+    return True, f"Предмет {item_name} успешно отремонтирован до 100% за {cost:,.0f} ₪.", cost

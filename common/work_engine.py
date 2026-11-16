@@ -14,6 +14,74 @@ import threading
 _WORK_ENGINE_LOCK = threading.RLock()
 _GLOBAL_JOB_TIMERS: Dict[Tuple[int, str], int] = {}
 
+
+class JobResult(tuple):
+    """
+    Result tuple returned by execute_job_action:
+    Unpacks as 4 elements for full backward compatibility:
+        (is_success, amount_change, text_message, item_dropped) = result
+    Also provides access to achievement details:
+        result.achievement / result[4] -> achievement dict or None
+        result.achievements -> list of achievement dicts unlocked in this shift
+        result.ach_bonus -> total cash bonus from achievements or 0
+    """
+    achievement: Optional[Dict[str, Any]] = None
+    achievements: list = []
+    ach_bonus: int = 0
+
+    def __new__(
+        cls,
+        is_success: bool,
+        amount: int,
+        text: str,
+        drop: Optional[str],
+        achievement: Optional[Dict[str, Any]] = None,
+        achievements: Optional[list] = None,
+    ):
+        instance = super().__new__(cls, (is_success, amount, text, drop))
+        instance.achievement = achievement
+        instance.achievements = achievements or ([achievement] if achievement else [])
+        instance.ach_bonus = sum(
+            max(0, int(a.get("reward_cash", 0)))
+            for a in instance.achievements
+            if isinstance(a, dict)
+        )
+        return instance
+
+    def __getitem__(self, index):
+        if index == 4:
+            return self.achievement
+        return super().__getitem__(index)
+
+
+
+
+def reset_job_timer(user_id: int, job_id: Optional[str] = None):
+    """
+    Resets in-memory global job timer for a user/job (e.g. Flash Ultra energy drink).
+    """
+    with _WORK_ENGINE_LOCK:
+        if job_id is not None:
+            _GLOBAL_JOB_TIMERS.pop((user_id, job_id), None)
+        else:
+            to_remove = [k for k in _GLOBAL_JOB_TIMERS if k[0] == user_id]
+            for k in to_remove:
+                _GLOBAL_JOB_TIMERS.pop(k, None)
+
+clear_global_job_timer = reset_job_timer
+
+def _clear_global_job_timer_legacy(user_id: int, job_id: Optional[str] = None):
+    """
+    Clears global in-memory job timers for a user (e.g. when Flash Ultra energy drink is used).
+    """
+    with _WORK_ENGINE_LOCK:
+        if job_id is not None:
+            _GLOBAL_JOB_TIMERS.pop((user_id, job_id), None)
+        else:
+            to_remove = [k for k in _GLOBAL_JOB_TIMERS if k[0] == user_id]
+            for k in to_remove:
+                _GLOBAL_JOB_TIMERS.pop(k, None)
+
 # -----------------------------------------------------------------------------
 # 9 Career Tiers (Authentic Dvach Lore & High-Stakes Progression)
 # -----------------------------------------------------------------------------
@@ -1679,6 +1747,75 @@ def is_night_shift_active(current_time: Optional[int] = None) -> bool:
     return 0 <= msk_hour < 7
 
 
+def get_user_daily_fatigue_info(recent_shifts: Any, now: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Returns daily fatigue metrics for the rolling 24-hour window across all vacancies.
+    Returns:
+        {
+            'shifts_today': N,
+            'efficiency_pct': 100/80/55/35/20,
+            'tier_desc': '1-3 смены (100%)',
+            'next_tier_at': 4
+        }
+    """
+    if now is None:
+        now = time.time()
+
+    total_shifts_today = 0
+    if isinstance(recent_shifts, dict):
+        for jid, timestamps in recent_shifts.items():
+            if isinstance(timestamps, list):
+                total_shifts_today += sum(1 for ts in timestamps if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400)
+            elif isinstance(timestamps, (int, float)) and 0 <= (now - timestamps) < 86400:
+                total_shifts_today += 1
+    elif isinstance(recent_shifts, list):
+        total_shifts_today = sum(1 for ts in recent_shifts if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400)
+    elif isinstance(recent_shifts, (int, float)):
+        total_shifts_today = max(0, int(recent_shifts))
+    else:
+        total_shifts_today = 0
+
+    if total_shifts_today <= 3:
+        eff = 100
+        desc = "1-3 смены (100%)"
+        next_at = 4
+    elif total_shifts_today <= 6:
+        eff = 80
+        desc = "4-6 смен (80%)"
+        next_at = 7
+    elif total_shifts_today <= 10:
+        eff = 55
+        desc = "7-10 смен (55%)"
+        next_at = 11
+    elif total_shifts_today <= 15:
+        eff = 35
+        desc = "11-15 смен (35%)"
+        next_at = 16
+    else:
+        eff = 20
+        desc = "16+ смен (20%)"
+        next_at = None
+
+    return {
+        "shifts_today": total_shifts_today,
+        "efficiency_pct": eff,
+        "tier_desc": desc,
+        "next_tier_at": next_at,
+    }
+
+
+def format_fatigue_badge(fatigue_info: Dict[str, Any]) -> str:
+    """
+    Formats player-visible fatigue badge:
+    `⚡ Смена за сутки: N | Эффективность: P%` (or with `(усталость -X%)` when < 100%).
+    """
+    shifts = fatigue_info.get("shifts_today", 0)
+    eff = fatigue_info.get("efficiency_pct", 100)
+    if eff < 100:
+        return f"⚡ Смена за сутки: {shifts} | Эффективность: {eff}% (усталость -{100 - eff}%)"
+    return f"⚡ Смена за сутки: {shifts} | Эффективность: {eff}%"
+
+
 def execute_job_action(
     job_id: str,
     current_items: dict,
@@ -1690,10 +1827,10 @@ def execute_job_action(
     Thread-safe, anti-race, cross-board synchronized.
     """
     if not isinstance(current_items, dict):
-        return False, 0, "❌ Ошибка данных инвентаря.", None
+        return JobResult(False, 0, "❌ Ошибка данных инвентаря.", None)
 
     if job_id not in WORK_VACANCIES:
-        return False, 0, "❌ Неизвестная вакансия.", None
+        return JobResult(False, 0, "❌ Неизвестная вакансия.", None)
 
     with _WORK_ENGINE_LOCK:
         job = WORK_VACANCIES[job_id]
@@ -1721,12 +1858,32 @@ def execute_job_action(
             except Exception:
                 shared_ts = 0
             mem_ts = _GLOBAL_JOB_TIMERS.get((effective_uid, job_id), 0)
+            try:
+                from shared_state import get_user_work_cooldowns
+                if effective_uid is not None and get_user_work_cooldowns(effective_uid).get(job_id, 0) == 0:
+                    shared_ts = 0
+                    mem_ts = 0
+                    local_ts = 0
+                    work_timers[job_id] = 0
+            except Exception:
+                pass
             shared_ts = max(shared_ts, mem_ts)
 
         try:
             local_ts = int(work_timers.get(job_id, 0))
         except (ValueError, TypeError):
             local_ts = 0
+
+        if effective_uid is not None:
+            try:
+                from shared_state import get_user_work_cooldowns
+                u_cds = get_user_work_cooldowns(effective_uid)
+                if job_id in u_cds and u_cds[job_id] <= 0:
+                    shared_ts = 0
+                    local_ts = 0
+                    work_timers[job_id] = 0
+            except Exception:
+                pass
 
         last_time = max(local_ts, shared_ts)
         passed = max(0, now - last_time) if last_time <= now else 0
@@ -1776,7 +1933,7 @@ def execute_job_action(
                 cd_str = f"{left_sec // 60} мин"
             else:
                 cd_str = f"{left_sec} сек"
-            return False, 0, f"⏳ Кулдаун! Эта смена будет доступна через {cd_str}.", None
+            return JobResult(False, 0, f"⏳ Кулдаун! Эта смена будет доступна через {cd_str}.", None)
 
         # Check Requirements (Progressive shifts unlock)
         try:
@@ -1787,7 +1944,7 @@ def execute_job_action(
 
         req_shifts = job.get("required_shifts", 0)
         if total_shifts < req_shifts:
-            return False, 0, f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}).", None
+            return JobResult(False, 0, f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}).", None)
 
         # Atomic cooldown reservation: prevent any concurrent request from passing the gate
         work_timers[job_id] = now
@@ -1838,38 +1995,67 @@ def execute_job_action(
 
         salary_mult = round(salary_mult, 2)
 
-        # Progressive Daily Fatigue System (Unique per Vacancy)
-        # Each subsequent shift on the SAME vacancy completed within the last 24h yields 15% less reward (down to a 20% floor).
-        # Multiplier = max(0.20, 0.85 ** shifts_today)
+        # Global Daily Fatigue System (Cross-Vacancy, 24-Hour Rolling Window)
+        # Tracks ALL shifts completed by the user in the past 24 hours across all vacancies.
+        # Scale:
+        #   Shifts 1–3:  100% (mult = 1.00)
+        #   Shifts 4–6:   80% (mult = 0.80)
+        #   Shifts 7–10:  55% (mult = 0.55)
+        #   Shifts 11–15: 35% (mult = 0.35)
+        #   Shifts 16+:   20% (mult = 0.20 floor)
         raw_recent = current_items.get("recent_shifts")
-        if isinstance(raw_recent, dict):
-            recent_job_shifts = [ts for ts in raw_recent.get(job_id, []) if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
-        elif isinstance(raw_recent, list):
-            # Graceful migration for legacy list format: treat previous timestamps as belonging to this job
-            recent_job_shifts = [ts for ts in raw_recent if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
-            current_items["recent_shifts"] = {job_id: list(recent_job_shifts)}
-        else:
-            recent_job_shifts = []
+        total_shifts_today = 0
+        cleaned_shifts = {}
 
-        shifts_today = len(recent_job_shifts)
-        fatigue_mult = max(0.20, 0.85 ** shifts_today)
-        if shifts_today > 0:
+        if isinstance(raw_recent, dict):
+            for jid, timestamps in raw_recent.items():
+                if isinstance(timestamps, list):
+                    valid = [ts for ts in timestamps if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+                    if valid:
+                        cleaned_shifts[jid] = valid
+                        total_shifts_today += len(valid)
+            current_items["recent_shifts"] = cleaned_shifts
+        elif isinstance(raw_recent, list):
+            valid = [ts for ts in raw_recent if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+            total_shifts_today = len(valid)
+            cleaned_shifts = {job_id: list(valid)} if valid else {}
+            current_items["recent_shifts"] = cleaned_shifts
+        else:
+            current_items["recent_shifts"] = {}
+
+        current_shift_num = total_shifts_today + 1
+
+        if current_shift_num <= 3:
+            fatigue_mult = 1.00
+        elif current_shift_num <= 6:
+            fatigue_mult = 0.80
+        elif current_shift_num <= 10:
+            fatigue_mult = 0.55
+        elif current_shift_num <= 15:
+            fatigue_mult = 0.35
+        else:
+            fatigue_mult = 0.20
+
+        if fatigue_mult < 1.0:
             fatigue_pct = int(round((1.0 - fatigue_mult) * 100))
-            buff_notes.append(f"⚡ Усталость по вакансии: -{fatigue_pct}% (смена #{shifts_today + 1})")
+            buff_notes.append(f"⚡ Усталость: -{fatigue_pct}% (смена #{current_shift_num})")
+            fatigue_badge = f"⚡ Смена за сутки: {current_shift_num} | Эффективность: {int(round(fatigue_mult * 100))}% (усталость -{fatigue_pct}%)"
+        else:
+            fatigue_badge = f"⚡ Смена за сутки: {current_shift_num} | Эффективность: 100%"
 
         def _record_shift_completion(jid: str):
             work_timers[jid] = now
             shifts_dict = current_items.get("recent_shifts")
             if not isinstance(shifts_dict, dict):
                 shifts_dict = {}
-            cleaned_shifts = {}
+            cleaned = {}
             for k, v in shifts_dict.items():
                 if isinstance(v, list):
                     valid = [ts for ts in v if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
                     if valid:
-                        cleaned_shifts[k] = valid
-            cleaned_shifts.setdefault(jid, []).append(now)
-            current_items["recent_shifts"] = cleaned_shifts
+                        cleaned[k] = valid
+            cleaned.setdefault(jid, []).append(now)
+            current_items["recent_shifts"] = cleaned
 
         # Failure & Risk Calculation
         risk_pct = max(0.0, float(job.get("risk_pct", 0.0)))
@@ -1886,20 +2072,30 @@ def execute_job_action(
                 fail_list = ["🚨 Штраф за косяк на смене: -{penalty} ₪!"]
             raw_fail = random.choice(fail_list).format(penalty=penalty, reward=0)
             clean_fail = re.sub(r'<[^>]+>', '', raw_fail)
-            return False, penalty, clean_fail, None
+            return JobResult(False, penalty, f"{clean_fail}\n{fatigue_badge}", None)
 
         # Success & Reward Calculation
         base_reward = random.randint(job["reward_range"][0], job["reward_range"][1])
         is_jackpot = random.random() < 0.04 and bool(job.get("jackpot_phrases"))
 
+        # Multiplier Cap & Absolute Ceiling Enforcement:
+        # 1. Multiplier product cap: salary_mult * jackpot_mult <= 2.25x
+        # 2. Absolute payout ceiling: maximum 45,000 ₪
+        MAX_COMBINED_MULTIPLIER = 2.25
+        MAX_SHIFT_REWARD_CAP = 45000
+
         if is_jackpot:
-            mult = random.randint(2, 3)
-            reward = max(1, int(round(base_reward * mult * salary_mult * fatigue_mult)))
+            raw_jackpot_mult = random.randint(2, 3)
+            combined_mult = min(MAX_COMBINED_MULTIPLIER, salary_mult * raw_jackpot_mult)
+            reward = int(round(base_reward * combined_mult * fatigue_mult))
+            reward = min(MAX_SHIFT_REWARD_CAP, max(1, reward))
             _record_shift_completion(job_id)
             jp_tmpl = random.choice(job["jackpot_phrases"]).format(reward=reward, penalty=0)
             clean_msg = re.sub(r'<[^>]+>', '', jp_tmpl)
         else:
-            reward = max(1, int(round(base_reward * salary_mult * fatigue_mult)))
+            combined_mult = min(MAX_COMBINED_MULTIPLIER, salary_mult * 1.0)
+            reward = int(round(base_reward * combined_mult * fatigue_mult))
+            reward = min(MAX_SHIFT_REWARD_CAP, max(1, reward))
             _record_shift_completion(job_id)
             succ_list = list(job.get("phrases", [])) + UNIVERSAL_WORK_SUCCESS_PHRASES
             if not succ_list:
@@ -1911,6 +2107,8 @@ def execute_job_action(
         total_shifts += 1
         current_items["work_shifts"] = total_shifts
         ach_note = ""
+        unlocked_ach = None
+        unlocked_achs = []
         try:
             from achievements_engine import check_and_unlock_achievement
             for req, ach_key in [
@@ -1930,10 +2128,18 @@ def execute_job_action(
                     unlocked, ach_info = check_and_unlock_achievement(current_items, ach_key)
                     if unlocked and ach_info:
                         ach_cash = max(0, int(ach_info.get('reward_cash', 0)))
-                        reward += ach_cash
+                        unlocked_ach = ach_info
+                        unlocked_achs.append(ach_info)
+                        # Note: We do NOT add ach_cash to reward!
+                        # Achievement reward is tracked separately to avoid inflating shift payouts.
                         ach_note += f" | 🏆 Ачивка: {ach_info['name']} (+{ach_cash} ₪)!"
         except Exception:
             pass
+
+        current_items["last_unlocked_achievement"] = unlocked_ach
+        if unlocked_ach:
+            current_items["unlocked_achievement"] = unlocked_ach
+            current_items["unlocked_achievements_batch"] = unlocked_achs
 
         # Check Random Item Drop (Anime set 2x, Tracksuit 2x, Bag 1.5x / 8% flat)
         drop_rate_mult = 2.0 if (active_set and active_set.get("id") in ["set_anime", "set_anime_hikka"]) else 1.0
@@ -1951,8 +2157,20 @@ def execute_job_action(
         elif head == "hat_bag" and random.random() < 0.08:
             dropped_item = "trash_lootbox"
 
-        buff_suffix = f" (Шмот: {', '.join(buff_notes)})" if buff_notes else ""
-        final_text = f"{clean_msg}{ach_note}{buff_suffix}"
+        # Loan Defaulter Wage Garnishment
+        if float(current_items.get("loan_owed", 0.0) or 0.0) > 0 or current_items.get("has_active_loan"):
+            try:
+                from heist_and_loan_engine import garnish_wages_for_loan
+                garnished_reward, garnished_amt, _notice = garnish_wages_for_loan(current_items, reward)
+                if garnished_amt > 0:
+                    reward = garnished_reward
+                    debt_left = int(float(current_items.get("loan_owed", 0.0) or 0.0))
+                    buff_notes.append(f"👵 Коллекторы Пахома: -{int(garnished_amt):,} ₪ в счет долга (осталось {debt_left:,} ₪)")
+            except Exception:
+                pass
 
-        return True, reward, final_text, dropped_item
+        buff_suffix = f" (Шмот: {', '.join(buff_notes)})" if buff_notes else ""
+        final_text = f"{clean_msg}{ach_note}{buff_suffix}\n{fatigue_badge}"
+
+        return JobResult(True, reward, final_text, dropped_item, unlocked_ach, unlocked_achs)
 

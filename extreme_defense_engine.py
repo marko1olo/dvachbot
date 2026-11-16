@@ -13,6 +13,8 @@ from common.database import (
     get_post_by_num
 )
 from site_tgach.admin_config import ADMIN_IDS
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from html import escape as html_escape
 
 logger = logging.getLogger("extreme_defense")
 
@@ -49,7 +51,15 @@ GORE_SEVERE_INJURY = {
 }
 
 SAFE_ART_STYLES = {
-    'anime', 'illustration', 'sketch', 'painting', 'cartoon', 'comic', 'manga', '3d_render'
+    'anime', 'illustration', 'sketch', 'painting', 'cartoon', 'comic', 'manga', '3d_render',
+    'drawing', 'lineart', 'digital_art', 'artwork', 'vector_art', '2d', 'traditional_art',
+    'digital_drawing', 'graphic_novel'
+}
+
+SAFE_SATIRE_AND_MEMES = {
+    'caricature', 'satire', 'parody', 'meme', 'wojak', 'pepe', 'soyjak', 'brainlet',
+    'trollface', 'political_cartoon', 'political_satire', 'editorial_cartoon', 'comic_strip',
+    'humor', 'joke', 'grotesque_caricature', 'political'
 }
 
 SAFE_MYTHOLOGY_AND_MEMES = {
@@ -59,6 +69,18 @@ SAFE_MYTHOLOGY_AND_MEMES = {
 
 SAFE_GURO_EXCLUSIONS = {
     'tobacco', 'smoke', 'smoking', 'snuffbox', 'pipe'
+}
+
+REALISTIC_PHOTO_INDICATORS = {
+    'photo', 'photorealistic', 'real_life', 'photograph', 'real life'
+}
+
+REAL_CORPSE_INDICATORS = {
+    'corpse', 'dead_body', 'autopsy', 'crime_scene', 'viscera', 'internal_organs', 'exposed_guts'
+}
+
+TRAUMA_MUTILATION_TAGS = {
+    'severed_head', 'severed_limb', 'decapitation', 'dismemberment', 'mutilation', 'evisceration'
 }
 
 
@@ -102,13 +124,27 @@ def classify_extreme_media(tags_str: str, desc_str: str = "") -> Tuple[bool, str
 
     # 2. Проверка на Гуро / Снафф / Некрофилия / Расчленение
     has_mythology_context = any(w in full_text for w in SAFE_MYTHOLOGY_AND_MEMES)
+    has_satire_or_meme = any(w in full_text for w in SAFE_SATIRE_AND_MEMES)
+    has_art_context = any(w in full_text for w in SAFE_ART_STYLES)
+    is_photorealistic = any(w in t_lower for w in REALISTIC_PHOTO_INDICATORS)
+    has_real_corpse = any(w in t_lower for w in REAL_CORPSE_INDICATORS)
     has_tobacco_context = any(w in full_text for w in SAFE_GURO_EXCLUSIONS)
+
     for kw in EXPLICIT_GURO_TAGS:
         if re.search(r'\b' + re.escape(kw) + r'\b', t_lower):
             if kw == 'snuff' and has_tobacco_context:
                 continue
-            if kw in {'severed_head', 'severed_limb', 'decapitation'} and has_mythology_context and 'corpse' not in t_lower and 'real_life' not in t_lower:
+
+            # Карикатуры, сатира, политические мемы, арт и мифология (рисунки, комиксы, шаржи)
+            # НЕ являются снафф-атаками, если нет фотореализма и реального трупа/вскрытия
+            if kw in TRAUMA_MUTILATION_TAGS:
+                if (has_satire_or_meme or has_art_context or has_mythology_context) and not is_photorealistic and not has_real_corpse:
+                    continue
+
+            # Если тег 'guro' попал на явную карикатуру / сатиру / мем без фотореализма и без порно/снаффа
+            if kw == 'guro' and has_satire_or_meme and not is_photorealistic and not any(w in full_text for w in {'eroguro', 'ero_guro', 'snuff', 'necrophilia', 'viscera', 'internal_organs'}):
                 continue
+
             return True, "GURO", f"Explicit guro/mutilation tag matched: '{kw}'"
 
     # Реальное вскрытие трупа (autopsy + viscera/corpse/gore)
@@ -118,11 +154,11 @@ def classify_extreme_media(tags_str: str, desc_str: str = "") -> Tuple[bool, str
 
     # 3. Фотореалистичный шок-гор (реальные фотографии ран, расчлененки, трупов)
     if 'gore' in t_lower:
-        is_realistic = any(w in t_lower for w in ['photo', 'photorealistic', 'real_life', 'photograph'])
+        is_realistic = any(w in t_lower for w in REALISTIC_PHOTO_INDICATORS)
         has_severe_wound = any(
             re.search(r'\b' + re.escape(w) + r'\b', t_lower) for w in GORE_SEVERE_INJURY
         )
-        is_safe_art = any(w in t_lower for w in SAFE_ART_STYLES)
+        is_safe_art = any(w in t_lower for w in (SAFE_ART_STYLES | SAFE_SATIRE_AND_MEMES | SAFE_MYTHOLOGY_AND_MEMES))
         is_costume_halloween = any(w in full_text for w in {'cosplay', 'halloween', 'costume', 'mask', 'props', 'movie', 'film_still'})
 
         if is_realistic and has_severe_wound and not is_safe_art and not is_costume_halloween:
@@ -207,6 +243,146 @@ async def register_extreme_strike(author_id: int, post_num: int, category: str, 
     return len(user_strikes)
 
 
+
+def get_all_admin_ids(board_id: Optional[str] = None) -> set[int]:
+    """Возвращает объединенное множество всех ID глобальных и локальных админов."""
+    admins = set(ADMIN_IDS)
+    try:
+        from shared_state import BOARD_CONFIG
+        if board_id and board_id in BOARD_CONFIG:
+            admins.update(BOARD_CONFIG[board_id].get('admins', set()))
+    except Exception:
+        pass
+    return admins
+
+
+def build_snitch_keyboard(user_id: int, board_id: str, post_num: int | None = None) -> InlineKeyboardMarkup:
+    """
+    Формирует инлайн-клавиатуру для Автостукача с действиями в 1 клик:
+    - [🔥 Сжечь и Забанить] -> snitch:ban:<user_id>:<board_id>:<post_num>
+    - [👻 Подтвердить мут 24ч] -> snitch:mute:<user_id>:<board_id>:<post_num>
+    - [🔇 Запретить медиа] -> snitch:media:<user_id>:<board_id>:<post_num>
+    - [🔓 Ошибка! Размутить] -> snitch:pardon:<user_id>:<board_id>:<post_num>
+    """
+    p_num = int(post_num or 0)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔥 Сжечь и Забанить",
+                callback_data=f"snitch:ban:{user_id}:{board_id}:{p_num}"
+            ),
+            InlineKeyboardButton(
+                text="👻 Подтвердить мут 24ч",
+                callback_data=f"snitch:mute:{user_id}:{board_id}:{p_num}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔇 Запретить медиа",
+                callback_data=f"snitch:media:{user_id}:{board_id}:{p_num}"
+            ),
+            InlineKeyboardButton(
+                text="🔓 Ошибка! Размутить",
+                callback_data=f"snitch:pardon:{user_id}:{board_id}:{p_num}"
+            )
+        ]
+    ])
+
+
+async def send_auto_snitch_alert(
+    bot: Any,
+    user_id: int,
+    board_id: str,
+    post_num: Optional[int] = None,
+    reason: str = "Подозрительная активность / вайп-атака",
+    details: str = "",
+    extra_info: str = ""
+) -> int:
+    """
+    Формирует карточку инцидента «🚨 АВТОСТУКАЧ» и отправляет в админский чат/канал
+    оповещений всем администраторам с инлайн-кнопками действий в 1 клик.
+    Возвращает количество успешно отправленных алертов.
+    """
+    if not bot:
+        logger.debug("[Auto-Snitch] Bot instance is None, alert suppressed.")
+        return 0
+
+    p_num_display = f"#{post_num}" if post_num and post_num > 0 else "—"
+    anon_name = ""
+    try:
+        from post_helpers import generate_anon_name
+        anon_name = generate_anon_name(user_id)
+    except Exception:
+        try:
+            from common.text_utils import generate_anon_name
+            anon_name = generate_anon_name(user_id)
+        except Exception:
+            anon_name = f"Анон #{user_id % 10000:04d}"
+
+    escaped_details = html_escape(details[:500]) if details else "Отсутствует"
+    escaped_reason = html_escape(reason)
+
+    alert_text = (
+        f"🚨 <b>АВТОСТУКАЧ: ОБНАРУЖЕН НАРУШИТЕЛЬ</b>\n\n"
+        f"👤 <b>Нарушитель:</b> <code>{user_id}</code> (<b>{anon_name}</b>)\n"
+        f"📌 <b>Доска:</b> /{board_id}/\n"
+        f"📩 <b>Пост:</b> {p_num_display}\n"
+        f"⚠️ <b>Детектор:</b> {escaped_reason}\n"
+        f"💬 <b>Контент:</b>\n"
+        f"<blockquote>{escaped_details}</blockquote>\n"
+    )
+    if extra_info:
+        alert_text += f"\nℹ️ <i>{html_escape(extra_info)}</i>\n"
+    alert_text += "\n<i>Выберите действие одной кнопкой:</i>"
+
+    markup = build_snitch_keyboard(user_id=user_id, board_id=board_id, post_num=post_num)
+    target_admins = get_all_admin_ids(board_id)
+
+    sent_count = 0
+    for adm_id in target_admins:
+        try:
+            await bot.send_message(
+                adm_id,
+                alert_text,
+                reply_markup=markup,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+            sent_count += 1
+        except Exception as e:
+            logger.debug(f"[Auto-Snitch] Failed to notify admin {adm_id}: {e}")
+
+    return sent_count
+
+
+async def clear_user_extreme_strikes(author_id: int, board_id: str = 'b') -> None:
+    """
+    Полностью очищает историю страйков пользователя в RAM и SQLite (при оправдании админом).
+    """
+    _EXTREME_STRIKES_CACHE.pop(author_id, None)
+    try:
+        db = await get_pool()
+        async with db_transaction(db):
+            async with db.execute(
+                "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
+                (author_id, board_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0]:
+                try:
+                    items = json.loads(row[0])
+                except Exception:
+                    items = {}
+                if "extreme_strikes" in items:
+                    items["extreme_strikes"] = []
+                    await db.execute(
+                        "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                        (json.dumps(items, ensure_ascii=False), author_id, board_id)
+                    )
+    except Exception as e:
+        logger.warning(f"[clear_user_extreme_strikes] Error resetting strikes for {author_id}: {e}")
+
+
 # ==============================================================================
 # 3. LOCKDOWN & DEFENSE EXECUTION
 # ==============================================================================
@@ -223,7 +399,9 @@ async def execute_extreme_lockdown(
     Применяет полный локдаун к спамеру копро/гуро:
     1. Авто-тоггл медиа (shadow_ban_media = 1, Text-only mode) в БД и RAM.
     2. Авто-шедоумут на 24 часа (86400с) в БД и RAM.
-    3. Авто-удаление постов спамера отовсюду (DB, RAM, каналы, ЛС получателей).
+    3. Авто-удаление постов спамера за последние 15 минут (DB, RAM, каналы, ЛС получателей).
+       Старые нормальные посты (>15 минут) не затрагиваются и сохраняются.
+       Конкретные зафиксированные offending_post_nums удаляются точечно независимо от возраста.
     4. Логирование в GlobalLogs и уведомление администраторов.
     """
     logger.critical(
@@ -290,6 +468,13 @@ async def execute_extreme_lockdown(
 
         delete_user_posts = getattr(main_mod, 'delete_user_posts', None)
         delete_single_post = getattr(main_mod, 'delete_single_post', None)
+        if not delete_user_posts or not delete_single_post:
+            try:
+                import post_helpers
+                delete_user_posts = delete_user_posts or getattr(post_helpers, 'delete_user_posts', None)
+                delete_single_post = delete_single_post or getattr(post_helpers, 'delete_single_post', None)
+            except Exception:
+                pass
 
         # Сначала удаляем конкретные зафиксированные посты с шок-контентом
         if delete_single_post and bot:
@@ -301,16 +486,16 @@ async def execute_extreme_lockdown(
                     except Exception as del_err:
                         logger.warning(f"Failed to delete offending post #{p_num}: {del_err}")
 
-        # Сносим все посты юзера за последние 24 часа на ВСЕХ досках
+        # Сносим посты юзера за последние 15 минут на ВСЕХ досках (старые нормальные посты не трогаем)
         if bot and delete_user_posts:
-            wiped = await delete_user_posts(bot, author_id, 1440, 'all')
-            deleted_count = max(deleted_count, wiped)
+            wiped = await delete_user_posts(bot, author_id, 15, 'all')
+            deleted_count += wiped
     except Exception as e:
         logger.error(f"Failed to wipe posts for {author_id}: {e}")
 
     await log_global_event(
         'bot',
-        f"🚮 AUTO-WIPE: Снесено {deleted_count} постов спамера {author_id} на ВСЕХ досках"
+        f"🚮 AUTO-WIPE: Снесено {deleted_count} постов спамера {author_id} за последние 15 минут на ВСЕХ досках (старые сохранены)"
     )
 
     # 4. Уведомление админов в Telegram
@@ -321,15 +506,21 @@ async def execute_extreme_lockdown(
             f"👤 <b>User ID:</b> <code>{author_id}</code>\n"
             f"📌 <b>Доска:</b> /{board_id}/\n"
             f"🏷️ <b>Категория:</b> {category} ({reason})\n"
-            f"🗑 <b>Удалено постов:</b> {deleted_count}\n\n"
+            f"🗑 <b>Удалено постов:</b> {deleted_count} (зачистка за 15 минут)\n\n"
             f"🛡️ <b>Примененные санкции:</b>\n"
             f"• 🔇 <b>Media Toggle:</b> Все медиа запрещены (Text-only mode)\n"
             f"• 👻 <b>Шедоумут:</b> 24 часа\n"
-            f"• 🔥 <b>Посты:</b> Удалены из БД, каналов и ЛС получателей."
+            f"• 🔥 <b>Посты:</b> Удалены за последние 15 минут из БД, каналов и ЛС (посты старше 15 минут сохранены)."
         )
-        for adm in ADMIN_IDS:
+        markup = build_snitch_keyboard(
+            user_id=author_id,
+            board_id=board_id,
+            post_num=offending_post_nums[-1] if offending_post_nums else None
+        )
+        target_admins = get_all_admin_ids(board_id)
+        for adm in target_admins:
             try:
-                await bot.send_message(adm, alert_text, parse_mode="HTML")
+                await bot.send_message(adm, alert_text, reply_markup=markup, parse_mode="HTML")
             except Exception:
                 pass
 
@@ -416,6 +607,19 @@ async def process_file_extreme_defense(
             'bot',
             f"⚠️ AUTO-DEFENSE STRIKE 1: Пост #{post_num} юзера {author_id} скрыт (теги: {category}). При повторе будет локдаун."
         )
+        if bot:
+            try:
+                await send_auto_snitch_alert(
+                    bot=bot,
+                    user_id=author_id,
+                    board_id=board_id,
+                    post_num=post_num,
+                    reason=f"Страйк 1 [{category}]: {reason}",
+                    details=f"Шок-контент (теги: {tags[:120]}, описание: {description[:120]})",
+                    extra_info="Пост скрыт в тень. При повторе будет полный локдаун."
+                )
+            except Exception as snitch_err:
+                logger.warning(f"Failed to send snitch alert on strike 1: {snitch_err}")
         return True
 
     # Страйк >= 2: ПОЛНЫЙ ЛОКДАУН

@@ -2457,19 +2457,17 @@ _LAST_DIRECT_ROAST_USER_TS: dict[tuple[str, int], float] = {}
 
 # Единый расширенный regex для детекции обращения к Киберчеду по имени и синонимам из реальной БД
 CYBERCHAD_NAME_REGEX = re.compile(
-    r'(?i)\b('
-    r'кибер[\s_-]*чед[а-яa-z]*|'
-    r'кибер[\s_-]*чат[а-яa-z]*|'
-    r'кибер[\s_-]*дед[а-яa-z]*|'
-    r'кибер[\s_-]*пёс[а-яa-z]*|'
-    r'кибер[\s_-]*котлет[а-яa-z]*|'
-    r'нейро[\s_-]*чед[а-яa-z]*|'
-    r'нейро[\s_-]*чат[а-яa-z]*|'
-    r'cyber[\s_-]*chad[a-z]*|'
-    r'cyberchad|'
-    r'чед|чедик|чеду|чедом|чеде|чеда|'
-    r'chad|chadd|chado'
-    r')\b'
+    r'(?i)(?:'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*чед[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*чат[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*дед[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*сыч[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*п[её]с[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])кибер[\s_-]*котлет[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])нейро[\s_-]*чед[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])нейро[\s_-]*чат[а-яa-z]*(?![а-яa-z0-9])|'
+    r'(?<![а-яa-z0-9])cyber[\s_-]*chad[a-z]*(?![а-яa-z0-9])'
+    r')'
 )
 
 CYBERCHAD_SYSTEM_JSON_PROMPT = (
@@ -3566,7 +3564,7 @@ async def build_cyberchad_context(
     author_id: int | None = None,
     limit_board: int = 55,
     limit_author: int = 5,
-    limit_chad: int = 0,
+    limit_chad: int = 4,
     target_text_override: str | None = None,
     mood_flavor: str | dict | None = None,
     include_mood: bool = True
@@ -4477,13 +4475,14 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
             if (board_id, user_id) not in _LAST_DIRECT_ROAST_USER_TS:
                 reset_user_board_guard(board_id, user_id)
 
+            user_direct_cd = 5.0 if has_caller_amulet else 15.0
             should_suppress, guard_reason, allow_voice = check_cyberchad_abuse_and_suppress(
-                user_id=user_id, board_id=board_id, text=text, now=now
+                user_id=user_id, board_id=board_id, text=text, now=now, base_cooldown=user_direct_cd
             )
             last_user_direct = _LAST_DIRECT_ROAST_USER_TS.get((board_id, user_id), 0.0)
-            is_under_base_60 = (0.5 < (now - last_user_direct) < 60.0)
+            is_under_cooldown = (0.5 < (now - last_user_direct) < user_direct_cd)
 
-            if should_suppress or is_under_base_60:
+            if should_suppress or is_under_cooldown:
                 last_reject = _LAST_REJECT_USER_TS.get((board_id, user_id), 0.0)
                 if allow_voice and (now - last_reject >= 15.0):
                     _LAST_REJECT_USER_TS[(board_id, user_id)] = now
@@ -4536,7 +4535,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
             author_id=user_id,
             limit_board=55,
             limit_author=5,
-            limit_chad=0,
+            limit_chad=4,
             target_text_override=text
         )
 
@@ -4617,7 +4616,7 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
                         author_id=recent_entries[-1][1] if recent_entries else None,
                         limit_board=55,
                         limit_author=5,
-                        limit_chad=0,
+                        limit_chad=4,
                         target_text_override=recent_entries[-1][2] if recent_entries else None
                     )
 
@@ -4648,10 +4647,14 @@ async def register_post_and_maybe_trigger_cyberchad_intervention(
             return
 
         in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-        if not in_test_env and (now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0) < CHAD_BOARD_COOLDOWN_SEC):
-            rem_cd = CHAD_BOARD_COOLDOWN_SEC - (now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0))
-            logger.info(f"⏳ [Cyberchad Intervention] Доска /{board_id}/ в кулдауне Киберчеда ({rem_cd:.1f}с). Пропуск.")
-            return
+        effective_board_cd = 5.0 if (is_direct_mode or is_explicit_name_call) else CHAD_BOARD_COOLDOWN_SEC
+        last_board_ts = _LAST_CHAD_POST_TS.get(board_id, 0.0)
+        if not in_test_env and last_board_ts > 0.0:
+            elapsed = now_curr - last_board_ts
+            if 0.0 <= elapsed < effective_board_cd:
+                rem_cd = effective_board_cd - elapsed
+                logger.info(f"⏳ [Cyberchad Intervention] Доска /{board_id}/ в кулдауне Киберчеда ({rem_cd:.1f}с, direct={is_direct_mode}). Пропуск.")
+                return
 
         _ACTIVE_CHAD_BOARDS.add(board_id)
         try:
@@ -5031,10 +5034,14 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 return
 
             in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-            if not in_test_env and (now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0) < CHAD_BOARD_COOLDOWN_SEC):
-                rem_cd = CHAD_BOARD_COOLDOWN_SEC - (now_curr - _LAST_CHAD_POST_TS.get(board_id, 0.0))
-                print(f"⏳ [Cyberchad Reply] Пропуск: доска /{board_id}/ в кулдауне Киберчеда ({rem_cd:.1f}с).")
-                return
+            effective_cd = 5.0 if (is_dialogue or is_admin_trigger) else CHAD_BOARD_COOLDOWN_SEC
+            last_board_ts = _LAST_CHAD_POST_TS.get(board_id, 0.0)
+            if not in_test_env and last_board_ts > 0.0:
+                elapsed = now_curr - last_board_ts
+                if 0.0 <= elapsed < effective_cd:
+                    rem_cd = effective_cd - elapsed
+                    print(f"⏳ [Cyberchad Reply] Пропуск: доска /{board_id}/ в кулдауне Киберчеда ({rem_cd:.1f}с).")
+                    return
 
         _ACTIVE_CHAD_BOARDS.add(board_id)
         try:
@@ -5047,7 +5054,7 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 author_id=target_author_id,
                 limit_board=55,
                 limit_author=5,
-                limit_chad=0,
+                limit_chad=4,
                 target_text_override=context_text
             )
 

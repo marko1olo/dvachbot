@@ -240,23 +240,34 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     })
 
 async def process_shadow_reject(ctx: ShadowRejectContext):
-
     """
     Эмулирует успешную публикацию поста, но отправляет его ТОЛЬКО автору.
     Не пишет в БД, не увеличивает счетчики.
+    Форматирует заголовок, бейджи и контент строго как при обычной публикации.
     """
     shadow_key = (ctx.board_id, ctx.user_id)
-    current_floor = state['post_counter'] + random.randint(1, 3)
     last_fake_post_num = shadow_fake_post_counters.get(shadow_key, 0)
-    fake_post_num = max(current_floor, last_fake_post_num + random.randint(1, 3))
+    fake_post_num = max(state.get('post_counter', 0) + 1, last_fake_post_num + 1)
     shadow_fake_post_counters[shadow_key] = fake_post_num
     header_text = await format_header(ctx.board_id, fake_post_num, ctx.user_id, stream=ctx.stream)
+
+    repost_count = ctx.content.get('repost_count')
+    if isinstance(repost_count, int) and repost_count > 1:
+        header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
+    if ctx.content.get('is_cyberchad'):
+        prefix = "🔥 КИБЕРЧЕД 🔥" if ctx.stream != 'en' else "🔥 CYBERCHAD 🔥"
+        if prefix not in header_text:
+            header_text = f"{prefix}\n{header_text}"
+
     user_content = ctx.content.copy()
     user_content['header'] = header_text
     user_content['post_num'] = fake_post_num
     user_content['is_shadow_reject'] = True
     user_content['reply_to_post'] = ctx.reply_to_post
+
+    # Искусственный лаг 0.5-1.5с эмулирует реальную обработку и доставку
     await asyncio.sleep(random.uniform(0.5, 1.5))
+
     await send_message_to_users(BroadcastConfig(
         bot_instance=ctx.bot,
         board_id=ctx.board_id,
@@ -264,7 +275,7 @@ async def process_shadow_reject(ctx: ShadowRejectContext):
         content=user_content,
         reply_info=None
     ))
-    print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
+    print(f"👻 [SHADOW] Теневой отброс поста #{fake_post_num} от {ctx.user_id} на доске {ctx.board_id}")
 
 def detect_media_type(data: bytes, url: str) -> str:
     """
@@ -303,21 +314,31 @@ async def git_commit_and_push_db() -> bool:
     asyncio.get_running_loop()
     return False # await loop.run_in_executor(git_executor, sync_git_operations_db, GITHUB_TOKEN)
 
-def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
-    if not uid:
-        return False
+_GLOBAL_ADMIN_IDS: Optional[set[int]] = None
+
+def _get_global_admin_ids() -> set[int]:
+    global _GLOBAL_ADMIN_IDS
+    if _GLOBAL_ADMIN_IDS is not None:
+        return _GLOBAL_ADMIN_IDS
+    res = set()
     try:
         from site_tgach.admin_config import ADMIN_IDS
-        if uid in ADMIN_IDS:
-            return True
+        res.update(ADMIN_IDS)
     except Exception:
         pass
     try:
         from common.config import ADMIN_IDS
-        if uid in ADMIN_IDS:
-            return True
+        res.update(ADMIN_IDS)
     except Exception:
         pass
+    _GLOBAL_ADMIN_IDS = res
+    return _GLOBAL_ADMIN_IDS
+
+def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
+    if not uid:
+        return False
+    if uid in _get_global_admin_ids():
+        return True
     if not board_id:
         return False
     from common.board_config import BOARD_CONFIG
@@ -423,23 +444,34 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     })
 
 async def process_shadow_reject(ctx: ShadowRejectContext):
-
     """
     Эмулирует успешную публикацию поста, но отправляет его ТОЛЬКО автору.
     Не пишет в БД, не увеличивает счетчики.
+    Форматирует заголовок, бейджи и контент строго как при обычной публикации.
     """
     shadow_key = (ctx.board_id, ctx.user_id)
-    current_floor = state['post_counter'] + random.randint(1, 3)
     last_fake_post_num = shadow_fake_post_counters.get(shadow_key, 0)
-    fake_post_num = max(current_floor, last_fake_post_num + random.randint(1, 3))
+    fake_post_num = max(state.get('post_counter', 0) + 1, last_fake_post_num + 1)
     shadow_fake_post_counters[shadow_key] = fake_post_num
     header_text = await format_header(ctx.board_id, fake_post_num, ctx.user_id, stream=ctx.stream)
+
+    repost_count = ctx.content.get('repost_count')
+    if isinstance(repost_count, int) and repost_count > 1:
+        header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
+    if ctx.content.get('is_cyberchad'):
+        prefix = "🔥 КИБЕРЧЕД 🔥" if ctx.stream != 'en' else "🔥 CYBERCHAD 🔥"
+        if prefix not in header_text:
+            header_text = f"{prefix}\n{header_text}"
+
     user_content = ctx.content.copy()
     user_content['header'] = header_text
     user_content['post_num'] = fake_post_num
     user_content['is_shadow_reject'] = True
     user_content['reply_to_post'] = ctx.reply_to_post
+
+    # Искусственный лаг 0.5-1.5с эмулирует реальную обработку и доставку
     await asyncio.sleep(random.uniform(0.5, 1.5))
+
     await send_message_to_users(BroadcastConfig(
         bot_instance=ctx.bot,
         board_id=ctx.board_id,
@@ -447,7 +479,7 @@ async def process_shadow_reject(ctx: ShadowRejectContext):
         content=user_content,
         reply_info=None
     ))
-    print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
+    print(f"👻 [SHADOW] Теневой отброс поста #{fake_post_num} от {ctx.user_id} на доске {ctx.board_id}")
 
 def detect_media_type(data: bytes, url: str) -> str:
     """
@@ -633,4 +665,45 @@ def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str
     elif msg.content_type == 'document':
         return msg.document.file_id if msg.document else None, 'document'
     return None, None
+from common.bot_helpers import (
+    render_menu_transition,
+    render_menu_view,
+    is_media_message,
+    smart_split_html,
+    safe_send_message,
+    safe_answer,
+    safe_reply,
+    install_message_safety_guard,
+)
 
+
+
+class SafeMessageProxy:
+    def __init__(self, original_msg, user, bot=None):
+        self._msg = original_msg
+        self.from_user = user
+        self.bot = getattr(original_msg, 'bot', None) or bot
+        self.chat = getattr(original_msg, 'chat', None)
+        self.date = getattr(original_msg, 'date', None)
+        self.message_id = getattr(original_msg, 'message_id', 0)
+        self.text = "/command"
+        self.caption = ""
+        self.html_text = "/command"
+        self.caption_html_text = ""
+        self.reply_to_message = None
+
+    async def answer(self, *args, **kwargs):
+        from aiogram import types
+        if self._msg and hasattr(self._msg, 'answer') and not isinstance(self._msg, types.InaccessibleMessage):
+            try:
+                return await self._msg.answer(*args, **kwargs)
+            except Exception:
+                pass
+        target_chat_id = self.chat.id if (self.chat and hasattr(self.chat, 'id')) else (self.from_user.id if self.from_user else None)
+        if self.bot and target_chat_id:
+            text = args[0] if args else kwargs.pop('text', '')
+            return await self.bot.send_message(chat_id=target_chat_id, text=text, **kwargs)
+        return None
+
+    async def reply(self, *args, **kwargs):
+        return await self.answer(*args, **kwargs)

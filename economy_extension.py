@@ -236,7 +236,7 @@ def record_flash_ultra_use(active_items: dict, now: float = None, user_id: int |
 
 
 @economy_router.callback_query(F.data.in_({
-    "work_bottles", "work_dumpster", "work_flyers", "work_microloan", "work_overtime", "work_sell_mother"
+    "work_bottles", "work_dumpster", "work_flyers", "work_overtime", "work_sell_mother"
 }))
 async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
     if not board_id: return
@@ -404,6 +404,11 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                     target_jid, target_title = best_job
                     work_timers[target_jid] = 0
                     set_user_work_cooldown(user_id, target_jid, 0)
+                    try:
+                        from common.work_engine import reset_job_timer
+                        reset_job_timer(user_id, target_jid)
+                    except Exception:
+                        pass
                     remaining_today = record_flash_ultra_use(active_items, now=now, user_id=user_id)
                     should_persist = True
                     ans_text = (
@@ -441,6 +446,12 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                         for sync_k in ("last_bottles", "last_dumpster", "last_flyers", "last_microloan", "microloan_debt", "mother_sold", "overtime_day", "overtime_uses_today", "last_overtime"):
                             if sync_k in active_items and other_data.get(sync_k) != active_items[sync_k]:
                                 other_data[sync_k] = active_items[sync_k]
+                                updated = True
+                        if action == "overtime":
+                            if not isinstance(other_data.get("work_cooldowns"), dict):
+                                other_data["work_cooldowns"] = {}
+                            if other_data["work_cooldowns"].get(target_jid) != 0:
+                                other_data["work_cooldowns"][target_jid] = 0
                                 updated = True
                         if updated:
                             await db.execute(
@@ -571,20 +582,20 @@ async def get_reply_target(message: types.Message):
 # ====================
 # HEIST (AI ОГРАБЛЕНИЕ)
 # ====================
-@economy_router.message(Command("heist"))
+@economy_router.message(Command("ai_heist", "ai_rob"))
 async def cmd_heist(message: types.Message, board_id: str | None = None):
     if not board_id:
         board_id = "b"
     user_id = message.from_user.id
     target_message = message.reply_to_message
     if not target_message:
-        await message.reply("❌ Сделай Reply на сообщение того, кого хочешь ограбить.\nПример: <code>/heist Я тихо пробираюсь в его комнату</code>", parse_mode="HTML")
+        await message.reply("❌ Сделай Reply на сообщение того, кого хочешь ограбить.\nПример: <code>/ai_heist Я тихо пробираюсь в его комнату</code>", parse_mode="HTML")
         return
 
     raw_text = message.text or message.caption or ""
     parts = raw_text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.reply("⚠️ <b>Использование:</b> <code>/heist [как именно ты грабишь]</code>\nПример: <i>/heist Я крадусь в носках по ковру и тащу кошелек</i>", parse_mode="HTML")
+        await message.reply("⚠️ <b>Использование:</b> <code>/ai_heist [как именно ты грабишь]</code>\nПример: <i>/ai_heist Я крадусь в носках по ковру и тащу кошелек</i>", parse_mode="HTML")
         return
 
     target_id = None

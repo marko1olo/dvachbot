@@ -8,7 +8,7 @@ import asyncio
 import random
 from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from common.db_pool import LazyLock
 
 
@@ -217,14 +217,30 @@ def get_user_work_cooldowns(user_id: int) -> dict:
     return dict(_GLOBAL_WORK_COOLDOWNS[user_id])
 
 def set_user_work_cooldown(user_id: int, job_id: str, timestamp: int):
-    _GLOBAL_WORK_COOLDOWNS[user_id][job_id] = max(_GLOBAL_WORK_COOLDOWNS[user_id].get(job_id, 0), int(timestamp))
+    val = int(timestamp)
+    if val <= 0:
+        _GLOBAL_WORK_COOLDOWNS[user_id][job_id] = 0
+    else:
+        _GLOBAL_WORK_COOLDOWNS[user_id][job_id] = val
+
+def reset_user_work_cooldown(user_id: int, job_id: Optional[str] = None):
+    """Explicitly resets user work cooldown in memory (for Flash Ultra energy drink)."""
+    if user_id in _GLOBAL_WORK_COOLDOWNS:
+        if job_id is not None:
+            _GLOBAL_WORK_COOLDOWNS[user_id][job_id] = 0
+        else:
+            _GLOBAL_WORK_COOLDOWNS[user_id].clear()
 
 def sync_user_work_cooldowns(user_id: int, cooldowns: dict):
     if not isinstance(cooldowns, dict):
         return
     for j, ts in cooldowns.items():
         if isinstance(ts, (int, float)):
-            _GLOBAL_WORK_COOLDOWNS[user_id][j] = max(_GLOBAL_WORK_COOLDOWNS[user_id].get(j, 0), int(ts))
+            val = int(ts)
+            if val <= 0:
+                _GLOBAL_WORK_COOLDOWNS[user_id][j] = 0
+            else:
+                _GLOBAL_WORK_COOLDOWNS[user_id][j] = max(_GLOBAL_WORK_COOLDOWNS[user_id].get(j, 0), val)
 
 _USER_PARTYVAN_COOLDOWNS: Dict[int, float] = {}
 _BOARD_PARTYVAN_COOLDOWNS: Dict[str, float] = {}
@@ -378,15 +394,21 @@ async def record_shop_purchase_async(db, user_id: int, item: str) -> int:
     _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)] += 1
     if item != canonical_item:
         _DAILY_SHOP_PURCHASES[(user_id, item, today_str)] = _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)]
-    from common.database import record_user_daily_limit
-    return await record_user_daily_limit(db, user_id, canonical_item, today_str, increment=1)
+    try:
+        from common.database import record_user_daily_limit
+        return await record_user_daily_limit(db, user_id, canonical_item, today_str, increment=1)
+    except Exception:
+        return _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)]
 
 async def get_user_daily_shop_buys_async(db, user_id: int, item: str) -> int:
     """Возвращает число покупок с синхронизацией из SQLite (UserDailyLimits)."""
     canonical_item = CANONICAL_SHOP_ITEM_ALIASES.get(item, item)
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    from common.database import get_user_daily_limit
-    db_cnt = await get_user_daily_limit(db, user_id, canonical_item, today_str)
+    try:
+        from common.database import get_user_daily_limit
+        db_cnt = await get_user_daily_limit(db, user_id, canonical_item, today_str)
+    except Exception:
+        db_cnt = 0
     mem_cnt = get_user_daily_shop_buys(user_id, canonical_item)
     final_cnt = max(mem_cnt, db_cnt)
     _DAILY_SHOP_PURCHASES[(user_id, canonical_item, today_str)] = final_cnt
@@ -907,6 +929,7 @@ class ShadowRejectContext:
     content: dict
     reply_to_post: int | None = None
     stream: str = 'ru'
+    reply_to_message_id: int | None = None
 
 @dataclass
 class NewPostParams:
