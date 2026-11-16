@@ -403,15 +403,16 @@ def test_future_timestamp_fatigue_resilience():
     """
     now = int(time.time())
     items = {
-        "work_shifts": 0,
+        "work_shifts": 3,
         "work_cooldowns": {},
         "recent_shifts": {
-            "bottles": [now + 999999, now - 1000]  # One future timestamp, one valid
+            "bottles": [now + 999999, now - 3000, now - 2000, now - 1000]  # One future timestamp, 3 valid
         }
     }
 
-    # Should only count 1 valid recent shift (shifts_today = 1), ignoring future timestamp
+    # Should only count 3 valid recent shifts (total_shifts_today = 3), ignoring future timestamp.
+    # Shift #4 applies 80% efficiency (-20% fatigue).
     success, amount, msg, _ = execute_job_action("bottles", items)
     assert success is True
-    # Future timestamp was ignored, only 1 previous shift counted (15% fatigue)
-    assert "смена #2" in msg
+    assert "смена #4" in msg
+    assert "-20%" in msg

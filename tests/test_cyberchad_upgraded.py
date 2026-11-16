@@ -164,10 +164,6 @@ class TestCyberchadNameRegex:
         "нейро чат что думаешь",
         "cyberchad answer me",
         "cyber_chad destroyed them",
-        "чед ты лучший",
-        "чедик, поясни",
-        "ответь чеду",
-        "мы с чедом заодно",
     ])
     def test_regex_matches_valid_names(self, msg_text):
         assert CYBERCHAD_NAME_REGEX.search(msg_text) is not None
@@ -177,6 +173,13 @@ class TestCyberchadNameRegex:
         "очередной тред ни о чем",
         "привет аноны",
         "купил чадо за 500 рублей",
+        "чед ты лучший",
+        "чедик, поясни",
+        "ответь чеду",
+        "мы с чедом заодно",
+        "чеду похуй",
+        "гигачед",
+        "он чед а я омега",
     ])
     def test_regex_does_not_false_positive(self, msg_text):
         assert CYBERCHAD_NAME_REGEX.search(msg_text) is None

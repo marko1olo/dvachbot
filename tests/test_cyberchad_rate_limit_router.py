@@ -181,13 +181,13 @@ class TestCyberchadRateLimitLifecycle(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(res1)
             mock_intervene.assert_called_once_with(
-                self.mock_bot, "b", 101, "киберчед поясни", post_num=1001, reply_to_post=None, stream="ru"
+                self.mock_bot, "b", 101, "киберчед поясни", post_num=1001, reply_to_post=None, stream="ru", is_rate_checked=True
             )
             mock_tts.assert_not_called()
             mock_pnp.assert_not_called()
             self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 101)], t0)
 
-            # --- CALL 2 at t = 5s (Rate limit hit: offline voice roast triggered) ---
+            # --- CALL 2 at t = 5s (Rate limit hit: silent drop per dynamic tuning) ---
             mock_time.return_value = t0 + 5.0
             res2 = await trigger_cyberchad_with_rate_limit(
                 self.mock_bot, "b", 101, "киберчед ты тут?", post_num=1002, reply_to_post=None, stream="ru"
@@ -195,54 +195,28 @@ class TestCyberchadRateLimitLifecycle(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(res2)
             # Intervention handler must NOT be called again (still 1 call)
             self.assertEqual(mock_intervene.call_count, 1)
-            # Voice note must be synthesized
-            mock_tts.assert_called_once()
-            reject_text_used = mock_tts.call_args[0][0]
-            self.assertIn(reject_text_used, CYBERCHAD_RATE_LIMIT_REJECTIONS)
-            # process_new_post must be called to send the voice note
-            mock_pnp.assert_called_once()
-            pnp_params = mock_pnp.call_args[0][0]
-            self.assertEqual(pnp_params.board_id, "b")
-            self.assertEqual(pnp_params.user_id, 0)
-            self.assertEqual(pnp_params.reply_to_post, 1002)
-            self.assertEqual(pnp_params.content["type"], "voice")
-            self.assertEqual(pnp_params.content["voice_bytes"], b"fake_rejection_audio_ogg")
-            self.assertEqual(pnp_params.content["caption"], "🔥 Разъёб от Киберчеда")
-            self.assertTrue(pnp_params.content["is_cyberchad"])
-            self.assertEqual(_CYBERCHAD_USER_LAST_REJECT[("b", 101)], t0 + 5.0)
+            # Standard user gets silent rate limit (zero voice bomb)
+            mock_tts.assert_not_called()
+            mock_pnp.assert_not_called()
 
-            # --- CALL 3 at t = 10s (Within 15s of reject: voice roast suppressed!) ---
+            # --- CALL 3 at t = 10s (Within cooldown: still suppressed!) ---
             mock_time.return_value = t0 + 10.0
             res3 = await trigger_cyberchad_with_rate_limit(
                 self.mock_bot, "b", 101, "киберчед ало", post_num=1003, reply_to_post=None, stream="ru"
             )
             self.assertFalse(res3)
-            # Neither intervention nor voice synthesis should be called
             self.assertEqual(mock_intervene.call_count, 1)
-            self.assertEqual(mock_tts.call_count, 1)
-            self.assertEqual(mock_pnp.call_count, 1)
+            mock_tts.assert_not_called()
+            mock_pnp.assert_not_called()
 
-            # --- CALL 4 at t = 21s (16s since reject at t=5s, but <60s from t=0: voice roast allowed again) ---
-            mock_time.return_value = t0 + 21.0
+            # --- CALL 4 at t = 31s (>= 30s base cooldown: intervention allowed again) ---
+            mock_time.return_value = t0 + 31.0
             res4 = await trigger_cyberchad_with_rate_limit(
                 self.mock_bot, "b", 101, "киберчед ну ответь", post_num=1004, reply_to_post=None, stream="ru"
             )
-            self.assertFalse(res4)
-            self.assertEqual(mock_intervene.call_count, 1)
-            self.assertEqual(mock_tts.call_count, 2)
-            self.assertEqual(mock_pnp.call_count, 2)
-            self.assertEqual(_CYBERCHAD_USER_LAST_REJECT[("b", 101)], t0 + 21.0)
-
-            # --- CALL 5 at t = 61s (>= 60s from t=0: normal intervention allowed) ---
-            mock_time.return_value = t0 + 61.0
-            res5 = await trigger_cyberchad_with_rate_limit(
-                self.mock_bot, "b", 101, "киберчед минута прошла", post_num=1005, reply_to_post=None, stream="ru"
-            )
-            self.assertTrue(res5)
+            self.assertTrue(res4)
             self.assertEqual(mock_intervene.call_count, 2)
-            self.assertEqual(mock_tts.call_count, 2)
-            self.assertEqual(mock_pnp.call_count, 2)
-            self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 101)], t0 + 61.0)
+            self.assertEqual(_CYBERCHAD_USER_LAST_DIRECT[("b", 101)], t0 + 31.0)
 
     async def test_multi_user_isolation(self):
         t0 = 200000.0

@@ -7,15 +7,25 @@ from dice_duel_engine import (
     sync_dice_screens,
     active_dice_games,
     user_active_dice_game,
+    user_last_dice_created,
+    pair_last_dice_duel,
     get_dice_roll_keyboard,
     DICE_TURN_TIMEOUT_SEC,
     DICE_CHALLENGE_TIMEOUT_SEC,
+    MIN_DICE_BET,
+    MAX_DICE_BET,
+    DICE_RAKE_PERCENT,
+    DICE_PAIR_COOLDOWN_SEC,
+    DICE_CREATION_COOLDOWN_SEC,
+    MAX_DICE_BET_RATIO,
 )
 
 class TestDiceDuelDualSync(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         active_dice_games.clear()
         user_active_dice_game.clear()
+        user_last_dice_created.clear()
+        pair_last_dice_duel.clear()
 
         # Mock DB Pool
         self.mock_db = AsyncMock()
@@ -44,6 +54,8 @@ class TestDiceDuelDualSync(unittest.IsolatedAsyncioTestCase):
         patch.stopall()
         active_dice_games.clear()
         user_active_dice_game.clear()
+        user_last_dice_created.clear()
+        pair_last_dice_duel.clear()
 
     async def test_dual_screen_sync_and_buttons(self):
         p1 = 111111
@@ -103,3 +115,9 @@ class TestDiceDuelDualSync(unittest.IsolatedAsyncioTestCase):
     async def test_constants_alignment(self):
         self.assertEqual(DICE_TURN_TIMEOUT_SEC, 120.0, "Turn timeout must be 120s")
         self.assertEqual(DICE_CHALLENGE_TIMEOUT_SEC, 600.0, "Challenge timeout must be 600s (10 min)")
+        self.assertEqual(MIN_DICE_BET, 50, "Min bet must be 50")
+        self.assertIn(MAX_DICE_BET, (50_000, 1_000_000), "Max bet must be 50k or 1M")
+        self.assertEqual(DICE_RAKE_PERCENT, 0.05, "House rake must be 5%")
+        self.assertEqual(DICE_PAIR_COOLDOWN_SEC, 30.0, "Pair cooldown must be 30s")
+        self.assertEqual(DICE_CREATION_COOLDOWN_SEC, 10.0, "Creation cooldown must be 10s")
+        self.assertEqual(MAX_DICE_BET_RATIO, 0.50, "Max bet ratio must be 50%")

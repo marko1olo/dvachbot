@@ -55,12 +55,12 @@ async def test_wealth_tax_calculates_dynamic_interest_in_real_time(isolated_test
     """, (uid, base_ts, base_ts + 86400, base_ts))
     await db.commit()
 
-    # Without dynamic interest, wealth would be 100,000 -> tax = 635.0 ₪
-    # With dynamic interest (+5,000 ₪), wealth is 105,000 -> tax = 685.0 ₪
-    tax_without_dynamic = db_mod.calculate_daily_wealth_tax(100000.0)
-    tax_with_dynamic = db_mod.calculate_daily_wealth_tax(105000.0)
-    assert tax_without_dynamic == 635.0
-    assert tax_with_dynamic == 685.0
+    # Without dynamic interest, wealth would be 100,000 -> tax = 317.5 ₪ (with 50% bank deposit discount)
+    # With dynamic interest (+5,000 ₪), wealth is 105,000 -> tax = 342.5 ₪ (with 50% bank deposit discount)
+    tax_without_dynamic = db_mod.calculate_daily_wealth_tax(100000.0, bank_balance=100000.0)
+    tax_with_dynamic = db_mod.calculate_daily_wealth_tax(105000.0, bank_balance=105000.0)
+    assert tax_without_dynamic == 317.5
+    assert tax_with_dynamic == 342.5
     assert tax_with_dynamic > tax_without_dynamic
 
     affected_cnt, confiscated, details = await db_mod.apply_daily_wealth_tax(db, current_ts=now_ts)
@@ -69,8 +69,8 @@ async def test_wealth_tax_calculates_dynamic_interest_in_real_time(isolated_test
     assert confiscated == tax_with_dynamic
     assert details[0]["old_wealth"] == 105000.0
 
-    # Check BankDeposit record: tax (685.0 ₪) was deducted from principal
-    # Remaining principal = 100,000 - 685 = 99,315 ₪
+    # Check BankDeposit record: tax (342.5 ₪) was deducted from principal
+    # Remaining principal = 100,000 - 342.5 = 99,657.5 ₪
     # Accrued interest crystallized at 5,000 ₪
     # last_accrual_at updated to now_ts
     async with db.execute(
@@ -78,7 +78,7 @@ async def test_wealth_tax_calculates_dynamic_interest_in_real_time(isolated_test
         (uid,)
     ) as c:
         row = await c.fetchone()
-        assert row[0] == 99315.0
+        assert row[0] == 99657.5
         assert row[1] == 5000.0
         assert row[2] == now_ts
 
@@ -104,8 +104,9 @@ async def test_wealth_tax_handles_deposit_only_user_without_users_row(isolated_t
     await db.commit()
 
     # 6% daily on 200k = +12,000 ₪ interest in 1 day
-    # Total wealth = 212,000 ₪
-    expected_tax = db_mod.calculate_daily_wealth_tax(212000.0)
+    # Total wealth = 212,000 ₪ (all in BankDeposit -> 50% bank discount applies)
+    expected_tax = db_mod.calculate_daily_wealth_tax(212000.0, bank_balance=212000.0)
+    assert expected_tax == 877.5
     affected_cnt, confiscated, details = await db_mod.apply_daily_wealth_tax(db, current_ts=now_ts)
 
     assert affected_cnt == 1

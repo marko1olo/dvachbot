@@ -374,6 +374,19 @@ async def test_votemute_does_not_reduce_existing_longer_mute(isolated_test_db):
     )
     await isolated_test_db.commit()
 
+    # Seed posts for voters so they meet the active quorum requirement (> 1 post in last 2 days)
+    now_ts = time.time()
+    for vid in range(1001, 1006):
+        await isolated_test_db.execute(
+            "INSERT INTO Posts (board_id, author_id, content, timestamp, is_shadow) VALUES ('b', ?, '{}', ?, 0)",
+            (vid, now_ts - 3600)
+        )
+        await isolated_test_db.execute(
+            "INSERT INTO Posts (board_id, author_id, content, timestamp, is_shadow) VALUES ('b', ?, '{}', ?, 0)",
+            (vid, now_ts - 1800)
+        )
+    await isolated_test_db.commit()
+
     # Vote 5 times to execute iron mute
     with patch("votemute_engine.get_pool", AsyncMock(return_value=isolated_test_db)):
         for voter_id in range(1001, 1006):
@@ -416,3 +429,40 @@ async def test_votemute_bot_rejection():
     )
     assert ok is False
     assert "бота" in msg
+
+# =====================================================================
+# RED TEAM: CAPITAL SURCHARGE BOUNDARIES & MALFORMED INPUTS
+# =====================================================================
+
+def test_redteam_capital_surcharge_edge_cases():
+    """Adversarial testing of calculate_capital_surcharge_pct and get_current_item_price."""
+    from main import get_current_item_price, calculate_capital_surcharge_pct
+    from shared_state import market_state
+
+    # 1. Negative & Zero balances
+    assert calculate_capital_surcharge_pct(-1000.0) == 0.0
+    assert calculate_capital_surcharge_pct(0.0) == 0.0
+    assert get_current_item_price('partyvan', balance=-500) == 1500
+    assert get_current_item_price('schizopill', balance=-100) == 650
+
+    # 2. Strict boundary at 10,000
+    assert calculate_capital_surcharge_pct(10000.0) == 0.0
+    assert get_current_item_price('partyvan', balance=10000.0) == 1500
+    assert calculate_capital_surcharge_pct(10001.0) > 0.0
+
+    # 3. Trillionaire balance capped strictly at 24.00 (+2400% / 25x)
+    assert calculate_capital_surcharge_pct(1e12) == 24.0
+    assert get_current_item_price('partyvan', balance=1e12) == 137500
+    assert get_current_item_price('cyberchad_amulet', balance=1e12) == 62500
+
+    # 4. Market multiplier integration with capital surcharge
+    # Save previous market multiplier
+    orig_mults = market_state.get('multipliers', {})
+    market_state['multipliers'] = {'partyvan': 1.5}
+    try:
+        # Novice (<=10k): 1500 * 1.5 = 2250
+        assert get_current_item_price('partyvan', balance=5000) == 2250
+        # Oligarch (>=1M): ((1500 * 6) + 10000) * 1.5 = 28500
+        assert get_current_item_price('partyvan', balance=1000000) == 28500
+    finally:
+        market_state['multipliers'] = orig_mults

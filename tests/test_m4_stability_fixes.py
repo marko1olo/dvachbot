@@ -26,19 +26,19 @@ async def test_check_flood_record_history_false():
     assert not is_fl, f"Should not be flood: {reason}"
     assert len(_user_request_timestamps[user_id]) == 0, "Tracker deque must remain empty when record_history=False"
 
-    # Step 2: Simulate 8 normal messages recorded in history (BURST_FLOOD_LIMIT is 8)
-    for i in range(8):
+    # Step 2: Simulate 5 normal messages recorded in history (text burst limit is 5)
+    for i in range(5):
         is_fl, _ = check_flood(user_id, board_id, now_ts=t0 + (i * 0.4), record_history=True, is_reply=False)
         assert not is_fl
-    assert len(_user_request_timestamps[user_id]) == 8
+    assert len(_user_request_timestamps[user_id]) == 5
 
-    # Step 3: 9th message at t0 + 3.5 with record_history=False
-    # 8 prior + 1 current = 9 messages within 3.5s (<= 4.0s window), exceeding burst limit of 8
-    is_fl, reason = check_flood(user_id, board_id, now_ts=t0 + 3.5, record_history=False, is_reply=False)
+    # Step 3: 6th message at t0 + 2.5 with record_history=False
+    # 5 prior + 1 current = 6 messages within 2.5s (<= 4.0s window), exceeding burst limit of 5
+    is_fl, reason = check_flood(user_id, board_id, now_ts=t0 + 2.5, record_history=False, is_reply=False)
     assert is_fl, "Should detect burst flood even when record_history=False"
     assert "Burst флуд" in reason
-    # Crucial: Tracker must NOT have the 9th timestamp appended
-    assert len(_user_request_timestamps[user_id]) == 8, "Tracker must NOT append timestamp when record_history=False"
+    # Crucial: Tracker must NOT have the 6th timestamp appended
+    assert len(_user_request_timestamps[user_id]) == 5, "Tracker must NOT append timestamp when record_history=False"
 
     # Clean up
     _user_request_timestamps[user_id].clear()

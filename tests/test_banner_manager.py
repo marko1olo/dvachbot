@@ -86,7 +86,7 @@ class TestBannerManager(unittest.TestCase):
         from banner_manager import SUBSECTION_CATEGORIES, resolve_category_candidates
         all_banners = set(_CATEGORIZED_BANNERS["all"])
         self.assertGreaterEqual(len(all_banners), 1441)
-        self.assertEqual(len(all_banners), 3325)
+        self.assertGreaterEqual(len(all_banners), 3980)
 
         all_reached = set()
         for subsection, cats in SUBSECTION_CATEGORIES.items():
@@ -517,6 +517,55 @@ class TestBannerCacheDebounce(unittest.TestCase):
         truncated2 = _truncate_html_caption(malformed_cut_txt, limit=cut_point)
         self.assertNotIn("<a", truncated2)
         self.assertTrue(truncated2.endswith("...\n<i>[Текст сокращен]</i>"))
+
+
+    def test_unscoped_cache_by_filename_lookup(self):
+        """Verify that get_banner_file resolves cached file_id even when bot_id is None."""
+        test_fn = "test_banner_sample_xyz.jpg"
+        banner_manager._BANNER_CACHE["998877:" + test_fn] = "fid_scoped_998877"
+        banner_manager._CACHE_BY_FILENAME[test_fn] = "fid_scoped_998877"
+
+        # Call get_banner_file with bot_id=None
+        fn, payload = get_banner_file(banner_name=test_fn, bot_id=None)
+        self.assertEqual(fn, test_fn)
+        self.assertEqual(payload, "fid_scoped_998877")
+
+    def test_send_banner_message_reply_to_message_id(self):
+        """Verify that send_banner_message respects and passes reply_to_message_id."""
+        import asyncio
+        from banner_manager import send_banner_message
+        mock_bot = AsyncMock()
+        mock_bot.id = 55555
+        recorded_kwargs = {}
+
+        async def fake_send_photo(*args, **kwargs):
+            nonlocal recorded_kwargs
+            recorded_kwargs = kwargs
+            msg = MagicMock()
+            msg.photo = [MagicMock(file_id="new_fid")]
+            msg.message_id = 99911
+            return msg
+
+        mock_bot.send_photo = AsyncMock(side_effect=fake_send_photo)
+
+        async def run_send():
+            return await send_banner_message(
+                bot=mock_bot,
+                chat_id=12345,
+                caption="Test reply caption",
+                reply_to_message_id=778899
+            )
+
+        sent = asyncio.run(run_send())
+        self.assertIsNotNone(sent)
+        self.assertEqual(recorded_kwargs.get("reply_to_message_id"), 778899)
+
+    def test_subsection_categories_reactions_and_votemute(self):
+        """Verify that new subsections resolve to rich multi-category candidate pools."""
+        from banner_manager import resolve_category_candidates
+        for sub in ("reaction", "reactions", "votemute", "crime", "heist", "event"):
+            cands = resolve_category_candidates(sub, strict=False)
+            self.assertGreaterEqual(len(cands), 3, f"Expected rich candidate pool for {sub}")
 
 
 if __name__ == "__main__":

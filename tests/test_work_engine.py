@@ -292,7 +292,9 @@ def test_jackpot_multiplier_calculation():
          patch("random.randint", side_effect=[500, 3]):
         succ, change, msg, drop = execute_job_action("factory", items)
         assert succ is True
-        assert change == 1500  # 500 * 3
+        # Cap rule: salary_mult (1.0) * jackpot_mult (3) is capped at 2.25x
+        # 500 * 2.25 = 1125 (formerly uncapped at 1500)
+        assert change == 1125
         assert items["work_shifts"] == 51
         assert "factory" in items["work_cooldowns"]
         assert "💎" in msg or "ЗОЛОТАЯ" in msg or "УДАРНИК" in msg
@@ -340,11 +342,19 @@ def test_all_milestone_achievements_unlock(start_shifts, expected_ach, expected_
     }
     with patch("random.random", return_value=0.5), \
          patch("random.randint", return_value=100):
-        succ, change, msg, drop = execute_job_action("bottles", items)
+        res = execute_job_action("bottles", items)
+        succ, change, msg, drop = res
         assert succ is True
         assert items["work_shifts"] == start_shifts + 1
         assert expected_ach in items.get("unlocked_achievements", [])
-        assert change == 100 + expected_bonus
+        # Shift reward is pure work payout (100), NOT inflated with achievement bonus
+        assert change == 100
+        # Unlocked achievement is passed separately in result tuple and active_items
+        assert res.achievement is not None
+        assert res.achievement["id"] == expected_ach
+        assert res.ach_bonus == expected_bonus
+        assert res[4]["id"] == expected_ach
+        assert items.get("last_unlocked_achievement")["id"] == expected_ach
         assert "🏆 Ачивка" in msg
         assert str(expected_bonus) in msg
 
@@ -655,9 +665,356 @@ def test_night_shift_active_and_multiplier():
     with patch("common.work_engine.is_night_shift_active", return_value=True), \
          patch("random.random", return_value=0.5), \
          patch("random.randint", return_value=100):
-        succ, change, msg, drop = execute_job_action("bottles", items)
+        res = execute_job_action("bottles", items)
+        succ, change, msg, drop = res
         assert succ is True
-        # 100 base * 1.5 night = 150 (+ 50 milestone ach_first_work) = 200
-        assert change == 200
+        # 100 base * 1.5 night = 150 (milestone ach_first_work bonus is separated)
+        assert change == 150
+        assert res.achievement["id"] == "ach_first_work"
+        assert res.ach_bonus == 50
         assert "Ночной тариф x1.5" in msg
 
+
+
+# =====================================================================
+# GLOBAL DAILY FATIGUE, HARD CAPS & ACHIEVEMENT SEPARATION TESTS
+# =====================================================================
+
+def test_global_daily_fatigue_scale_tiers():
+    """
+    Verifies the 5 distinct global daily fatigue tiers:
+    1–3 shifts: 100%
+    4–6 shifts: 80% (-20%)
+    7–10 shifts: 55% (-45%)
+    11–15 shifts: 35% (-65%)
+    16+ shifts: 20% (-80% floor)
+    """
+    now = int(time.time())
+
+    # Tier 1: Shifts 1-3 (100% payout, no fatigue note)
+    for prior_count in [0, 1, 2]:
+        prior_shifts = [now - 1000 - i * 60 for i in range(prior_count)]
+        items = {
+            "work_shifts": 50,
+            "work_cooldowns": {},
+            "recent_shifts": {"bottles": prior_shifts},
+            "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50"]
+        }
+        with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+            succ, reward, msg, _ = execute_job_action("bottles", items)
+            assert succ is True
+            assert reward == 100, f"Expected 100 at prior={prior_count}, got {reward}"
+            assert "Усталость" not in msg
+
+    # Tier 2: Shifts 4-6 (80% payout)
+    for prior_count in [3, 4, 5]:
+        prior_shifts = [now - 1000 - i * 60 for i in range(prior_count)]
+        items = {
+            "work_shifts": 50,
+            "work_cooldowns": {},
+            "recent_shifts": {"bottles": prior_shifts},
+            "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50"]
+        }
+        with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+            succ, reward, msg, _ = execute_job_action("bottles", items)
+            assert succ is True
+            assert reward == 80
+            assert f"смена #{prior_count + 1}" in msg
+            assert "-20%" in msg
+
+    # Tier 3: Shifts 7-10 (55% payout)
+    for prior_count in [6, 7, 8, 9]:
+        prior_shifts = [now - 1000 - i * 60 for i in range(prior_count)]
+        items = {
+            "work_shifts": 50,
+            "work_cooldowns": {},
+            "recent_shifts": {"bottles": prior_shifts},
+            "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50"]
+        }
+        with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+            succ, reward, msg, _ = execute_job_action("bottles", items)
+            assert succ is True
+            assert reward == 55
+            assert f"смена #{prior_count + 1}" in msg
+            assert "-45%" in msg
+
+    # Tier 4: Shifts 11-15 (35% payout)
+    for prior_count in [10, 11, 12, 13, 14]:
+        prior_shifts = [now - 1000 - i * 60 for i in range(prior_count)]
+        items = {
+            "work_shifts": 50,
+            "work_cooldowns": {},
+            "recent_shifts": {"bottles": prior_shifts},
+            "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50"]
+        }
+        with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+            succ, reward, msg, _ = execute_job_action("bottles", items)
+            assert succ is True
+            assert reward == 35
+            assert f"смена #{prior_count + 1}" in msg
+            assert "-65%" in msg
+
+    # Tier 5: Shifts 16+ (20% floor payout)
+    for prior_count in [15, 20, 25]:
+        prior_shifts = [now - 1000 - i * 60 for i in range(prior_count)]
+        items = {
+            "work_shifts": 50,
+            "work_cooldowns": {},
+            "recent_shifts": {"bottles": prior_shifts},
+            "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50"]
+        }
+        with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+            succ, reward, msg, _ = execute_job_action("bottles", items)
+            assert succ is True
+            assert reward == 20
+            assert f"смена #{prior_count + 1}" in msg
+            assert "-80%" in msg
+
+
+def test_global_fatigue_cross_vacancy():
+    """
+    Verifies that shifts completed on one vacancy (e.g. bottles, sweeper, shoplifter)
+    cause fatigue on a completely different vacancy (e.g. courier).
+    Prevents button-mashing across all 26 vacancies.
+    """
+    now = int(time.time())
+    # User completed 3 shifts across 3 different vacancies in the last 24h
+    items = {
+        "work_shifts": 50,
+        "work_cooldowns": {},
+        "recent_shifts": {
+            "bottles": [now - 3600],
+            "sweeper": [now - 2400],
+            "shoplifter": [now - 1200],
+        },
+        "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50"]
+    }
+
+    # Working 'courier' now is the 4th shift overall -> 80% multiplier (-20% fatigue)
+    with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+        succ, reward, msg, _ = execute_job_action("courier", items)
+        assert succ is True
+        assert reward == 80
+        assert "⚡ Усталость: -20% (смена #4)" in msg
+
+
+def test_multiplier_hard_cap_2_25x():
+    """
+    Verifies that stacked multipliers (gear + night + jackpot) are strictly capped at 2.25x.
+    """
+    # Wasserman (+25%) + Crown (+20%) + Set Wasserman (+40%) = 1.85x
+    # During night (1.5x) -> 1.85 * 1.5 = 2.78x -> must be capped at 2.25x!
+    items = {
+        "work_shifts": 150,
+        "work_cooldowns": {},
+        "equipped_torso": "body_wasserman",
+        "equipped_head": "hat_crown",
+        "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50", "ach_work_100", "ach_work_150"]
+    }
+    with patch("wardrobe_engine.get_active_set_bonus", return_value={"id": "set_wasserman"}),          patch("common.work_engine.is_night_shift_active", return_value=True),          patch("random.randint", return_value=1000),          patch("random.random", return_value=0.5):
+        succ, change, msg, drop = execute_job_action("deputy", items)
+        assert succ is True
+        # 1000 * 2.25 = 2250 (not 1000 * 2.78 = 2780)
+        assert change == 2250
+
+
+def test_reward_absolute_hard_cap_45k():
+    """
+    Verifies absolute ceiling of 45,000 ₪ per shift.
+    Even with dvach_creator (base 88,888 ₪) and max multiplier (2.25x), payout is capped at 45,000 ₪.
+    """
+    items = {
+        "work_shifts": 1337,
+        "work_cooldowns": {},
+        "equipped_head": "hat_helmet",  # 0% risk
+        "unlocked_achievements": [
+            "ach_first_work", "ach_work_10", "ach_work_50", "ach_work_100",
+            "ach_work_150", "ach_work_250", "ach_work_400", "ach_work_600",
+            "ach_work_800", "ach_work_1000", "ach_work_1337"
+        ]
+    }
+    # Mock base reward = 88888, jackpot mult = 3 (combined mult capped at 2.25x)
+    # 88,888 * 2.25 = 199,998 -> hard capped at 45,000!
+    with patch("random.random", side_effect=[0.5, 0.01, 0.99]),          patch("random.randint", side_effect=[88888, 3]):
+        succ, change, msg, _ = execute_job_action("dvach_creator", items)
+        assert succ is True
+        assert change == 45000, f"Expected 45,000 ₪ cap, got {change} ₪!"
+
+
+def test_achievement_separation_high_milestone_no_inflation():
+    """
+    Verifies that high-tier milestone achievements (ach_work_1000 = +50k, ach_work_1337 = +100k)
+    do NOT inflate the work shift reward or get recorded into the shift payout.
+    """
+    # Transitioning from 999 -> 1000 shifts (unlocks ach_work_1000, worth +50,000 ₪)
+    items = {
+        "work_shifts": 999,
+        "work_cooldowns": {},
+        "unlocked_achievements": ["ach_first_work", "ach_work_10", "ach_work_50", "ach_work_100", "ach_work_150", "ach_work_250", "ach_work_400", "ach_work_600", "ach_work_800"]
+    }
+    with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+        res = execute_job_action("bottles", items)
+        succ, change, msg, _ = res
+        assert succ is True
+        # Shift reward is strictly pure payout (100 ₪), NOT 50,100 ₪!
+        assert change == 100
+        assert res.achievement["id"] == "ach_work_1000"
+        assert res.ach_bonus == 50000
+        assert "ach_work_1000" in items["unlocked_achievements"]
+        assert "50000" in msg
+
+
+
+# =====================================================================
+# UI TRANSPARENCY & DAILY FATIGUE HELPER TESTS
+# =====================================================================
+
+def test_get_user_daily_fatigue_info_all_tiers():
+    """
+    Verifies get_user_daily_fatigue_info returns correct structure and values
+    for all 5 daily fatigue tiers.
+    """
+    from common.work_engine import get_user_daily_fatigue_info, format_fatigue_badge
+    now = 1700000000
+
+    # 1. Tier 1: 0-3 shifts (100% efficiency, next_tier_at: 4)
+    for count in [0, 1, 2, 3]:
+        shifts = {"bottles": [now - i * 100 for i in range(count)]}
+        info = get_user_daily_fatigue_info(shifts, now=now)
+        assert info["shifts_today"] == count
+        assert info["efficiency_pct"] == 100
+        assert info["tier_desc"] == "1-3 смены (100%)"
+        assert info["next_tier_at"] == 4
+        badge = format_fatigue_badge(info)
+        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 100%"
+
+    # 2. Tier 2: 4-6 shifts (80% efficiency, next_tier_at: 7)
+    for count in [4, 5, 6]:
+        shifts = {"bottles": [now - i * 100 for i in range(count)]}
+        info = get_user_daily_fatigue_info(shifts, now=now)
+        assert info["shifts_today"] == count
+        assert info["efficiency_pct"] == 80
+        assert info["tier_desc"] == "4-6 смен (80%)"
+        assert info["next_tier_at"] == 7
+        badge = format_fatigue_badge(info)
+        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 80% (усталость -20%)"
+
+    # 3. Tier 3: 7-10 shifts (55% efficiency, next_tier_at: 11)
+    for count in [7, 8, 9, 10]:
+        shifts = {"bottles": [now - i * 100 for i in range(count)]}
+        info = get_user_daily_fatigue_info(shifts, now=now)
+        assert info["shifts_today"] == count
+        assert info["efficiency_pct"] == 55
+        assert info["tier_desc"] == "7-10 смен (55%)"
+        assert info["next_tier_at"] == 11
+        badge = format_fatigue_badge(info)
+        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 55% (усталость -45%)"
+
+    # 4. Tier 4: 11-15 shifts (35% efficiency, next_tier_at: 16)
+    for count in [11, 13, 15]:
+        shifts = {"bottles": [now - i * 100 for i in range(count)]}
+        info = get_user_daily_fatigue_info(shifts, now=now)
+        assert info["shifts_today"] == count
+        assert info["efficiency_pct"] == 35
+        assert info["tier_desc"] == "11-15 смен (35%)"
+        assert info["next_tier_at"] == 16
+        badge = format_fatigue_badge(info)
+        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 35% (усталость -65%)"
+
+    # 5. Tier 5: 16+ shifts (20% floor efficiency, next_tier_at: None)
+    for count in [16, 20, 50]:
+        shifts = {"bottles": [now - i * 100 for i in range(count)]}
+        info = get_user_daily_fatigue_info(shifts, now=now)
+        assert info["shifts_today"] == count
+        assert info["efficiency_pct"] == 20
+        assert info["tier_desc"] == "16+ смен (20%)"
+        assert info["next_tier_at"] is None
+        badge = format_fatigue_badge(info)
+        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 20% (усталость -80%)"
+
+
+def test_get_user_daily_fatigue_info_input_formats_and_expiry():
+    """
+    Verifies robust handling of None, list, int, future and expired timestamps.
+    """
+    from common.work_engine import get_user_daily_fatigue_info
+    now = 1700000000
+
+    # None and empty
+    assert get_user_daily_fatigue_info(None, now=now)["shifts_today"] == 0
+    assert get_user_daily_fatigue_info({}, now=now)["shifts_today"] == 0
+    assert get_user_daily_fatigue_info([], now=now)["shifts_today"] == 0
+
+    # Direct integer
+    assert get_user_daily_fatigue_info(4, now=now)["shifts_today"] == 4
+    assert get_user_daily_fatigue_info(4, now=now)["efficiency_pct"] == 80
+
+    # List format
+    shifts_list = [now - 100, now - 200, now - 300, now - 400]
+    assert get_user_daily_fatigue_info(shifts_list, now=now)["shifts_today"] == 4
+
+    # Timestamp expiration (older than 86400s) and future timestamps (> now)
+    shifts_mixed = {
+        "bottles": [now - 90000, now - 86401, now - 1000],  # only 1 valid
+        "sweeper": [now + 500, now - 2000]                   # only 1 valid
+    }
+    assert get_user_daily_fatigue_info(shifts_mixed, now=now)["shifts_today"] == 2
+
+
+@pytest.mark.asyncio
+async def test_work_ui_transparency_in_menu_and_result():
+    """
+    Verifies that the fatigue status badge is rendered in:
+    1. /work menu (_build_work_card)
+    2. shift result message (execute_job_action)
+    """
+    import main
+    from common.work_engine import execute_job_action
+
+    now = int(time.time())
+    db_conn = await aiosqlite.connect(":memory:")
+    await db_conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS Users (
+            user_id INTEGER,
+            board_id TEXT,
+            balance REAL DEFAULT 0,
+            posts_count INTEGER DEFAULT 0,
+            active_items TEXT DEFAULT '{}',
+            is_verified_b INTEGER DEFAULT 0,
+            last_failed_amount REAL DEFAULT 0,
+            custom_prefix TEXT DEFAULT NULL,
+            prefix_expires_at REAL DEFAULT 0,
+            cursed_until REAL DEFAULT 0,
+            PRIMARY KEY (user_id, board_id)
+        )
+        """
+    )
+    await db_conn.commit()
+
+    # User with 4 shifts today (80% tier)
+    items = {
+        "work_shifts": 4,
+        "work_cooldowns": {},
+        "recent_shifts": {
+            "bottles": [now - 3000, now - 2000, now - 1000, now - 500]
+        }
+    }
+    await db_conn.execute(
+        "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (888, 'b', 1000, ?)",
+        (json.dumps(items),)
+    )
+    await db_conn.commit()
+
+    with patch("main.get_pool", return_value=db_conn):
+        caption, _ = await main._build_work_card(888, "b")
+        assert "⚡ Смена за сутки: 4 | Эффективность: 80% (усталость -20%)" in caption
+
+    # Check shift execution result includes fatigue status
+    with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
+        # 5th shift -> Tier 2 (80%)
+        succ, change, msg, drop = execute_job_action("bottles", items)
+        assert succ is True
+        assert "⚡ Смена за сутки: 5 | Эффективность: 80% (усталость -20%)" in msg
+
+    await db_conn.close()

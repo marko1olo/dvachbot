@@ -23,6 +23,7 @@ Features Covered:
 
 import random
 import time
+import pytest
 
 
 from lootbox_engine import (
@@ -35,6 +36,15 @@ from lootbox_engine import (
     roll_trash_lootbox,
     roll_gold_safe,
     apply_lootbox_reward,
+    LOOTBOX_PITY_THRESHOLD,
+    is_wearable_reward,
+    calculate_scrap_value,
+    SCRAP_TAX_RATE,
+    MAX_SCRAP_RECOVERY_RATE,
+    burn_lootbox_to_abu,
+    calculate_abu_burn_amount,
+    get_lootbox_price,
+    record_lootbox_purchase_persistent,
 )
 from wardrobe_engine import CLOTHING_CATALOG, get_wardrobe_total_stats
 
@@ -311,14 +321,16 @@ class TestMathematicalRebalanceAndRTP:
 
         cash_rtp = (total_liquid_cash / total_spent) * 100.0
         nominal_rtp = (total_nominal_value / total_spent) * 100.0
+        avg_cash_return = total_liquid_cash / N
 
-        assert cash_rtp < 25.0, f"Cash RTP {cash_rtp:.2f}% exceeds threshold"
-        assert nominal_rtp <= 85.0, f"Nominal RTP {nominal_rtp:.2f}% exceeds 85%"
+        assert cash_rtp < 25.0, f"Cash RTP {cash_rtp:.2f}% exceeds 25%"
+        assert nominal_rtp <= 60.0, f"Nominal RTP {nominal_rtp:.2f}% exceeds 60%"
+        assert avg_cash_return <= 35.0, f"Average cash return {avg_cash_return:.2f} exceeds 35 ₪"
 
     def test_monte_carlo_gold_safe_rtp_under_85(self):
         """
         10,000 stochastic rolls of Gold Safe (500 ₪) with saturated duplicate inventory.
-        Confirms Liquid Cash RTP < 35% and Nominal RTP <= 85.0% (target ~62%).
+        Confirms Liquid Cash RTP < 25% (avg cash <= 110 ₪) and Nominal RTP <= 60.0%.
         """
         random.seed(1337)
         N = 10000
@@ -375,9 +387,11 @@ class TestMathematicalRebalanceAndRTP:
 
         cash_rtp = (total_liquid_cash / total_spent) * 100.0
         nominal_rtp = (total_nominal_value / total_spent) * 100.0
+        avg_cash_return = total_liquid_cash / N
 
-        assert cash_rtp < 35.0, f"Cash RTP {cash_rtp:.2f}% exceeds threshold"
-        assert nominal_rtp <= 85.0, f"Nominal RTP {nominal_rtp:.2f}% exceeds 85%"
+        assert cash_rtp < 25.0, f"Cash RTP {cash_rtp:.2f}% exceeds 25%"
+        assert nominal_rtp <= 60.0, f"Nominal RTP {nominal_rtp:.2f}% exceeds 60%"
+        assert avg_cash_return <= 110.0, f"Average cash return {avg_cash_return:.2f} exceeds 110 ₪"
 
     def test_anti_autoclicker_continuous_bankruptcy(self):
         """Opening 1,000 Gold Safes monotonically drains player wallet to bankruptcy."""
@@ -456,3 +470,158 @@ class TestNonBuyableStatusRewards:
         assert res_inv["custom_title"] == "[Золотой Кит]"
         assert res_inv["title_expires_at"] >= now + 29 * 86400
         assert "[Золотой Кит]" in note
+
+
+# =============================================================================
+# 5. PITY SYSTEM & ABU YACHT FUND 50% BURN (F2.5)
+# =============================================================================
+
+class TestPitySystemAndAbuFund:
+    """Validates bad luck protection (pity 10) and 50% Abu Yacht fund sink."""
+
+    def test_pity_counter_increments_on_non_wearable_drops(self):
+        """10 consecutive openings without wearable items increment pity counter from 0 to 10."""
+        inv = {}
+        for i in range(1, 11):
+            inv, _, _ = apply_lootbox_reward(inv, {"shit_gun": True}, 0, "trash")
+            assert inv["lootbox_pity_counter"] == i
+
+    def test_pity_counter_resets_on_wearable_drop(self):
+        """Dropping a wearable item immediately resets lootbox_pity_counter to 0."""
+        inv = {"lootbox_pity_counter": 7}
+        payload = {"item_id": "hat_bag", "dur_hours": 168, "slot": "head"}
+        res_inv, _, _ = apply_lootbox_reward(inv, payload, 0, "trash")
+        assert res_inv["lootbox_pity_counter"] == 0
+
+    def test_pity_counter_resets_on_tinfoil_head_drop(self):
+        """Dropping tinfoil hat (equips head wear) also resets pity counter."""
+        inv = {"lootbox_pity_counter": 8}
+        payload = {"tinfoil_hat": int(time.time()) + 21600, "equipped_head": "hat_tinfoil"}
+        res_inv, _, _ = apply_lootbox_reward(inv, payload, 0, "trash")
+        assert res_inv["lootbox_pity_counter"] == 0
+
+    def test_pity_guarantee_triggers_on_11th_opening_trash(self):
+        """When lootbox_pity_counter reaches 10, the 11th opening guarantees wardrobe gear."""
+        inv = {"lootbox_pity_counter": 10}
+        tier, title, desc, payload, base_cash = roll_trash_lootbox(active_items=inv)
+
+        assert payload.get("pity_triggered") is True
+        assert "item_id" in payload
+        assert payload["slot"] in ("head", "face", "feet")
+        assert is_wearable_reward(payload) is True
+        assert base_cash == 0
+        assert "ГАРАНТ" in tier
+
+        res_inv, final_cash, note = apply_lootbox_reward(inv, payload, base_cash, "trash")
+        assert res_inv["lootbox_pity_counter"] == 0
+        assert "Сработала защита от невезения" in note
+
+    def test_pity_guarantee_triggers_on_11th_opening_gold(self):
+        """When lootbox_pity_counter reaches 10, Gold Safe guarantees apparel drop."""
+        inv = {"lootbox_pity_counter": 10}
+        tier, title, desc, payload, base_cash = roll_gold_safe(active_items=inv)
+
+        assert payload.get("pity_triggered") is True
+        assert "item_id" in payload
+        assert payload["slot"] in ("head", "face", "feet", "torso")
+        assert is_wearable_reward(payload) is True
+        assert base_cash == 0
+        assert "ГАРАНТ" in tier
+
+        res_inv, final_cash, note = apply_lootbox_reward(inv, payload, base_cash, "gold")
+        assert res_inv["lootbox_pity_counter"] == 0
+        assert "Сработала защита от невезения" in note
+
+    def test_scrap_tax_and_recovery_formula(self):
+        """Scrap tax is 40% (max recovery <= 60% of item nominal)."""
+        assert SCRAP_TAX_RATE == 0.40
+        assert MAX_SCRAP_RECOVERY_RATE == 0.60
+
+        assert calculate_scrap_value(100) == 60
+        assert calculate_scrap_value(500) == 300
+        assert calculate_scrap_value(1000) == 600
+
+        # Weapon scrap prices in both cases are well under 60% of shop retail prices
+        for case, prices in WEAPON_SCRAP_PRICES.items():
+            if case in ("trash", "gold"):
+                for w, sc in prices.items():
+                    # None should exceed 150 ₪
+                    assert sc <= 150
+
+    @pytest.mark.asyncio
+    async def test_abu_fund_50_percent_burn_isolated_db(self, isolated_test_db):
+        """50% of lootbox purchase price is burned to GlobalStats['abu_yacht_fund']."""
+        db = isolated_test_db
+
+        assert calculate_abu_burn_amount("trash") == 75.0
+        assert calculate_abu_burn_amount("gold") == 250.0
+
+        # Burn 50% for trash case (150 -> 75)
+        fund_1 = await burn_lootbox_to_abu(db, "trash", donor_id=123)
+        assert fund_1 == 75.0
+
+        # Burn 50% for gold case (500 -> 250)
+        fund_2 = await burn_lootbox_to_abu(db, "gold", donor_id=123)
+        assert fund_2 == 325.0  # 75 + 250
+
+        # Check GlobalStats table
+        async with db.execute("SELECT value FROM GlobalStats WHERE key = 'abu_yacht_fund'") as c:
+            row = await c.fetchone()
+            assert float(row[0]) == 325.0
+
+    @pytest.mark.asyncio
+    async def test_record_purchase_persistent_burns_abu_fund(self, isolated_test_db):
+        """record_lootbox_purchase_persistent updates daily limits and burns 50% to Abu Yacht Fund."""
+        db = isolated_test_db
+        uid = 777001
+
+        # Check initial fund
+        from common.database import get_abu_fund_total
+        init_fund = await get_abu_fund_total(db)
+
+        # Buy gold case -> 50% (250 ₪) burned
+        cnt = await record_lootbox_purchase_persistent(db, uid, "gold")
+        assert cnt == 1
+
+        new_fund = await get_abu_fund_total(db)
+        assert new_fund == init_fund + 250.0
+
+
+    def test_format_pity_counter_outputs(self):
+        """
+        Verifies format_pity_counter generates exact string:
+        🛡️ Гарант гардероба: X/10 (через {10 - X} кейсов гарантирован шмот)
+        """
+        from lootbox_engine import format_pity_counter
+
+        # Default / None / 0
+        assert format_pity_counter(None) == "🛡️ Гарант гардероба: 0/10 (через 10 кейсов гарантирован шмот)"
+        assert format_pity_counter({}) == "🛡️ Гарант гардероба: 0/10 (через 10 кейсов гарантирован шмот)"
+        assert format_pity_counter({"lootbox_pity_counter": 0}) == "🛡️ Гарант гардероба: 0/10 (через 10 кейсов гарантирован шмот)"
+
+        # Mid-counter (4 openings without wardrobe drop)
+        assert format_pity_counter({"lootbox_pity_counter": 4}) == "🛡️ Гарант гардероба: 4/10 (через 6 кейсов гарантирован шмот)"
+
+        # Threshold reached (10 openings)
+        assert format_pity_counter({"lootbox_pity_counter": 10}) == "🛡️ Гарант гардероба: 10/10 (через 0 кейсов гарантирован шмот)"
+
+    def test_build_lootbox_shop_content_includes_pity_counter(self):
+        """
+        Verifies _build_lootbox_shop_content includes wardrobe pity counter.
+        """
+        import main
+        text, _ = main._build_lootbox_shop_content(user_id=1, balance=5000.0, active_items={"lootbox_pity_counter": 3})
+        assert "🛡️ Гарант гардероба: 3/10 (через 7 кейсов гарантирован шмот)" in text
+
+    def test_build_lootbox_opened_content_includes_pity_counter(self):
+        """
+        Verifies _build_lootbox_opened_content includes wardrobe pity counter.
+        """
+        import main
+        text, _ = main._build_lootbox_opened_content(
+            reveal_text="🎉 Выпало: Заточка!",
+            user_id=1,
+            balance=4850.0,
+            active_items={"lootbox_pity_counter": 7}
+        )
+        assert "🛡️ Гарант гардероба: 7/10 (через 3 кейсов гарантирован шмот)" in text

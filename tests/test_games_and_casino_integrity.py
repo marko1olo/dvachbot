@@ -332,6 +332,84 @@ def test_vip_table_rake():
     assert casino_engine.is_burn_vip_rake(100000)
 
 
+def test_casino_dynamic_bet_caps_integrity():
+    """Integrity check for Dynamic Bet Caps: 1000, 25000, 150000, 500000, 1000000 and absolute 1M limit."""
+    assert casino_engine.MAX_CASINO_BET == 1_000_000
+    assert casino_engine.MAX_ROULETTE_BET == 1_000_000
+
+    # Novices
+    assert casino_engine.get_max_bet_for_balance(1000) == 1000
+    assert casino_engine.get_max_bet_for_balance(10000) == 1000
+
+    # Middle class
+    assert casino_engine.get_max_bet_for_balance(10001) == 25000
+    assert casino_engine.get_max_bet_for_balance(100000) == 25000
+
+    # Wealthy
+    assert casino_engine.get_max_bet_for_balance(100001) == 150000
+    assert casino_engine.get_max_bet_for_balance(500000) == 150000
+
+    # Oligarchs
+    assert casino_engine.get_max_bet_for_balance(500001) == 500000
+    assert casino_engine.get_max_bet_for_balance(2000000) == 500000
+
+    # Whales / Multi-millionaires
+    assert casino_engine.get_max_bet_for_balance(2000001) == 1000000
+    assert casino_engine.get_max_bet_for_balance(5000000) == 1000000
+
+    # Keyboards clamp to dynamic limit
+    kb_novice = casino_engine.get_slots_lobby_keyboard(bet=2000, balance=5000)
+    # The spin button text should have 1000 (clamped)
+    btn_text = kb_novice.inline_keyboard[0][0].text
+    assert "1000" in btn_text
+
+    # Whales all-in button clamped to 1000000
+    kb_bj = casino_engine.get_blackjack_lobby_keyboard(bet=600000, balance=10000000)
+    max_btn = kb_bj.inline_keyboard[2][2].callback_data
+    assert max_btn == "cas:bj:lobby:1000000"
+
+
+def test_casino_jackpot_tax_integrity():
+    """Integrity check for 10% tax on net profit >= 10,000 or mult >= 4.0x."""
+    # Profit >= 10k: 10% tax
+    tax, payout, msg = casino_engine.calculate_jackpot_tax(20000, multiplier=2.0)
+    assert tax == 2000
+    assert payout == 18000
+    assert "🏛️ Налог Абу (10%): -2000 ₪ перечислено в фонд яхты" in msg
+
+    # Mult >= 4.0x with small profit: 10% tax
+    tax_m, payout_m, msg_m = casino_engine.calculate_jackpot_tax(500, multiplier=4.5)
+    assert tax_m == 50
+    assert payout_m == 450
+    assert "🏛️ Налог Абу (10%): -50 ₪ перечислено в фонд яхты" in msg_m
+
+    # Small win (<10k and <4x): 0 tax
+    tax_s, payout_s, msg_s = casino_engine.calculate_jackpot_tax(5000, multiplier=2.0)
+    assert tax_s == 0
+    assert payout_s == 5000
+    assert msg_s == ""
+
+
+def test_casino_spin_cooldown_integrity():
+    """Integrity check for spin cooldown >= 1.5s and anti-autoclicker warning."""
+    uid = 888777666
+    casino_engine.user_casino_last_action.pop(uid, None)
+
+    ok1, rem1 = casino_engine.check_casino_cooldown(uid)
+    assert ok1 is True
+    assert rem1 == 0.0
+
+    res = casino_engine.check_casino_cooldown(uid)
+    assert res.is_allowed is False
+    assert res.remaining > 0
+    assert res.message == "⏳ Не части! Колесу нужно остановиться."
+
+    # Unpack test
+    ok2, rem2 = res
+    assert ok2 is False
+    assert rem2 > 0
+
+
 def test_russian_roulette_solo_mechanics():
     """Verify Russian roulette cylinder mechanics and streak multipliers."""
     user_id = 9999

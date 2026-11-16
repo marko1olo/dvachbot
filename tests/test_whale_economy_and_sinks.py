@@ -581,7 +581,7 @@ class TestSuperWealthTaxAndClassWars:
 
     @pytest.mark.asyncio
     async def test_raid_oligarch_confiscation_cap_200000(self, isolated_test_db):
-        """Confiscation is capped at 200,000 ₪ even for mega-wallets."""
+        """Confiscation is capped at 1,000,000 ₪ even for mega-wallets."""
         db = isolated_test_db
         voters = [73300 + i for i in range(5)]
         for v in voters:
@@ -589,16 +589,18 @@ class TestSuperWealthTaxAndClassWars:
             await db.execute("UPDATE Users SET posts_count = 35 WHERE user_id = ?", (v,))
 
         mega_target = 73399
-        await common.database.add_user_global_balance(db, mega_target, "b", 5000000.0)  # 10% would be 500k
+        await common.database.add_user_global_balance(db, mega_target, "b", 15000000.0)  # 10% would be 1.5M -> capped at 1,000,000 ₪
 
         res = await execute_oligarch_raid(db, voters, mega_target, "b")
         assert res["ok"] is True
-        assert res["confiscated"] == 200000.0  # capped at 200k
-        assert res["burned_to_abu"] == 140000.0  # 70% of 200k
-        assert res["distributed_total"] == 60000.0  # 30% of 200k
-        assert res["per_voter"] == 12000.0
+        assert res["confiscated"] == 1000000.0  # capped at 1M
+        assert res["burned_to_abu"] == 700000.0  # 70% of 1M
+        assert res["distributed_total"] == 300000.0  # 30% of 1M
+        assert res["per_voter"] == 60000.0
 
-        assert await common.database.get_user_global_balance(db, mega_target) == 4800000.0
+        assert await common.database.get_user_global_balance(db, mega_target) == 14000000.0
+        for v in voters:
+            assert await common.database.get_user_global_balance(db, v) == 60500.0  # 500 + 60,000
 
     @pytest.mark.asyncio
     async def test_raid_oligarch_defenses(self, isolated_test_db):
@@ -915,8 +917,12 @@ class TestM2MicroFixAndShopWiring:
         await cmd_whale_safe(msg)
         assert "СЕЙФ ОЛИГАРХА ВЗЛОМАН" in msg.reply.call_args[0][0]
 
-        # /raid_oligarch interactive lobby
+        # /raid_oligarch interactive lobby (requires proletarian user: balance < 5k, posts >= 25)
         msg.reset_mock()
+        prole_id = 75025
+        await common.database.add_user_global_balance(db, prole_id, "b", 500.0)
+        await db.execute("UPDATE Users SET posts_count = 35 WHERE user_id = ?", (prole_id,))
+        msg.from_user.id = prole_id
         msg.board_id = "b"
         msg.chat.id = 999
         msg.text = "/raid_oligarch"
