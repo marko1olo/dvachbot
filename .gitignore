@@ -95,3 +95,6 @@ scripts/archive/bin/
 scratch/
 scratch_*.py
 
+
+assets/banners/.quarantine/
+assets/banners/.compressed/
