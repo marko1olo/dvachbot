@@ -218,9 +218,9 @@
                         <span>{{ request.state.t('anon_name') }} </span>
                         <span>
                             {% if post.thread_id %}
-                                <a href="/{{ board_id }}/res/{{ post.thread_id }}.html#post-{{ post.id }}" class="post-num-link">#{{ post.id }}</a>
+                                <a href="/{{ board_id }}/res/{{ post.thread_id }}.html#post-{{ post.id }}" class="post-num-link" data-post-num="{{ post.id }}">#{{ post.id }}</a>
                             {% else %}
-                                <a href="#post-{{ post.id }}" class="post-num-link">#{{ post.id }}</a>
+                                <a href="#post-{{ post.id }}" class="post-num-link" data-post-num="{{ post.id }}">#{{ post.id }}</a>
                             {% endif %}
                             {% if post.author_id == session.user.id %}<span class="you-marker">(You)</span>{% endif %}
                         </span>
@@ -237,7 +237,7 @@
                         </div>
                     </div>
                     <div class="post-content">
-                        {% if post.content.type == 'files' and post.content.files %}
+                        {% if post.content.files %}
                             <div class="post-files-container post-gallery">
                                 {% for file in post.content.files %}
                                     {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
@@ -382,9 +382,9 @@
         </nav>
         <p>{{ request.state.t('footer_text') }}</p>
     </footer>
-    <div class="modal-overlay" id="modal-overlay" style="display: none !important;"></div>
-    <div class="modal" id="quick-reply-modal" style="display: none !important;"></div>
-    <div class="modal" id="report-modal" style="display: none !important;">
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+    <div class="modal" id="quick-reply-modal" style="display: none;"></div>
+    <div class="modal" id="report-modal" style="display: none;">
         <h3>Жалоба на пост <span id="report-post-num"></span></h3>
         <form id="report-form">
             <div class="form-group">
@@ -552,7 +552,7 @@
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.min.js?v=10.2" defer></script>
+    <script src="/static/js/main.min.js?v=10.3" defer></script>
     <div class="modal" id="bottle-modal" style="display: none;">
         <h3>Отправить записку анону</h3>
         <form id="bottle-form">

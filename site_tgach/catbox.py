@@ -60,9 +60,10 @@ def _is_invalid_uploader(resp: httpx.Response) -> bool:
 
 
 def _disable_bad_catbox_hash():
-    global _CATBOX_HASH_DISABLED_UNTIL
-    _CATBOX_HASH_DISABLED_UNTIL = time.time() + CATBOX_HASH_DISABLE_SECONDS
-    logger.warning("Catbox userhash rejected; using anonymous upload for a while.")
+    global CATBOX_HASH, _CATBOX_HASH_DISABLED_UNTIL
+    CATBOX_HASH = None
+    _CATBOX_HASH_DISABLED_UNTIL = float("inf")
+    logger.warning("Catbox userhash rejected (invalid uploader); zeroed CATBOX_HASH and switched to anonymous upload.")
 
 
 def _read_upload_file(file_source: str) -> tuple[str, bytes]:
@@ -127,11 +128,12 @@ async def _upload_logic(req_type, file_source, is_file=False):
                     data = _build_data(req_type, file_source)
                     resp = await _send_request(client, url, data)
 
-                if data.get('userhash') and _is_invalid_uploader(resp):
+                if _is_invalid_uploader(resp):
                     _disable_bad_catbox_hash()
-                    anonymous_data = dict(data)
-                    anonymous_data.pop('userhash', None)
-                    resp = await _send_request(client, url, anonymous_data, files)
+                    if data.get('userhash'):
+                        anonymous_data = dict(data)
+                        anonymous_data.pop('userhash', None)
+                        resp = await _send_request(client, url, anonymous_data, files)
 
                 if resp.status_code == 200:
                     link = resp.text.strip()
@@ -141,7 +143,7 @@ async def _upload_logic(req_type, file_source, is_file=False):
                     else:
                         logger.warning(f"⚠️ Catbox returned weird response: {link[:100]}")
 
-                elif resp.status_code == 412 or "uploads paused" in resp.text.lower() or "storage issues" in resp.text.lower():
+                elif (resp.status_code == 412 or "uploads paused" in resp.text.lower() or "storage issues" in resp.text.lower()) and not _is_invalid_uploader(resp):
                     _CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + CATBOX_PAUSE_COOLDOWN
                     logger.warning(f"❌ Catbox Service Paused: {resp.text[:120]}. Pausing Catbox uploads for {int(CATBOX_PAUSE_COOLDOWN // 60)}m.")
                     return None

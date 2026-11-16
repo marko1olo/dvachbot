@@ -224,7 +224,7 @@ MAX_BAN_LIST_SIZE = 10000
 
 RATE_LIMIT_WINDOW = 5
 MAX_REQUESTS_PER_WINDOW = 200
-BAN_TIME = 60
+BAN_TIME = 600
 
 def check_ddos(ip: str) -> bool:
     if not ip or not isinstance(ip, str):

@@ -198,7 +198,7 @@
                                         {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
                                             {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
                                             {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
-                                            {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
+                                            {% if file.type == 'image' or file.type == 'photo' %}
                                                 <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                                     {% if file.blurhash %}
                                                         <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
@@ -209,6 +209,21 @@
                                                         class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="handleImageError(this)">
                                                     {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                 </a>
+                                            {% elif file.type == 'sticker' %}
+                                                <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
+                                                    <a href="{{ file_orig_src }}" class="gallery-trigger" data-type="{{ 'video' if file.filename.endswith('.webm') else 'image' }}" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                        {% if file.filename.endswith('.webm') %}
+                                                            <video class="post-sticker" src="{{ file_orig_src }}" autoplay loop muted playsinline webkit-playsinline referrerpolicy="no-referrer" style="max-height: 150px; width: auto; background: transparent; display: block;"></video>
+                                                        {% else %}
+                                                            <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                                data-src="{{ file_thumb_src }}" 
+                                                                data-file-id="{{ file.original_file_id }}" 
+                                                                class="post-sticker lazy-load" referrerpolicy="no-referrer" 
+                                                                style="max-height: 150px; width: auto; background: transparent; display: block;" 
+                                                                onerror="handleImageError(this)">
+                                                        {% endif %}
+                                                    </a>
+                                                </div>
                                             {% elif file.type == 'video_note' %}
                                                 <video class="post-video video-note lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" 
                                                        data-src="{{ file_orig_src }}" 
@@ -521,7 +536,7 @@
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.min.js?v=10.2" defer></script>
+    <script src="/static/js/main.min.js?v=10.3" defer></script>
     <div class="modal" id="filters-modal" style="display: none;">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
             <h3 style="margin: 0; border: none; padding: 0;">🛡️ Фильтрация контента</h3>

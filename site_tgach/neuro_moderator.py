@@ -273,12 +273,21 @@ async def _safe_groq_json(messages, max_tokens=1024):
     return None
 
 
+def is_vector_tgs(image_bytes: bytes | None, file_id: str = "") -> bool:
+    """Проверяет, является ли медиа анимированным векторным Lottie (.tgs) стикером."""
+    if file_id and file_id.lower().endswith(".tgs"):
+        return True
+    if image_bytes and isinstance(image_bytes, (bytes, bytearray)) and image_bytes.startswith(b"\x1f\x8b"):
+        return True
+    return False
+
+
 async def run_deep_check(image_bytes: bytes, file_id: str):
     """
     Запускает глубокую нейро-проверку безопасности изображения.
     """
-    if not file_id or file_id.startswith("CAAC") or file_id.startswith("sticker_"):
-        logger.info(f"⏩ [DeepCheck] Skipping sticker media: {file_id[:16]}")
+    if not file_id or is_vector_tgs(image_bytes, file_id):
+        logger.info(f"⏩ [DeepCheck] Skipping vector TGS sticker: {file_id[:16]}")
         return
     async with _get_deep_check_semaphore():
         return await _run_deep_check_impl(image_bytes, file_id)
@@ -305,8 +314,8 @@ async def _run_deep_check_impl(image_bytes: bytes, file_id: str):
     from site_tgach.security import IP_BAN_LIST
 
     # Telegram stickers and animated media are not subject to deep check
-    if not file_id or file_id.startswith("CAAC") or file_id.startswith("sticker_"):
-        logger.info(f"⏩ [DeepCheck] Skipping sticker media: {file_id[:16]}")
+    if not file_id or is_vector_tgs(image_bytes, file_id):
+        logger.info(f"⏩ [DeepCheck] Skipping vector TGS sticker: {file_id[:16]}")
         return
 
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
@@ -334,7 +343,21 @@ async def _run_deep_check_impl(image_bytes: bytes, file_id: str):
     check_res = await _safe_groq_json(messages)
 
     if not check_res:
-        logger.warning(f"⚠️ [DeepCheck] AI returned no result for {file_id}. Skipping.")
+        logger.warning(f"⚠️ [DeepCheck] AI check failed / returned no result for {file_id}. Quarantining with BLUR + ModQueue.")
+        affected = await apply_auto_censure(file_id, "blur")
+        for pid in affected:
+            await add_to_mod_queue(
+                pid, file_id, "AI Check Failure (Timeout/Error) - Quarantined for Manual Review", 0.7
+            )
+            try:
+                db = await get_pool()
+                async with db_lock:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
+                        (pid, time.time()),
+                    )
+            except Exception as e:
+                logger.warning("Failed to insert into BroadcastQueue: %s", e)
         return
 
     if check_res.get("safety_refusal"):
@@ -465,7 +488,7 @@ async def _run_deep_check_impl(image_bytes: bytes, file_id: str):
 
     # === ЛОГИКА МЯГКОЙ ЦЕНЗУРЫ (ПОДРОСТКИ / BORDERLINE) ===
 
-    elif age == "teen" and visual_style == "photorealistic":
+    elif age == "teen" and visual_style == "photorealistic" and is_nsfw:
         action = "blur"
         reason = "CENSOR: Underage/Teen content suspected (Photo)"
 

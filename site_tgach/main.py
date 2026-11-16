@@ -428,18 +428,44 @@ class PooledConnectionContext:
     Высокопроизводительный пул-адаптер соединения для site_tgach.
     Вместо создания нового aiosqlite.connect() и исполнения 8 PRAGMA-запросов на каждый HTTP-вызов,
     переиспользует активное соединение из common.db_pool.get_pool().
-    Гарантирует автоматический откат (ROLLBACK) зависшей транзакции при исключениях и отсутствие утечек ресурсов.
+    Гарантирует автоматический откат (ROLLBACK) зависшей транзакции при исключениях,
+    а при отказе первичного пула обеспечивает read-only SQLite fallback.
     """
-    __slots__ = ("_conn",)
+    __slots__ = ("_conn", "_is_ro_fallback")
 
     def __init__(self):
         self._conn = None
+        self._is_ro_fallback = False
 
     async def __aenter__(self):
-        self._conn = await get_pool()
-        return self._conn
+        try:
+            self._conn = await get_pool()
+            return self._conn
+        except Exception as pool_err:
+            logger.warning(f"Primary DB pool unavailable ({pool_err}), engaging read-only SQLite fallback...")
+            try:
+                import aiosqlite
+                from common.config import DB_NAME
+                abs_path = os.path.abspath(DB_NAME).replace("\\", "/")
+                uri = f"file:///{abs_path}?mode=ro"
+                self._conn = await aiosqlite.connect(uri, uri=True, timeout=5.0)
+                await self._conn.execute("PRAGMA query_only = ON;")
+                self._is_ro_fallback = True
+                logger.info("Read-only SQLite fallback connection active.")
+                return self._conn
+            except Exception as ro_err:
+                logger.error(f"Read-only SQLite fallback failed: {ro_err}", exc_info=True)
+                raise pool_err
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._is_ro_fallback and self._conn is not None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            return
+
         if exc_type is not None and self._conn is not None:
             try:
                 in_tx = getattr(self._conn, "in_transaction", False)
@@ -459,6 +485,41 @@ class PooledConnectionContext:
 
 def get_db_connection():
     return PooledConnectionContext()
+
+
+class ReadOnlyConnectionContext:
+    __slots__ = ("_conn",)
+
+    def __init__(self):
+        self._conn = None
+
+    async def __aenter__(self):
+        try:
+            import aiosqlite
+            from common.config import DB_NAME
+            abs_path = os.path.abspath(DB_NAME).replace("\\", "/")
+            uri = f"file:///{abs_path}?mode=ro"
+            self._conn = await aiosqlite.connect(uri, uri=True, timeout=5.0)
+            await self._conn.execute("PRAGMA query_only = ON;")
+            return self._conn
+        except Exception as ro_err:
+            logger.warning(f"Dedicated read-only connection failed ({ro_err}), using pooled connection...")
+            self._conn = await get_pool()
+            return self._conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._conn is not None:
+            try:
+                import common.db_pool as dbp
+                if self._conn is not getattr(dbp, "_db_connection", None):
+                    await self._conn.close()
+            except Exception:
+                pass
+        self._conn = None
+
+
+def get_readonly_db_connection():
+    return ReadOnlyConnectionContext()
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.image_processing import process_and_upload_image
 from site_tgach.mirror_health import is_hf_link_allowed
@@ -539,11 +600,23 @@ from logging.handlers import RotatingFileHandler
 
 
 class SafeRotatingFileHandler(RotatingFileHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rollover_retry_after = 0.0
+
+    def shouldRollover(self, record):
+        if self._rollover_retry_after and time.time() < self._rollover_retry_after:
+            return 0
+        return super().shouldRollover(record)
+
     def doRollover(self):
         try:
             super().doRollover()
+            self._rollover_retry_after = 0.0
         except (PermissionError, OSError):
-            pass
+            self._rollover_retry_after = time.time() + 300.0
+            if self.stream is None:
+                self.stream = self._open()
 
 
 class _RequestIdDefaultFilter(logging.Filter):
@@ -2557,7 +2630,7 @@ app.mount(
     name="static",
 )
 templates = Jinja2Templates(directory=os.path.join(site_root, "templates"))
-templates.env.globals["static_version"] = "10.2"
+templates.env.globals["static_version"] = "10.3"
 app.state.templates = templates
 
 from site_tgach.stats_api import router as stats_v2_router
@@ -3176,6 +3249,21 @@ async def custom_404_handler(request: Request, exc):
 
 @app.exception_handler(500)
 async def custom_500_handler(request: Request, exc):
+    exc_name = type(exc).__name__
+    exc_str = str(exc)
+    is_client_abort = any(
+        err in exc_name or err in exc_str
+        for err in ("LocalProtocolError", "CancelledError", "ClientDisconnect", "ConnectionResetError")
+    )
+    if is_client_abort:
+        logger.info(
+            "Stream or client connection closed normally (%s) on %s %s",
+            exc_name,
+            request.method,
+            request.url.path,
+        )
+        return Response(status_code=499 if "Client" in exc_name else 200)
+
     logger.exception(
         "site_error_500 method=%s path=%s content_length=%s",
         request.method,
@@ -4543,13 +4631,16 @@ async def auth_logout(request: Request):
 
 
 @app.get("/search")
+@limiter.limit("30/minute")
 async def search_page(
     request: Request,
     query: str = "",
     archive: int = 0,
     user: dict | None = Depends(get_optional_user),
 ):
-    clean_query = query.strip()
+    query = (query or "").strip()[:200]
+    archive = 1 if archive else 0
+    clean_query = query
     if clean_query:
         clean_query = clean_query.replace('"', '""')
 
@@ -4849,9 +4940,13 @@ async def api_my_replies_count(user: dict = Depends(get_current_user_or_guest)):
 
 
 @app.get("/api/my/replies/list")
+@limiter.limit("30/minute", key_func=get_user_id_from_session)
 async def api_my_replies_list(
-    page: int = 0, user: dict = Depends(get_current_user_or_guest)
+    request: Request,
+    page: int = 0,
+    user: dict = Depends(get_current_user_or_guest),
 ):
+    page = max(0, min(page, 500))
     limit = 20
     offset = page * limit
     replies = await get_user_replies(int(user["id"]), limit, offset)
@@ -4863,10 +4958,14 @@ class MarkReadRequest(BaseModel):
 
 
 @app.post("/api/my/replies/read")
+@limiter.limit("30/minute", key_func=get_user_id_from_session)
 async def api_my_replies_read(
-    data: MarkReadRequest, user: dict = Depends(get_current_user_or_guest)
+    request: Request,
+    data: MarkReadRequest,
+    user: dict = Depends(get_current_user_or_guest),
 ):
-    await mark_replies_read(int(user["id"]), data.ids if data.ids else None)
+    clean_ids = data.ids[:200] if data.ids else None
+    await mark_replies_read(int(user["id"]), clean_ids)
     return {"status": "ok"}
 
 
@@ -4922,6 +5021,8 @@ async def search_tags_page(
     page: int = 1,
     user: dict | None = Depends(get_optional_user),
 ):
+    page = max(1, min(page, 500))
+    tags = (tags or "").strip()[:200]
     # 1. Формируем уникальный ключ для кэша (зависит от тегов и страницы)
     # Кэшируем только для гостей (чтобы у админов работали кнопки)
     cache_key = f"search_tags:{tags}:{page}"
@@ -5055,7 +5156,8 @@ async def tag_seo_page(
     page: int = 1,
     user: dict | None = Depends(get_optional_user),
 ):
-    clean_tag = tag_name.strip().removesuffix(".html").removesuffix(".htm").replace("-", " ")
+    page = max(1, min(page, 500))
+    clean_tag = tag_name.strip().removesuffix(".html").removesuffix(".htm").replace("-", " ")[:100]
 
     # Кэшируем страницу конкретного тега
     cache_key = f"seo_tag:{clean_tag}:{page}"
@@ -6199,6 +6301,7 @@ async def archive_threads_view(
 
 
 @app.post("/makaba/posting.fcgi")
+@limiter.limit("30/minute", key_func=get_user_id_from_session)
 async def api_makaba_posting(
     request: Request,
     task: str = Form(...),
@@ -6218,6 +6321,9 @@ async def api_makaba_posting(
     )
     t = request.state.t
     current_ts = time.time()
+
+    if comment and len(comment) > 15000:
+        return JSONResponse({"Error": "Post text too long (max 15000 chars)", "Status": "Error"}, status_code=400)
 
     if task != "post":
         return JSONResponse({"Error": "Unknown task", "Status": "Error"}, 400)
@@ -7966,6 +8072,10 @@ async def api_create_post(
         logging.getLogger(__name__), {"request_id": request_id}
     )
     local_logger.info("--- START api_create_post ---")
+    if text and len(text) > 15000:
+        raise HTTPException(status_code=400, detail="Post text too long (max 15000 chars)")
+    if images and len(images) > 10:
+        raise HTTPException(status_code=400, detail="Too many files (max 10)")
     if reply_to and reply_to > 0 and post_mode != "chat_post":
         post_mode = "reply"
     client_ip = get_real_ip(request)
@@ -10777,20 +10887,26 @@ async def _proxy_protected_telegram_file(
     session = _get_shared_aiohttp_session()
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
     resp = None
+    stream_timeout = aiohttp.ClientTimeout(
+        connect=10.0,
+        sock_connect=10.0,
+        sock_read=None,
+        total=None,
+    )
     try:
         request_headers = {}
         if request:
             range_header = request.headers.get("range")
             if range_header:
                 request_headers["Range"] = range_header
-        resp = await session.get(url, headers=request_headers, allow_redirects=False)
+        resp = await session.get(url, headers=request_headers, timeout=stream_timeout, allow_redirects=False)
         if resp.status not in (200, 206) and PROXY_URL:
             resp.release()
-            resp = await session.get(url, headers=request_headers, proxy=PROXY_URL, allow_redirects=False)
+            resp = await session.get(url, headers=request_headers, proxy=PROXY_URL, timeout=stream_timeout, allow_redirects=False)
     except Exception:
         if PROXY_URL:
             try:
-                resp = await session.get(url, headers=request_headers, proxy=PROXY_URL, allow_redirects=False)
+                resp = await session.get(url, headers=request_headers, proxy=PROXY_URL, timeout=stream_timeout, allow_redirects=False)
             except Exception:
                 raise HTTPException(status_code=404, detail="File unavailable.")
         else:
@@ -10849,10 +10965,15 @@ async def _proxy_protected_telegram_file(
             "Cache-Control": "public, max-age=2592000, immutable",
             "X-Content-Type-Options": "nosniff",
         }
-        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+        for header_name in ("Last-Modified", "ETag"):
             value = resp.headers.get(header_name)
             if value:
                 headers[header_name] = value
+        if resp.status == 206:
+            for header_name in ("Content-Range", "Content-Length"):
+                value = resp.headers.get(header_name)
+                if value:
+                    headers[header_name] = value
 
         safe_filename = sanitize_header_filename(filename or os.path.basename(file_path))
         file_ext = os.path.splitext(safe_filename)[1].lower()
@@ -10886,6 +11007,8 @@ async def _proxy_protected_telegram_file(
             async for chunk in resp.content.iter_chunked(64 * 1024):
                 if chunk:
                     yield chunk
+        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError, asyncio.CancelledError) as e:
+            logger.warning(f"⚠️ [STREAM_PROXY] Upstream file stream interrupted ({file_id}): {e}")
         finally:
             await close_upstream()
 
@@ -10915,7 +11038,13 @@ async def _proxy_external_url(
             range_header = request.headers.get("range")
             if range_header:
                 request_headers["Range"] = range_header
-        resp = await session.get(url, headers=request_headers, allow_redirects=False)
+        stream_timeout = aiohttp.ClientTimeout(
+            connect=10.0,
+            sock_connect=10.0,
+            sock_read=None,
+            total=None,
+        )
+        resp = await session.get(url, headers=request_headers, timeout=stream_timeout, allow_redirects=False)
     except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
         logger.warning(f"Proxy external file upstream unavailable ({url[:80]}): {e}")
         raise HTTPException(status_code=404, detail="File unavailable.")
@@ -10954,10 +11083,15 @@ async def _proxy_external_url(
             "Cache-Control": "public, max-age=86400",
             "X-Content-Type-Options": "nosniff",
         }
-        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+        for header_name in ("Last-Modified", "ETag"):
             value = resp.headers.get(header_name)
             if value:
                 headers[header_name] = value
+        if resp.status == 206:
+            for header_name in ("Content-Range", "Content-Length"):
+                value = resp.headers.get(header_name)
+                if value:
+                    headers[header_name] = value
 
         MIME_TO_EXT = {
             "image/jpeg": ".jpg",
@@ -11007,10 +11141,14 @@ async def _proxy_external_url(
             async for chunk in resp.content.iter_chunked(64 * 1024):
                 if chunk:
                     yield chunk
-        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError, asyncio.CancelledError, OSError) as e:
             logger.warning(f"Proxy external file stream interrupted ({url[:80]}): {e}")
         except Exception as e:
-            logger.error(f"Proxy external file stream error ({url[:80]}): {e}", exc_info=True)
+            # Handle client aborts / h11 LocalProtocolError without dumping huge tracebacks
+            if "LocalProtocolError" in type(e).__name__ or "BrokenResource" in type(e).__name__:
+                logger.warning(f"Proxy client stream disconnected ({url[:80]}): {e}")
+            else:
+                logger.error(f"Proxy external file stream error ({url[:80]}): {e}", exc_info=True)
         finally:
             await close_upstream()
 
@@ -11191,14 +11329,17 @@ async def get_telegram_file(
                         async with _VIDEO_THUMB_SEMAPHORE:
                             jpeg_bytes = await asyncio.to_thread(extract_video_frame_cpu, v_bytes)
                         if jpeg_bytes:
-                            try:
-                                def _save_thumb_file(p_out, b_data):
-                                    os.makedirs(os.path.dirname(p_out), exist_ok=True)
-                                    with open(p_out, "wb") as f_out:
-                                        f_out.write(b_data)
-                                await asyncio.to_thread(_save_thumb_file, thumb_disk_path, jpeg_bytes)
-                            except Exception as e:
-                                logger.warning(f"Failed to cache extracted thumbnail: {e}")
+                            if thumb_disk_path:
+                                try:
+                                    def _save_thumb_file(p_out, b_data):
+                                        dirname = os.path.dirname(p_out)
+                                        if dirname:
+                                            os.makedirs(dirname, exist_ok=True)
+                                        with open(p_out, "wb") as f_out:
+                                            f_out.write(b_data)
+                                    await asyncio.to_thread(_save_thumb_file, thumb_disk_path, jpeg_bytes)
+                                except Exception as e:
+                                    logger.warning(f"Failed to cache extracted thumbnail: {e}")
                             return Response(
                                 content=jpeg_bytes,
                                 media_type="image/jpeg",
@@ -11211,7 +11352,7 @@ async def get_telegram_file(
                     logger.warning(f"Dynamic video frame extraction failed for {file_id}: {e}")
 
     # --- SMART WAIT LOOP ---
-    backend = FastAPICache.get_backend()
+    backend = getattr(FastAPICache, "_backend", None)
     mirrors = {}
 
     is_video_ext = is_video_id
@@ -11453,6 +11594,7 @@ from common.database import save_poll_vote_db
 
 
 @app.post("/api/poll/vote")
+@limiter.limit("20/minute", key_func=get_user_id_from_session)
 async def api_poll_vote(
     data: PollVote, request: Request, user: dict = Depends(get_current_user_or_guest)
 ):
@@ -11478,11 +11620,12 @@ async def api_poll_vote(
 
 
 @app.post("/api/favourites")
-async def api_get_favourite_threads(data: FavouriteThreads):
+@limiter.limit("30/minute")
+async def api_get_favourite_threads(request: Request, data: FavouriteThreads):
     if not data.thread_ids:
         return []
     db = await get_pool()
-    clean_ids = [int(tid) for tid in data.thread_ids if str(tid).isdigit()]
+    clean_ids = [int(tid) for tid in data.thread_ids if str(tid).isdigit()][:100]
     if not clean_ids:
         return []
 

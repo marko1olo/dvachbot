@@ -301,7 +301,7 @@ window.formatTextGlobal = (text, opId = null, boardId = null, threadId = null) =
             const isThreadPage = tId && location.pathname.includes(`/res/${tId}.html`);
             const href = isThreadPage ? `#post-${num}` : `/${boardId || 'b'}/res/${tId || num}.html#post-${num}`;
             
-            return `<a href="${href}" class="post-link" onclick="event.stopPropagation();" data-post-num="${num}">${label}</a>`;
+            return `<a href="${href}" class="post-link" data-post-num="${num}">${label}</a>`;
         }
     );
 
@@ -2066,17 +2066,55 @@ const PreviewManager = {
         });
         document.body.addEventListener('click', (e) => {
             if (window.innerWidth > 768) return;
-            const link = e.target.closest('a.post-num-link, a.post-link');
+            const link = e.target.closest('a.post-num-link, a.post-link, .post-reply-link');
             if (!link || link.classList.contains('cross-board-link')) return;
             if (link.closest('.post-actions')) return;
+            if (link.classList.contains('post-reply-link')) {
+                return;
+            }
             if (link.classList.contains('post-num-link') && link.closest('.post-header')) {
                 return; 
             }
+            const postNum = link.dataset.postNum || (link.getAttribute('href') || '').replace(/.*#post-/, '');
+            const activeTa = (document.activeElement && document.activeElement.tagName === 'TEXTAREA') ? document.activeElement : null;
+            const floatBox = document.getElementById('floating-reply-box');
+            const isFloatOpen = floatBox && floatBox.style.display !== 'none' && !floatBox.classList.contains('hidden');
+            let targetTa = null;
+            if (activeTa) {
+                targetTa = activeTa;
+            } else if (isFloatOpen && typeof FormManager !== 'undefined' && FormManager.floatingTextarea) {
+                targetTa = FormManager.floatingTextarea;
+            } else if (typeof FormManager !== 'undefined') {
+                const openForm = (FormManager.forms || []).find(f => {
+                    const c = f.closest('.form-container');
+                    return (c && c.classList.contains('is-open')) || (!c && f.style && f.style.display !== 'none' && !f.classList.contains('is-hidden-by-toggle'));
+                });
+                if (openForm) {
+                    targetTa = openForm.querySelector('textarea');
+                }
+            }
+            if (targetTa && postNum && typeof FormManager !== 'undefined') {
+                e.preventDefault();
+                FormManager.appendToTextarea(targetTa, postNum);
+                return;
+            }
             if (link.classList.contains('preview-active')) {
+                if (postNum) {
+                    const targetPost = document.getElementById(`post-${postNum}`);
+                    if (targetPost) {
+                        e.preventDefault();
+                        this.closeAll();
+                        targetPost.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        targetPost.classList.remove('target-highlight');
+                        void targetPost.offsetWidth;
+                        targetPost.classList.add('target-highlight');
+                        setTimeout(() => targetPost.classList.remove('target-highlight'), 1500);
+                        return;
+                    }
+                }
                 return;
             }
             e.preventDefault();
-            e.stopPropagation();
             this.onHover(e, link, true);
         });
         document.addEventListener('click', (e) => {
@@ -2200,9 +2238,12 @@ const PreviewManager = {
                     ${isCensored ? `<span style="color:var(--action-danger); font-size:0.85em; font-weight:bold; margin-left:10px;">[РАЗМЫТО]</span>` : ''}
                 </div>
                 <div class="post-content">${contentHtml}</div>
-                <div class="preview-actions" style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding-top:6px; border-top:1px solid var(--border-separator, rgba(255,255,255,0.1));">
+                <div class="preview-actions" style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-top:8px; padding-top:6px; border-top:1px solid var(--border-separator, rgba(255,255,255,0.1));">
                     <button type="button" class="btn-jump-post" data-post-num="${num}" style="background:var(--accent-primary, #0088cc); color:#fff; border:none; border-radius:4px; padding:6px 12px; font-size:12px; font-weight:bold; cursor:pointer;">
                         ↵ Перейти к посту #${num}
+                    </button>
+                    <button type="button" class="btn-reply-post" data-post-num="${num}" style="background:var(--bg-button-secondary, #383e47); border:1px solid var(--border-input, #444); color:var(--text-primary, #fff); border-radius:4px; padding:6px 10px; font-size:12px; cursor:pointer;">
+                        Ответить
                     </button>
                     <button type="button" class="btn-close-preview" style="background:transparent; border:1px solid var(--border-input, #444); color:var(--text-secondary, #aaa); border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">
                         Закрыть
@@ -2225,6 +2266,16 @@ const PreviewManager = {
                     setTimeout(() => targetPost.classList.remove('highlight-target'), 2500);
                 } else if (targetHref && targetHref !== '#' && !targetHref.startsWith('#post-')) {
                     window.location.href = targetHref;
+                }
+            };
+        }
+        const replyBtn = popupEl.querySelector('.btn-reply-post');
+        if (replyBtn) {
+            replyBtn.onclick = (e) => {
+                e.preventDefault();
+                PreviewManager.closeAll();
+                if (typeof FormManager !== 'undefined') {
+                    FormManager.smartReply(num, e);
                 }
             };
         }
@@ -3270,9 +3321,11 @@ const VpnManager = {
         const botPattern = /bot|crawl|slurp|spider|mediapartners|whatsapp|telegram|discord|facebook|pinterest/i;
         if (navigator.userAgent && botPattern.test(navigator.userAgent)) return;
 
-        this.applyLogic(country);
+        // ВРЕМЕННО ОТКЛЮЧЕНО ПО ЗАПРОСУ: сплеш "Путин хуйло / VPN" закомментирован
+        // this.applyLogic(country);
     },
     applyLogic(country) {
+        /* ВРЕМЕННО ОТКЛЮЧЕНО
         if (country !== 'RU') return; // Показываем только юзерам из РФ
         const lastSeen = localStorage.getItem('vpn_disclaimer_ts');
         const now = Date.now();
@@ -3282,8 +3335,10 @@ const VpnManager = {
             // Ждем пару секунд после загрузки, чтобы контент прогрузился и модалка не "била по глазам" сразу
             setTimeout(() => this.showDisclaimer(), 2000);
         }
+        */
     },
     showDisclaimer() {
+        /* ВРЕМЕННО ОТКЛЮЧЕНО: сплеш "Путин хуйло / VPN"
         if (document.getElementById('vpn-modal-overlay')) return;
         
         const overlay = document.createElement('div');
@@ -3333,6 +3388,7 @@ const VpnManager = {
             // Сохраняем метку в localStorage, чтобы не дергать пользователя ближайшие 12 часов
             localStorage.setItem('vpn_disclaimer_ts', Date.now().toString());
         };
+        */
     }
 };
 
@@ -3854,7 +3910,9 @@ window.startSpankGame = function() {
         document.body.appendChild(overlay);
     }
     
+    overlay.style.removeProperty('display');
     overlay.style.display = 'block';
+    modal.style.removeProperty('display');
     modal.style.display = 'block';
     setTimeout(() => {
         overlay.classList.add('active');
@@ -7869,12 +7927,14 @@ const FormManager = {
         document.addEventListener('paste', this._pasteListener);
     },
     autoResize(el) {
-        if (!el) return;
-        if (el._resizeAF) cancelAnimationFrame(el._resizeAF);
+        if (!el || !el.style) return;
+        if (typeof requestAnimationFrame === 'undefined') return;
+        if (el._resizeAF && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(el._resizeAF);
         el._resizeAF = requestAnimationFrame(() => {
+            if (!el || !el.style) return;
             el.style.height = 'auto';
-            const scrollH = el.scrollHeight;
-            const maxHeight = window.innerHeight * 0.5;
+            const scrollH = el.scrollHeight || 0;
+            const maxHeight = (typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800) * 0.5;
             el.style.height = Math.min(scrollH, maxHeight) + 'px';
             el.style.overflowY = scrollH > maxHeight ? 'auto' : 'hidden';
             el._resizeAF = null;
@@ -8173,7 +8233,8 @@ const FormManager = {
         });
     },
     setReplyTo(postNum) {
-        this.forms.forEach(form => {
+        (this.forms || []).forEach(form => {
+            if (!form) return;
             const replyInput = form.querySelector('input[name="reply_to"]');
             const modeInput = form.querySelector('input[name="post_mode"]');
             const indicator = form.querySelector('.reply-to-indicator');
@@ -8869,34 +8930,108 @@ const FormManager = {
         showToast(t('reply_mode_reset'));
     },
     smartReply(postNum, event) {
+        if (!postNum) return;
         this.setReplyTo(postNum); 
         const vh = window.innerHeight;
         const threshold = 400;
-        const nearbyForm = this.forms.find(f => {
-            if (f === this.floatingForm) return false;
-            const container = f.closest('.form-container');
+        if (!this.forms || this.forms.length === 0) {
+            const f = document.querySelector('form.reply-form-static, #post-form, form[id*="post"]');
+            if (f) {
+                this.forms = [f];
+                this.mainForm = f;
+                this.mainTextarea = f.querySelector('textarea');
+            }
+        }
+        const getContainer = (f) => {
+            if (!f) return null;
+            if (typeof Element !== 'undefined' && !(f instanceof Element)) return null;
+            const closest = (typeof f.closest === 'function') ? (f.closest('.form-container') || f.closest('.chat-form-container')) : null;
+            if (closest) return closest;
+            const p = f.parentElement;
+            if (p && p.classList && typeof p.classList.contains === 'function' && p.classList.contains('form-container')) return p;
+            const prev = f.previousElementSibling;
+            if (prev && prev.classList && typeof prev.classList.contains === 'function' && prev.classList.contains('form-container')) return prev;
+            if (p && typeof p.querySelector === 'function') {
+                const found = p.querySelector('.form-container');
+                if (found) return found;
+            }
+            return (typeof document !== 'undefined' && typeof document.querySelector === 'function') ? document.querySelector('.form-container') : null;
+        };
+        const nearbyForm = (this.forms || []).find(f => {
+            if (!f || f === this.floatingForm) return false;
+            const container = getContainer(f);
             const targetEl = container || f;
-            if (targetEl.offsetHeight === 0 && targetEl.getClientRects().length === 0) {
+            if (!targetEl) return false;
+            if (targetEl.offsetHeight === 0 && targetEl.getClientRects().length === 0 && (!container || container.offsetHeight === 0)) {
                 return false;
             }
+            if (typeof targetEl.getBoundingClientRect !== 'function') return false;
             const r = targetEl.getBoundingClientRect();
             return r.bottom > -threshold && r.top < (vh + threshold);
         });
         if (nearbyForm) {
-            const container = nearbyForm.closest('.form-container');
-            if (container && !container.classList.contains('is-open')) {
-                const toggleBtn = container.querySelector('.form-toggle-button');
-                if (toggleBtn) toggleBtn.click();
+            const container = getContainer(nearbyForm);
+            if (container) {
+                if (!container.classList.contains('is-open')) {
+                    const toggleBtn = container.querySelector('.form-toggle-button');
+                    if (toggleBtn) {
+                        toggleBtn.click();
+                    } else {
+                        container.classList.add('is-open');
+                    }
+                }
             }
-            const textarea = nearbyForm.querySelector('textarea');
-            this.appendToTextarea(textarea, postNum);
-            nearbyForm.scrollIntoView({ behavior: "auto", block: 'center' });
+            if (nearbyForm.classList) {
+                nearbyForm.classList.remove('is-hidden-by-toggle');
+            }
+            if (nearbyForm.style && nearbyForm.style.display === 'none') {
+                nearbyForm.style.display = '';
+            }
+            const textarea = nearbyForm.querySelector('textarea') || document.querySelector('textarea[name="text"]') || document.getElementById('post-text');
+            if (textarea) {
+                this.appendToTextarea(textarea, postNum);
+            }
+            if (typeof nearbyForm.scrollIntoView === 'function') {
+                nearbyForm.scrollIntoView({ behavior: "auto", block: 'center' });
+            }
             this.hideFloating();
         } else {
-            this.showFloating(event, postNum);
+            if (this.floatingBox && window.innerWidth > 768) {
+                this.showFloating(event, postNum);
+            } else {
+                const fallbackForm = document.querySelector('#post-form') || this.mainForm || (this.forms && this.forms[0]);
+                if (fallbackForm) {
+                    const container = getContainer(fallbackForm);
+                    if (container) {
+                        if (!container.classList.contains('is-open')) {
+                            const toggleBtn = container.querySelector('.form-toggle-button');
+                            if (toggleBtn) toggleBtn.click();
+                            else {
+                                container.classList.add('is-open');
+                            }
+                        }
+                    }
+                    if (fallbackForm.classList) {
+                        fallbackForm.classList.remove('is-hidden-by-toggle');
+                    }
+                    if (fallbackForm.style && fallbackForm.style.display === 'none') {
+                        fallbackForm.style.display = '';
+                    }
+                    const textarea = fallbackForm.querySelector('textarea') || document.querySelector('textarea[name="text"]') || document.getElementById('post-text');
+                    if (textarea) {
+                        this.appendToTextarea(textarea, postNum);
+                    }
+                    if (typeof fallbackForm.scrollIntoView === 'function') {
+                        fallbackForm.scrollIntoView({ behavior: "auto", block: 'center' });
+                    }
+                } else if (this.floatingBox) {
+                    this.showFloating(event, postNum);
+                }
+            }
         }
     },
     showFloating(e, postNum, quoteText = null) {
+        if (!this.floatingBox) return;
         if (postNum) {
         this.setReplyTo(postNum);
         }
@@ -8978,13 +9113,14 @@ const FormManager = {
         }
     },
     appendToTextarea(el, num, quoteText = null) {
-        if (!quoteText) {
+        if (!el) return;
+        if (!quoteText && typeof window !== 'undefined' && typeof window.getSelection === 'function') {
             const sel = window.getSelection();
-            const selectionStr = sel.toString().trim();
+            const selectionStr = sel ? sel.toString().trim() : '';
             if (selectionStr.length > 0) {
                 let container = sel.anchorNode ? (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode) : null;
-                let post = container ? container.closest('.post') : null;
-                let postNumOfSelection = post ? post.id.replace('post-', '') : null;
+                let post = container && typeof container.closest === 'function' ? container.closest('.post') : null;
+                let postNumOfSelection = post && post.id ? post.id.replace('post-', '') : null;
                 if (!num || postNumOfSelection === String(num)) {
                     quoteText = selectionStr;
                 }
@@ -9028,16 +9164,23 @@ const FormManager = {
             el.setRangeText(insert, start, end, 'end');
         }
 
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        this.autoResize(el);
+        if (typeof el.dispatchEvent === 'function') {
+            try {
+                const ev = typeof Event === 'function' ? new Event('input', { bubbles: true }) : null;
+                if (ev) el.dispatchEvent(ev);
+            } catch (e) {}
+        }
+        if (typeof this.autoResize === 'function') {
+            this.autoResize(el);
+        }
         
-        const form = el.closest('form');
-        if (form && form.classList.contains('reply-form-static')) {
+        const form = typeof el.closest === 'function' ? el.closest('form') : null;
+        if (form && form.classList && typeof form.classList.contains === 'function' && form.classList.contains('reply-form-static')) {
             const cont = form.previousElementSibling;
-            if (cont && cont.classList.contains('form-container')) {
+            if (cont && cont.classList && typeof cont.classList.contains === 'function' && cont.classList.contains('form-container')) {
                 cont.classList.add('is-open');
                 form.classList.remove('is-hidden-by-toggle');
-                const arrow = cont.querySelector('.form-toggle-arrow');
+                const arrow = typeof cont.querySelector === 'function' ? cont.querySelector('.form-toggle-arrow') : null;
                 if (arrow) arrow.textContent = '[-]';
             }
         }
@@ -11185,7 +11328,7 @@ const PostRenderer = {
                             <a href="${safeUrl}" class="gallery-trigger" data-type="${isWebm ? 'video' : 'image'}" data-filename="${filename}" ${fileIdAttr}>
                                 ${isWebm 
                                     ? `<video class="post-sticker${blurClass}" src="${safeUrl}" autoplay loop muted playsinline webkit-playsinline style="max-height: 150px; width: auto; background: transparent; display: block;" referrerpolicy="no-referrer"></video>`
-                                    : `<img src="${placeholder}" data-src="${safeThumb || safeUrl}" class="post-sticker lazy-load${blurClass}" style="max-height: 150px;" onclick="event.stopPropagation();" referrerpolicy="no-referrer">`
+                                    : `<img src="${placeholder}" data-src="${safeThumb || safeUrl}" class="post-sticker lazy-load${blurClass}" style="max-height: 150px;" referrerpolicy="no-referrer">`
                                 }
                             </a>
                         </div>`;
@@ -11300,7 +11443,7 @@ const PostRenderer = {
             
             const mkLink = (bl) => {
                 const blUrl = isThreadPage ? `#post-${bl}` : `/${data.board_id}/res/${tId}.html#post-${bl}`;
-                return `<a href="${blUrl}" class="post-link" data-post-num="${bl}" onclick="event.stopPropagation();">&gt;&gt;${bl}</a> `;
+                return `<a href="${blUrl}" class="post-link" data-post-num="${bl}">&gt;&gt;${bl}</a> `;
             };
 
             if (data.backlinks.length > 10) {
@@ -12013,19 +12156,21 @@ document.body.addEventListener('click', (e) => {
         lazyWrapper.classList.remove('lazy-media-wrapper');
         return;
     }
-    const pLink = t.closest('.post-num-link');
+    const pLink = t.closest('.post-num-link, .post-reply-link');
     if (pLink) {
         if (pLink.classList.contains('cross-board-link')) return;
-        if (location.pathname.includes('/res/')) {
+        if (location.pathname.includes('/res/') || location.pathname.includes('/chat/') || location.pathname.includes('/catalog/') || document.querySelector('.thread-container, .chat-list, .op-post, #post-form')) {
             e.preventDefault();
-            const num = pLink.dataset.postNum;
-            FormManager.smartReply(num, e);
-            const targetPost = document.getElementById(`post-${num}`);
-            if (targetPost) {
-                targetPost.classList.remove('target-highlight');
-                void targetPost.offsetWidth;
-                targetPost.classList.add('target-highlight');
-                setTimeout(() => targetPost.classList.remove('target-highlight'), 1500);
+            const num = pLink.dataset.postNum || (pLink.getAttribute('href') || '').replace(/.*#post-/, '');
+            if (num && typeof FormManager !== 'undefined') {
+                FormManager.smartReply(num, e);
+                const targetPost = document.getElementById(`post-${num}`);
+                if (targetPost) {
+                    targetPost.classList.remove('target-highlight');
+                    void targetPost.offsetWidth;
+                    targetPost.classList.add('target-highlight');
+                    setTimeout(() => targetPost.classList.remove('target-highlight'), 1500);
+                }
             }
             return;
         }
@@ -13323,8 +13468,8 @@ const SystemDock = {
 
                 <div class="dock-content" id="tab-tools">
                     <div class="dock-tools-grid">
-                        <button class="dock-tool-btn" onclick="window.scrollTo({top:0, behavior: "auto"})">⬆ ${t('dock_up', 'Наверх')}</button>
-                        <button class="dock-tool-btn" onclick="window.scrollTo({top:document.body.scrollHeight, behavior: "auto"})">⬇ ${t('dock_down', 'Вниз')}</button>
+                        <button class="dock-tool-btn" onclick="window.scrollTo({top:0, behavior: 'auto'})">⬆ ${t('dock_up', 'Наверх')}</button>
+                        <button class="dock-tool-btn" onclick="window.scrollTo({top:document.body.scrollHeight, behavior: 'auto'})">⬇ ${t('dock_down', 'Вниз')}</button>
                         <button class="dock-tool-btn" onclick="document.getElementById('theme-toggle').click()">🌗 ${t('dock_theme', 'Тема')}</button>
                         <button class="dock-tool-btn" onclick="window.manualRefresh()">🔄 ${t('dock_refresh', 'Обновить')}</button>
                         <button class="dock-tool-btn" id="dock-clear-history" style="color:var(--action-danger)">🗑 ${t('dock_clear_hist', 'История')}</button>
@@ -13449,11 +13594,27 @@ const SystemDock = {
             }
         });
         if (btnUp && btnDown && scrollCtrl) {
-            btnUp.onclick = () => window.scrollTo({ top: 0, behavior: "auto" });
-            btnDown.onclick = () => window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
+            const doScrollUp = (e) => {
+                if (e) { e.preventDefault(); e.stopPropagation(); }
+                window.scrollTo({ top: 0, behavior: "smooth" });
+            };
+            const doScrollDown = (e) => {
+                if (e) { e.preventDefault(); e.stopPropagation(); }
+                const max = Math.max(
+                    document.body ? document.body.scrollHeight : 0,
+                    document.documentElement ? document.documentElement.scrollHeight : 0
+                );
+                window.scrollTo({ top: max, behavior: "smooth" });
+            };
+
+            btnUp.onclick = doScrollUp;
+            btnDown.onclick = doScrollDown;
+            btnUp.addEventListener('touchend', doScrollUp, { passive: false });
+            btnDown.addEventListener('touchend', doScrollDown, { passive: false });
 
             const handleScroll = () => {
-                if (!SettingsManager.current.showScrollButtons) {
+                const show = SettingsManager && SettingsManager.current && SettingsManager.current.showScrollButtons;
+                if (!show) {
                     scrollCtrl.style.display = 'none';
                     scrollCtrl.classList.remove('visible');
                     return;
@@ -13461,11 +13622,16 @@ const SystemDock = {
                 scrollCtrl.style.display = 'flex';
                 scrollCtrl.classList.add('visible');
                 
-                const scrollY = window.scrollY;
-                const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+                const scrollY = window.pageYOffset || (document.documentElement ? document.documentElement.scrollTop : 0) || window.scrollY || 0;
+                const docHeight = Math.max(
+                    document.body ? document.body.scrollHeight : 0,
+                    document.documentElement ? document.documentElement.scrollHeight : 0
+                );
+                const winHeight = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 0) || 0;
+                const maxScroll = Math.max(0, docHeight - winHeight);
                 
                 btnUp.disabled = scrollY <= 50;
-                btnDown.disabled = scrollY >= maxScroll - 50;
+                btnDown.disabled = maxScroll > 0 && scrollY >= maxScroll - 50;
             };
 
             window.addEventListener('scroll', debounce(handleScroll, 100), { passive: true });
@@ -13506,8 +13672,10 @@ const SystemDock = {
     updateScrollVisibility() {
         const scrollCtrl = document.getElementById('dock-scroll-controls');
         if (!scrollCtrl) return;
-        if (SettingsManager.current.showScrollButtons) {
+        const show = SettingsManager && SettingsManager.current && SettingsManager.current.showScrollButtons;
+        if (show) {
             scrollCtrl.style.display = 'flex';
+            scrollCtrl.classList.add('visible');
             window.dispatchEvent(new Event('scroll'));
         } else {
             scrollCtrl.style.display = 'none';
