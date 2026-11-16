@@ -359,7 +359,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             groq_image_urls = []
             for i, fp in enumerate(file_paths):
                 src = fp if (isinstance(fp, (str, Path)) and os.path.exists(fp)) else (images_data[i] if i < len(images_data) else None)
-                groq_bytes, g_err = prepare_image_for_groq(src, max_size=640)
+                groq_bytes, g_err = await asyncio.to_thread(prepare_image_for_groq, src, 640)
                 if not g_err and groq_bytes:
                     b64_g = base64.b64encode(groq_bytes).decode("utf-8")
                     groq_image_urls.append(f"data:image/jpeg;base64,{b64_g}")

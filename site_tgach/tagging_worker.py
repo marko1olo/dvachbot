@@ -420,9 +420,12 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     try:
         from site_tgach.vision import describe_image
 
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp_path = tmp.name
-            tmp.write(resized_image_bytes)
+        def _write_temp_jpg(data: bytes) -> str:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(data)
+                return tmp.name
+
+        tmp_path = await asyncio.to_thread(_write_temp_jpg, resized_image_bytes)
 
         return await describe_image(
             tmp_path,
@@ -438,7 +441,8 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     finally:
         # Раньше удаление стояло после await: любое исключение в describe_image
         # оставляло jpg в %TEMP% навсегда.
-        _remove_temp_file(tmp_path)
+        if tmp_path:
+            await asyncio.to_thread(_remove_temp_file, tmp_path)
 
 
 # ==========================================
@@ -696,7 +700,17 @@ async def _download_via_bot(bot, file_id: str) -> tuple[bytes | None, str]:
     f_obj = await asyncio.wait_for(
         bot.download_file(file_path), timeout=DOWNLOAD_DATA_TIMEOUT_PER_BOT
     )
-    data = f_obj.read() if hasattr(f_obj, "read") else f_obj
+    if hasattr(f_obj, "getvalue"):
+        data = f_obj.getvalue()
+    elif hasattr(f_obj, "read"):
+        if hasattr(f_obj, "seek"):
+            try:
+                f_obj.seek(0)
+            except Exception:
+                pass
+        data = f_obj.read()
+    else:
+        data = f_obj
     return (data, "ok") if data else (None, "empty")
 
 
@@ -754,6 +768,8 @@ async def download_file_with_fallback(file_id: str, primary_bot=None) -> tuple[b
             logger.warning(
                 f"⏱️ [TAGGER] Таймаут скачивания {file_id[:15]} ботом {b_id or '?'}, пробую следующего бота."
             )
+            if global_bot_pool:
+                global_bot_pool.mark_bot_cooldown_by_bot(b, duration_sec=30.0)
             continue
         except asyncio.CancelledError:
             raise
@@ -1025,7 +1041,10 @@ async def tagging_loop():
                     logger.info(
                         f"🎵 [BG_TAGGER] Audio document {file_id[:12]} (name={valid_task.get('fname')}, mime={valid_task.get('fmime')}) -> marked as 'audio' without Vision"
                     )
-                    sha_audio = hashlib.sha256(img_bytes).hexdigest() if img_bytes else f"audio_{file_id}"
+                    if img_bytes:
+                        sha_audio = await asyncio.to_thread(lambda b: hashlib.sha256(b).hexdigest(), img_bytes) if len(img_bytes) > 500_000 else hashlib.sha256(img_bytes).hexdigest()
+                    else:
+                        sha_audio = f"audio_{file_id}"
                     async def _save_audio_doc():
                         async with db_transaction(db):
                             async with db.execute(
@@ -1109,7 +1128,7 @@ async def tagging_loop():
                 elif not res:
                     logger.error(f"⚠️ Bad File {file_id}: {error_msg}")
                     # Сохраняем как ошибку, чтобы не долбить
-                    sha_fail = hashlib.sha256(img_bytes).hexdigest()
+                    sha_fail = await asyncio.to_thread(lambda b: hashlib.sha256(b).hexdigest(), img_bytes) if len(img_bytes) > 500_000 else hashlib.sha256(img_bytes).hexdigest()
                     async def _save_bad_file():
                         async with db_transaction(db):
                             async with db.execute(

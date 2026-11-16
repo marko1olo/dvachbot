@@ -8,7 +8,7 @@ import time
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-REPO_ROOT = r"c:\Users\danat\Desktop\dvachbot"
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DB_PATH = os.path.join(REPO_ROOT, "dvach_bot.db")
 
 PYTHON_FILES = [
@@ -233,16 +233,16 @@ def check_ast_integrity_and_facades():
     with open(post_helpers_path, "r", encoding="utf-8", errors="ignore") as f:
         ph_content = f.read()
 
-    # Verify compact_icon is not added to custom_prefix
-    if 'custom_prefix = badge_emoji + debuff_icons + prefix_str' in ph_content:
-        print("✅ post_helpers.py: custom_prefix correctly omits compact_icon.")
+    # Verify compact_icon is added to custom_prefix
+    if 'custom_prefix = compact_icon + badge_emoji + debuff_icons + prefix_str' in ph_content:
+        print("✅ post_helpers.py: custom_prefix correctly includes compact_icon.")
     else:
         print("❌ post_helpers.py: custom_prefix does not match expected definition!")
 
-    if 'author_prefix = ""  # wardrobe icons disabled in post headers' in ph_content:
-        print("✅ post_helpers.py: format_thread_post_header author_prefix correctly disabled.")
+    if 'w_stats.get("compact_post_icon", "")' in ph_content:
+        print("✅ post_helpers.py: format_thread_post_header author_prefix correctly enabled.")
     else:
-        print("❌ post_helpers.py: format_thread_post_header author_prefix not disabled!")
+        print("❌ post_helpers.py: format_thread_post_header author_prefix not enabled!")
 
 if __name__ == "__main__":
     check_compilation()

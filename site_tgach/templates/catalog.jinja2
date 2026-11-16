@@ -213,13 +213,13 @@
                         {% else %}
                             <div class="catalog-ambient">
                                 <span>📝</span>
-                                <small>{{ thread.content.text | safe | striptags | truncate(40) }}</small>
+                                <small>{{ thread.content.text | striptags | truncate(40) }}</small>
                             </div>
                         {% endif %}
                     {% else %}
                         <div class="catalog-ambient">
                             <span>📝</span>
-                            <small>{{ thread.content.text | safe | striptags | truncate(40) }}</small>
+                            <small>{{ thread.content.text | striptags | truncate(40) }}</small>
                         </div>
                     {% endif %}
                     {% if thread.is_pinned %}
@@ -239,7 +239,7 @@
                     </div>
                     <div class="catalog-text-content">
                         {% set raw_text = thread.content.text | replace('<br>', ' ') | replace('<br/>', ' ') | replace('</p>', ' ') | replace('\n', ' ') %}
-                        {% set clean_text = raw_text | safe | striptags %}
+                        {% set clean_text = raw_text | striptags %}
                         <span class="catalog-subject">
                             {% if thread.thread_type == 'image' %} <span style="color:#e91e63; font-weight:bold; font-size:0.9em;">[IMG]</span>{% endif %}
                             {% if thread.thread_type == 'video' %} <span style="color:#9c27b0; font-weight:bold; font-size:0.9em;">[VID]</span>{% endif %}
@@ -420,6 +420,6 @@
         </form>
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
-    <script src="/static/js/main.min.js?v=10.2" defer></script>
+    <script src="/static/js/main.min.js?v=10.3" defer></script>
 </body>
 </html>
