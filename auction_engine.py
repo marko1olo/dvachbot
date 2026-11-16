@@ -8,12 +8,13 @@ as well as auction_router handling /auction, /bid, /whale_safe, and /raid_oligar
 """
 
 import asyncio
+import html
 import logging
 import math
 import re
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiogram import Router, F, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -40,6 +41,7 @@ __all__ = [
     "place_auction_bid",
     "finish_active_auctions",
     "get_active_auctions",
+    "check_raid_proletarian",
     "auction_router",
 ]
 
@@ -50,16 +52,103 @@ _ACTIVE_RAIDS: Dict[str, Dict[str, Any]] = {}
 _raid_lock = asyncio.Lock()
 
 
+async def check_raid_proletarian(db, user_id: int) -> Tuple[bool, str]:
+    """
+    Checks whether a user qualifies as a proletarian raider:
+    1. Not isolated (is_isolated == 0)
+    2. Total wealth (wallet + active bank deposits) < 5,000 ₪
+    3. Posts >= 25 (Users.posts_count or Posts author count)
+    """
+    try:
+        async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (user_id,)) as iso_c:
+            iso_row = await iso_c.fetchone()
+            if iso_row and iso_row[0]:
+                return False, "🧘 Ты находишься в режиме самоизоляции и не можешь участвовать в рейдах ОБЭП."
+    except Exception:
+        pass
+
+    bal = await get_user_global_balance(db, user_id)
+    bank_tot = 0.0
+    try:
+        async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
+            if await tc.fetchone():
+                async with db.execute(
+                    "SELECT COALESCE(SUM(principal + accrued_interest), 0.0) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
+                    (user_id,)
+                ) as bc:
+                    brow = await bc.fetchone()
+                    if brow and brow[0]:
+                        bank_tot = float(brow[0])
+    except Exception:
+        bank_tot = 0.0
+
+    total_wealth = bal + bank_tot
+    posts = 0
+    try:
+        async with db.execute("SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as c:
+            p_row = await c.fetchone()
+            posts = p_row[0] if p_row else 0
+    except Exception:
+        posts = 0
+
+    if posts < 25:
+        try:
+            async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,)) as pc:
+                pc_row = await pc.fetchone()
+                posts = max(posts, pc_row[0] if pc_row else 0)
+        except Exception:
+            pass
+
+    if total_wealth >= 5000 or posts < 25:
+        reasons = []
+        if total_wealth >= 5000:
+            reasons.append(f"баланс {total_wealth:,.0f} ₪ ≥ 5,000 ₪")
+        if posts < 25:
+            reasons.append(f"постов {posts} < 25")
+        return False, f"Требуется: баланс < 5,000 ₪ и ≥ 25 постов ({', '.join(reasons)})."
+
+    return True, ""
+
+
+def build_auction_list_kb(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Генерирует клавиатуру пагинации и хаб-навигации для активных аукционов."""
+    rows: List[List[InlineKeyboardButton]] = []
+    if total_pages > 1:
+        nav_row: List[InlineKeyboardButton] = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"auc_page:{page-1}"))
+        else:
+            nav_row.append(InlineKeyboardButton(text="◀️", callback_data="auc_noop"))
+
+        nav_row.append(InlineKeyboardButton(text=f"Стр. {page}/{total_pages}", callback_data=f"auc_page:{page}"))
+
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"auc_page:{page+1}"))
+        else:
+            nav_row.append(InlineKeyboardButton(text="▶️", callback_data="auc_noop"))
+        rows.append(nav_row)
+
+    rows.append([
+        InlineKeyboardButton(text="🛒 В Барахолку (/market)", callback_data="market_main_hub"),
+        InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # =============================================================================
 # 1. /auction HANDLER
 # =============================================================================
 
 @auction_router.message(F.text.regexp(r"^/(auction|auctions|аукцион)\b", flags=re.IGNORECASE))
-async def cmd_auction(message: types.Message):
+async def cmd_auction(message: types.Message, board_id: str | None = None, **kwargs):
     """
     Displays active auctions or allows creating lots via /auction create.
     """
-    board_id = message.board_id if isinstance(getattr(message, "board_id", None), str) else "b"
+    board_id = board_id or (message.board_id if isinstance(getattr(message, "board_id", None), str) else "b")
     text_val = (message.text or "").strip()
     parts = text_val.split(maxsplit=5)
     db = await get_pool()
@@ -127,41 +216,122 @@ async def cmd_auction(message: types.Message):
         )
         return
 
-    # Normal listing of active auctions
+    # Normal listing of active auctions with safe pagination (max 4 per page, under 4096 chars)
+    raw_page = 1
+    if len(parts) >= 2 and parts[1].isdigit():
+        raw_page = int(parts[1])
+    elif len(parts) >= 3 and parts[1].lower() in ("page", "стр", "страница") and parts[2].isdigit():
+        raw_page = int(parts[2])
+
     auctions = await get_active_auctions(db, board_id)
     if not auctions:
+        kb = build_auction_list_kb(1, 1)
         await message.reply(
-            "🏛️ <b>АУКЦИОННЫЙ ДОМ ДВАЧА (F3.2)</b>\n\n"
+            "🏛️ <b>АУКЦИОННЫЙ ДОМ ДВАЧА</b>\n\n"
             "Сейчас нет активных торгов.\n"
             "Следите за объявлениями Абу или создайте лот:\n"
             "<code>/auction create &lt;lot_type&gt; &lt;start_price&gt; &lt;step&gt; &lt;hours&gt; &lt;title&gt;</code>\n\n"
-            "Доступные типы: <code>custom_role</code>, <code>board_pin</code>, <code>custom_badge</code>."
+            "Доступные типы: <code>custom_role</code>, <code>board_pin</code>, <code>custom_badge</code>.",
+            reply_markup=kb,
+            parse_mode="HTML"
         )
         return
 
-    lines = ["🏛️ <b>АКТИВНЫЕ АУКЦИОНЫ ДВАЧА (F3.2)</b>\n"]
-    for auc in auctions:
+    per_page = 4
+    total_count = len(auctions)
+    total_pages = max(1, math.ceil(total_count / per_page))
+    page = max(1, min(raw_page, total_pages))
+    start_idx = (page - 1) * per_page
+    page_auctions = auctions[start_idx:start_idx + per_page]
+
+    lines = [f"🏛️ <b>АКТИВНЫЕ АУКЦИОНЫ ДВАЧА</b> (Стр. {page}/{total_pages}, лотов: {total_count})\n"]
+    for auc in page_auctions:
         mins_left = max(1, auc["time_left"] // 60)
         hours_left = mins_left // 60
         rem_str = f"{hours_left} ч. {mins_left % 60} мин." if hours_left > 0 else f"{mins_left} мин."
         next_min = (auc["current_bid"] + auc["min_bid_step"]) if auc["current_winner_id"] else auc["start_price"]
-        leader = auc["current_winner_name"] or "Нет ставок"
+        leader = html.escape(str(auc["current_winner_name"] or "Нет ставок"))
+        safe_title = html.escape(str(auc['title']))
+        safe_desc = html.escape(str(auc['description']))
 
         lines.append(
-            f"🔹 <b>Лот #{auc['id']}: {auc['title']}</b>\n"
-            f"📝 <i>{auc['description']}</i>\n"
+            f"🔹 <b>Лот #{auc['id']}: {safe_title}</b>\n"
+            f"📝 <i>{safe_desc}</i>\n"
             f"💰 Текущая ставка: <code>{int(auc['current_bid']):,} ₪</code> (Лидер: <b>{leader}</b>)\n"
             f"⚡ Мин. шаг: <code>+{int(auc['min_bid_step']):,} ₪</code> | ⏳ Осталось: <b>{rem_str}</b>\n"
             f"👉 Поставить: <code>/bid {auc['id']} {int(next_min)}</code>\n"
         )
 
     lines.append("<i>Все победные ставки на 100% сжигаются в Фонд Яхты Абу!</i>")
-    await message.reply("\n".join(lines))
+    out_text = "\n".join(lines)
+    if len(out_text) > 3900:
+        out_text = out_text[:3850] + "\n\n⚠️ <i>[Список сокращен]</i>"
+
+    kb = build_auction_list_kb(page, total_pages)
+    await message.reply(out_text, reply_markup=kb, parse_mode="HTML")
 
 
 # =============================================================================
 # 2. /bid HANDLER
 # =============================================================================
+
+@auction_router.callback_query(F.data.startswith("auc_page:"))
+async def cb_auction_page(callback: types.CallbackQuery):
+    """Пагинация активных аукционов через инлайн-кнопки."""
+    from common.bot_helpers import safe_callback_answer, render_menu_transition
+    try:
+        raw_page = callback.data.split(":", 1)[1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        board_id = "b"
+        if callback.message and isinstance(getattr(callback.message, "board_id", None), str):
+            board_id = callback.message.board_id or "b"
+        db = await get_pool()
+        auctions = await get_active_auctions(db, board_id)
+        if not auctions:
+            await callback.answer("Аукционы завершены или отсутствуют.", show_alert=True)
+            return
+
+        per_page = 4
+        total_count = len(auctions)
+        total_pages = max(1, math.ceil(total_count / per_page))
+        page = max(1, min(page, total_pages))
+        start_idx = (page - 1) * per_page
+        page_auctions = auctions[start_idx:start_idx + per_page]
+
+        lines = [f"🏛️ <b>АКТИВНЫЕ АУКЦИОНЫ ДВАЧА</b> (Стр. {page}/{total_pages}, лотов: {total_count})\n"]
+        for auc in page_auctions:
+            mins_left = max(1, auc["time_left"] // 60)
+            hours_left = mins_left // 60
+            rem_str = f"{hours_left} ч. {mins_left % 60} мин." if hours_left > 0 else f"{mins_left} мин."
+            next_min = (auc["current_bid"] + auc["min_bid_step"]) if auc["current_winner_id"] else auc["start_price"]
+            leader = html.escape(str(auc["current_winner_name"] or "Нет ставок"))
+            safe_title = html.escape(str(auc['title']))
+            safe_desc = html.escape(str(auc['description']))
+
+            lines.append(
+                f"🔹 <b>Лот #{auc['id']}: {safe_title}</b>\n"
+                f"📝 <i>{safe_desc}</i>\n"
+                f"💰 Текущая ставка: <code>{int(auc['current_bid']):,} ₪</code> (Лидер: <b>{leader}</b>)\n"
+                f"⚡ Мин. шаг: <code>+{int(auc['min_bid_step']):,} ₪</code> | ⏳ Осталось: <b>{rem_str}</b>\n"
+                f"👉 Поставить: <code>/bid {auc['id']} {int(next_min)}</code>\n"
+            )
+
+        lines.append("<i>Все победные ставки на 100% сжигаются в Фонд Яхты Абу!</i>")
+        out_text = "\n".join(lines)
+        if len(out_text) > 3900:
+            out_text = out_text[:3850] + "\n\n⚠️ <i>[Список сокращен]</i>"
+
+        kb = build_auction_list_kb(page, total_pages)
+        await render_menu_transition(callback, out_text, kb, category="shop", prefer_banner=False)
+    finally:
+        await safe_callback_answer(callback)
+
+
+@auction_router.callback_query(F.data == "auc_noop")
+async def cb_auc_noop(callback: types.CallbackQuery):
+    from common.bot_helpers import safe_callback_answer
+    await safe_callback_answer(callback)
+
 
 @auction_router.message(F.text.regexp(r"^/(bid|auction_bid|ставка)\b", flags=re.IGNORECASE))
 async def cmd_bid(message: types.Message):
@@ -172,6 +342,40 @@ async def cmd_bid(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or f"Анон #{user_id}"
     parts = (message.text or "").split()
+
+    db = await get_pool()
+
+    # Мут-гард
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
+    if await check_db_shadow_muted(user_id, board_id, db=db) or await check_user_is_muted(db, user_id, board_id):
+        await message.reply("🔇 Замученным нельзя делать ставки на аукционе.")
+        return
+
+    # Самоизоляция
+    try:
+        async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (user_id,)) as iso_c:
+            iso_row = await iso_c.fetchone()
+            if iso_row and iso_row[0]:
+                await message.reply("🧘 Вы находитесь в режиме самоизоляции. Ставки на аукционе заблокированы (капитал заморожен).", parse_mode="HTML")
+                return
+    except Exception:
+        pass
+
+    # Розыск 5★
+    try:
+        from common.bot_helpers import _get_user_active_items
+        s_items = await _get_user_active_items(db, user_id, board_id)
+        if int(s_items.get("wanted_stars", 0) or 0) >= 5:
+            await message.reply(
+                "🚨 <b>СЛУЖБА ФИНАНСОВОГО МОНИТОРИНГА АБУ:</b>\n"
+                "Вы находитесь в федеральном розыске (5★)! Все аукционные операции заблокированы полицией.\n"
+                "Сбросьте розыск через взятку (<code>/bribe_cop</code>) или отсидите срок!",
+                parse_mode="HTML"
+            )
+            return
+    except Exception as e:
+        logger.warning(f"Error checking wanted status in cmd_bid: {e}")
 
     if len(parts) < 3:
         await message.reply(
@@ -196,7 +400,8 @@ async def cmd_bid(message: types.Message):
     res = await place_auction_bid(db, auction_id, user_id, user_name, bid_amount, board_id)
 
     if not res.get("ok"):
-        await message.reply(f"❌ <b>Ставка отклонена:</b> {res.get('error', 'Неизвестная ошибка')}")
+        err_msg = html.escape(str(res.get('error', 'Неизвестная ошибка')))
+        await message.reply(f"❌ <b>Ставка отклонена:</b> {err_msg}", parse_mode="HTML")
         return
 
     snipe_txt = (
@@ -205,12 +410,17 @@ async def cmd_bid(message: types.Message):
     )
     prev_txt = "\nПредыдущему лидеру возвращено 100% ставки из эскроу." if res.get("previous_winner") else ""
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+    ])
     await message.reply(
         f"🔨 <b>СТАВКА ПРИНЯТА!</b>\n\n"
         f"Аукцион: <b>#{auction_id}</b>\n"
         f"Твоя ставка: <code>{int(bid_amount):,} ₪</code>\n"
         f"Статус: <b>Лидер аукциона 👑</b>"
-        f"{prev_txt}{snipe_txt}"
+        f"{prev_txt}{snipe_txt}",
+        reply_markup=kb,
+        parse_mode="HTML"
     )
 
 
@@ -219,42 +429,48 @@ async def cmd_bid(message: types.Message):
 # =============================================================================
 
 @auction_router.message(F.text.regexp(r"^/(whale_safe|whale|сейф_олигарха)\b", flags=re.IGNORECASE))
-async def cmd_whale_safe(message: types.Message):
+async def cmd_whale_safe(message: types.Message, board_id: str | None = None, **kwargs):
     """
     Purchases and opens a Whale Safe (Сейф Олигарха).
     """
-    board_id = message.board_id if isinstance(getattr(message, "board_id", None), str) else "b"
+    board_id = board_id or (message.board_id if isinstance(getattr(message, "board_id", None), str) else "b")
     user_id = message.from_user.id
     db = await get_pool()
 
     res = await buy_whale_safe(db, user_id, board_id)
 
     if not res.get("ok"):
-        await message.reply(f"❌ <b>Покупка отклонена:</b> {res.get('error')}")
+        err_msg = html.escape(str(res.get('error', 'Ошибка покупки')))
+        await message.reply(f"❌ <b>Покупка отклонена:</b> {err_msg}", parse_mode="HTML")
         return
 
     rec_str = f"\n\n{res['recycle_note']}" if res.get("recycle_note") else ""
+    safe_title = html.escape(str(res.get('title', '')))
+    safe_desc = html.escape(str(res.get('desc', '')))
     text = (
         f"🐋 <b>СЕЙФ ОЛИГАРХА ВЗЛОМАН!</b>\n\n"
         f"🌟 <b>Тир:</b> {res['tier']}\n"
-        f"🎁 <b>Награда:</b> <b>{res['title']}</b>\n"
-        f"📝 <i>{res['desc']}</i>{rec_str}\n\n"
+        f"🎁 <b>Награда:</b> <b>{safe_title}</b>\n"
+        f"📝 <i>{safe_desc}</i>{rec_str}\n\n"
         f"🔥 <i>70% стоимости ({res['burned_to_abu']:,.0f} ₪) навсегда сожжено в Фонд Яхты Абу!</i>\n"
         f"Твой новый баланс: <code>{int(res['new_balance']):,} ₪</code>"
     )
-    await message.reply(text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+    ])
+    await message.reply(text, reply_markup=kb, parse_mode="HTML")
 
 
 # =============================================================================
 # 4. /raid_oligarch & LOBBY HANDLERS
 # =============================================================================
 
-@auction_router.message(F.text.regexp(r"^/(raid_oligarch|раскулачить)\b", flags=re.IGNORECASE))
-async def cmd_raid_oligarch(message: types.Message):
+@auction_router.message(F.text.regexp(r"^/(raid_oligarch|раскулачить|raid|рейд)\b", flags=re.IGNORECASE))
+async def cmd_raid_oligarch(message: types.Message, board_id: str | None = None, **kwargs):
     """
     Initiates or executes a collaborative proletarian raid against an oligarch.
     """
-    board_id = message.board_id if isinstance(getattr(message, "board_id", None), str) else "b"
+    board_id = board_id or (message.board_id if isinstance(getattr(message, "board_id", None), str) else "b")
     user_id = message.from_user.id
     text_val = (message.text or "").strip()
     parts = text_val.split()
@@ -303,6 +519,26 @@ async def cmd_raid_oligarch(message: types.Message):
         )
         return
 
+    # Check target not self
+    if target_id is not None and target_id == user_id:
+        await message.reply("❌ Олигарх не может организовать рейд против самого себя!")
+        return
+
+    # Proletarian qualification check for initiator
+    is_ok, reason = await check_raid_proletarian(db, user_id)
+    if not is_ok:
+        await message.reply(f"❌ <b>Ты не можешь объявить рейд ОБЭП!</b>\n{reason}", parse_mode="HTML")
+        return
+
+    # Check active raid in this chat
+    now_ts = time.time()
+    async with _raid_lock:
+        for r_id, r_info in list(_ACTIVE_RAIDS.items()):
+            if r_info.get("chat_id") == message.chat.id and (now_ts - r_info.get("created_at", 0) < 600):
+                cnt = len(r_info.get("voters", []))
+                await message.reply(f"⚠️ В этом чате уже идет сбор рабочего рейда ОБЭП ({cnt}/5)! Присоединяйся к нему по кнопке выше.")
+                return
+
     # Interactive Raid Lobby
     raid_id = uuid.uuid4().hex[:8]
     _ACTIVE_RAIDS[raid_id] = {
@@ -322,7 +558,7 @@ async def cmd_raid_oligarch(message: types.Message):
         f"☭ <b>ОБЪЯВЛЕН НАРОДНЫЙ РЕЙД ОБЭП (/raid_oligarch)!</b>\n\n"
         f"🎯 <b>Цель:</b> {tgt_str}\n"
         f"Требования к работягам: баланс &lt; 5,000 ₪ и &gt;= 25 постов.\n"
-        f"Добыча: 10% капитала цели (макс 200,000 ₪).\n"
+        f"Добыча: 10% капитала цели (макс 1,000,000 ₪).\n"
         f"70% сжигается в Фонд Яхты Абу, 30% делится поровну между 5 участниками!\n\n"
         f"Собрано пролетариев: <b>1/5</b>",
         reply_markup=kb
@@ -358,157 +594,132 @@ async def cb_raid_join(callback: types.CallbackQuery):
     Thread-safe, resilient against caption/photo cards and detailed feedback.
     Prunes stale lobbies and guards against oligarch self-sabotage and bank deposit evasion.
     """
-    raid_id = callback.data.replace("raid_join_", "")
-    now_ts = time.time()
-    async with _raid_lock:
-        # Prune stale raids older than 3600 seconds to prevent unbounded memory growth
-        stale_keys = [k for k, v in _ACTIVE_RAIDS.items() if now_ts - v.get("created_at", now_ts) > 3600]
-        for k in stale_keys:
-            _ACTIVE_RAIDS.pop(k, None)
-
-        raid = _ACTIVE_RAIDS.get(raid_id)
-        if not raid:
-            await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
-            return
-
-        user_id = callback.from_user.id
-        if raid.get("target_id") and user_id == raid["target_id"]:
-            await callback.answer("❌ Олигарх не может участвовать в рейде против самого себя!", show_alert=True)
-            return
-
-        if user_id in raid["voters"]:
-            await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
-            return
-
-    db = await get_pool()
-    # Check isolation guard
+    from common.bot_helpers import safe_callback_answer
     try:
-        async with db.execute("SELECT COALESCE(is_isolated, 0) FROM Users WHERE user_id = ?", (user_id,)) as iso_c:
-            iso_row = await iso_c.fetchone()
-            if iso_row and iso_row[0]:
-                await callback.answer("🧘 Ты находишься в режиме самоизоляции и не можешь участвовать в рейдах ОБЭП.", show_alert=True)
+        raid_id = callback.data.replace("raid_join_", "")
+        now_ts = time.time()
+        async with _raid_lock:
+            # Prune stale raids older than 3600 seconds to prevent unbounded memory growth
+            stale_keys = [k for k, v in _ACTIVE_RAIDS.items() if now_ts - v.get("created_at", now_ts) > 3600]
+            for k in stale_keys:
+                _ACTIVE_RAIDS.pop(k, None)
+
+            raid = _ACTIVE_RAIDS.get(raid_id)
+            if not raid:
+                await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
                 return
-    except Exception:
-        pass
 
-    bal = await get_user_global_balance(db, user_id)
-    bank_tot = 0.0
-    try:
-        async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='BankDeposits'") as tc:
-            if await tc.fetchone():
-                async with db.execute(
-                    "SELECT COALESCE(SUM(principal + accrued_interest), 0.0) FROM BankDeposits WHERE user_id = ? AND status = 'active'",
-                    (user_id,)
-                ) as bc:
-                    brow = await bc.fetchone()
-                    if brow and brow[0]:
-                        bank_tot = float(brow[0])
-    except Exception:
-        bank_tot = 0.0
+            user_id = callback.from_user.id
+            if raid.get("target_id") and user_id == raid["target_id"]:
+                await callback.answer("❌ Олигарх не может участвовать в рейде против самого себя!", show_alert=True)
+                return
 
-    total_wealth = bal + bank_tot
-    posts = 0
-    try:
-        async with db.execute("SELECT COALESCE(SUM(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,)) as c:
-            p_row = await c.fetchone()
-            posts = p_row[0] if p_row else 0
-    except Exception:
-        posts = 0
+            if user_id in raid["voters"]:
+                await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
+                return
 
-    if posts < 25:
-        try:
-            async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,)) as pc:
-                pc_row = await pc.fetchone()
-                posts = max(posts, pc_row[0] if pc_row else 0)
-        except Exception:
-            pass
-
-    if total_wealth >= 5000 or posts < 25:
-        reasons = []
-        if total_wealth >= 5000:
-            reasons.append(f"баланс {total_wealth:,.0f} ₪ ≥ 5,000 ₪")
-        if posts < 25:
-            reasons.append(f"постов {posts} < 25")
-        await callback.answer(f"❌ Ты не подходишь для рейда! Нужно: баланс < 5,000 ₪ и ≥ 25 постов ({', '.join(reasons)}).", show_alert=True)
-        return
-
-    async with _raid_lock:
-        if raid_id not in _ACTIVE_RAIDS:
-            await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
+        db = await get_pool()
+        is_ok, reason = await check_raid_proletarian(db, user_id)
+        if not is_ok:
+            await callback.answer(f"❌ Ты не подходишь для рейда! {reason}", show_alert=True)
             return
-        raid = _ACTIVE_RAIDS[raid_id]
-        if raid.get("target_id") and user_id == raid["target_id"]:
-            await callback.answer("❌ Олигарх не может участвовать в рейде против самого себя!", show_alert=True)
-            return
-        if user_id in raid["voters"]:
-            await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
-            return
-        raid["voters"].append(user_id)
-        cnt = len(raid["voters"])
-        should_execute = False
-        if cnt >= 5:
-            _ACTIVE_RAIDS.pop(raid_id, None)
-            should_execute = True
 
-    if not should_execute:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🚩 Вступить в рейд ОБЭП ({cnt}/5)", callback_data=f"raid_join_{raid_id}")]
-        ])
-        tgt_str = f"Олигарх: <code>{raid['target_id']}</code>" if raid['target_id'] else "Самый богатый олигарх борды"
-        new_text = (
-            f"☭ <b>ОБЪЯВЛЕН НАРОДНЫЙ РЕЙД ОБЭП (/raid_oligarch)!</b>\n\n"
-            f"🎯 <b>Цель:</b> {tgt_str}\n"
-            f"Требования к работягам: баланс &lt; 5,000 ₪ и &gt;= 25 постов.\n"
-            f"Добыча: 10% капитала цели (макс 200,000 ₪).\n"
-            f"70% сжигается в Фонд Яхты Абу, 30% делится поровну между 5 участниками!\n\n"
-            f"Собрано пролетариев: <b>{cnt}/5</b>"
-        )
-        try:
-            if callback.message:
-                if callback.message.caption is not None or callback.message.photo:
-                    await callback.message.edit_caption(caption=new_text, reply_markup=kb, parse_mode="HTML")
-                else:
-                    await callback.message.edit_text(text=new_text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
+        async with _raid_lock:
+            if raid_id not in _ACTIVE_RAIDS:
+                await callback.answer("⏳ Рейд уже завершен или истек!", show_alert=True)
+                return
+            raid = _ACTIVE_RAIDS[raid_id]
+            if raid.get("target_id") and user_id == raid["target_id"]:
+                await callback.answer("❌ Олигарх не может участвовать в рейде против самого себя!", show_alert=True)
+                return
+            if user_id in raid["voters"]:
+                await callback.answer(f"⚠️ Ты уже в строю! Собрано: {len(raid['voters'])}/5", show_alert=True)
+                return
+            raid["voters"].append(user_id)
+            cnt = len(raid["voters"])
+            should_execute = False
+            if cnt >= 5:
+                _ACTIVE_RAIDS.pop(raid_id, None)
+                should_execute = True
+
+        if not should_execute:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"🚩 Вступить в рейд ОБЭП ({cnt}/5)", callback_data=f"raid_join_{raid_id}")],
+                [
+                    InlineKeyboardButton(text="◀️ Назад в Банк", callback_data="bank_main_hub"),
+                    InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+                ],
+            ])
+            tgt_str = f"Олигарх: <code>{raid['target_id']}</code>" if raid['target_id'] else "Самый богатый олигарх борды"
+            new_text = (
+                f"☭ <b>ОБЪЯВЛЕН НАРОДНЫЙ РЕЙД ОБЭП (/raid_oligarch)!</b>\n\n"
+                f"🎯 <b>Цель:</b> {tgt_str}\n"
+                f"Требования к работягам: баланс &lt; 5,000 ₪ и &gt;= 25 постов.\n"
+                f"Добыча: 10% капитала цели (макс 1,000,000 ₪).\n"
+                f"70% сжигается в Фонд Яхты Абу, 30% делится поровну между 5 участниками!\n\n"
+                f"Собрано пролетариев: <b>{cnt}/5</b>"
+            )
             try:
                 if callback.message:
-                    await callback.message.edit_reply_markup(reply_markup=kb)
+                    if callback.message.caption is not None or callback.message.photo:
+                        await callback.message.edit_caption(caption=new_text, reply_markup=kb, parse_mode="HTML")
+                    else:
+                        await callback.message.edit_text(text=new_text, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                try:
+                    if callback.message:
+                        await callback.message.edit_reply_markup(reply_markup=kb)
+                except Exception:
+                    pass
+
+            await callback.answer(f"🚩 Ты вступил в рейд ОБЭП! ({cnt}/5)")
+            return
+
+        # 5 voters gathered! Execute raid!
+        res = await execute_oligarch_raid(db, raid["voters"], raid["target_id"], raid["board_id"])
+
+        if not res.get("ok"):
+            err_msg = html.escape(str(res.get('error', 'Ошибка')))
+            fail_text = f"❌ <b>Рейд ОБЭП провален:</b> {err_msg}"
+            fail_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="◀️ Назад в Банк", callback_data="bank_main_hub"),
+                    InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+                ],
+            ])
+            try:
+                if callback.message:
+                    if callback.message.caption is not None or callback.message.photo:
+                        await callback.message.edit_caption(caption=fail_text, reply_markup=fail_kb, parse_mode="HTML")
+                    else:
+                        await callback.message.edit_text(text=fail_text, reply_markup=fail_kb, parse_mode="HTML")
             except Exception:
                 pass
+            await callback.answer("Рейд провален!", show_alert=True)
+            return
 
-        await callback.answer(f"🚩 Ты вступил в рейд ОБЭП! ({cnt}/5)")
-        return
-
-    # 5 voters gathered! Execute raid!
-    res = await execute_oligarch_raid(db, raid["voters"], raid["target_id"], raid["board_id"])
-
-    if not res.get("ok"):
-        fail_text = f"❌ <b>Рейд ОБЭП провален:</b> {res.get('error')}"
+        win_text = (
+            f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА #{res['target_id']} ЗАВЕРШЕНО!</b>\n\n"
+            f"💰 Конфисковано: <b>{res['confiscated']:,.0f} ₪</b> (10% капитала)\n"
+            f"🔥 Сожжено в Фонд Яхты Абу (70%): <b>{res['burned_to_abu']:,.0f} ₪</b>\n"
+            f"🛠️ Распределено 5 работягам (30%): <b>{res['distributed_total']:,.0f} ₪</b>\n"
+            f"💵 Доля каждого участника: <b>+{res['per_voter']:,.0f} ₪</b>\n\n"
+            f"<i>«Экспроприация экспроприаторов прошла успешно!»</i>"
+        )
+        win_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="◀️ Назад в Банк", callback_data="bank_main_hub"),
+                InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+            ],
+        ])
         try:
             if callback.message:
                 if callback.message.caption is not None or callback.message.photo:
-                    await callback.message.edit_caption(caption=fail_text, parse_mode="HTML")
+                    await callback.message.edit_caption(caption=win_text, reply_markup=win_kb, parse_mode="HTML")
                 else:
-                    await callback.message.edit_text(text=fail_text, parse_mode="HTML")
+                    await callback.message.edit_text(text=win_text, reply_markup=win_kb, parse_mode="HTML")
         except Exception:
             pass
-        await callback.answer("Рейд провален!", show_alert=True)
-        return
-
-    win_text = (
-        f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА #{res['target_id']} ЗАВЕРШЕНО!</b>\n\n"
-        f"💰 Конфисковано: <b>{res['confiscated']:,.0f} ₪</b> (10% капитала)\n"
-        f"🔥 Сожжено в Фонд Яхты Абу (70%): <b>{res['burned_to_abu']:,.0f} ₪</b>\n"
-        f"🛠️ Распределено 5 работягам (30%): <b>{res['distributed_total']:,.0f} ₪</b>\n"
-        f"💵 Доля каждого участника: <b>+{res['per_voter']:,.0f} ₪</b>\n\n"
-        f"<i>«Экспроприация экспроприаторов прошла успешно!»</i>"
-    )
-    try:
-        if callback.message:
-            if callback.message.caption is not None or callback.message.photo:
-                await callback.message.edit_caption(caption=win_text, parse_mode="HTML")
-            else:
-                await callback.message.edit_text(text=win_text, parse_mode="HTML")
-    except Exception:
-        pass
-    await callback.answer("☭ Рейд успешно завершен!")
+        await callback.answer("☭ Рейд успешно завершен!")
+    finally:
+        await safe_callback_answer(callback)

@@ -6,6 +6,7 @@ instant purchases with 5% Abu market fee, catalog browsing with pagination and p
 interactive sell wizard, and seller PM notifications.
 """
 
+import html
 import json
 import logging
 import math
@@ -87,6 +88,8 @@ __all__ = [
     "get_user_sellable_items_list",
     "extract_item_for_escrow",
     "restore_item_to_active_items",
+    "cmd_buy_market",
+    "cmd_cancel_market",
 ]
 
 # -----------------------------------------------------------------------------
@@ -978,19 +981,45 @@ async def get_market_catalog(
     return items, total_pages, total_count
 
 
-async def get_user_listings(db, user_id: int, status: str = "active") -> List[Dict[str, Any]]:
+async def get_user_listings(db, user_id: int, status: str = "active", page: Optional[int] = None, per_page: int = 5) -> Any:
     """
     Возвращает список лотов конкретного пользователя.
+    Если page передан, возвращает (items, total_pages, total_count).
+    Если page is None, возвращает items (для обратной совместимости).
     """
     await ensure_market_schema(db)
-    query = """
-        SELECT id, seller_id, seller_board_id, item_id, item_type, item_name, item_data, price, status, created_at
-        FROM MarketListings
-        WHERE seller_id = ? AND status = ?
-        ORDER BY created_at DESC
-    """
+    if page is not None:
+        async with db.execute(
+            "SELECT COUNT(*) FROM MarketListings WHERE seller_id = ? AND status = ?",
+            (user_id, status)
+        ) as c:
+            row = await c.fetchone()
+            total_count = int(row[0]) if row and row[0] else 0
+
+        p = max(1, page)
+        pp = max(1, min(per_page, 20))
+        total_pages = max(1, math.ceil(total_count / pp)) if total_count > 0 else 1
+        offset = (p - 1) * pp
+
+        query = """
+            SELECT id, seller_id, seller_board_id, item_id, item_type, item_name, item_data, price, status, created_at
+            FROM MarketListings
+            WHERE seller_id = ? AND status = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """
+        params = (user_id, status, pp, offset)
+    else:
+        query = """
+            SELECT id, seller_id, seller_board_id, item_id, item_type, item_name, item_data, price, status, created_at
+            FROM MarketListings
+            WHERE seller_id = ? AND status = ?
+            ORDER BY created_at DESC
+        """
+        params = (user_id, status)
+
     items: List[Dict[str, Any]] = []
-    async with db.execute(query, (user_id, status)) as c:
+    async with db.execute(query, params) as c:
         rows = await c.fetchall()
         for r in rows:
             data = {}
@@ -1011,6 +1040,9 @@ async def get_user_listings(db, user_id: int, status: str = "active") -> List[Di
                 "status": r[8],
                 "created_at": float(r[9]),
             })
+
+    if page is not None:
+        return items, total_pages, total_count
     return items
 
 
@@ -1111,9 +1143,50 @@ def build_market_main_menu_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="⬅️ В Магазин (/shop)", callback_data="shop_main_hub"),
             InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub"),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def build_my_lots_kb(items: List[Dict[str, Any]], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Генерирует клавиатуру управления своими лотами с пагинацией."""
+    kb_rows: List[List[InlineKeyboardButton]] = []
+    for lot in items:
+        lot_name = html.escape(lot['item_name'])[:14]
+        kb_rows.append([
+            InlineKeyboardButton(
+                text=f"❌ Снять #{lot['id']} ({lot_name})",
+                callback_data=f"market_cancel:{lot['id']}"
+            )
+        ])
+
+    nav_row: List[InlineKeyboardButton] = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"market_my_lots:{page-1}"))
+    else:
+        nav_row.append(InlineKeyboardButton(text="◀️", callback_data="market_noop"))
+
+    nav_row.append(InlineKeyboardButton(text=f"Стр. {page}/{total_pages}", callback_data=f"market_my_lots:{page}"))
+
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"market_my_lots:{page+1}"))
+    else:
+        nav_row.append(InlineKeyboardButton(text="▶️", callback_data="market_noop"))
+
+    if total_pages > 1:
+        kb_rows.append(nav_row)
+
+    kb_rows.append([
+        InlineKeyboardButton(text="🏷 Продать еще (/sell)", callback_data="market_sell_menu"),
+        InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub"),
+    ])
+    kb_rows.append([
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
 def build_market_catalog_kb(
@@ -1168,8 +1241,11 @@ def build_market_catalog_kb(
         InlineKeyboardButton(text="🏷 Продать (/sell)", callback_data="market_sell_menu"),
     ])
     kb.append([
-        InlineKeyboardButton(text="📋 Все категории", callback_data="market_main_hub"),
+        InlineKeyboardButton(text="◀️ Назад в категории", callback_data="market_main_hub"),
         InlineKeyboardButton(text="🏬 Торговый Хаб", callback_data="shop_main_hub"),
+    ])
+    kb.append([
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -1182,30 +1258,8 @@ async def _render_market_view(
     category: str = "shop"
 ):
     """Универсально отображает или обновляет представление Базара."""
-    try:
-        if isinstance(target, types.CallbackQuery):
-            if target.message.caption is not None or target.message.photo:
-                await target.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-            elif target.message.text is not None:
-                await target.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
-            else:
-                from banner_manager import send_banner_message
-                await send_banner_message(bot=target.bot, chat_id=target.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-        else:
-            from banner_manager import send_banner_message
-            await send_banner_message(bot=target.bot, chat_id=target.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-            try:
-                await target.delete()
-            except Exception:
-                pass
-    except Exception:
-        try:
-            if isinstance(target, types.CallbackQuery):
-                await target.message.answer(text=text, reply_markup=kb, parse_mode="HTML")
-            else:
-                await target.answer(text=text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
+    from common.bot_helpers import render_menu_transition
+    await render_menu_transition(target, text, kb, category=category, prefer_banner=True)
 
 
 # -----------------------------------------------------------------------------
@@ -1280,13 +1334,66 @@ def get_user_sellable_items_list(active_items: Dict[str, Any]) -> List[Tuple[str
 # Telegram Command Handlers
 # -----------------------------------------------------------------------------
 
-@market_router.message(Command("market", "bazar", "рынок", "базар", "барахолка", ignore_case=True, ignore_mention=True))
+@market_router.message(Command("market", "bazar", "рынок", "базар", "барахолка", "market_catalog", ignore_case=True, ignore_mention=True))
 async def cmd_market(message: types.Message, board_id: str | None = None, stream: str = 'ru') -> None:
-    """Главный экран каталога Барахолки."""
+    """Главный экран каталога Барахолки с поддержкой быстрого перехода по категориям и страницам."""
     b_id = board_id or "b"
     user_id = message.from_user.id if message.from_user else message.chat.id
     db = await get_pool()
     wallet_balance = await get_user_global_balance(db, user_id)
+
+    raw_args = (message.text or "").split()[1:]
+    category = None
+    page = 1
+    if raw_args:
+        first = raw_args[0].lower().strip()
+        if first.isdigit():
+            page = int(first)
+            category = "all"
+        elif first in ("all", "все", "всё"):
+            category = "all"
+            if len(raw_args) > 1 and raw_args[1].isdigit():
+                page = int(raw_args[1])
+        elif first in ("weapon", "weapons", "оружие", "пушки"):
+            category = "weapon"
+            if len(raw_args) > 1 and raw_args[1].isdigit():
+                page = int(raw_args[1])
+        elif first in ("clothing", "clothes", "шмот", "одежда", "гардероб"):
+            category = "clothing"
+            if len(raw_args) > 1 and raw_args[1].isdigit():
+                page = int(raw_args[1])
+        elif first in ("pharma", "drugs", "аптека", "фарма"):
+            category = "pharma"
+            if len(raw_args) > 1 and raw_args[1].isdigit():
+                page = int(raw_args[1])
+        elif first in ("lootbox", "lootboxes", "boxes", "кейсы", "боксы", "лутбоксы"):
+            category = "lootbox"
+            if len(raw_args) > 1 and raw_args[1].isdigit():
+                page = int(raw_args[1])
+        elif first in ("my", "мои", "mylots", "мои_лоты"):
+            return await cmd_my_lots(message, board_id=board_id)
+
+    if category:
+        cat_filter = None if category == "all" else category
+        items, total_pages, total_count = await get_market_catalog(db, category=cat_filter, sort_order="price_asc", page=page, per_page=5)
+        cat_name = MARKET_CATEGORIES.get(category, "Все лоты")
+        lines = [
+            f"🛒 <b>КАТАЛОГ БАРАХОЛКИ — {cat_name}</b>",
+            f"Сортировка: <b>По цене</b> | Лотов: <b>{total_count}</b> (Стр. {page}/{total_pages})",
+            "<code>────────────────────────</code>",
+        ]
+        if not items:
+            lines.append("\n<i>В этой категории сейчас нет активных лотов.</i>")
+            lines.append("<i>Будь первым — продай что-нибудь через /sell!</i>")
+        else:
+            for it in items:
+                p_str = f"{int(it['price']):,} ₪" if it['price'].is_integer() else f"{it['price']:,.2f} ₪"
+                is_own = " <i>(твой лот)</i>" if it["seller_id"] == user_id else ""
+                lines.append(f"• <b>{it['item_name']}</b> — <code>{p_str}</code>{is_own}")
+        text = "\n".join(lines)
+        kb = build_market_catalog_kb(category, "price_asc", page, total_pages, items)
+        await _render_market_view(message, text, kb, category="market")
+        return
 
     text = (
         "🛒 <b>P2P БАРАХОЛКА / ЧЁРНЫЙ РЫНОК ДВАЧА</b>\n\n"
@@ -1300,12 +1407,27 @@ async def cmd_market(message: types.Message, board_id: str | None = None, stream
     await _render_market_view(message, text, kb, category="market")
 
 
-@market_router.message(Command("sell", "продать", "лот", "выставить", ignore_case=True, ignore_mention=True))
+@market_router.message(Command("sell", "продать", "лот", "выставить", "sell_market", "market_sell", "продать_рынок", ignore_case=True, ignore_mention=True))
 async def cmd_sell(message: types.Message, board_id: str | None = None, stream: str = 'ru') -> None:
     """Команда выставления предмета на продажу или интерактивный визард."""
     b_id = board_id or "b"
     user_id = message.from_user.id if message.from_user else message.chat.id
     db = await get_pool()
+
+    # Розыск 5★
+    try:
+        from common.bot_helpers import _get_user_active_items
+        s_items = await _get_user_active_items(db, user_id, b_id)
+        if int(s_items.get("wanted_stars", 0) or 0) >= 5:
+            await message.answer(
+                "🚨 <b>СЛУЖБА ФИНАНСОВОГО МОНИТОРИНГА АБУ:</b>\n"
+                "Вы находитесь в федеральном розыске (5★)! Выставление лотов на Базар заблокировано полицией.\n"
+                "Сбросьте розыск через взятку (<code>/bribe_cop</code>) или отсидите срок!",
+                parse_mode="HTML"
+            )
+            return
+    except Exception as e:
+        logger.warning(f"Error checking wanted status in cmd_sell: {e}")
 
     # Мут-гард: замученным нельзя выставлять лоты
     from common.database import is_shadow_muted as check_db_shadow_muted
@@ -1334,8 +1456,9 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
 
         resolved = find_item_by_name_or_id(raw_item)
         if not resolved:
+            safe_raw = html.escape(raw_item)
             await message.answer(
-                f"❌ Не удалось опознать предмет «{raw_item}».\n"
+                f"❌ Не удалось опознать предмет «{safe_raw}».\n"
                 "Используй /sell без параметров, чтобы выбрать предмет из инвентаря.",
                 parse_mode="HTML"
             )
@@ -1344,15 +1467,17 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
         item_id, item_type, item_name = resolved
         ok, listing, err = await create_market_listing(db, user_id, b_id, item_id, price, item_type=item_type)
         if not ok:
-            await message.answer(f"❌ Ошибка выставления: {err}", parse_mode="HTML")
+            err_msg = html.escape(str(err or "Ошибка выставления"))
+            await message.answer(f"❌ Ошибка выставления: {err_msg}", parse_mode="HTML")
             return
 
         fee_est = max(1.0, round(price * 0.05, 2)) if price >= 1.0 else round(price * 0.05, 2)
         payout_est = round(price - fee_est, 2)
 
+        safe_name = html.escape(item_name)
         resp = (
             f"🏷 <b>ЛОТ #{listing['id']} УСПЕШНО ВЫСТАВЛЕН НА БАЗАР!</b>\n\n"
-            f"📦 <b>Предмет:</b> {item_name}\n"
+            f"📦 <b>Предмет:</b> {safe_name}\n"
             f"💰 <b>Цена продажи:</b> <code>{price:,.2f} ₪</code>\n"
             f"💸 <b>Налог Абу (5%):</b> <code>-{fee_est:,.2f} ₪</code>\n"
             f"💵 <b>Ты получишь при покупке:</b> <code>+{payout_est:,.2f} ₪</code>\n\n"
@@ -1361,6 +1486,7 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
             [InlineKeyboardButton(text="🛒 В Барахолку", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
         await message.answer(resp, reply_markup=kb, parse_mode="HTML")
         return
@@ -1378,6 +1504,7 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏬 В Магазин (/shop)", callback_data="shop_main_hub")],
             [InlineKeyboardButton(text="🛒 В Барахолку", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
         await _render_market_view(message, text, kb, category="market")
         return
@@ -1392,6 +1519,7 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
         buttons.append([InlineKeyboardButton(text=f"🏷 {s_name}", callback_data=f"market_sell_item:{s_id}")])
 
     buttons.append([InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub")])
+    buttons.append([InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")])
     await _render_market_view(message, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="market")
 
 
@@ -1402,168 +1530,257 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
 @market_router.callback_query(F.data == "market_noop")
 async def cb_market_noop(callback: types.CallbackQuery):
     """Заглушка для неактивных кнопок пагинации."""
-    await callback.answer()
+    from common.bot_helpers import safe_callback_answer
+    await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data == "market_main_hub")
 async def cb_market_main_hub(callback: types.CallbackQuery, board_id: str | None = None):
     """Возврат в главное меню Барахолки."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    db = await get_pool()
-    wallet_balance = await get_user_global_balance(db, user_id)
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        db = await get_pool()
+        wallet_balance = await get_user_global_balance(db, user_id)
 
-    text = (
-        "🛒 <b>P2P БАРАХОЛКА / ЧЁРНЫЙ РЫНОК ДВАЧА</b>\n\n"
-        "Здесь аноны продают и покупают редкое оружие, шмот, кейсы и аптеку без посредников.\n\n"
-        f"💰 <b>Твой кошелек:</b> <code>{wallet_balance:,.2f} ₪</code>\n"
-        "🛡️ <b>Безопасность:</b> Эскроу-депонирование (предмет блокируется до покупки)\n"
-        "💸 <b>Налог Абу:</b> 5% с продавца при успешной сделке\n\n"
-        "<i>Выбери категорию товаров ниже или выстави свой лот командой /sell:</i>"
-    )
-    kb = build_market_main_menu_kb()
-    await _render_market_view(callback, text, kb, category="market")
-    await callback.answer()
+        text = (
+            "🛒 <b>P2P БАРАХОЛКА / ЧЁРНЫЙ РЫНОК ДВАЧА</b>\n\n"
+            "Здесь аноны продают и покупают редкое оружие, шмот, кейсы и аптеку без посредников.\n\n"
+            f"💰 <b>Твой кошелек:</b> <code>{wallet_balance:,.2f} ₪</code>\n"
+            "🛡️ <b>Безопасность:</b> Эскроу-депонирование (предмет блокируется до покупки)\n"
+            "💸 <b>Налог Абу:</b> 5% с продавца при успешной сделке\n\n"
+            "<i>Выбери категорию товаров ниже или выстави свой лот командой /sell:</i>"
+        )
+        kb = build_market_main_menu_kb()
+        await _render_market_view(callback, text, kb, category="market")
+    finally:
+        await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data.startswith("market_cat:") | F.data.startswith("market_cat_"))
 async def cb_market_cat(callback: types.CallbackQuery, board_id: str | None = None):
     """Просмотр категории каталога с пагинацией и сортировкой."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    raw = callback.data
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        raw = callback.data
 
-    # Разбираем формат: market_cat:<category>:<sort>:<page> или market_cat_<category>
-    if ":" in raw:
-        parts = raw.split(":")
-        category = parts[1] if len(parts) > 1 else "all"
-        sort_order = parts[2] if len(parts) > 2 else "price_asc"
-        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
-    else:
-        category = raw.replace("market_cat_", "")
-        sort_order = "price_asc"
-        page = 1
+        # Разбираем формат: market_cat:<category>:<sort>:<page> или market_cat_<category>
+        if ":" in raw:
+            parts = raw.split(":")
+            category = parts[1] if len(parts) > 1 else "all"
+            sort_order = parts[2] if len(parts) > 2 else "price_asc"
+            page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+        else:
+            category = raw.replace("market_cat_", "")
+            sort_order = "price_asc"
+            page = 1
 
-    db = await get_pool()
-    cat_filter = None if category == "all" else category
-    items, total_pages, total_count = await get_market_catalog(db, category=cat_filter, sort_order=sort_order, page=page, per_page=5)
+        db = await get_pool()
+        cat_filter = None if category == "all" else category
+        items, total_pages, total_count = await get_market_catalog(db, category=cat_filter, sort_order=sort_order, page=page, per_page=5)
 
-    cat_name = MARKET_CATEGORIES.get(category, "Все лоты")
-    sort_labels = {"price_asc": "Дешевле", "price_desc": "Дороже", "newest": "Новые"}
-    sort_label = sort_labels.get(sort_order, "По цене")
+        cat_name = MARKET_CATEGORIES.get(category, "Все лоты")
+        sort_labels = {"price_asc": "Дешевле", "price_desc": "Дороже", "newest": "Новые"}
+        sort_label = sort_labels.get(sort_order, "По цене")
 
-    lines = [
-        f"🛒 <b>КАТАЛОГ БАРАХОЛКИ — {cat_name}</b>",
-        f"Сортировка: <b>{sort_label}</b> | Лотов: <b>{total_count}</b> (Стр. {page}/{total_pages})",
-        "<code>────────────────────────</code>",
-    ]
+        lines = [
+            f"🛒 <b>КАТАЛОГ БАРАХОЛКИ — {cat_name}</b>",
+            f"Сортировка: <b>{sort_label}</b> | Лотов: <b>{total_count}</b> (Стр. {page}/{total_pages})",
+            "<code>────────────────────────</code>",
+        ]
 
-    if not items:
-        lines.append("\n<i>В этой категории сейчас нет активных лотов.</i>")
-        lines.append("<i>Будь первым — продай что-нибудь через /sell!</i>")
-    else:
-        for it in items:
-            p_str = f"{int(it['price']):,} ₪" if it['price'].is_integer() else f"{it['price']:,.2f} ₪"
-            is_own = " <i>(твой лот)</i>" if it["seller_id"] == user_id else ""
-            lines.append(f"• <b>{it['item_name']}</b> — <code>{p_str}</code>{is_own}")
+        if not items:
+            lines.append("\n<i>В этой категории сейчас нет активных лотов.</i>")
+            lines.append("<i>Будь первым — продай что-нибудь через /sell!</i>")
+        else:
+            for it in items:
+                p_str = f"{int(it['price']):,} ₪" if it['price'].is_integer() else f"{it['price']:,.2f} ₪"
+                is_own = " <i>(твой лот)</i>" if it["seller_id"] == user_id else ""
+                safe_item_name = html.escape(it['item_name'])
+                lines.append(f"• <b>{safe_item_name}</b> — <code>{p_str}</code>{is_own}")
 
-    text = "\n".join(lines)
-    kb = build_market_catalog_kb(category, sort_order, page, total_pages, items)
-    await _render_market_view(callback, text, kb, category="market")
-    await callback.answer()
+        text = "\n".join(lines)
+        kb = build_market_catalog_kb(category, sort_order, page, total_pages, items)
+        await _render_market_view(callback, text, kb, category="market")
+    finally:
+        await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data.startswith("market_lot:"))
 async def cb_market_lot(callback: types.CallbackQuery, board_id: str | None = None):
     """Детальный просмотр лота на Базаре."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    raw_id = callback.data.split(":", 1)[1]
-    lot_id = int(raw_id) if raw_id.isdigit() else 0
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        raw_id = callback.data.split(":", 1)[1]
+        lot_id = int(raw_id) if raw_id.isdigit() else 0
 
-    db = await get_pool()
-    lot = await get_market_listing(db, lot_id)
+        db = await get_pool()
+        lot = await get_market_listing(db, lot_id)
 
-    if not lot or lot["status"] != "active":
-        await callback.answer("❌ Этот лот уже продан или снят с продажи.", show_alert=True)
-        return
+        if not lot or lot["status"] != "active":
+            await callback.answer("❌ Этот лот уже продан или снят с продажи.", show_alert=True)
+            return
 
-    price = lot["price"]
-    price_str = f"{int(price):,} ₪" if price.is_integer() else f"{price:,.2f} ₪"
-    is_seller = (lot["seller_id"] == user_id)
+        price = lot["price"]
+        price_str = f"{int(price):,} ₪" if price.is_integer() else f"{price:,.2f} ₪"
+        is_seller = (lot["seller_id"] == user_id)
 
-    meta = lot.get("item_data", {})
-    desc_lines = []
-    if meta.get("is_permanent"):
-        desc_lines.append("✨ <b>Статус:</b> <code>ВЕЧНЫЙ ПРЕДМЕТ (Permanent)</code>")
-    elif meta.get("remaining_seconds"):
-        rem_h = int(meta["remaining_seconds"] / 3600)
-        desc_lines.append(f"⏳ <b>Остаток срока:</b> <code>{rem_h} часов</code>")
+        meta = lot.get("item_data", {})
+        desc_lines = []
+        if meta.get("is_permanent"):
+            desc_lines.append("✨ <b>Статус:</b> <code>ВЕЧНЫЙ ПРЕДМЕТ (Permanent)</code>")
+        elif meta.get("remaining_seconds"):
+            rem_h = int(meta["remaining_seconds"] / 3600)
+            desc_lines.append(f"⏳ <b>Остаток срока:</b> <code>{rem_h} часов</code>")
 
-    if meta.get("defense"):
-        desc_lines.append(f"🛡 <b>Защита:</b> +{meta['defense']}")
-    if meta.get("toxicity"):
-        desc_lines.append(f"☣ <b>Токсичность:</b> +{meta['toxicity']}")
+        if meta.get("defense"):
+            desc_lines.append(f"🛡 <b>Защита:</b> +{meta['defense']}")
+        if meta.get("toxicity"):
+            desc_lines.append(f"☣ <b>Токсичность:</b> +{meta['toxicity']}")
 
-    desc_text = "\n".join(desc_lines)
-    if desc_text:
-        desc_text = f"\n{desc_text}\n"
+        desc_text = "\n".join(desc_lines)
+        if desc_text:
+            desc_text = f"\n{desc_text}\n"
 
-    text = (
-        f"🏷 <b>ЛОТ #{lot['id']}: {lot['item_name']}</b>\n\n"
-        f"📁 <b>Категория:</b> {MARKET_CATEGORIES.get(lot['item_type'], lot['item_type'])}\n"
-        f"💰 <b>Цена:</b> <code>{price_str}</code>\n"
-        f"{desc_text}\n"
-        f"🏛 <i>Включает 5% сбор Абу при покупке. Товар передается мгновенно.</i>"
-    )
+        safe_lot_name = html.escape(lot['item_name'])
+        text = (
+            f"🏷 <b>ЛОТ #{lot['id']}: {safe_lot_name}</b>\n\n"
+            f"📁 <b>Категория:</b> {MARKET_CATEGORIES.get(lot['item_type'], lot['item_type'])}\n"
+            f"💰 <b>Цена:</b> <code>{price_str}</code>\n"
+            f"{desc_text}\n"
+            f"🏛 <i>Включает 5% сбор Абу при покупке. Товар передается мгновенно.</i>"
+        )
 
-    kb_rows = []
-    if is_seller:
-        kb_rows.append([InlineKeyboardButton(text=f"❌ Снять с продажи #{lot['id']}", callback_data=f"market_cancel:{lot['id']}")])
-    else:
-        kb_rows.append([InlineKeyboardButton(text=f"💰 Купить за {price_str}", callback_data=f"market_buy:{lot['id']}")])
+        kb_rows = []
+        if is_seller:
+            kb_rows.append([InlineKeyboardButton(text=f"❌ Снять с продажи #{lot['id']}", callback_data=f"market_cancel:{lot['id']}")])
+        else:
+            kb_rows.append([InlineKeyboardButton(text=f"💰 Купить за {price_str}", callback_data=f"market_buy:{lot['id']}")])
 
-    kb_rows.append([
-        InlineKeyboardButton(text="⬅️ Назад в каталог", callback_data=f"market_cat:{lot['item_type']}:price_asc:1"),
-        InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub"),
-    ])
+        kb_rows.append([
+            InlineKeyboardButton(text="◀️ Назад в каталог", callback_data=f"market_cat:{lot['item_type']}:price_asc:1"),
+            InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub"),
+        ])
+        kb_rows.append([
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ])
 
-    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="market")
-    await callback.answer()
+        await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="market")
+    finally:
+        await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data.startswith("market_buy:") | F.data.startswith("market_buy_"))
 async def cb_market_buy(callback: types.CallbackQuery, board_id: str | None = None):
     """Покупка лота на Базаре."""
-    b_id = board_id or "b"
-    buyer_id = callback.from_user.id
-    raw = callback.data
-    raw_id = raw.split(":", 1)[1] if ":" in raw else raw.replace("market_buy_", "")
-    lot_id = int(raw_id) if raw_id.isdigit() else 0
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        buyer_id = callback.from_user.id
+        raw = callback.data
+        raw_id = raw.split(":", 1)[1] if ":" in raw else raw.replace("market_buy_", "")
+        lot_id = int(raw_id) if raw_id.isdigit() else 0
 
+        db = await get_pool()
+
+        # Мут-гард: замученным нельзя покупать на базаре
+        from common.database import is_shadow_muted as check_db_shadow_muted
+        from common.bot_helpers import check_user_is_muted
+        if await check_db_shadow_muted(buyer_id, b_id, db=db) or await check_user_is_muted(db, buyer_id, b_id):
+            await callback.answer("🔇 Замученным нельзя покупать на базаре.", show_alert=True)
+            return
+
+        ok, seller_id, price, payout, fee, item_dict, err = await buy_market_listing(db, lot_id, buyer_id, b_id)
+
+        if not ok:
+            err_msg = html.escape(str(err or "Ошибка покупки"))
+            await callback.answer(f"❌ {err_msg}"[:199], show_alert=True)
+            return
+
+        # Отправляем уведомление продавцу
+        item_name = item_dict.get("item_name", "Предмет") if item_dict else "Предмет"
+        await notify_seller_lot_sold(callback.bot, seller_id, item_name, price, payout, fee)
+
+        price_str = f"{int(price):,} ₪" if price.is_integer() else f"{price:,.2f} ₪"
+        safe_item_name = html.escape(item_name)
+        text = (
+            f"🎉 <b>ПОКУПКА УСПЕШНО СОВЕРШЕНА!</b>\n\n"
+            f"📦 <b>Куплен предмет:</b> <b>{safe_item_name}</b>\n"
+            f"💸 <b>Списано с кошелька:</b> <code>{price_str}</code>\n"
+            f"🏛 <b>Комиссия Абу (5%):</b> <code>{fee:,.2f} ₪</code>\n\n"
+            f"<i>Предмет зачислен в твой инвентарь и готов к использованию!</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎒 Мой Инвентарь (/inv)", callback_data="avatar_view")],
+            [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+        ])
+        await _render_market_view(callback, text, kb, category="market")
+        await callback.answer("✅ Предмет успешно куплен!", show_alert=False)
+    finally:
+        await safe_callback_answer(callback)
+
+
+
+@market_router.message(Command("buy_market", "market_buy", "купить_рынок", "купить_лот", ignore_case=True, ignore_mention=True))
+async def cmd_buy_market(message: types.Message, board_id: str | None = None, stream: str = 'ru') -> None:
+    """Прямая покупка лота по номеру: /buy_market <номер_лота>."""
+    b_id = board_id or "b"
+    buyer_id = message.from_user.id if message.from_user else message.chat.id
     db = await get_pool()
 
-    # Мут-гард: замученным нельзя покупать на базаре
+    # Мут-гард
     from common.database import is_shadow_muted as check_db_shadow_muted
     from common.bot_helpers import check_user_is_muted
     if await check_db_shadow_muted(buyer_id, b_id, db=db) or await check_user_is_muted(db, buyer_id, b_id):
-        await callback.answer("🔇 Замученным нельзя покупать на базаре.", show_alert=True)
+        await message.answer("🔇 Замученным нельзя покупать на базаре.")
         return
 
+    # Розыск 5★
+    try:
+        from common.bot_helpers import _get_user_active_items
+        b_items = await _get_user_active_items(db, buyer_id, b_id)
+        if int(b_items.get("wanted_stars", 0) or 0) >= 5:
+            await message.answer(
+                "🚨 <b>СЛУЖБА ФИНАНСОВОГО МОНИТОРИНГА АБУ:</b>\n"
+                "Вы находитесь в федеральном розыске (5★)! Покупки на Базаре заблокированы полицией.\n"
+                "Сбросьте розыск через взятку (<code>/bribe_cop</code>) или отсидите срок!",
+                parse_mode="HTML"
+            )
+            return
+    except Exception as e:
+        logger.warning(f"Error checking wanted status in cmd_buy_market: {e}")
+
+    parts = (message.text or "").split()[1:]
+    if not parts or not parts[0].isdigit():
+        await message.answer(
+            "⚠️ <b>Укажи номер лота для покупки!</b>\n"
+            "Пример: <code>/buy_market 12</code>\n\n"
+            "Посмотреть каталог лотов: /market",
+            parse_mode="HTML"
+        )
+        return
+
+    lot_id = int(parts[0])
     ok, seller_id, price, payout, fee, item_dict, err = await buy_market_listing(db, lot_id, buyer_id, b_id)
-
     if not ok:
-        await callback.answer(f"❌ {err}", show_alert=True)
+        err_msg = html.escape(str(err or "Ошибка покупки"))
+        await message.answer(f"❌ Ошибка покупки: {err_msg}", parse_mode="HTML")
         return
 
-    # Отправляем уведомление продавцу
     item_name = item_dict.get("item_name", "Предмет") if item_dict else "Предмет"
-    await notify_seller_lot_sold(callback.bot, seller_id, item_name, price, payout, fee)
+    await notify_seller_lot_sold(message.bot, seller_id, item_name, price, payout, fee)
 
     price_str = f"{int(price):,} ₪" if price.is_integer() else f"{price:,.2f} ₪"
+    safe_name = html.escape(item_name)
     text = (
         f"🎉 <b>ПОКУПКА УСПЕШНО СОВЕРШЕНА!</b>\n\n"
-        f"📦 <b>Куплен предмет:</b> <b>{item_name}</b>\n"
+        f"📦 <b>Куплен предмет:</b> <b>{safe_name}</b> (лот #{lot_id})\n"
         f"💸 <b>Списано с кошелька:</b> <code>{price_str}</code>\n"
         f"🏛 <b>Комиссия Абу (5%):</b> <code>{fee:,.2f} ₪</code>\n\n"
         f"<i>Предмет зачислен в твой инвентарь и готов к использованию!</i>"
@@ -1571,20 +1788,61 @@ async def cb_market_buy(callback: types.CallbackQuery, board_id: str | None = No
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎒 Мой Инвентарь (/inv)", callback_data="avatar_view")],
         [InlineKeyboardButton(text="🛒 Назад на Базар", callback_data="market_main_hub")],
+        [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
     ])
-    await _render_market_view(callback, text, kb, category="market")
-    await callback.answer("✅ Предмет успешно куплен!", show_alert=False)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
+
+@market_router.message(Command("cancel_market", "market_cancel", "снять_рынок", "снять_лот", ignore_case=True, ignore_mention=True))
+async def cmd_cancel_market(message: types.Message, board_id: str | None = None, stream: str = 'ru') -> None:
+    """Снятие лота с продажи по номеру: /cancel_market <номер_лота>."""
+    b_id = board_id or "b"
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    db = await get_pool()
+
+    parts = (message.text or "").split()[1:]
+    if not parts or not parts[0].isdigit():
+        await message.answer(
+            "⚠️ <b>Укажи номер лота для снятия!</b>\n"
+            "Пример: <code>/cancel_market 12</code>\n\n"
+            "Посмотреть свои лоты: /my_lots",
+            parse_mode="HTML"
+        )
+        return
+
+    lot_id = int(parts[0])
+    ok, item_dict, err = await cancel_market_listing(db, lot_id, user_id, b_id)
+    if not ok:
+        err_msg = html.escape(str(err or "Ошибка снятия лота"))
+        await message.answer(f"❌ Ошибка: {err_msg}", parse_mode="HTML")
+        return
+
+    item_name = item_dict.get("item_name", "Предмет") if item_dict else "Предмет"
+    safe_name = html.escape(item_name)
+    text = (
+        f"✅ <b>ЛОТ #{lot_id} СНЯТ С ПРОДАЖИ</b>\n\n"
+        f"📦 Предмет <b>{safe_name}</b> возвращен в твой инвентарь."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
+        [InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub")],
+        [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 @market_router.message(Command("my_lots", "мои_лоты", "mylots", ignore_case=True, ignore_mention=True))
 async def cmd_my_lots(message: types.Message, board_id: str | None = None):
-    """Slash command to view user's active market listings."""
+    """Просмотр активных лотов пользователя с безопасной пагинацией."""
     b_id = board_id or "b"
     user_id = message.from_user.id
     db = await get_pool()
-    listings = await get_user_listings(db, user_id, status="active")
 
-    if not listings:
+    parts = (message.text or "").split()[1:]
+    page = int(parts[0]) if parts and parts[0].isdigit() else 1
+
+    items, total_pages, total_count = await get_user_listings(db, user_id, status="active", page=page, per_page=5)
+
+    if total_count == 0:
         text = (
             "📦 <b>МОИ АКТИВНЫЕ ЛОТЫ</b>\n\n"
             "У тебя пока нет активных лотов на Базаре.\n"
@@ -1593,203 +1851,254 @@ async def cmd_my_lots(message: types.Message, board_id: str | None = None):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏷 Продать предмет (/sell)", callback_data="market_sell_menu")],
             [InlineKeyboardButton(text="🛒 На Базар (/market)", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
         return
 
-    lines = ["📦 <b>ТВОИ АКТИВНЫЕ ЛОТЫ НА БАЗАРЕ:</b>\n"]
-    kb_rows = []
-    for lot in listings:
-        p_str = f"{int(lot['price']):,} ₪" if lot['price'].is_integer() else f"{lot['price']:,.2f} ₪"
-        lines.append(f"• Лот <b>#{lot['id']}</b>: {lot['item_name']} — <code>{p_str}</code>")
-        kb_rows.append([
-            InlineKeyboardButton(
-                text=f"❌ Снять #{lot['id']} ({lot['item_name'][:12]})",
-                callback_data=f"market_cancel:{lot['id']}"
-            )
-        ])
-    kb_rows.append([
-        InlineKeyboardButton(text="🏷 Продать еще (/sell)", callback_data="market_sell_menu"),
-        InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub"),
-    ])
-    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
-
-
-@market_router.callback_query(F.data.startswith("market_my_lots") | F.data.startswith("market_my_lots:"))
-async def cb_market_my_lots(callback: types.CallbackQuery, board_id: str | None = None):
-    """Список активных лотов пользователя."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    db = await get_pool()
-    listings = await get_user_listings(db, user_id, status="active")
-
-    if not listings:
-        text = (
-            "📦 <b>МОИ АКТИВНЫЕ ЛОТЫ</b>\n\n"
-            "У тебя пока нет активных лотов на Базаре.\n"
-            "Выстави ненужный шмот, пушки или кейсы командой /sell!"
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏷 Продать предмет (/sell)", callback_data="market_sell_menu")],
-            [InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub")],
-        ])
-        await _render_market_view(callback, text, kb, category="market")
-        await callback.answer()
-        return
-
     lines = [
-        "📦 <b>ТВОИ АКТИВНЫЕ ЛОТЫ НА БАЗАРЕ:</b>\n",
+        f"📦 <b>ТВОИ АКТИВНЫЕ ЛОТЫ НА БАЗАРЕ:</b> (Стр. {page}/{total_pages}, всего: {total_count})\n",
     ]
-    kb_rows = []
-    for lot in listings:
+    for lot in items:
         p_str = f"{int(lot['price']):,} ₪" if lot['price'].is_integer() else f"{lot['price']:,.2f} ₪"
-        lines.append(f"• Лот <b>#{lot['id']}</b>: {lot['item_name']} — <code>{p_str}</code>")
-        kb_rows.append([
-            InlineKeyboardButton(
-                text=f"❌ Снять #{lot['id']} ({lot['item_name'][:12]})",
-                callback_data=f"market_cancel:{lot['id']}"
+        safe_name = html.escape(lot['item_name'])
+        lines.append(f"• Лот <b>#{lot['id']}</b>: {safe_name} — <code>{p_str}</code>")
+
+    kb = build_my_lots_kb(items, page, total_pages)
+    await message.answer("\n".join(lines), reply_markup=kb, parse_mode="HTML")
+
+
+@market_router.callback_query(F.data.startswith("market_my_lots"))
+async def cb_market_my_lots(callback: types.CallbackQuery, board_id: str | None = None):
+    """Список активных лотов пользователя с пагинацией."""
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        db = await get_pool()
+
+        raw = callback.data
+        page = 1
+        if ":" in raw:
+            p_str = raw.split(":", 1)[1]
+            if p_str.isdigit():
+                page = int(p_str)
+
+        items, total_pages, total_count = await get_user_listings(db, user_id, status="active", page=page, per_page=5)
+
+        if total_count == 0:
+            text = (
+                "📦 <b>МОИ АКТИВНЫЕ ЛОТЫ</b>\n\n"
+                "У тебя пока нет активных лотов на Базаре.\n"
+                "Выстави ненужный шмот, пушки или кейсы командой /sell!"
             )
-        ])
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏷 Продать предмет (/sell)", callback_data="market_sell_menu")],
+                [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
+                [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+            ])
+            await _render_market_view(callback, text, kb, category="market")
+            return
 
-    kb_rows.append([
-        InlineKeyboardButton(text="🏷 Продать еще (/sell)", callback_data="market_sell_menu"),
-        InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub"),
-    ])
+        lines = [
+            f"📦 <b>ТВОИ АКТИВНЫЕ ЛОТЫ НА БАЗАРЕ:</b> (Стр. {page}/{total_pages}, всего: {total_count})\n",
+        ]
+        for lot in items:
+            p_str = f"{int(lot['price']):,} ₪" if lot['price'].is_integer() else f"{lot['price']:,.2f} ₪"
+            safe_name = html.escape(lot['item_name'])
+            lines.append(f"• Лот <b>#{lot['id']}</b>: {safe_name} — <code>{p_str}</code>")
 
-    text = "\n".join(lines)
-    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows), category="market")
-    await callback.answer()
+        kb = build_my_lots_kb(items, page, total_pages)
+        text = "\n".join(lines)
+        await _render_market_view(callback, text, kb, category="market")
+    finally:
+        await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data.startswith("market_cancel:") | F.data.startswith("market_cancel_"))
 async def cb_market_cancel(callback: types.CallbackQuery, board_id: str | None = None):
     """Снятие лота с продажи и возврат предмета владельцу."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    raw = callback.data
-    raw_id = raw.split(":", 1)[1] if ":" in raw else raw.replace("market_cancel_", "")
-    lot_id = int(raw_id) if raw_id.isdigit() else 0
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        raw = callback.data
+        raw_id = raw.split(":", 1)[1] if ":" in raw else raw.replace("market_cancel_", "")
+        lot_id = int(raw_id) if raw_id.isdigit() else 0
 
-    db = await get_pool()
-    ok, item_dict, err = await cancel_market_listing(db, lot_id, user_id, b_id)
+        db = await get_pool()
+        ok, item_dict, err = await cancel_market_listing(db, lot_id, user_id, b_id)
 
-    if not ok:
-        await callback.answer(f"❌ {err}", show_alert=True)
-        return
+        if not ok:
+            err_msg = html.escape(str(err or "Ошибка снятия"))
+            await callback.answer(f"❌ {err_msg}"[:199], show_alert=True)
+            return
 
-    item_name = item_dict.get("item_name", "Предмет") if item_dict else "Предмет"
-    text = (
-        f"✅ <b>ЛОТ #{lot_id} СНЯТ С ПРОДАЖИ</b>\n\n"
-        f"📦 Предмет <b>{item_name}</b> возвращен в твой инвентарь."
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
-        [InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub")],
-    ])
-    await _render_market_view(callback, text, kb, category="market")
-    await callback.answer("✅ Лот снят с продажи", show_alert=False)
-
-
-@market_router.callback_query(F.data == "market_sell_menu")
-async def cb_market_sell_menu(callback: types.CallbackQuery, board_id: str | None = None):
-    """Интерактивное меню выбора предмета для продажи."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    db = await get_pool()
-    active_items = await _load_user_active_items_for_update(db, user_id, b_id)
-    sellable = get_user_sellable_items_list(active_items)
-
-    if not sellable:
+        item_name = item_dict.get("item_name", "Предмет") if item_dict else "Предмет"
+        safe_name = html.escape(item_name)
         text = (
-            "🎒 <b>ПРОДАЖА ПРЕДМЕТОВ НА БАЗАРЕ</b>\n\n"
-            "Твой инвентарь пуст, нищеброд! Тебе нечего выставить на продажу.\n"
-            "Купи лут в /shop, выбей из кейсов или добудь в грабежах /rob."
+            f"✅ <b>ЛОТ #{lot_id} СНЯТ С ПРОДАЖИ</b>\n\n"
+            f"📦 Предмет <b>{safe_name}</b> возвращен в твой инвентарь."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏬 В Магазин (/shop)", callback_data="shop_main_hub")],
-            [InlineKeyboardButton(text="🛒 В Барахолку", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
+            [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
         await _render_market_view(callback, text, kb, category="market")
-        await callback.answer()
-        return
+        await callback.answer("✅ Лот снят с продажи", show_alert=False)
+    finally:
+        await safe_callback_answer(callback)
 
-    text = (
-        "🎒 <b>ВЫБЕРИ ПРЕДМЕТ ДЛЯ ПРОДАЖИ:</b>\n\n"
-        "Нажми на предмет ниже, чтобы установить цену лота:\n"
-        "<i>(Или введи: <code>/sell &lt;предмет&gt; &lt;цена&gt;</code>)</i>"
-    )
-    buttons = []
-    for s_id, s_type, s_name in sellable:
-        buttons.append([InlineKeyboardButton(text=f"🏷 {s_name}", callback_data=f"market_sell_item:{s_id}")])
 
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад на Базар", callback_data="market_main_hub")])
-    await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="market")
-    await callback.answer()
+@market_router.callback_query(F.data.startswith("market_sell_menu"))
+async def cb_market_sell_menu(callback: types.CallbackQuery, board_id: str | None = None):
+    """Интерактивное меню выбора предмета для продажи с пагинацией."""
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        db = await get_pool()
+        active_items = await _load_user_active_items_for_update(db, user_id, b_id)
+        sellable = get_user_sellable_items_list(active_items)
+
+        raw = callback.data
+        page = 1
+        if ":" in raw:
+            p_str = raw.split(":", 1)[1]
+            if p_str.isdigit():
+                page = int(p_str)
+
+        if not sellable:
+            text = (
+                "🎒 <b>ПРОДАЖА ПРЕДМЕТОВ НА БАЗАРЕ</b>\n\n"
+                "Твой инвентарь пуст, нищеброд! Тебе нечего выставить на продажу.\n"
+                "Купи лут в /shop, выбей из кейсов или добудь в грабежах /rob."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏬 В Магазин (/shop)", callback_data="shop_main_hub")],
+                [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
+                [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+            ])
+            await _render_market_view(callback, text, kb, category="market")
+            return
+
+        per_page = 6
+        total_pages = max(1, math.ceil(len(sellable) / per_page))
+        page = max(1, min(page, total_pages))
+        start_idx = (page - 1) * per_page
+        page_items = sellable[start_idx:start_idx + per_page]
+
+        text = (
+            f"🎒 <b>ВЫБЕРИ ПРЕДМЕТ ДЛЯ ПРОДАЖИ (Стр. {page}/{total_pages}):</b>\n\n"
+            "Нажми на предмет ниже, чтобы установить цену лота:\n"
+            "<i>(Или введи: <code>/sell &lt;предмет&gt; &lt;цена&gt;</code>)</i>"
+        )
+        buttons: List[List[InlineKeyboardButton]] = []
+        for s_id, s_type, s_name in page_items:
+            safe_item_name = html.escape(s_name)
+            buttons.append([InlineKeyboardButton(text=f"🏷 {safe_item_name}", callback_data=f"market_sell_item:{s_id}")])
+
+        if total_pages > 1:
+            nav_row: List[InlineKeyboardButton] = []
+            if page > 1:
+                nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"market_sell_menu:{page-1}"))
+            else:
+                nav_row.append(InlineKeyboardButton(text="◀️", callback_data="market_noop"))
+            nav_row.append(InlineKeyboardButton(text=f"Стр. {page}/{total_pages}", callback_data=f"market_sell_menu:{page}"))
+            if page < total_pages:
+                nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"market_sell_menu:{page+1}"))
+            else:
+                nav_row.append(InlineKeyboardButton(text="▶️", callback_data="market_noop"))
+            buttons.append(nav_row)
+
+        buttons.append([InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")])
+        buttons.append([InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")])
+        await _render_market_view(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons), category="market")
+    finally:
+        await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data.startswith("market_sell_item:"))
 async def cb_market_sell_item(callback: types.CallbackQuery, board_id: str | None = None):
     """Выбор цены для выставления выбранного предмета с пресетами."""
-    item_id = callback.data.split(":", 1)[1]
-    detected_type, item_name, _ = classify_item(item_id)
+    from common.bot_helpers import safe_callback_answer
+    try:
+        item_id = callback.data.split(":", 1)[1]
+        detected_type, item_name, _ = classify_item(item_id)
+        safe_name = html.escape(item_name)
 
-    text = (
-        f"🏷 <b>ВЫСТАВЛЕНИЕ НА ПРОДАЖУ: {item_name}</b>\n\n"
-        f"Выбери готовую цену из кнопок ниже или отправь в чат точную сумму:\n"
-        f"<code>/sell {item_id} [цена]</code>\n\n"
-        f"<i>Налог Абу 5% будет удержан с покупателя при покупке.</i>"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="50 ₪", callback_data=f"market_do_sell:{item_id}:50"),
-            InlineKeyboardButton(text="100 ₪", callback_data=f"market_do_sell:{item_id}:100"),
-            InlineKeyboardButton(text="250 ₪", callback_data=f"market_do_sell:{item_id}:250"),
-        ],
-        [
-            InlineKeyboardButton(text="500 ₪", callback_data=f"market_do_sell:{item_id}:500"),
-            InlineKeyboardButton(text="1000 ₪", callback_data=f"market_do_sell:{item_id}:1000"),
-        ],
-        [
-            InlineKeyboardButton(text="⬅️ Отмена", callback_data="market_sell_menu"),
-        ]
-    ])
-    await _render_market_view(callback, text, kb, category="market")
-    await callback.answer()
+        text = (
+            f"🏷 <b>ВЫСТАВЛЕНИЕ НА ПРОДАЖУ: {safe_name}</b>\n\n"
+            f"Выбери готовую цену из кнопок ниже или отправь в чат точную сумму:\n"
+            f"<code>/sell {item_id} [цена]</code>\n\n"
+            f"<i>Налог Абу 5% будет удержан с покупателя при покупке.</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="50 ₪", callback_data=f"market_do_sell:{item_id}:50"),
+                InlineKeyboardButton(text="100 ₪", callback_data=f"market_do_sell:{item_id}:100"),
+                InlineKeyboardButton(text="250 ₪", callback_data=f"market_do_sell:{item_id}:250"),
+            ],
+            [
+                InlineKeyboardButton(text="500 ₪", callback_data=f"market_do_sell:{item_id}:500"),
+                InlineKeyboardButton(text="1000 ₪", callback_data=f"market_do_sell:{item_id}:1000"),
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Назад к предметам", callback_data="market_sell_menu"),
+                InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+            ]
+        ])
+        await _render_market_view(callback, text, kb, category="market")
+    finally:
+        await safe_callback_answer(callback)
 
 
 @market_router.callback_query(F.data.startswith("market_do_sell:"))
 async def cb_market_do_sell(callback: types.CallbackQuery, board_id: str | None = None):
     """Создание лота по нажатию кнопки готового пресета цены."""
-    b_id = board_id or "b"
-    user_id = callback.from_user.id
-    parts = callback.data.split(":")
-    if len(parts) != 3:
-        return
+    from common.bot_helpers import safe_callback_answer
+    try:
+        b_id = board_id or "b"
+        user_id = callback.from_user.id
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer("❌ Некорректный формат данных лота.", show_alert=True)
+            return
 
-    item_id = parts[1]
-    price = float(parts[2])
+        item_id = parts[1]
+        try:
+            price = float(parts[2])
+        except (ValueError, OverflowError):
+            await callback.answer("❌ Некорректная цена.", show_alert=True)
+            return
 
-    db = await get_pool()
-    ok, listing, err = await create_market_listing(db, user_id, b_id, item_id, price)
+        db = await get_pool()
+        ok, listing, err = await create_market_listing(db, user_id, b_id, item_id, price)
 
-    if not ok:
-        await callback.answer(f"❌ {err}", show_alert=True)
-        return
+        if not ok:
+            err_msg = html.escape(str(err or "Ошибка выставления"))
+            await callback.answer(f"❌ {err_msg}"[:199], show_alert=True)
+            return
 
-    item_name = listing["item_name"]
-    fee_est = max(1.0, round(price * 0.05, 2)) if price >= 1.0 else round(price * 0.05, 2)
-    payout_est = round(price - fee_est, 2)
+        item_name = listing["item_name"]
+        fee_est = max(1.0, round(price * 0.05, 2)) if price >= 1.0 else round(price * 0.05, 2)
+        payout_est = round(price - fee_est, 2)
+        safe_name = html.escape(item_name)
 
-    text = (
-        f"🏷 <b>ЛОТ #{listing['id']} ВЫСТАВЛЕН НА БАЗАР!</b>\n\n"
-        f"📦 <b>Товар:</b> {item_name}\n"
-        f"💰 <b>Цена:</b> <code>{price:,.2f} ₪</code>\n"
-        f"💵 <b>Выплата продавцу:</b> <code>+{payout_est:,.2f} ₪</code> (за вычетом 5% Абу)\n\n"
-        f"<i>Предмет перемещен на эскроу-склад Базара.</i>"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
-        [InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub")],
-    ])
-    await _render_market_view(callback, text, kb, category="market")
-    await callback.answer("✅ Лот успешно выставлен!", show_alert=False)
+        text = (
+            f"🏷 <b>ЛОТ #{listing['id']} ВЫСТАВЛЕН НА БАЗАР!</b>\n\n"
+            f"📦 <b>Товар:</b> {safe_name}\n"
+            f"💰 <b>Цена:</b> <code>{price:,.2f} ₪</code>\n"
+            f"💵 <b>Выплата продавцу:</b> <code>+{payout_est:,.2f} ₪</code> (за вычетом 5% Абу)\n\n"
+            f"<i>Предмет перемещен на эскроу-склад Базара.</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Мои лоты", callback_data="market_my_lots:1")],
+            [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
+            [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
+        ])
+        await _render_market_view(callback, text, kb, category="market")
+        await callback.answer("✅ Лот успешно выставлен!", show_alert=False)
+    finally:
+        await safe_callback_answer(callback)

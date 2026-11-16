@@ -21,8 +21,121 @@ active_roulette_sessions: Dict[int, Dict[str, Any]] = {}
 # -----------------------------------------------------------------------------
 
 MIN_CASINO_BET = 10
-MAX_CASINO_BET = 1_500_000
-MAX_ROULETTE_BET = 1_500_000
+MAX_CASINO_BET = 1_000_000
+MAX_ROULETTE_BET = 1_000_000
+
+# Dynamic Bet Tiers based on player balance:
+# - Новички (баланс <= 10,000 ₪): max bet = 1,000 ₪ (защита от мгновенного слива новичков)
+# - Средний класс (10,000 < баланс <= 100,000 ₪): max bet = 25,000 ₪
+# - Зажиточные (100,000 < баланс <= 500,000 ₪): max bet = 150,000 ₪
+# - Олигархи (500,000 < баланс <= 2,000,000 ₪): макс ставка = 500,000 ₪
+# - Киты / Мультимиллионеры (баланс > 2,000,000 ₪): макс ставка = 1,000,000 ₪ (абсолютный потолок)
+BET_TIERS = [
+    (10_000, 1_000, "Новички"),
+    (100_000, 25_000, "Средний класс"),
+    (500_000, 150_000, "Зажиточные"),
+    (2_000_000, 500_000, "Олигархи"),
+    (float("inf"), 1_000_000, "Киты / Мультимиллионеры"),
+]
+
+
+def get_max_bet_for_balance(balance: int | float) -> int:
+    """
+    Dynamic Bet Caps:
+    - Новички (баланс <= 10,000 ₪): максимальная ставка = 1,000 ₪.
+    - Средний класс (10,000 < баланс <= 100,000 ₪): максимальная ставка = 25,000 ₪.
+    - Зажиточные (100,000 < баланс <= 500,000 ₪): максимальная ставка = 150,000 ₪.
+    - Олигархи (500,000 < баланс <= 2,000,000 ₪): максимальная ставка = 500,000 ₪.
+    - Киты / Мультимиллионеры (баланс > 2,000,000 ₪): абсолютный потолок максимальной ставки = 1,000,000 ₪.
+    """
+    bal = max(0, int(balance))
+    if bal <= 10_000:
+        return 1_000
+    elif bal <= 100_000:
+        return 25_000
+    elif bal <= 500_000:
+        return 150_000
+    elif bal <= 2_000_000:
+        return 500_000
+    else:
+        return 1_000_000
+
+
+def get_dynamic_max_bet(balance: int | float) -> int:
+    """Alias for get_max_bet_for_balance."""
+    return get_max_bet_for_balance(balance)
+
+
+def validate_casino_bet(bet: int, balance: int | float) -> Tuple[bool, int, str]:
+    """
+    Validates a bet against MIN_CASINO_BET and dynamic cap based on balance.
+    Returns: (is_valid, max_allowed, error_msg)
+    """
+    bal = max(0, int(balance))
+    max_allowed = min(MAX_CASINO_BET, get_max_bet_for_balance(bal))
+    if bet < MIN_CASINO_BET:
+        return False, max_allowed, f"Минимальная ставка: {MIN_CASINO_BET} ₪"
+    if bet > max_allowed:
+        return False, max_allowed, f"Максимальная ставка для вашего баланса ({bal:,} ₪): {max_allowed:,} ₪"
+    if bet > bal:
+        return False, max_allowed, f"Недостаточно средств. Ваш баланс: {bal:,} ₪"
+    return True, max_allowed, ""
+
+
+def clamp_bet_to_limits(bet: int, balance: int | float) -> int:
+    """
+    Clamps bet between MIN_CASINO_BET and dynamic maximum allowed bet.
+    """
+    bal = max(0, int(balance))
+    max_allowed = min(MAX_CASINO_BET, get_max_bet_for_balance(bal))
+    if max_allowed < MIN_CASINO_BET:
+        return MIN_CASINO_BET
+    return max(MIN_CASINO_BET, min(max_allowed, bet))
+
+
+# Jackpot & High-Win Tax
+def calculate_jackpot_tax(net_profit: int | float, multiplier: float = 1.0) -> Tuple[int, int, str]:
+    """
+    Налог на джекпоты и крупные выигрыши (Jackpot & High-Win Tax):
+    - При чистом выигрыше >= 10,000 ₪ или коэффициенте >= 4.0x:
+      * Взимается 10% налог на выигрыш (перечисляется в Фонд Яхты Абу).
+      * Игрок получает 90% чистой прибыли.
+      * В сообщении указывается: "🏛️ Налог Абу (10%): -X ₪ перечислено в фонд яхты".
+    Returns: (tax_amount, player_profit_after_tax, tax_message)
+    """
+    net = int(net_profit)
+    if net <= 0:
+        return 0, 0, ""
+
+    if net >= 10_000 or multiplier >= 4.0:
+        tax = int(round(net * 0.10))
+        payout = net - tax
+        message = f"🏛️ Налог Абу (10%): -{tax} ₪ перечислено в фонд яхты"
+        return tax, payout, message
+
+    return 0, net, ""
+
+
+def calculate_win_tax(net_profit: int | float, multiplier: float = 1.0) -> Tuple[int, int]:
+    """
+    Returns: (tax_amount, payout_after_tax)
+    """
+    tax, payout, _ = calculate_jackpot_tax(net_profit, multiplier)
+    return tax, payout
+
+
+async def transfer_tax_to_abu_fund(db, tax_amount: int) -> None:
+    """
+    Transfers casino win tax directly to Abu's Yacht Fund.
+    """
+    if tax_amount <= 0 or db is None:
+        return
+    try:
+        from common.database import add_to_abu_fund
+        await add_to_abu_fund(db, tax_amount)
+    except Exception:
+        pass
+
 
 SLOT_SYMBOLS = [
     ("👑", 50.0, 4),    # 777 Jackpot: 4 weight (x50.0)
@@ -93,23 +206,60 @@ def format_hand(hand: List[Tuple[str, str]], hide_dealer_card: bool = False) -> 
 
 
 # Anti-abuse and rate-limiting
-CASINO_COOLDOWN_SECONDS = 2.5
+CASINO_COOLDOWN_SECONDS = 1.5
+SPIN_COOLDOWN_MESSAGE = "⏳ Не части! Колесу нужно остановиться."
 user_casino_last_action: Dict[int, float] = {}
 user_win_streaks: Dict[int, int] = {}
 
 
-def check_casino_cooldown(user_id: int) -> Tuple[bool, float]:
+class CooldownResult(tuple):
+    """
+    Subclass of 2-tuple (is_allowed, remaining_seconds) with .message attribute.
+    Provides backwards compatibility for `is_ok, rem = check_casino_cooldown(...)`
+    while exposing the friendly anti-autoclicker warning message.
+    """
+    def __new__(cls, is_allowed: bool, remaining_seconds: float, message: str = ""):
+        return super().__new__(cls, (is_allowed, remaining_seconds))
+
+    @property
+    def is_allowed(self) -> bool:
+        return self[0]
+
+    @property
+    def remaining(self) -> float:
+        return self[1]
+
+    @property
+    def message(self) -> str:
+        return SPIN_COOLDOWN_MESSAGE if not self[0] else ""
+
+    def __str__(self) -> str:
+        return self.message
+
+
+def check_casino_cooldown(user_id: int, cooldown_sec: float = CASINO_COOLDOWN_SECONDS) -> CooldownResult:
     """
     Prevents script-bot hammering and rapid martingale bets.
-    Returns: (is_allowed, remaining_seconds)
+    Enforces minimum 1.5 second cooldown between bets/spins.
+    Returns: CooldownResult(is_allowed, remaining_seconds) with .message warning.
     """
     now = time.time()
     last = user_casino_last_action.get(user_id, 0.0)
     elapsed = now - last
-    if elapsed < CASINO_COOLDOWN_SECONDS:
-        return False, round(CASINO_COOLDOWN_SECONDS - elapsed, 1)
+    if elapsed < cooldown_sec:
+        rem = round(cooldown_sec - elapsed, 1)
+        return CooldownResult(False, rem, SPIN_COOLDOWN_MESSAGE)
     user_casino_last_action[user_id] = now
-    return True, 0.0
+    return CooldownResult(True, 0.0, "")
+
+
+def check_spin_cooldown(user_id: int, cooldown_sec: float = CASINO_COOLDOWN_SECONDS) -> Tuple[bool, float, str]:
+    """
+    Spin cooldown check returning (is_allowed, remaining_seconds, warning_message).
+    Friendly warning: '⏳ Не части! Колесу нужно остановиться.'
+    """
+    res = check_casino_cooldown(user_id, cooldown_sec)
+    return res[0], res[1], res.message
 
 
 def calculate_vip_table_rake(bet: int) -> Tuple[int, int]:
@@ -152,19 +302,19 @@ def get_win_streak(user_id: int) -> int:
 # Slots Mechanics
 # -----------------------------------------------------------------------------
 
-def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, str]:
+def roll_slots(user_id: int = 0, balance: int = 0, bet: int = 0) -> Tuple[List[str], float, str]:
     """
-    Spins 3 reels based on weighted probability (~96% RTP).
-    Applies Anti-Streak / High-Roller Tilt if user is on a high win streak (>=5) or balance > 100,000 ₪.
+    Spins 3 reels based on weighted probability (~94.8% RTP, MMORPG target 92-95%).
+    Applies Anti-Streak / High-Roller Tilt if user is on a high win streak (>=5) or balance > 100,000 ₪ (~92.8% RTP).
     Returns: (symbols_list, multiplier, result_title)
     """
     streak = user_win_streaks.get(user_id, 0) if user_id else 0
     is_tilted = streak >= 5 or balance > 100_000
 
     # Adjust weights if player is on a hot streak or is a highroller (>100k)
-    # Balanced anti-streak tilt: keep crown jackpot achievable and maintain high diamond/crown visual frequency
+    # Balanced anti-streak tilt: keep crown jackpot achievable (target ~92.8% RTP)
     if is_tilted:
-        weights = [3, 6, 9, 11, 13, 10]
+        weights = [3, 6, 9, 11, 14, 9]
     else:
         weights = [s[2] for s in SLOT_SYMBOLS]
 
@@ -176,31 +326,39 @@ def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, st
 
     reels = [reel1, reel2, reel3]
 
+    def _with_tax(title: str, mult: float) -> str:
+        if bet > 0 and mult > 0:
+            net_profit = int(bet * mult) - bet
+            tax, _, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+            if tax > 0:
+                return f"{title}\n{tax_msg}"
+        return title
+
     # Check 3 matching
     if reel1 == reel2 == reel3:
         for sym, mult, _ in SLOT_SYMBOLS:
             if reel1 == sym:
                 if sym == "👑":
                     if user_id: record_win_streak(user_id, True)
-                    return reels, 50.0, "🔥 ДЖЕКПОТ! ТРИ КОРОНЫ 777! 🔥"
+                    return reels, 50.0, _with_tax("🔥 ДЖЕКПОТ! ТРИ КОРОНЫ 777! 🔥", 50.0)
                 elif sym == "💀":
                     if user_id: record_win_streak(user_id, False)
                     return reels, 0.0, "💀 ТРИ ЧЕРЕПА! Полный провал!"
                 if user_id: record_win_streak(user_id, True)
-                return reels, mult, f"✨ ВЫИГРЫШ: Три в ряд ({sym})! x{mult:.0f}!"
+                return reels, mult, _with_tax(f"✨ ВЫИГРЫШ: Три в ряд ({sym})! x{mult:.0f}!", mult)
 
     # Check 2 matching (excluding skulls)
     if (reel1 == reel2 or reel2 == reel3 or reel1 == reel3) and ("💀" not in reels or reels.count("💀") < 2):
         matched_sym = reel1 if reel1 == reel2 or reel1 == reel3 else reel2
         if matched_sym == "👑":
             if user_id: record_win_streak(user_id, True)
-            return reels, 4.5, "👑 Пара Корон! Отличный занос x4.5!"
+            return reels, 4.5, _with_tax("👑 Пара Корон! Отличный занос x4.5!", 4.5)
         elif matched_sym == "💎":
             if user_id: record_win_streak(user_id, True)
-            return reels, 2.8, "💎 Пара Бриллиантов! Выигрыш x2.8!"
+            return reels, 2.8, _with_tax("💎 Пара Бриллиантов! Выигрыш x2.8!", 2.8)
         elif matched_sym != "💀":
             if user_id: record_win_streak(user_id, True)
-            return reels, 1.8, f"🎉 Пара совпадений ({matched_sym})! x1.8"
+            return reels, 1.8, _with_tax(f"🎉 Пара совпадений ({matched_sym})! x1.8", 1.8)
 
     if user_id: record_win_streak(user_id, False)
     return reels, 0.0, "💨 Мимо! Попробуй еще раз."
@@ -210,9 +368,9 @@ def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, st
 # Coinflip Mechanics
 # -----------------------------------------------------------------------------
 
-def play_coinflip(chosen_side: str, user_id: int = 0, balance: int = 0) -> Tuple[str, bool, float, str]:
+def play_coinflip(chosen_side: str, user_id: int = 0, balance: int = 0, bet: int = 0) -> Tuple[str, bool, float, str]:
     """
-    Plays 50/50 coinflip with fair ~96% RTP.
+    Plays 50/50 coinflip with fair ~94% RTP (MMORPG target 92-95%).
     chosen_side: 'heads' ('орел', 'eagle') or 'tails' ('решка')
     Returns: (result_side, is_win, multiplier, text_message)
     """
@@ -220,9 +378,9 @@ def play_coinflip(chosen_side: str, user_id: int = 0, balance: int = 0) -> Tuple
     is_tilted = streak >= 5 or balance > 1_000_000
 
     if is_tilted:
-        win_prob = 0.47
+        win_prob = 0.47  # ~92.1% RTP
     else:
-        win_prob = 0.49
+        win_prob = 0.48  # ~94.1% RTP
 
     side_match = (random.random() < win_prob)
 
@@ -240,7 +398,14 @@ def play_coinflip(chosen_side: str, user_id: int = 0, balance: int = 0) -> Tuple
 
     mult = 1.96 if is_win else 0.0
     tilt_note = " <i>(Абу подкрутил монетку)</i>" if is_tilted and not is_win else ""
-    title = f"🎉 ПОБЕДА! Выпал {side_ru} (x1.96)!" if is_win else f"💀 ПРОИГРЫШ! Выпал {side_ru}.{tilt_note}"
+    tax_line = ""
+    if is_win and bet > 0:
+        net_profit = int(bet * mult) - bet
+        tax, _, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+        if tax > 0:
+            tax_line = f"\n{tax_msg}"
+
+    title = f"🎉 ПОБЕДА! Выпал {side_ru} (x1.96)!{tax_line}" if is_win else f"💀 ПРОИГРЫШ! Выпал {side_ru}.{tilt_note}"
     return side_ru, is_win, mult, title
 
 
@@ -267,6 +432,7 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
 
     session = active_roulette_sessions.get(user_id, {"streak": 0, "bet": bet})
     locked_bet = session.get("bet", bet) if user_id in active_roulette_sessions else bet
+    locked_bet = min(MAX_ROULETTE_BET, max(MIN_CASINO_BET, locked_bet))
 
     if is_bullet:
         active_roulette_sessions.pop(user_id, None)
@@ -282,7 +448,12 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
         "last_shot": time.time(),
     }
 
-    return True, mult, new_streak, f"💨 *ЩЁЛК!* Пустая камора! Серия: {new_streak} (Множитель: x{mult:.2f})"
+    win_amt = int(locked_bet * mult)
+    net_profit = win_amt - locked_bet
+    tax, _, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+    tax_line = f"\n{tax_msg}" if tax > 0 else ""
+
+    return True, mult, new_streak, f"💨 *ЩЁЛК!* Пустая камора! Серия: {new_streak} (Множитель: x{mult:.2f}){tax_line}"
 
 
 def expire_stale_roulette_sessions(timeout_sec: float = 300.0) -> List[Tuple[int, Dict[str, Any]]]:
@@ -370,6 +541,10 @@ def get_casino_hub_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="💳 Мой Кошелек (/wallet)", callback_data="prof_wallet"),
             InlineKeyboardButton(text="🎭 Персонаж RPG (/avatar)", callback_data="avatar_view"),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -389,15 +564,17 @@ def format_bet_amount(amount: int) -> str:
 
 def get_adaptive_bet_presets(balance: int, current_bet: int = 100, max_limit: int = MAX_CASINO_BET) -> list[int]:
     """
-    Возвращает список ставок, которые игрок ДЕЙСТВИТЕЛЬНО может себе позволить (не больше balance).
+    Возвращает список ставок, которые игрок ДЕЙСТВИТЕЛЬНО может себе позволить (не больше balance и не выше динамического капа).
     """
-    ALL_PRESETS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 1500000]
+    ALL_PRESETS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000]
     eff_bal = max(0, int(balance))
+    dynamic_cap = get_max_bet_for_balance(eff_bal)
+    effective_max = min(max_limit, dynamic_cap, MAX_CASINO_BET)
     if eff_bal < MIN_CASINO_BET:
         return [MIN_CASINO_BET]
-    affordable = [p for p in ALL_PRESETS if p <= eff_bal and p <= max_limit]
+    affordable = [p for p in ALL_PRESETS if p <= eff_bal and p <= effective_max]
     if not affordable:
-        return [max(MIN_CASINO_BET, min(eff_bal, max_limit))]
+        return [max(MIN_CASINO_BET, min(eff_bal, effective_max))]
     if len(affordable) <= 5:
         return affordable
     indices = [0, len(affordable)//4, len(affordable)//2, (len(affordable)*3)//4, len(affordable)-1]
@@ -407,7 +584,9 @@ def get_adaptive_bet_presets(balance: int, current_bet: int = 100, max_limit: in
 # --- SLOTS KEYBOARDS ---
 
 def get_slots_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
-    presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
+    dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:slots:lobby:{p}")
         for p in presets
@@ -415,19 +594,23 @@ def get_slots_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyb
     buttons = [
         [InlineKeyboardButton(text=f"🎰 Крутить барабан ({bet} ₪)", callback_data=f"cas:slots:spin:{bet}")],
         preset_row,
-        [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")]
+        [
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_slots_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
-    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
-    doubled = min(MAX_CASINO_BET, bet * 2)
+    dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    doubled = min(dynamic_max, bet * 2)
     top_row = [InlineKeyboardButton(text=f"🔄 Крутить снова ({bet} ₪)", callback_data=f"cas:slots:spin:{bet}")]
-    if doubled <= balance:
+    if doubled <= balance and doubled <= dynamic_max and doubled > bet:
         top_row.append(InlineKeyboardButton(text=f"2x Ставка ({format_bet_amount(doubled)})", callback_data=f"cas:slots:spin:{doubled}"))
 
-    presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
+    presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:slots:spin:{p}")
         for p in presets
@@ -435,7 +618,10 @@ def get_slots_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
     buttons = [
         top_row,
         preset_row,
-        [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")]
+        [
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -443,8 +629,9 @@ def get_slots_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
 # --- COINFLIP KEYBOARDS ---
 
 def get_coinflip_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
-    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
-    presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
+    dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:coin:lobby:{p}")
         for p in presets
@@ -455,21 +642,25 @@ def get_coinflip_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineK
             InlineKeyboardButton(text=f"👑 На Решку ({bet} ₪)", callback_data=f"cas:coin:tails:{bet}"),
         ],
         preset_row,
-        [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")]
+        [
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_coinflip_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
-    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
-    doubled = min(MAX_CASINO_BET, bet * 2)
-    presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
+    dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    doubled = min(dynamic_max, bet * 2)
+    presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:coin:preset:{p}")
         for p in presets
     ]
     ctrl_row = []
-    if doubled <= balance:
+    if doubled <= balance and doubled <= dynamic_max and doubled > bet:
         ctrl_row.append(InlineKeyboardButton(text=f"x2 Ставка ({format_bet_amount(doubled)})", callback_data=f"cas:coin:preset:{doubled}"))
 
     buttons = [
@@ -481,22 +672,26 @@ def get_coinflip_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarku
     if ctrl_row:
         buttons.append(ctrl_row)
     buttons.append(preset_row)
-    buttons.append([InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # --- BLACKJACK KEYBOARDS ---
 
 def get_blackjack_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
-    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
-    presets = get_adaptive_bet_presets(balance, bet, MAX_CASINO_BET)
+    dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:bj:lobby:{p}")
         for p in presets
     ]
     half_bet = max(MIN_CASINO_BET, bet // 2)
-    double_bet = min(MAX_CASINO_BET, min(balance, bet * 2)) if balance >= bet * 2 else bet
-    max_bet = max(MIN_CASINO_BET, min(MAX_CASINO_BET, balance))
+    double_bet = min(dynamic_max, min(balance, bet * 2)) if balance >= bet * 2 else bet
+    max_bet = max(MIN_CASINO_BET, min(dynamic_max, balance))
 
     ctrl_row = [
         InlineKeyboardButton(text="½", callback_data=f"cas:bj:lobby:{half_bet}"),
@@ -507,7 +702,10 @@ def get_blackjack_lobby_keyboard(bet: int = 100, balance: int = 10000) -> Inline
         [InlineKeyboardButton(text=f"🃏 Раздать карты ({bet:,} ₪)", callback_data=f"cas:bj:start:{bet}")],
         preset_row,
         ctrl_row,
-        [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")]
+        [
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -524,15 +722,20 @@ def get_blackjack_keyboard(bet: int, can_double: bool = True) -> InlineKeyboardM
         row1,
         [
             InlineKeyboardButton(text="🏳️ Сдаться (-50%)", callback_data=f"cas:bj:surrender:{bet}"),
-            InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_blackjack_replay_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
-    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
-    double_bet = min(MAX_CASINO_BET, min(balance, bet * 2)) if balance >= bet * 2 else bet
+    dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    double_bet = min(dynamic_max, min(balance, bet * 2)) if balance >= bet * 2 else bet
     buttons = [
         [
             InlineKeyboardButton(text=f"🔄 Повторить ({bet:,} ₪)", callback_data=f"cas:bj:start:{bet}"),
@@ -540,7 +743,11 @@ def get_blackjack_replay_keyboard(bet: int = 100, balance: int = 10000) -> Inlin
         ],
         [
             InlineKeyboardButton(text="⚙️ Выбрать ставку", callback_data=f"cas:bj:lobby:{bet}"),
-            InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -549,7 +756,9 @@ def get_blackjack_replay_keyboard(bet: int = 100, balance: int = 10000) -> Inlin
 # --- RUSSIAN ROULETTE KEYBOARDS ---
 
 def get_roulette_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyboardMarkup:
-    presets = get_adaptive_bet_presets(balance, bet, MAX_ROULETTE_BET)
+    dynamic_max = min(MAX_ROULETTE_BET, get_max_bet_for_balance(balance))
+    bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
+    presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:roulette:lobby:{p}")
         for p in presets
@@ -557,7 +766,10 @@ def get_roulette_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineK
     buttons = [
         [InlineKeyboardButton(text=f"💥 Взвести курок ({bet} ₪)", callback_data=f"cas:roulette:shoot:{bet}")],
         preset_row,
-        [InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub")]
+        [
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -572,7 +784,8 @@ def get_roulette_keyboard(bet: int, current_mult: float) -> InlineKeyboardMarkup
             InlineKeyboardButton(text=f"💰 Забрать {win_amount} ₪ (x{current_mult:.2f})", callback_data=f"cas:roulette:cashout:{bet}"),
         ],
         [
-            InlineKeyboardButton(text="🔙 Меню Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
