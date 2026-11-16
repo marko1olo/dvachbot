@@ -1,7 +1,9 @@
+import atexit
 import json
 import os
 import queue as _queue_mod
 import re
+import signal
 import subprocess
 import sys
 try:
@@ -165,6 +167,23 @@ def _release_supervisor_lock() -> None:
         pass
 
 
+atexit.register(_release_supervisor_lock)
+
+
+def _setup_signal_handlers() -> None:
+    def _sig_handler(signum, frame):
+        log(f"Supervisor received signal {signum}, initiating graceful exit...")
+        raise KeyboardInterrupt(f"signal_{signum}")
+
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _sig_handler)
+            except (ValueError, OSError, AttributeError):
+                pass
+
+
 def _read_lock_pid() -> int | None:
     try:
         text = BOT_LOCK.read_text(encoding="utf-8").strip()
@@ -226,13 +245,17 @@ def _heartbeat_queue_total(payload: dict | None) -> int | None:
     return None
 
 
-def _heartbeat_is_fresh(payload: dict | None) -> bool:
+def _heartbeat_is_fresh(payload: dict | None, expected_pid: int | None = None) -> bool:
+    if not payload:
+        return False
+    if expected_pid is not None and payload.get("pid") is not None and payload.get("pid") != expected_pid:
+        return False
+    if bool(payload.get("is_shutting_down")) and not bool(payload.get("drain_shutdown_requested")):
+        return False
     heartbeat_age = _heartbeat_age_sec(payload)
     return bool(
-        payload
-        and heartbeat_age is not None
+        heartbeat_age is not None
         and heartbeat_age <= HEARTBEAT_STALE_SEC
-        and not bool(payload.get("is_shutting_down"))
     )
 
 
@@ -348,11 +371,41 @@ def _kill_tree(process: subprocess.Popen, reason: str) -> None:
     _clear_bot_lock("after forced child stop")
 
 
-def _start_child() -> subprocess.Popen:
+def _clear_restart_request(context: str = "") -> None:
     try:
         BOT_RESTART_PATH.unlink(missing_ok=True)
-    except OSError:
-        pass
+        if context:
+            log(f"Cleared {BOT_RESTART_PATH.name} {context}".strip())
+    except OSError as exc:
+        log(f"Could not remove {BOT_RESTART_PATH.name}: {exc}")
+        try:
+            BOT_RESTART_PATH.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _clear_stale_heartbeat(context: str = "") -> None:
+    try:
+        HEARTBEAT_LOG.unlink(missing_ok=True)
+        if context:
+            log(f"Cleared {HEARTBEAT_LOG.name} {context}".strip())
+    except OSError as exc:
+        log(f"Could not remove {HEARTBEAT_LOG.name}: {exc}")
+        try:
+            HEARTBEAT_LOG.write_text("{}", encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _start_child() -> subprocess.Popen:
+    _clear_restart_request("before child start")
+    _clear_stale_heartbeat("before child start")
+    lock_pid = _read_lock_pid()
+    if lock_pid is not None and not _is_bot_process(lock_pid):
+        _clear_bot_lock(f"stale PID {lock_pid} before child launch")
+    elif lock_pid is None and BOT_LOCK.exists():
+        _clear_bot_lock("empty or unreadable before child launch")
+
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -522,6 +575,7 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                 _close_child_log(child)
                 if _stop_requested():
                     log("Stop request detected after child exit; supervisor exits")
+                    _clear_bot_lock("after stop request")
                     return True
                 live_pid = _locked_live_bot_pid()
                 if live_pid and live_pid in known_child_pids:
@@ -574,6 +628,21 @@ def _monitor_child(child: subprocess.Popen) -> bool:
             uptime = time.time() - start_time
             stdout_age = _file_age_sec(STDOUT_LOG)
             runtime_age = _file_age_sec(LOG_DIR / "bot_runtime.log")
+
+            # Detect child-initiated or external graceful drain restart
+            if soft_restart_requested_at is None:
+                heartbeat = _read_heartbeat()
+                is_child_draining = bool(
+                    heartbeat
+                    and heartbeat.get("pid") == child.pid
+                    and (heartbeat.get("drain_shutdown_requested") or heartbeat.get("is_shutting_down"))
+                )
+                if BOT_RESTART_PATH.exists() or is_child_draining:
+                    soft_restart_requested_at = time.time()
+                    log(
+                        f"Detected graceful shutdown/restart for pid={child.pid}; "
+                        f"armed soft restart grace period ({SOFT_RESTART_GRACE_SEC:.0f}s)"
+                    )
 
             # Check if soft restart was requested and has timed out
             if soft_restart_requested_at is not None:
@@ -635,7 +704,7 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                         pass
                     continue
                 heartbeat = _read_heartbeat()
-                if _heartbeat_is_fresh(heartbeat):
+                if _heartbeat_is_fresh(heartbeat, expected_pid=child.pid):
                     if health_failures:
                         heartbeat_age = _heartbeat_age_sec(heartbeat)
                         heartbeat_queue_total = _heartbeat_queue_total(heartbeat)
@@ -655,7 +724,7 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                 healthy, details = _health_probe()
                 heartbeat_age = _heartbeat_age_sec(heartbeat)
                 heartbeat_queue_total = _heartbeat_queue_total(heartbeat)
-                heartbeat_fresh = _heartbeat_is_fresh(heartbeat)
+                heartbeat_fresh = _heartbeat_is_fresh(heartbeat, expected_pid=child.pid)
                 if healthy:
                     if health_failures:
                         log(
@@ -723,6 +792,7 @@ def _monitor_child(child: subprocess.Popen) -> bool:
         except subprocess.TimeoutExpired:
             log(f"Child pid={child.pid} did not exit within 5.0s on KeyboardInterrupt; killing process tree...")
             _kill_tree(child, "supervisor_keyboard_interrupt")
+        _clear_bot_lock("on supervisor shutdown")
         _close_child_log(child)
         return True
     except Exception as exc:
@@ -734,6 +804,7 @@ def _monitor_child(child: subprocess.Popen) -> bool:
 
 def main() -> int:
     LOG_DIR.mkdir(exist_ok=True)
+    _setup_signal_handlers()
     if not _acquire_supervisor_lock():
         return 0
     try:
@@ -741,6 +812,7 @@ def main() -> int:
         while True:
             if _stop_requested():
                 log("Stop request detected before child start; supervisor exits")
+                _clear_bot_lock("before supervisor exit")
                 return 0
             live_pid = _locked_live_bot_pid()
             if live_pid:
@@ -766,7 +838,7 @@ def main() -> int:
                         "Treating existing process as stale/zombie; killing process tree and starting fresh child."
                     )
                     _kill_pid_tree(live_pid, f"startup_health_failed: {details}")
-                    _clear_bot_lock()
+                    _clear_bot_lock("stale zombie on startup")
             child = _start_child()
             should_exit = _monitor_child(child)
             if should_exit:
@@ -774,6 +846,7 @@ def main() -> int:
 
             if _stop_requested():
                 log("Stop request detected before restart; supervisor exits")
+                _clear_bot_lock("before supervisor exit")
                 return 0
             log(f"Restarting after {RESTART_DELAY_SEC}s")
             try:

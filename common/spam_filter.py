@@ -52,12 +52,145 @@ _user_link_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 _user_repost_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 # {user_id: {media_group_id: {'first_ts': float, 'blocked': bool, 'response': str}}}
 _seen_repost_media_groups: Dict[int, Dict[str, dict]] = defaultdict(dict)
+# {user_id: deque of timestamps}
+_short_gibberish_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=30))
 _last_auto_cleanup_ts: float = 0.0
 
+# --- In-Memory Shadow Mutes Fast Cache (DOS & Flood Shield) ---
+# {user_id or (user_id, board_id): expires_at_timestamp}
+_in_memory_shadow_muted_users: Dict[Any, float] = {}
+
+def set_in_memory_shadow_mute(
+    user_id: int,
+    board_id: Any = 'ALL',
+    expires_at: float | None = None,
+    duration_seconds: float | None = None
+) -> float:
+    """Sets shadow mute expiration in memory for instant O(1) checks without DB queries."""
+    now = time.time()
+    if expires_at is None:
+        dur = float(duration_seconds or 1200.0)
+        exp_ts = now + dur
+    else:
+        exp_ts = float(expires_at)
+
+    _in_memory_shadow_muted_users[user_id] = exp_ts
+    if board_id == 'ALL' or board_id is None:
+        _in_memory_shadow_muted_users[(user_id, 'ALL')] = exp_ts
+        try:
+            from shared_state import BOARDS
+            for b in BOARDS:
+                _in_memory_shadow_muted_users[(user_id, str(b))] = exp_ts
+        except Exception:
+            pass
+    elif isinstance(board_id, (list, set, tuple)):
+        for b in board_id:
+            _in_memory_shadow_muted_users[(user_id, str(b))] = exp_ts
+    else:
+        _in_memory_shadow_muted_users[(user_id, str(board_id))] = exp_ts
+
+    return exp_ts
+
+def is_user_in_memory_shadow_muted(user_id: int, board_id: str | None = None, now_ts: float | None = None) -> bool:
+    """
+    Checks if a user is shadow-muted using strictly in-memory data (< 0.1ms).
+    Zero database queries, zero db_lock acquisitions.
+    """
+    if not user_id:
+        return False
+
+    now = float(now_ts) if now_ts is not None else time.time()
+
+    # 1. Global / direct user check
+    exp = _in_memory_shadow_muted_users.get(user_id)
+    if exp is not None:
+        if exp > now:
+            return True
+        else:
+            _in_memory_shadow_muted_users.pop(user_id, None)
+
+    # 2. Board-specific checks
+    if board_id:
+        b_str = str(board_id)
+        exp_b = _in_memory_shadow_muted_users.get((user_id, b_str))
+        if exp_b is not None:
+            if exp_b > now:
+                return True
+            else:
+                _in_memory_shadow_muted_users.pop((user_id, b_str), None)
+
+        exp_all = _in_memory_shadow_muted_users.get((user_id, 'ALL'))
+        if exp_all is not None:
+            if exp_all > now:
+                return True
+            else:
+                _in_memory_shadow_muted_users.pop((user_id, 'ALL'), None)
+
+    return False
+
+def clear_in_memory_shadow_mutes(user_id: int | None = None) -> None:
+    """Clears in-memory shadow mutes for a user (or globally)."""
+    if user_id is not None:
+        _in_memory_shadow_muted_users.pop(user_id, None)
+        for k in list(_in_memory_shadow_muted_users.keys()):
+            if isinstance(k, tuple) and k[0] == user_id:
+                _in_memory_shadow_muted_users.pop(k, None)
+    else:
+        _in_memory_shadow_muted_users.clear()
+
+def load_active_shadow_mutes_from_db(db_path: str | None = None) -> int:
+    """
+    Loads active shadow mutes from SQLite into _in_memory_shadow_muted_users.
+    Uses read-only URI mode to prevent any WAL write lock contention.
+    Returns count of loaded records.
+    """
+    try:
+        import os, sqlite3
+        if not db_path:
+            try:
+                from common.config import DB_NAME
+                db_path = DB_NAME
+            except Exception:
+                db_path = r"C:\dev\dvachbot\dvach_bot.db"
+
+        if not db_path or not os.path.exists(str(db_path)):
+            return 0
+
+        clean_path = str(db_path).replace("\\", "/")
+        now_ts = time.time()
+        conn = sqlite3.connect(f"file:{clean_path}?mode=ro", uri=True, timeout=1.0)
+        loaded = 0
+        try:
+            cur = conn.execute(
+                "SELECT user_id, board_id, expires_at FROM Mutes WHERE mute_type = 'shadow' AND expires_at > ?",
+                (now_ts,)
+            )
+            for uid, bid, exp in cur.fetchall():
+                if exp and exp > now_ts:
+                    set_in_memory_shadow_mute(int(uid), str(bid), float(exp))
+                    loaded += 1
+        finally:
+            conn.close()
+        return loaded
+    except Exception as e:
+        logger.debug(f"Failed to load shadow mutes from DB: {e}")
+        return 0
+
+# --- Wall-of-Text & Sybil Raid Tracker ---
+# deque of (timestamp, user_id, board_id, norm_text, raw_snippet)
+_board_recent_wall_of_texts: deque = deque(maxlen=500)
+WALL_OF_TEXT_MIN_LEN = 100
+SYBIL_RAID_WINDOW_SEC = 1800.0   # 30 minutes window for detecting bot networks posting same copypasta
+CROSS_BOARD_FAST_SEC = 300.0     # 5 minutes window for cross-board copy blast
+TEXT_BAYAN_MIN_LEN = 80          # Short texts (< 80 chars) are casual banter and immune from bayan bans
+
 # --- Constants & Thresholds ---
-BAYAN_WINDOW_SEC = 180          # 3 minutes sliding window
+BAYAN_WINDOW_SEC = 180          # 3 minutes sliding window (180s matches '3+ баяна за 3 минуты')
 BAYAN_THRESHOLD = 3             # 3 bayans in 3 minutes -> 20 min shadowmute
+BAYAN_STICKER_THRESHOLD = 5     # 5 sticker repeats in 180s (increased from 3 to 5)
+BAYAN_MEDIA_THRESHOLD = 5       # 5 sticker/media repeats in 180s
 BAYAN_BASE_MUTE_SEC = 1200      # 20 minutes base shadowmute (1200 seconds)
+BAYAN_STICKER_BASE_MUTE_SEC = 120  # 120 seconds base shadowmute for sticker repeats (reduced from 1200s / 20m)
 BAYAN_RESET_SEC = 3600          # Reset escalation counter after 1 hour without infractions
 MAX_BAYAN_MUTE_SEC = 1800       # 30 minutes max shadow mute for bayan
 MAX_SHADOW_MUTE_SEC = 1800      # 30 minutes hard cap
@@ -70,6 +203,15 @@ RATE_FLOOD_WINDOW = 15.0
 MINUTE_FLOOD_LIMIT = 30         # > 30 messages in 60 seconds
 MINUTE_FLOOD_WINDOW = 60.0
 FLOOD_BASE_MUTE_SEC = 300.0     # 5 minutes base shadowmute for fast flood (not 20m!)
+
+# Short Gibberish & Keysmash Flood
+SHORT_GIBBERISH_MAX_LEN = 25
+SHORT_GIBBERISH_FAST_WINDOW = 5.0
+SHORT_GIBBERISH_FAST_LIMIT = 3
+SHORT_GIBBERISH_SLOW_WINDOW = 10.0
+SHORT_GIBBERISH_SLOW_LIMIT = 4
+SHORT_GIBBERISH_VETERAN_MUTE = 600
+SHORT_GIBBERISH_DEFAULT_MUTE = 1800
 
 # Repost / Forward from public channels limits & responses
 REPOST_LIMIT_PER_MINUTE = 6
@@ -220,6 +362,13 @@ def reset_media_burst_tracker(user_id: int | None = None):
     else:
         _user_media_burst_tracker.clear()
         _seen_media_groups.clear()
+
+def reset_short_gibberish_tracker(user_id: int | None = None):
+    """Resets short gibberish flood tracker for a user or globally."""
+    if user_id is not None:
+        _short_gibberish_tracker.pop(user_id, None)
+    else:
+        _short_gibberish_tracker.clear()
 
 def register_media_group(user_id: int, media_group_id: str, now_ts: float | None = None):
     """Explicitly registers an incoming media group for a user."""
@@ -558,8 +707,8 @@ def _content_fingerprint(
         if isinstance(content, str):
             cleaned = canonicalize_spam_text(content)
             normalized = " ".join(cleaned.split())
-            if len(normalized) < 4:
-                return ""  # Ignore short trivial text
+            if len(normalized) < TEXT_BAYAN_MIN_LEN:
+                return ""  # Ignore short trivial text & casual banter (immune to bayan bans)
             h = hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()[:16]
             return f"text:{h}"
         elif isinstance(content, dict):
@@ -571,7 +720,7 @@ def _content_fingerprint(
             if t:
                 cleaned = canonicalize_spam_text(str(t))
                 normalized = " ".join(cleaned.split())
-                if len(normalized) >= 4:
+                if len(normalized) >= TEXT_BAYAN_MIN_LEN:
                     h = hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()[:16]
                     return f"text:{h}"
     return ""
@@ -605,29 +754,30 @@ def is_bayan(
         return False, ""
 
     # 1. Check if user recently posted this exact fingerprint
-    u_tracker = _bayan_tracker[user_id]
-    for item in u_tracker:
-        ts = item[0]
-        prev_fp = item[1]
-        prev_mg = item[3] if len(item) > 3 else None
-        if media_group_id and prev_mg and prev_mg == str(media_group_id):
-            continue
-        if now - ts <= BAYAN_WINDOW_SEC and prev_fp == fp:
-            return True, f"Повтор сообщения/медиа (fingerprint: {fp})"
-
-    # 2. Check near-duplicate text similarity (Levenstein/diff >= 85%)
-    if fp.startswith("text:") and isinstance(content, str) and len(content.strip()) >= 10:
-        norm_cur = content.strip().lower()
+    u_tracker = _bayan_tracker.get(user_id)
+    if u_tracker:
         for item in u_tracker:
             ts = item[0]
             prev_fp = item[1]
-            prev_raw = item[2] if len(item) > 2 else None
-            if now - ts <= BAYAN_WINDOW_SEC and prev_fp.startswith("text:") and prev_raw:
-                norm_prev = str(prev_raw).strip().lower()
-                l1, l2 = len(norm_cur), len(norm_prev)
-                if max(l1, l2) > 0 and abs(l1 - l2) / max(l1, l2) <= 0.25:
-                    if difflib.SequenceMatcher(None, norm_cur[:300], norm_prev[:300]).ratio() >= 0.85:
-                        return True, "Схожий дубликат текста (схожесть >= 85%)"
+            prev_mg = item[3] if len(item) > 3 else None
+            if media_group_id and prev_mg and prev_mg == str(media_group_id):
+                continue
+            if now - ts <= BAYAN_WINDOW_SEC and prev_fp == fp:
+                return True, f"Повтор сообщения/медиа (fingerprint: {fp})"
+
+        # 2. Check near-duplicate text similarity (Levenstein/diff >= 85%)
+        if fp.startswith("text:") and isinstance(content, str) and len(content.strip()) >= 10:
+            norm_cur = content.strip().lower()
+            for item in u_tracker:
+                ts = item[0]
+                prev_fp = item[1]
+                prev_raw = item[2] if len(item) > 2 else None
+                if now - ts <= BAYAN_WINDOW_SEC and prev_fp.startswith("text:") and prev_raw:
+                    norm_prev = str(prev_raw).strip().lower()
+                    l1, l2 = len(norm_cur), len(norm_prev)
+                    if max(l1, l2) > 0 and abs(l1 - l2) / max(l1, l2) <= 0.25:
+                        if difflib.SequenceMatcher(None, norm_cur[:300], norm_prev[:300]).ratio() >= 0.85:
+                            return True, "Схожий дубликат текста (схожесть >= 85%)"
 
     # 3. Check if media was already seen on board in recent history
     if fp.startswith(("fuid:", "mhash:", "media:", "fid:")):
@@ -673,6 +823,10 @@ def check_bayan(
     while tracker and now - tracker[0][0] > BAYAN_WINDOW_SEC:
         tracker.popleft()
 
+    if len(_bayan_tracker) > 5000:
+        for k in list(_bayan_tracker.keys())[:1000]:
+            _bayan_tracker.pop(k, None)
+
     # Record current message: (timestamp, fingerprint, content, media_group_id)
     tracker.append((now, fp, content if isinstance(content, str) else None, str(media_group_id) if media_group_id else None))
 
@@ -685,17 +839,21 @@ def check_bayan(
         if item[1] == fp and not (media_group_id and len(item) > 3 and item[3] == str(media_group_id))
     )
 
-    if bayan_count >= BAYAN_THRESHOLD:
+    is_sticker = (msg_type == 'sticker')
+    effective_threshold = BAYAN_STICKER_THRESHOLD if is_sticker else BAYAN_THRESHOLD
+    effective_base_mute = BAYAN_STICKER_BASE_MUTE_SEC if is_sticker else BAYAN_BASE_MUTE_SEC
+
+    if bayan_count >= effective_threshold:
         last_mute = _bayan_mute_last_ts[user_id]
         if last_mute and now - last_mute > BAYAN_RESET_SEC:
             _bayan_mute_count[user_id] = 0
 
         escalation = _bayan_mute_count[user_id]
-        mute_seconds = int(min(MAX_BAYAN_MUTE_SEC, BAYAN_BASE_MUTE_SEC * (2 ** escalation)))
+        mute_seconds = int(min(MAX_BAYAN_MUTE_SEC, effective_base_mute * (2 ** escalation)))
 
         _bayan_mute_count[user_id] = escalation + 1
         _bayan_mute_last_ts[user_id] = now
-        tracker.clear()
+        _bayan_tracker.pop(user_id, None)
         return True, mute_seconds
 
     return False, 0
@@ -825,9 +983,14 @@ def check_flood(
         tier_minute += MEDIA_MINUTE_BONUS
 
     # 1. Burst flood: > burst_limit in burst_window
-    mult = tier.get('multiplier', 1.0)
-    burst_limit = int(max(tier_burst, 8 * mult)) if is_reply else tier_burst
-    burst_window = 10.0 if is_reply else tier.get('burst_window', BURST_FLOOD_WINDOW)
+    if not is_media and not media_group_id:
+        # Trust fair tier_burst directly without artificial min(tier_burst, 5) clamping
+        burst_limit = tier_burst if not is_reply else max(tier_burst, 8)
+        burst_window = tier.get('burst_window', 4.0 if not is_reply else 5.0)
+    else:
+        mult = tier.get('multiplier', 1.0)
+        burst_limit = int(max(tier_burst, 8 * mult)) if is_reply else tier_burst
+        burst_window = 10.0 if is_reply else tier.get('burst_window', BURST_FLOOD_WINDOW)
     burst_count = sum(1 for ts in current_timestamps if now - ts <= burst_window)
     if burst_count > burst_limit:
         if record_history:
@@ -893,7 +1056,7 @@ def get_top_active_monthly_users(ttl: float = 3600.0) -> set[int]:
     return _top_active_users_cache
 
 
-def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None) -> Tuple[bool, str]:
+def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None, posts_count: int | None = None) -> Tuple[bool, str]:
     """
     Checks for link spam or doxing phone number leaks (Anti-Dox).
     Casino keywords are not flagged per owner directive (regular chat mentions must not cause bans).
@@ -921,31 +1084,25 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
         phones = extract_phone_numbers(clean_text)
         return True, f"Слив телефонного номера (Anti-Dox): {phones[0]}"
 
-    # 32-Hour Emergency Anti-Dox: auto-shadowmute any Telegram links or @username/@channel mentions
-    # Active until 2026-11-04 08:40:00 UTC+4 (32 hours from deployment)
-    # Indulgence: Admins and TOP 15 most active users of the last month are exempt!
-    TG_LINKS_AUTOSHADOW_UNTIL = 1793767200.0
-    if now < TG_LINKS_AUTOSHADOW_UNTIL:
-        top_15 = get_top_active_monthly_users()
-        if user_id not in top_15:
-            norm_text = canonicalize_spam_text(clean_text)
-            # Check @username or @channel mention (at least 2 alphanumeric chars)
-            if re.search(r'@[a-zA-Z0-9_]{2,}', clean_text) or re.search(r'@[a-zA-Z0-9_]{2,}', norm_text):
-                return True, "Аварийный авто-шедоумут: обнаружен @юзернейм/паблик (режим защиты 32 часа, без индульгенции)"
+    # Permanent invite, promo, and ad/scam filter for new/untrusted users (posts_count < 50)
+    # URL_WHITELIST (tgchan_archive, tgach_archive, 2ch.hk, tgach.top, etc.) is strictly preserved
+    p_count = posts_count if posts_count is not None else get_cached_user_posts(user_id)
+    if p_count < 50:
+        norm_text = canonicalize_spam_text(clean_text)
+        cyr_homo = str.maketrans('тасеорхі', 'taceopxi')
+        trans_text = norm_text.translate(cyr_homo)
 
-            # Check t.me, telegram.me, telegram.dog, tg://, etc.
-            tg_pattern = re.compile(
-                r'(?:https?:\/\/)?(?:www\.)?(?:t(?:elegram)?\.(?:me|dog)|telegram\.org)\/[a-zA-Z0-9_+%-]+|tg:\/\/\S+|t\s*[\.,]\s*me[\s\/]',
-                re.IGNORECASE
-            )
-            if tg_pattern.search(clean_text) or tg_pattern.search(norm_text):
-                return True, "Аварийный авто-шедоумут: обнаружена Telegram ссылка/паблик (режим защиты 32 часа, без индульгенции)"
+        # 1. Telegram invite links (t.me/+..., joinchat, etc.)
+        if RE_TG_INVITE.search(clean_text) or RE_TG_INVITE.search(norm_text) or RE_TG_INVITE.search(trans_text):
+            return True, "Запрещенная инвайт-ссылка Telegram (posts < 50)"
 
-            # Check Cyrillic homoglyphs for t.me
-            cyr_homo = str.maketrans('тасеорхі', 'taceopxi')
-            trans_text = norm_text.translate(cyr_homo)
-            if tg_pattern.search(trans_text):
-                return True, "Аварийный авто-шедоумут: обнаружена Telegram ссылка/паблик (режим защиты 32 часа, без индульгенции)"
+        # 2. Telegram public/promo links (excluding whitelisted archives)
+        if RE_TG_PROMO.search(clean_text) or RE_TG_PROMO.search(norm_text) or RE_TG_PROMO.search(trans_text):
+            return True, "Реклама/промо Telegram-канала (posts < 50)"
+
+        # 3. Ad / Casino / Crypto / Scam keywords
+        if RE_AD_SCAM.search(clean_text) or RE_AD_SCAM.search(norm_text) or RE_AD_SCAM.search(trans_text):
+            return True, "Рекламный или скам-текст (posts < 50)"
 
     return False, ""
 
@@ -1458,29 +1615,167 @@ async def handle_shadow_mute_continuation(
     except Exception:
         pass
 
+    now = float(now_ts) if now_ts is not None else time.time()
+    if is_user_in_memory_shadow_muted(user_id, board_id, now_ts=now):
+        exp_ts = _in_memory_shadow_muted_users.get(user_id) or _in_memory_shadow_muted_users.get((user_id, board_id)) or (now + 1200.0)
+        return True, exp_ts
+
     from common.database import get_shadow_mute_info
     info = await get_shadow_mute_info(user_id, board_id)
     if info['is_muted']:
-        return True, info['expires_at'] or 0.0
+        exp = info['expires_at'] or (now + 1200.0)
+        set_in_memory_shadow_mute(user_id, board_id, exp)
+        return True, exp
     return False, 0.0
 
 
+async def apply_shadow_mute_multi_boards(
+    user_id: int,
+    board_ids: list[str] | set[str] | tuple[str, ...],
+    duration_seconds: float = 1200.0,
+    reason: str = ""
+) -> float:
+    """
+    Applies shadow mute across multiple boards in a SINGLE batched executemany transaction.
+    Eliminates database lock contention caused by looping individual queries across 28 boards.
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, 'ALL'):
+            return 0.0
+    except Exception:
+        pass
+
+    now_ts = time.time()
+
+    # If already in memory with active mute: skip repeated DB writes
+    if is_user_in_memory_shadow_muted(user_id, now_ts=now_ts):
+        existing_exp = _in_memory_shadow_muted_users.get(user_id) or _in_memory_shadow_muted_users.get((user_id, 'ALL'))
+        if existing_exp and existing_exp > now_ts:
+            return existing_exp
+
+    new_duration = float(duration_seconds or 1200.0)
+    new_expires_at = now_ts + new_duration
+
+    # 1. Update in-memory cache and volatile trackers immediately
+    set_in_memory_shadow_mute(user_id, board_ids, new_expires_at)
+    record_shadow_mute_applied(user_id, now_ts=now_ts)
+    _user_media_burst_tracker.pop(user_id, None)
+    _seen_media_groups.pop(user_id, None)
+    reset_repost_tracker(user_id)
+    reset_short_gibberish_tracker(user_id)
+    cross_board_spam_tracker.pop(user_id, None)
+    _user_request_timestamps.pop(user_id, None)
+
+    # 2. Sync RAM board_data
+    try:
+        from shared_state import board_data
+        exp_dt = datetime.fromtimestamp(new_expires_at, UTC)
+        for b in board_ids:
+            if b in board_data:
+                board_data[b].setdefault('shadow_mutes', {})[user_id] = exp_dt
+        board_data.setdefault('ALL', {}).setdefault('shadow_mutes', {})[user_id] = exp_dt
+    except Exception:
+        pass
+
+    # 3. Single batched executemany in a single transaction
+    target_boards = list(board_ids)
+    if 'ALL' not in target_boards:
+        target_boards.append('ALL')
+
+    records = [
+        (user_id, b, 'shadow', new_expires_at, reason or 'auto_spam')
+        for b in target_boards
+    ]
+
+    try:
+        from common.db_pool import get_pool, db_transaction
+        db = await get_pool()
+        async with db_transaction(db):
+            try:
+                await db.executemany(
+                    """
+                    INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id, reason)
+                    VALUES (?, ?, ?, ?, NULL, ?)
+                    """,
+                    records
+                )
+            except Exception as col_err:
+                if "no column named reason" in str(col_err).lower():
+                    try:
+                        await db.execute("ALTER TABLE Mutes ADD COLUMN reason TEXT")
+                        await db.executemany(
+                            """
+                            INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id, reason)
+                            VALUES (?, ?, ?, ?, NULL, ?)
+                            """,
+                            records
+                        )
+                    except Exception:
+                        await db.executemany(
+                            """
+                            INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id)
+                            VALUES (?, ?, ?, ?, NULL)
+                            """,
+                            [(r[0], r[1], r[2], r[3]) for r in records]
+                        )
+                else:
+                    raise col_err
+    except Exception as e:
+        logger.warning(f"Error in batched multi-board mute for user {user_id}: {e}")
+
+    return new_expires_at
+
 async def apply_shadow_mute(
     user_id: int,
-    board_id: str,
+    board_id: str | list[str] | set[str] | tuple[str, ...],
     duration_seconds: float = 1200.0,
     reason: str = "",
     is_exponential: bool = False
 ) -> float:
     """
-    Applies shadow mute, clears the user's timestamp deques _user_request_timestamps[(user_id, board_id)].clear()
-    and _user_request_timestamps[user_id].clear() so queued/in-flight messages from the same packet burst
-    do not immediately re-trigger flood detection, and ensures ghost/shadow posts do not trigger exponential flood mute escalation.
+    Applies shadow mute, clears user volatile trackers, and caches mute in memory.
+    Supports batched multi-board writes (board_id='ALL' or list/set of boards) via a single executemany query.
+    If user is already in memory shadow muted, drops without repeating DB writes.
     """
-    record_shadow_mute_applied(user_id)
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id if isinstance(board_id, str) else 'ALL'):
+            return 0.0
+    except Exception:
+        pass
+
+    now_ts = time.time()
+
+    # Fast check: If user is already in-memory shadow muted, avoid repeating DB writes!
+    b_str = board_id if isinstance(board_id, str) else None
+    if is_user_in_memory_shadow_muted(user_id, b_str, now_ts=now_ts):
+        existing_exp = _in_memory_shadow_muted_users.get(user_id) or (
+            _in_memory_shadow_muted_users.get((user_id, b_str)) if b_str else None
+        )
+        if existing_exp and existing_exp > now_ts:
+            return existing_exp
+
+    # Check multi-board mute
+    if board_id == 'ALL' or isinstance(board_id, (list, set, tuple)):
+        try:
+            from shared_state import BOARDS
+            target_boards = list(BOARDS) if board_id == 'ALL' else list(board_id)
+        except Exception:
+            target_boards = list(board_id) if isinstance(board_id, (list, set, tuple)) else ['ALL']
+        return await apply_shadow_mute_multi_boards(
+            user_id=user_id,
+            board_ids=target_boards,
+            duration_seconds=duration_seconds,
+            reason=reason
+        )
+
+    # Single board mute:
+    record_shadow_mute_applied(user_id, now_ts=now_ts)
     _user_media_burst_tracker.pop(user_id, None)
     _seen_media_groups.pop(user_id, None)
     reset_repost_tracker(user_id, board_id)
+    reset_short_gibberish_tracker(user_id)
     cross_board_spam_tracker.pop(user_id, None)
     if board_id in _spam_trackers:
         _spam_trackers[board_id].pop(user_id, None)
@@ -1490,26 +1785,31 @@ async def apply_shadow_mute(
     except Exception:
         pass
 
+    set_in_memory_shadow_mute(user_id, board_id, duration_seconds=duration_seconds)
+
     # Ensure ghost / shadow posts do not trigger exponential flood mute escalation
     if is_exponential:
         from common.database import get_shadow_mute_info
         info = await get_shadow_mute_info(user_id, board_id)
         if info.get('is_muted'):
-            return info.get('expires_at') or 0.0
+            return info.get('expires_at') or (now_ts + duration_seconds)
 
     is_flood_reason = any(w in (reason or "").lower() for w in ("флуд", "flood", "burst", "постинг"))
     if is_exponential and is_flood_reason:
         is_exponential = False
 
-    if is_exponential and is_in_mute_grace_period(user_id):
+    if is_exponential and is_in_mute_grace_period(user_id, now_ts=now_ts):
         is_exponential = False
 
     orig_fn = _orig_db_apply_shadow_mute or getattr(common.database, "apply_shadow_mute", None)
     if orig_fn and orig_fn is not apply_shadow_mute:
-        return await orig_fn(
+        exp_res = await orig_fn(
             user_id, board_id, duration_seconds=duration_seconds, reason=reason, is_exponential=is_exponential
         )
-    return 0.0
+        if exp_res:
+            set_in_memory_shadow_mute(user_id, board_id, exp_res)
+        return exp_res
+    return now_ts + duration_seconds
 
 
 # Hook common.database.apply_shadow_mute
@@ -1520,6 +1820,544 @@ try:
         common.database.apply_shadow_mute = apply_shadow_mute
 except Exception:
     _orig_db_apply_shadow_mute = None
+
+
+
+
+def normalize_wall_text(text: str) -> str:
+    """Normalizes text for Sybil & wall-of-text matching (NFKC, zero-width stripped, non-alphanumeric removed)."""
+    if not text:
+        return ""
+    norm = unicodedata.normalize('NFKC', text)
+    norm = RE_ZERO_WIDTH.sub('', norm).lower()
+    return re.sub(r'[\W_]+', '', norm)
+
+
+RE_BEGGAR_PHRASES = re.compile(
+    r'(?:(?:нужна|прошу|ищу|помогите|сбор|скиньте|подайте|задонатьте)\s+.{1,100}?(?:на\s+еду|с\s+едой|на\s+хлеб|денег|рублей|рубл|копеечк|на\s+проживание|выжить|покушать|на\s+проезд)|'
+    r'(?:помощь\s+с\s+едой|сбор\s+средств|непростой\s+период|тяжелый\s+период|буду\s+искренне\s+благодарен\s+любой\s+поддержк)|'
+    r'(?:(?:nuzhna|proshu|pomogite|sbor|skinte|podate)\s+.{1,100}?(?:s\s+edoy|na\s+edu|na\s+khleb|deneg|rubley|vyzhit|pokushat))|'
+    r'(?:pomoshch\s+s\s+edoy|sbor\s+sredstv|neprostoy\s+period|tyazhelyy\s+period|budu\s+iskrenne\s+blagodaren))'
+)
+
+RE_BEGGAR_DEST = re.compile(
+    r'(?:@[a-zA-Z0-9_]{3,}|t\.me\/[a-zA-Z0-9_]{3,}|\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b|\b(?:0x[a-fA-F0-9]{40}|T[A-Za-z1-9]{33})\b)'
+)
+
+
+def check_beggar_phishing_spam(text: str) -> Tuple[bool, str]:
+    """
+    Детектор спам-попрошаек и финансового скама (@Waouty, просьбы денег/еды, криптокошельки).
+    Устойчив к математическим курсивным шрифтам Unicode и транслиту.
+    Не срабатывает на обычные просьбы о помощи в коде/музыке.
+    """
+    if not text or len(text.strip()) < 20:
+        return False, ""
+
+    norm = unicodedata.normalize('NFKC', text)
+    norm = RE_ZERO_WIDTH.sub('', norm).lower()
+
+    # Short-circuit check using precompiled regex
+    if not RE_BEGGAR_PHRASES.search(norm):
+        return False, ""
+
+    # Financial destination / contact in beg context
+    if RE_BEGGAR_DEST.search(norm):
+        return True, "Спам-шаблон попрошайки / финансового сбора с контактом"
+
+    return False, ""
+
+
+def check_text_copro_flood(text: str) -> Tuple[bool, str]:
+    """
+    Детектор текстового копро-вайпа (3+ фекальных корней капсом/повторами в одном посте).
+    Обычное бытовое ругательство (1-2 слова) не блокирует.
+    """
+    if not text or len(text.strip()) < 10:
+        return False, ""
+    norm = unicodedata.normalize('NFKC', text)
+    norm = RE_ZERO_WIDTH.sub('', norm).lower()
+
+    SAFE_NON_FECAL_PREFIXES = (
+        'калори', 'календар', 'калибр', 'кальци', 'калий', 'кальмар',
+        'калитк', 'калейдоскоп', 'кальян', 'каллиграф', 'кальк', 'калек',
+        'калин', 'калорифер', 'каламбур', 'калош', 'калач', 'калган',
+        'кальсон', 'калым', 'кальвадос', 'ккал', 'мегакал'
+    )
+    fecal_roots = ['понос', 'кал', 'калл', 'говн', 'гавн', 'дрист', 'срак', 'говнон', 'гавнон']
+    pattern = r'\b(?:' + '|'.join(fecal_roots) + r')[а-яё]*\b'
+    raw_matches = re.findall(pattern, norm)
+    matches = [m for m in raw_matches if not any(m.startswith(safe) for safe in SAFE_NON_FECAL_PREFIXES)]
+    if len(matches) >= 3:
+        return True, f"Текстовый копро-вайп ({len(matches)} фекальных корней в посте)"
+    return False, ""
+
+
+def check_sybil_and_wall_of_text_raid(
+    user_id: int,
+    board_id: str,
+    text: str,
+    now_ts: float | None = None
+) -> Tuple[bool, str, int]:
+    """
+    Детектор скоординированных сеток ботов (Sybil Raid) и веерного спама длинными пастами.
+    - Короткие реплики (< 100 символов) полностью освобождены от проверки.
+    - Сетевой дубль клиента (double-tap <= 3.0с) отбрасывается без наказания (0 секунд).
+    - Дубль длинного текста от другого аккаунта за 30 минут = 24 часа мут (Sybil Raid).
+    - Дубль на другую доску за 5 минут = 1 час мут (Cross-board blast).
+    - 3-й повтор пасты одним юзером за 15 минут = 30 минут мут.
+    """
+    if not text or len(text.strip()) < WALL_OF_TEXT_MIN_LEN:
+        return False, "", 0
+
+    now = now_ts or time.time()
+    norm_cur = normalize_wall_text(text)
+    if len(norm_cur) < 70:
+        return False, "", 0
+
+    # Prune expired entries (> 30 mins)
+    while _board_recent_wall_of_texts and (now - _board_recent_wall_of_texts[0][0] > SYBIL_RAID_WINDOW_SEC):
+        _board_recent_wall_of_texts.popleft()
+
+    user_repeat_count = 0
+    for prev_ts, prev_uid, prev_bid, prev_norm, prev_raw in _board_recent_wall_of_texts:
+        is_match = False
+        if prev_norm == norm_cur:
+            is_match = True
+        elif abs(len(prev_norm) - len(norm_cur)) / max(len(prev_norm), len(norm_cur)) <= 0.15:
+            if difflib.SequenceMatcher(None, norm_cur[:250], prev_norm[:250]).ratio() >= 0.85:
+                is_match = True
+
+        if is_match:
+            # 1. Double-tap protection (same user, <= 3 seconds apart)
+            if prev_uid == user_id and now - prev_ts <= 3.0:
+                return True, "double_tap_drop", 0
+
+            # 2. Sybil Raid (different user, same wall of text within 30 min)
+            if prev_uid != user_id and now - prev_ts <= SYBIL_RAID_WINDOW_SEC:
+                _board_recent_wall_of_texts.append((now, user_id, board_id, norm_cur, text[:60]))
+                return True, f"Сетка ботов / Sybil Raid: дубль длинного текста от пользователя {prev_uid}", 86400
+
+            # 3. Cross-board fast blast (same user, different board within 5 min)
+            if prev_uid == user_id and prev_bid != board_id and now - prev_ts <= CROSS_BOARD_FAST_SEC:
+                _board_recent_wall_of_texts.append((now, user_id, board_id, norm_cur, text[:60]))
+                return True, f"Веерный спам длинной пастой по доскам (/{prev_bid}/ -> /{board_id}/)", 3600
+
+            if prev_uid == user_id and now - prev_ts <= 900.0:
+                user_repeat_count += 1
+
+    if user_repeat_count >= 2:
+        _board_recent_wall_of_texts.append((now, user_id, board_id, norm_cur, text[:60]))
+        return True, "Повторный спам длинной пастой (3+ за 15 мин)", 1800
+
+    _board_recent_wall_of_texts.append((now, user_id, board_id, norm_cur, text[:60]))
+    return False, "", 0
+
+def calculate_dynamic_spam_mute_duration(
+    text: str,
+    count: int,
+    window: float,
+    posts_count: int | None = None,
+    user_id: int | None = None
+) -> int:
+    """
+    Calculates dynamic shadow mute duration based on text length, message frequency, and user tier:
+    - length_factor:
+        <= 10 chars: 3.0 (ultra-short keysmash)
+        11..25 chars: 2.0
+        26..60 chars: 1.2
+        > 60 chars: 1.0
+    - frequency_factor:
+        velocity = count / max(window, 0.5)
+        >= 2.0 msg/s: 2.5 (macro/script)
+        >= 1.0 msg/s: 1.8
+        < 1.0 msg/s: 1.0
+    - base_sec:
+        600s for veterans/oldfags (posts_count >= 100)
+        1200s for newbies/anons
+    - duration = int(base_sec * length_factor * frequency_factor), capped at 86400s (24h).
+    """
+    cleaned = canonicalize_spam_text(text).strip() if text and isinstance(text, str) else ""
+    text_len = len(cleaned)
+    if text_len <= 10:
+        length_factor = 3.0
+    elif text_len <= 25:
+        length_factor = 2.0
+    elif text_len <= 60:
+        length_factor = 1.2
+    else:
+        length_factor = 1.0
+
+    eff_window = max(float(window or 0.0), 0.5)
+    velocity = float(count) / eff_window
+    if velocity >= 2.0:
+        frequency_factor = 2.5
+    elif velocity >= 1.0:
+        frequency_factor = 1.8
+    else:
+        frequency_factor = 1.0
+
+    if posts_count is None and user_id is not None:
+        posts_count = get_cached_user_posts(user_id)
+    base_sec = 600.0 if (posts_count or 0) >= 100 else 1200.0
+
+    duration = int(base_sec * length_factor * frequency_factor)
+    return min(duration, 86400)
+
+
+VOWELS = set("аеёиоуыэюяaeiouy")
+CONSONANTS = set("бвгджзйклмнпрстфхцчшщbcdfghjklmnpqrstvwxz")
+
+ALLOWED_NO_VOWEL_WORDS = {
+    "спс", "ппц", "спб", "мск", "чзх", "нз", "кст", "крч", "пнх", "дтп",
+    "смс", "чп", "ввп", "кгб", "фсб", "мвд", "блять", "хз", "мб", "ок",
+    "в", "с", "к", "о", "у", "я", "и", "а", "не", "но", "он", "оч", "до",
+    "из", "за", "по", "со", "ко", "во", "же", "ли", "бы", "то", "ну",
+    "мда", "хд", "xd", "втф",
+    "brb", "btw", "thx", "pls", "wtf", "idk", "tbh", "ngl"
+}
+
+VALID_CONSONANT_CLUSTERS = {
+    "встр", "вспл", "взгл", "вскр", "нстр", "рств", "нтств", "ндств", "пльс"
+}
+
+LAUGHTER_WORDS = {
+    "ха", "хах", "хаха", "хахах", "хахаха", "хахахах", "хахахаха",
+    "аха", "ахах", "ахаха", "ахахах", "ахахаха",
+    "хе", "хех", "хехе", "хехех", "хы", "хых", "хыхы", "кек", "лол",
+    "пха", "пхах", "пхаха", "пхахах", "пхахаха",
+    "бгг", "бггг", "бгггг"
+}
+
+KEYBOARD_WALKS = [
+    "qwertyuiop", "asdfghjkl", "zxcvbnm",
+    "йцукенгшщзхъ", "фывапролджэ", "фывпр", "фывпрлджэ",
+    "ячсмитьбю", "qazwsxedc", "poiuytrewq", "lkjhgfdsa", "mnbvcxz",
+    "ъхзщшгнекуцй", "эждлорпавыф", "юбьтимсчя"
+]
+
+_VOWELS_RE_PATTERN = r'[аеёиоуыэюяaeiouy]'
+# Disjoint deterministic non-backtracking laughter regex: zero ReDoS risk (< 0.05ms)
+RE_LAUGH_DET = re.compile(
+    rf'^[пpbбgг]?{_VOWELS_RE_PATTERN}*(?:[хxh]+{_VOWELS_RE_PATTERN}+)*[хxh]*$',
+    re.IGNORECASE
+)
+
+def is_laughter_or_slang_token(token: str) -> bool:
+    """Recognizes laughter patterns, elongated laughs, and valid slang."""
+    t = token.lower()
+    if t in LAUGHTER_WORDS or t in ALLOWED_NO_VOWEL_WORDS:
+        return True
+    # Laugh patterns with repetition: 'хддд', 'xd', 'xddd'
+    if re.fullmatch(r'^[хx]+[дd]+$', t):
+        return True
+    # Elongated laughs: 'лоооол', 'лооооол'
+    if re.fullmatch(r'^л+[оo]+л+$', t):
+        return True
+    # Elongated 'кеееек'
+    if re.fullmatch(r'^к+[еe]+к+$', t):
+        return True
+    # Russian chuckle 'ыыы', 'ыыыы', 'ыыыыы'
+    if re.fullmatch(r'^ы+$', t):
+        return True
+    # Elongated 'роофл'
+    if re.fullmatch(r'^р+[оo]+ф+л+$', t):
+        return True
+    # Russian chuckle 'бгг', 'бггг'
+    if re.fullmatch(r'^б+[гg]+$', t):
+        return True
+    # Laugh expressions with 'х'/'x'/'h' and vowels: 'ахахах', 'пхаха', 'хахахааа', 'хехехе', 'хыхыхы'
+    # Deterministic O(N) evaluation with disjoint transitions (< 0.05ms, zero backtracking / ReDoS)
+    if len(t) >= 2 and ('х' in t or 'x' in t or 'h' in t) and len(t) <= 1000:
+        if RE_LAUGH_DET.fullmatch(t):
+            return True
+    # Humming / contemplation: 'ммм', 'мммм', 'ммммм', 'mmm', 'mmmm'
+    if re.fullmatch(r'^[мm]+$', t):
+        return True
+    # Howling / sorrow / amazement: 'ууу', 'уууу', 'ууууу', 'uuu', 'uuuu'
+    if re.fullmatch(r'^[уu]+$', t):
+        return True
+    # Wonder / ooh: 'ооо', 'оооо', 'ооооо', 'ooo', 'oooo'
+    if re.fullmatch(r'^[оo]+$', t):
+        return True
+    # Dots / ellipsis: '....', '.....'
+    if re.fullmatch(r'^\.+$|', t):
+        return True
+    # De-elongate repeated vowels: e.g. 'даааа' -> 'да', 'неееет' -> 'нет', 'мдааа' -> 'мда'
+    collapsed = re.sub(r'([аеёиоуыэюяaeiouyмm])\1{2,}', r'\1', t)
+    if collapsed in ALLOWED_NO_VOWEL_WORDS or collapsed in LAUGHTER_WORDS:
+        return True
+    if collapsed in {"да", "нет", "мда", "ура", "плиз", "спасибо", "привет", "ладно", "жиза", "база", "кринж"}:
+        return True
+    return False
+
+def is_actual_keysmash_or_gibberish(text: str, posts_count: int | None = None) -> bool:
+    """
+    Detects true keysmash, home-row smashes, or consonant gibberish.
+    Returns False for legitimate human conversation, common slang, laughing, or valid words.
+    Users with posts_count >= 100 are exempt from hard keysmash detection.
+    """
+    if posts_count is not None and posts_count >= 100:
+        return False
+
+    if not text or not isinstance(text, str):
+        return False
+
+    cleaned = text.strip()
+    if not cleaned:
+        return False
+
+    cleaned_lower = cleaned.lower()
+    if re.fullmatch(r'^\.+$|^\.{2,}$', cleaned_lower):
+        return False
+
+    # If it's standard laughter or recognized slang across the entire input
+    if is_laughter_or_slang_token(cleaned_lower):
+        return False
+
+    # Extract alphanumeric tokens
+    tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ0-9]+', cleaned_lower)
+
+    # If all tokens are laughter or slang, it's NOT keysmash
+    if tokens and all(is_laughter_or_slang_token(tok) for tok in tokens):
+        return False
+
+    # 1. Check for single character repeated >= 4 times (e.g. 'aaaa', 'фффф', '))))', '1111')
+    if re.search(r'(.)\1{3,}', cleaned_lower):
+        # Allow laughter / elongated tokens (e.g. 'лоооол', 'ыыыы', 'даааа', 'неееет', 'хддд')
+        if not tokens:
+            return True
+        # If any token is pure single-character repeat (like 'aaaa', 'фффф', '1111') and not laughter
+        has_abusive_repeat = False
+        for tok in tokens:
+            if is_laughter_or_slang_token(tok):
+                continue
+            if re.search(r'(.)\1{3,}', tok):
+                has_abusive_repeat = True
+                break
+        if has_abusive_repeat:
+            return True
+
+    # If non-alphanumeric only, e.g. repeated symbols like '=-=-=-'
+    if not tokens:
+        if len(cleaned_lower) >= 4 and len(set(cleaned_lower)) <= 2:
+            return True
+        return False
+
+    for token in tokens:
+        if is_laughter_or_slang_token(token):
+            continue
+        # Pure numeric tokens (years, post numbers, counters, e.g. 123, 2026, 12345) are never keysmash
+        if token.isdigit():
+            continue
+
+        token_len = len(token)
+
+        # Check full repetition: 'asdasd', 'fghfgh', 'ываыва', 'qwerqwer'
+        # Whitelist conversational affirmations and short words ('да', 'нет', 'ой', 'ай', 'ну', 'то')
+        match_rep = re.match(r'^(.{2,5})\1+$', token)
+        if match_rep:
+            unit = match_rep.group(1)
+            if unit not in ("ха", "хе", "хы", "ах", "ох", "хо", "да", "нет", "ой", "ай", "ну", "па", "то"):
+                return True
+
+        # Check keyboard walks (e.g. 'asdfgh', 'фывпр', 'йцукен', 'zxcvb')
+        if token_len >= 4:
+            for walk in KEYBOARD_WALKS:
+                if len(walk) >= 4:
+                    for i in range(len(walk) - 3):
+                        sub = walk[i:i+4]
+                        if sub in token:
+                            return True
+
+        token_vowels = [c for c in token if c in VOWELS]
+        token_consonants = [c for c in token if c in CONSONANTS]
+
+        # Consonant keysmash rules apply ONLY when the token actually contains letters/consonants
+        if token_consonants:
+            # Rule: If token has consonants, length > 3 and has NO vowels -> KEYSMASH!
+            if token_len > 3 and not token_vowels:
+                return True
+
+            # Rule: If token length is 3 and has NO vowels and not in allowed abbreviations -> KEYSMASH!
+            if token_len == 3 and not token_vowels and token not in ALLOWED_NO_VOWEL_WORDS:
+                return True
+
+        # Rule: Check clusters of >= 4 consonants in a row without vowels
+        consec_consonants = re.findall(r'[бвгджзйклмнпрстфхцчшщbcdfghjklmnpqrstvwxz]{4,}', token)
+        for cluster in consec_consonants:
+            if len(cluster) >= 5 and cluster not in VALID_CONSONANT_CLUSTERS:
+                return True
+            if len(cluster) == 4:
+                if cluster not in VALID_CONSONANT_CLUSTERS:
+                    return True
+                if not token_vowels:
+                    return True
+
+    # Check overall phrase vowel ratio for phrases with >= 2 words
+    all_letters = [c for c in cleaned_lower if c.isalpha()]
+    if len(all_letters) >= 5:
+        all_vowels = [c for c in all_letters if c in VOWELS]
+        ratio = len(all_vowels) / len(all_letters)
+        if ratio < 0.15 and len(tokens) >= 2:
+            return True
+
+    return False
+
+
+STOP_WORDS_WINDOW = 180.0
+STOP_WORDS_TRIGGER_COUNT = 3  # > 2 messages with stop-words in sliding window
+STOP_WORDS_MUTE_DURATION = 3600.0  # 1 hour (3600s)
+
+_stop_words_violation_tracker: Dict[int, deque] = defaultdict(deque)
+
+def reset_stop_words_tracker(user_id: int | None = None) -> None:
+    """Resets stop-words violation tracker for a user or globally."""
+    if user_id is not None:
+        _stop_words_violation_tracker.pop(user_id, None)
+    else:
+        _stop_words_violation_tracker.clear()
+
+def check_stop_words_violation(
+    user_id: int,
+    board_id: str,
+    text: str,
+    now_ts: float | None = None
+) -> Tuple[bool, str, int]:
+    """
+    Tracks messages containing stop words from _spam_filter_words.
+    If a user sends > 2 messages containing stop words within a sliding 180s window,
+    triggers a 1-hour (3600s) shadowmute.
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, "", 0
+    except Exception:
+        pass
+
+    if not is_spam_filtered(text, board_id, user_id):
+        return False, "", 0
+
+    now = float(now_ts) if now_ts is not None else time.time()
+    tracker = _stop_words_violation_tracker[user_id]
+    while tracker and (now - tracker[0] > STOP_WORDS_WINDOW):
+        tracker.popleft()
+
+    tracker.append(now)
+    if len(tracker) >= STOP_WORDS_TRIGGER_COUNT:
+        reason = f"Спам запрещенными словами из стоп-листа ({len(tracker)} сообщений за {int(STOP_WORDS_WINDOW)}с)"
+        tracker.clear()
+        return True, reason, int(STOP_WORDS_MUTE_DURATION)
+
+    return False, "", 0
+
+
+def check_short_gibberish_flood(
+    user_id: int,
+    text: str,
+    now_ts: float | None = None,
+    posts_count: int | None = None
+) -> Tuple[bool, str, int]:
+    """
+    Detects macro flood with short random gibberish / keysmash in sliding windows:
+    - Text length after canonicalization <= 25 chars.
+    - If text is NOT actual keysmash / gibberish, returns False immediately!
+    - Dynamic post trust scaling:
+      * oldfags (posts_count >= 10000): fast limit raised to 12 msgs / 5s
+      * regular / veteran / oldfag (posts_count >= 500): fast limit raised to 8 msgs / 5s
+      * newbies / unverified: fast limit remains 3 msgs / 5s
+    - Shadowmute duration dynamically scaled via calculate_dynamic_spam_mute_duration.
+    Returns (is_flood: bool, reason: str, mute_duration_seconds: int).
+    """
+    if not user_id or not text or not isinstance(text, str):
+        return False, "", 0
+
+    try:
+        from site_tgach.admin_config import ADMIN_IDS
+        if user_id in ADMIN_IDS:
+            return False, "", 0
+    except Exception:
+        pass
+
+    cleaned = canonicalize_spam_text(text).strip()
+    if not cleaned or len(cleaned) > SHORT_GIBBERISH_MAX_LEN:
+        return False, "", 0
+
+    # Resolve post count trust scaling
+    if posts_count is None and user_id is not None:
+        posts_count = get_cached_user_posts(user_id)
+    p_count = posts_count or 0
+
+    # Veterans with >= 100 posts are exempt from hard keysmash checks
+    if p_count >= 100:
+        return False, "", 0
+
+    # REAL KEYSMASH / GIBBERISH CHECK: If normal text, do NOT trigger!
+    if not is_actual_keysmash_or_gibberish(cleaned, posts_count=p_count):
+        return False, "", 0
+
+    now = float(now_ts) if now_ts is not None else time.time()
+    tracker = _short_gibberish_tracker[user_id]
+
+    if p_count >= 10000:
+        fast_limit = 12
+        slow_limit = 16
+        fast_window = 5.0
+        slow_window = 10.0
+    elif p_count >= 500:
+        fast_limit = 8
+        slow_limit = 12
+        fast_window = 5.0
+        slow_window = 10.0
+    else:
+        fast_limit = SHORT_GIBBERISH_FAST_LIMIT
+        slow_limit = SHORT_GIBBERISH_SLOW_LIMIT
+        fast_window = SHORT_GIBBERISH_FAST_WINDOW
+        slow_window = SHORT_GIBBERISH_SLOW_WINDOW
+
+    # Prune timestamps older than slow_window
+    while tracker and (now - tracker[0] > slow_window):
+        tracker.popleft()
+
+    if len(_short_gibberish_tracker) > 5000:
+        for k in list(_short_gibberish_tracker.keys())[:1000]:
+            _short_gibberish_tracker.pop(k, None)
+
+    tracker.append(now)
+
+    matching_fast = [ts for ts in tracker if now - ts <= fast_window]
+    matching_slow = list(tracker)
+
+    count_fast = len(matching_fast)
+    count_slow = len(matching_slow)
+
+    if count_fast >= fast_limit:
+        time_span = now - matching_fast[0] if len(matching_fast) > 1 else fast_window
+        mute_sec = calculate_dynamic_spam_mute_duration(
+            text=cleaned,
+            count=count_fast,
+            window=time_span,
+            posts_count=posts_count,
+            user_id=user_id
+        )
+        reason = f"Спам-флуд короткой рандомной херней/keysmash ({count_fast} за {fast_window}с)"
+        _short_gibberish_tracker.pop(user_id, None)
+        return True, reason, mute_sec
+    elif count_slow >= slow_limit:
+        time_span = now - matching_slow[0] if len(matching_slow) > 1 else slow_window
+        mute_sec = calculate_dynamic_spam_mute_duration(
+            text=cleaned,
+            count=count_slow,
+            window=time_span,
+            posts_count=posts_count,
+            user_id=user_id
+        )
+        reason = f"Спам-флуд короткой рандомной херней/keysmash ({count_slow} за {slow_window}с)"
+        _short_gibberish_tracker.pop(user_id, None)
+        return True, reason, mute_sec
+
+    return False, "", 0
 
 
 async def evaluate_message_for_autoshadowmute(
@@ -1552,13 +2390,20 @@ async def evaluate_message_for_autoshadowmute(
     except Exception:
         pass
 
+    now = now_ts or time.time()
+
+    # Fast in-memory check FIRST (< 0.1ms, zero DB, zero locks)
+    if is_user_in_memory_shadow_muted(user_id, board_id, now_ts=now):
+        exp_ts = _in_memory_shadow_muted_users.get(user_id) or _in_memory_shadow_muted_users.get((user_id, board_id)) or (now + 1200.0)
+        return True, "Уже в теневом муте", exp_ts
+
     # If user is already shadow-muted, maintain existing mute without extending duration
     from common.database import is_shadow_muted, get_shadow_mute_info
     if await is_shadow_muted(user_id, board_id):
         info = await get_shadow_mute_info(user_id, board_id)
-        return True, "Уже в теневом муте", info.get('expires_at') or 0.0
-
-    now = now_ts or time.time()
+        exp_ts = info.get('expires_at') or (now + 1200.0)
+        set_in_memory_shadow_mute(user_id, board_id, exp_ts)
+        return True, "Уже в теневом муте", exp_ts
     text_content = content if isinstance(content, str) else (content.get('text') or content.get('caption') if isinstance(content, dict) else None)
 
     if not media_group_id and isinstance(content, dict):
@@ -1584,12 +2429,35 @@ async def evaluate_message_for_autoshadowmute(
         from common.database import apply_shadow_mute
         tier = get_user_tier(posts_count or 0)
         base_mute = tier.get('flood_base_mute_sec', FLOOD_BASE_MUTE_SEC)
+        if not is_media and not media_group_id and text_content and "burst" in flood_reason.lower():
+            m_burst = re.search(r'Burst флуд:\s*(\d+)\s*сообщений\s*за\s*([\d\.]+)с', flood_reason)
+            b_cnt = int(m_burst.group(1)) if m_burst else 6
+            b_win = float(m_burst.group(2)) if m_burst else 4.0
+            base_mute = float(calculate_dynamic_spam_mute_duration(
+                text=text_content, count=b_cnt, window=b_win, posts_count=posts_count, user_id=user_id
+            ))
         logger.warning(
             f"🚫 [SPAM_FILTER_TRIGGER: FLOOD] user={user_id} board={board_id} posts={posts_count} "
             f"tier={tier.get('name')} reason='{flood_reason}' duration={base_mute}s"
         )
         expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=base_mute, reason=flood_reason, is_exponential=False)
         return True, flood_reason, expires_at
+
+    # 1.1. Short gibberish / keysmash macro flood check
+    if text_content and not is_media and not media_group_id:
+        is_gib, gib_reason, gib_mute_sec = check_short_gibberish_flood(
+            user_id=user_id, text=text_content, now_ts=now, posts_count=posts_count
+        )
+        if is_gib:
+            from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: SHORT_GIBBERISH_FLOOD] user={user_id} board={board_id} posts={posts_count} "
+                f"reason='{gib_reason}' duration={gib_mute_sec}s"
+            )
+            expires_at = await apply_shadow_mute(
+                user_id, board_id, duration_seconds=float(gib_mute_sec), reason=gib_reason, is_exponential=False
+            )
+            return True, gib_reason, expires_at
 
     # 2. Link / Ad / Scam spam check
     if text_content:
@@ -1602,6 +2470,58 @@ async def evaluate_message_for_autoshadowmute(
             expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=link_reason, is_exponential=False)
             return True, link_reason, expires_at
 
+    # 2.1. Beggar & Phishing Scam Template Check
+    if text_content:
+        is_beggar, beggar_reason = check_beggar_phishing_spam(text_content)
+        if is_beggar:
+            from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: BEGGAR_SCAM] user={user_id} board={board_id} reason='{beggar_reason}' duration=86400s"
+            )
+            expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=86400.0, reason=beggar_reason, is_exponential=False)
+            return True, beggar_reason, expires_at
+
+    # 2.2. Stop-words consecutive spam check (>2 messages with stop words in 180s -> 1h shadowmute)
+    if text_content:
+        is_sw_flood, sw_reason, sw_mute_sec = check_stop_words_violation(
+            user_id=user_id, board_id=board_id, text=text_content, now_ts=now
+        )
+        if is_sw_flood:
+            from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: STOP_WORDS_FLOOD] user={user_id} board={board_id} posts={posts_count} "
+                f"reason='{sw_reason}' duration={sw_mute_sec}s"
+            )
+            expires_at = await apply_shadow_mute(
+                user_id, board_id, duration_seconds=float(sw_mute_sec), reason=sw_reason, is_exponential=False
+            )
+            return True, sw_reason, expires_at
+
+    # 2.2. Text Copro-Wipe Check (3+ fecal roots in one message)
+    if text_content:
+        is_copro_text, copro_reason = check_text_copro_flood(text_content)
+        if is_copro_text:
+            from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: COPRO_TEXT] user={user_id} board={board_id} reason='{copro_reason}' duration={BAYAN_BASE_MUTE_SEC}s"
+            )
+            expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=copro_reason, is_exponential=False)
+            return True, copro_reason, expires_at
+
+    # 2.3. Sybil Raid & Wall-of-Text Check (long text >= 100 chars across users/boards)
+    if text_content:
+        is_raid, raid_reason, raid_mute_sec = check_sybil_and_wall_of_text_raid(user_id, board_id, text_content, now_ts=now)
+        if is_raid:
+            if raid_reason == "double_tap_drop":
+                logger.info(f"👻 [SPAM_FILTER: DOUBLE_TAP_DROP] user={user_id} board={board_id}")
+                return True, "Сетевой дубль сообщения (лаг Telegram)", 0.0
+            from common.database import apply_shadow_mute
+            logger.warning(
+                f"🚫 [SPAM_FILTER_TRIGGER: SYBIL_WALL_OF_TEXT] user={user_id} board={board_id} reason='{raid_reason}' duration={raid_mute_sec}s"
+            )
+            expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=float(raid_mute_sec), reason=raid_reason, is_exponential=False)
+            return True, raid_reason, expires_at
+
     # 3. Cross-board spam check
     if text_content or file_unique_id or file_id:
         payload = text_content or file_unique_id or file_id or ""
@@ -1609,9 +2529,9 @@ async def evaluate_message_for_autoshadowmute(
             cb_reason = "Кросс-борд веерный спам по доскам"
             from common.database import apply_shadow_mute
             logger.warning(
-                f"🚫 [SPAM_FILTER_TRIGGER: CROSS_BOARD] user={user_id} board={board_id} duration={BAYAN_BASE_MUTE_SEC}s"
+                f"🚫 [SPAM_FILTER_TRIGGER: CROSS_BOARD] user={user_id} board=ALL duration={BAYAN_BASE_MUTE_SEC}s"
             )
-            expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=cb_reason, is_exponential=False)
+            expires_at = await apply_shadow_mute(user_id, 'ALL', duration_seconds=BAYAN_BASE_MUTE_SEC, reason=cb_reason, is_exponential=False)
             return True, cb_reason, expires_at
 
     # 4. Bayan check (>= 3 bayans in 3 minutes)
@@ -1723,6 +2643,7 @@ def get_board_spam_stats(board_id: str) -> dict:
         "media_burst_tracked_users": len(_user_media_burst_tracker),
         "active_media_groups": sum(len(g) for g in list(_seen_media_groups.values())),
         "repost_tracked_users": len(_user_repost_timestamps),
+        "short_gibberish_tracked_users": len(_short_gibberish_tracker),
     }
 
 def prune_idle_user_spam_locks(max_keep: int = 1500) -> int:
@@ -1843,7 +2764,11 @@ def prune_stale_spam_filter_state(now_ts: float | None = None) -> dict[str, int]
         for uid in stale_bayan_mutes:
             _bayan_mute_last_ts.pop(uid, None)
             _bayan_mute_count.pop(uid, None)
-        pruned["_bayan_mute_counters"] = len(stale_bayan_mutes)
+        # Also clean orphaned entries in _bayan_mute_count
+        orphans = [uid for uid, cnt in list(_bayan_mute_count.items()) if cnt <= 0 or uid not in _bayan_mute_last_ts]
+        for uid in orphans:
+            _bayan_mute_count.pop(uid, None)
+        pruned["_bayan_mute_counters"] = len(stale_bayan_mutes) + len(orphans)
     except Exception as e:
         logger.debug(f"Stage 6 _bayan_mute_counters error: {e}")
         pruned["_bayan_mute_counters"] = 0
@@ -1972,6 +2897,68 @@ def prune_stale_spam_filter_state(now_ts: float | None = None) -> dict[str, int]
         logger.debug(f"Stage 13 cross_board_spam_tracker error: {e}")
         pruned["cross_board_spam_tracker"] = 0
 
+    # 14. _short_gibberish_tracker: {user_id: deque}
+    try:
+        stale_gib_users = []
+        for uid, tracker in list(_short_gibberish_tracker.items()):
+            while tracker and (now - tracker[0] > SHORT_GIBBERISH_SLOW_WINDOW):
+                tracker.popleft()
+            if not tracker:
+                stale_gib_users.append(uid)
+        for uid in stale_gib_users:
+            _short_gibberish_tracker.pop(uid, None)
+        pruned["_short_gibberish_tracker"] = len(stale_gib_users)
+    except Exception as e:
+        logger.debug(f"Stage 14 _short_gibberish_tracker error: {e}")
+        pruned["_short_gibberish_tracker"] = 0
+
+    # 14. _stop_words_violation_tracker
+    try:
+        stale_sw = []
+        for uid, tr in list(_stop_words_violation_tracker.items()):
+            while tr and (now - tr[0] > STOP_WORDS_WINDOW):
+                tr.popleft()
+            if not tr:
+                stale_sw.append(uid)
+        for uid in stale_sw:
+            _stop_words_violation_tracker.pop(uid, None)
+        pruned["_stop_words_violation_tracker"] = len(stale_sw)
+    except Exception as e:
+        logger.debug(f"Stage 14 _stop_words_violation_tracker error: {e}")
+        pruned["_stop_words_violation_tracker"] = 0
+
+    # 15. _in_memory_shadow_muted_users
+    try:
+        stale_sm = []
+        for k, exp in list(_in_memory_shadow_muted_users.items()):
+            if exp <= now:
+                stale_sm.append(k)
+        for k in stale_sm:
+            _in_memory_shadow_muted_users.pop(k, None)
+        pruned["_in_memory_shadow_muted_users"] = len(stale_sm)
+    except Exception as e:
+        logger.debug(f"Stage 15 _in_memory_shadow_muted_users error: {e}")
+        pruned["_in_memory_shadow_muted_users"] = 0
+
+    # 16. board_data shadow_mutes stale entries cleanup
+    try:
+        from shared_state import board_data
+        clean_bd_sm = 0
+        for b_id, b_dict in list(board_data.items()):
+            sm_map = b_dict.get('shadow_mutes', {})
+            stale_bd = []
+            for uid, exp in list(sm_map.items()):
+                exp_sec = exp.timestamp() if isinstance(exp, datetime) else float(exp)
+                if exp_sec <= now:
+                    stale_bd.append(uid)
+            for uid in stale_bd:
+                sm_map.pop(uid, None)
+            clean_bd_sm += len(stale_bd)
+        pruned["board_data_shadow_mutes"] = clean_bd_sm
+    except Exception as e:
+        logger.debug(f"Stage 16 board_data_shadow_mutes error: {e}")
+        pruned["board_data_shadow_mutes"] = 0
+
     return pruned
 
 
@@ -1983,3 +2970,9 @@ def acquire_spam_lock(user_id: int):
 
 def get_spam_violation_level(board_id: str, user_id: int) -> int:
     return _spam_violations[board_id].get(user_id, {}).get('level', 0)
+
+# Preload existing active shadow mutes on startup
+try:
+    load_active_shadow_mutes_from_db()
+except Exception:
+    pass

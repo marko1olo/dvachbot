@@ -2900,12 +2900,26 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 badges.append("Гладиатор")
 
             now_ts = int(time.time())
-            if active_items.get("tinfoil_hat", 0) > now_ts:
-                badges.append("В фольге")
-            if active_items.get("reflect_shield_until", 0) > now_ts:
+            from wardrobe_engine import get_wardrobe_total_stats
+            w_stats = get_wardrobe_total_stats(active_items, current_time=now_ts)
+            gear_def = int(w_stats.get("total_defense", 0))
+            gear_tox = int(w_stats.get("total_toxicity", 0))
+            tips_mult = float(w_stats.get("tips_mult", 1.0))
+            gear_cha = int(round((tips_mult - 1.0) * 100)) + (10 if w_stats.get("active_set_name") else 0)
+            gear_luck = int(w_stats.get("casino_bonus_pct", 0) + round(w_stats.get("lootbox_flat_chance", 0.0) * 100))
+
+            if gear_def >= 20 or active_items.get("reflect_shield_until", 0) > now_ts:
                 badges.append("Под щитом")
+            if active_items.get("tinfoil_hat", 0) > now_ts or active_items.get("equipped_head") in ("hat_tinfoil", "hat_golden_foil"):
+                badges.append("В фольге")
             if active_items.get("shit_gun"):
                 badges.append("С говном")
+            if active_items.get("equipped_face") == "face_monocle" or active_items.get("monocle") or active_items.get("equipped_head") == "hat_golden_crown":
+                if "Олигарх" not in badges:
+                    badges.append("Олигарх")
+            if active_items.get("equipped_head") == "hat_crown":
+                if "Легенда" not in badges:
+                    badges.append("Легенда")
 
             return {
                 'balance': balance or 0.0,
@@ -2927,7 +2941,11 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 'badges': badges[:4],
                 'active_items': active_items,
                 'duel_wins': duel_wins,
-                'duel_losses': duel_losses
+                'duel_losses': duel_losses,
+                'gear_defense': gear_def,
+                'gear_toxicity': gear_tox,
+                'gear_charisma': gear_cha,
+                'gear_luck': gear_luck
             }
 
 
@@ -2978,12 +2996,17 @@ class UserStatsCardData:
     avatar_file_id: str | None = None
     duel_wins: int = 0
     duel_losses: int = 0
+    gear_defense: int = 0
+    gear_toxicity: int = 0
+    gear_charisma: int = 0
+    gear_luck: int = 0
 
 
 
 def _format_text_report(data: UserStatsCardData) -> str:
     wardrobe_line = "🎽 <b>Экипировка:</b> (Ничего не надето, надеть: /wardrobe)"
     set_line = ""
+    gear_stats_line = ""
     if data.active_items:
         try:
             from wardrobe_engine import get_wardrobe_total_stats, get_equipped_gear
@@ -3000,6 +3023,23 @@ def _format_text_report(data: UserStatsCardData) -> str:
                 wardrobe_line = f"🎽 <b>Экипировка:</b> {' '.join(eq_parts)}"
             if stats.get("active_set_name"):
                 set_line = f"\n✨ <b>Сет:</b> {stats.get('compact_post_icon', '')}{stats['active_set_name']} ({stats.get('active_set_desc', '')})"
+
+            gear_def = stats.get("total_defense", data.gear_defense or 0)
+            gear_tox = stats.get("total_toxicity", data.gear_toxicity or 0)
+            tips_mult = float(stats.get("tips_mult", 1.0))
+            gear_cha = int(round((tips_mult - 1.0) * 100)) + (10 if stats.get("active_set_name") else 0)
+            if data.gear_charisma:
+                gear_cha = max(gear_cha, data.gear_charisma)
+            gear_luck = int(stats.get("casino_bonus_pct", 0) + round(stats.get("lootbox_flat_chance", 0.0) * 100))
+            if data.gear_luck:
+                gear_luck = max(gear_luck, data.gear_luck)
+
+            sign_tox = f"+{gear_tox}" if gear_tox > 0 else str(gear_tox)
+            sign_cha = f"+{gear_cha}%" if gear_cha > 0 else f"{gear_cha}%"
+            sign_luck = f"+{gear_luck}%" if gear_luck > 0 else f"{gear_luck}%"
+            sign_def = f"+{gear_def}" if gear_def > 0 else str(gear_def)
+
+            gear_stats_line = f"\n⚔️ <b>Характеристики шмота:</b> 🛡️ Защита: {sign_def} | ☣️ Токсичность: {sign_tox} | 🎭 Харизма: {sign_cha} | 🍀 Удача: {sign_luck}"
         except Exception:
             pass
 
@@ -3021,7 +3061,7 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"🌀 <b>Зашквар-фактор:</b> {data.cringe_factor}%\n"
         f"🌙 <b>Хронотип:</b> {data.chronotype}"
         f"{duel_line}\n\n"
-        f"{wardrobe_line}{set_line}\n\n"
+        f"{wardrobe_line}{set_line}{gear_stats_line}\n\n"
         f"💬 <i>\"{data.slang_comment}\"</i>\n"
         f"💡 <i>Карточка персонажа RPG и гардероб: /avatar</i>"
     )
@@ -3170,7 +3210,11 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str, theme: 
         badges=stats_data.get('badges', ["Анон"]),
         active_items=stats_data.get('active_items'),
         duel_wins=stats_data.get('duel_wins', 0),
-        duel_losses=stats_data.get('duel_losses', 0)
+        duel_losses=stats_data.get('duel_losses', 0),
+        gear_defense=stats_data.get('gear_defense', 0),
+        gear_toxicity=stats_data.get('gear_toxicity', 0),
+        gear_charisma=stats_data.get('gear_charisma', 0),
+        gear_luck=stats_data.get('gear_luck', 0)
     )
 
     text_report = _format_text_report(card_data)
@@ -3206,7 +3250,11 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
             badges=data.get('badges', ['Анон']),
             active_items=data.get('active_items'),
             duel_wins=data.get('duel_wins', 0),
-            duel_losses=data.get('duel_losses', 0)
+            duel_losses=data.get('duel_losses', 0),
+            gear_defense=data.get('gear_defense', 0),
+            gear_toxicity=data.get('gear_toxicity', 0),
+            gear_charisma=data.get('gear_charisma', 0),
+            gear_luck=data.get('gear_luck', 0)
         )
 
     if theme == 'auto':
@@ -3316,7 +3364,19 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
 
     # 4. Badges / Achievements Row
     by = 352
-    draw.text((36, by), "ДОСТИЖЕНИЯ И ЭКИПИРОВКА:", font=f_badge, fill=t['subtitle_color'])
+    if (data.gear_defense or data.gear_toxicity or data.gear_charisma or data.gear_luck) == 0 and data.active_items:
+        try:
+            from wardrobe_engine import get_wardrobe_total_stats
+            w_st = get_wardrobe_total_stats(data.active_items)
+            data.gear_defense = int(w_st.get("total_defense", 0))
+            data.gear_toxicity = int(w_st.get("total_toxicity", 0))
+            data.gear_charisma = int(round((float(w_st.get("tips_mult", 1.0)) - 1.0) * 100)) + (10 if w_st.get("active_set_name") else 0)
+            data.gear_luck = int(w_st.get("casino_bonus_pct", 0) + round(w_st.get("lootbox_flat_chance", 0.0) * 100))
+        except Exception:
+            pass
+    sign_tox = f"+{data.gear_toxicity}" if data.gear_toxicity > 0 else str(data.gear_toxicity)
+    gear_info = f" [🛡️ +{data.gear_defense}  ☣️ {sign_tox}  🎭 +{data.gear_charisma}%  🍀 +{data.gear_luck}%]"
+    draw.text((36, by), f"ДОСТИЖЕНИЯ И ЭКИПИРОВКА{gear_info}:", font=f_badge, fill=t['subtitle_color'])
     bx = 36
 
     badge_colors = {

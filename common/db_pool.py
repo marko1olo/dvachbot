@@ -10,8 +10,34 @@ from common.config import DB_NAME
 
 logger = logging.getLogger("db_pool")
 
-# Отслеживание глубины транзакций для конкретной asyncio задачи
-_task_tx_depth = contextvars.ContextVar("_task_tx_depth", default=0)
+# Отслеживание глубины транзакций для конкретной asyncio задачи (с защитой от утечек в дочерние таски)
+class _TaskTxDepthWrapper:
+    """
+    Изолирует глубину транзакций по конкретным asyncio задачам.
+    Предотвращает утечку глубины транзакций в дочерние таски при asyncio.create_task(),
+    гарантируя, что дочерние таски всегда стартуют с depth = 0.
+    """
+    def __init__(self):
+        self._var = contextvars.ContextVar("_task_tx_depth_tuple", default=(None, 0))
+
+    def get(self, default: int = 0) -> int:
+        try:
+            cur = asyncio.current_task()
+        except RuntimeError:
+            cur = None
+        task, depth = self._var.get()
+        if task is not cur:
+            return default
+        return depth
+
+    def set(self, depth: int):
+        try:
+            cur = asyncio.current_task()
+        except RuntimeError:
+            cur = None
+        self._var.set((cur, depth))
+
+_task_tx_depth = _TaskTxDepthWrapper()
 
 
 def _patch_aiosqlite_safe_worker():
@@ -95,8 +121,10 @@ class LazyLock:
         self._owner = None
         self._depth = 0
         self._acquired_at = 0.0
+        self._high_waiters = []  # list of (asyncio.Future, asyncio.Task)
+        self._low_waiters = []   # list of (asyncio.Future, asyncio.Task)
 
-    def _get_lock(self):
+    def _ensure_loop(self):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -107,75 +135,22 @@ class LazyLock:
             self._owner = None
             self._depth = 0
             self._acquired_at = 0.0
+            self._high_waiters.clear()
+            self._low_waiters.clear()
+        return loop
+
+    def _get_lock(self):
+        self._ensure_loop()
         return self._lock
 
-    async def acquire(self, timeout: float = None):
-        lock = self._get_lock()
-        try:
-            current = asyncio.current_task()
-        except RuntimeError:
-            current = None
-
-        # Реентерабельный повторный захват из той же таски
-        if current is not None and self._owner is current:
-            self._depth += 1
-            return True
-
-        # Защита от мертвого владельца: если владелец уже завершился (done),
-        # сбрасываем замок, чтобы не зависать намертво!
-        if self._owner is not None and getattr(self._owner, "done", lambda: False)():
-            logger.error(
-                f"🚨 [LAZY_LOCK] Владелец замка {self._owner} завершился (done), но замок не освободил! Принудительный сброс замка."
-            )
-            self._depth = 0
-            self._owner = None
-            self._acquired_at = 0.0
-            if self._lock and self._lock.locked():
-                try:
-                    self._lock.release()
-                except RuntimeError:
-                    pass
-
-        if timeout is not None:
-            res = await asyncio.wait_for(lock.acquire(), timeout=timeout)
-        else:
-            res = await lock.acquire()
-        self._owner = current
-        self._depth = 1
-        self._acquired_at = time.monotonic()
-        return res
-
-    def release(self):
-        if self._lock:
-            try:
-                current = asyncio.current_task()
-            except RuntimeError:
-                current = None
-
-            if current is not None and self._owner is current:
-                self._depth -= 1
-                if self._depth <= 0:
-                    self._depth = 0
-                    self._owner = None
-                    self._acquired_at = 0.0
-                    if self._lock.locked():
-                        self._lock.release()
-            else:
-                if self._depth > 1:
-                    self._depth -= 1
-                else:
-                    self._depth = 0
-                    self._owner = None
-                    self._acquired_at = 0.0
-                    if self._lock.locked():
-                        self._lock.release()
-
-    def locked(self):
-        return self._get_lock().locked()
+    def locked(self) -> bool:
+        self._ensure_loop()
+        return self._owner is not None
 
     def is_owned_by_current_task(self) -> bool:
         """Проверяет, удерживает ли текущая задача этот замок."""
-        if not self.locked():
+        self._ensure_loop()
+        if self._owner is None:
             return False
         try:
             current = asyncio.current_task()
@@ -189,12 +164,177 @@ class LazyLock:
         """Алиас/хелпер для проверки владения замком текущей задачей."""
         return self.is_owned_by_current_task()
 
+    def has_pending_high_priority(self) -> bool:
+        """Проверяет, ожидают ли высокоприоритетные задачи (например, входящие посты)."""
+        self._ensure_loop()
+        return any(not fut.done() for fut, _ in self._high_waiters)
+
+    def _check_watchdog(self):
+        if self._owner is None:
+            return
+        now = time.monotonic()
+        is_hung = self._acquired_at > 0.0 and (now - self._acquired_at > 20.0)
+        is_dead = getattr(self._owner, "done", lambda: False)()
+        if is_dead or is_hung:
+            duration = f"{now - self._acquired_at:.1f}s" if self._acquired_at > 0 else "unknown"
+            owner_desc = f"{self._owner}" if self._owner else "None"
+            stack_info = ""
+            if self._owner and hasattr(self._owner, "get_stack"):
+                try:
+                    import traceback
+                    frames = self._owner.get_stack()
+                    if frames:
+                        stack_info = "\n" + "".join(traceback.format_stack(frames[-1]))
+                except Exception:
+                    pass
+            reason = "завершился (done)" if is_dead else f"удерживает замок > 20с ({duration})"
+            logger.critical(
+                f"🚨 [LAZY_LOCK] Принудительный сброс замка! Владелец {reason}: {owner_desc}{stack_info}"
+            )
+            self._depth = 0
+            self._owner = None
+            self._acquired_at = 0.0
+            if self._lock and self._lock.locked():
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
+            self._wake_next()
+
+    def _wake_next(self):
+        while self._high_waiters:
+            fut, task = self._high_waiters.pop(0)
+            if not fut.done():
+                self._owner = task
+                self._depth = 1
+                self._acquired_at = time.monotonic()
+                fut.set_result(True)
+                return
+        while self._low_waiters:
+            fut, task = self._low_waiters.pop(0)
+            if not fut.done():
+                self._owner = task
+                self._depth = 1
+                self._acquired_at = time.monotonic()
+                fut.set_result(True)
+                return
+
+    async def acquire(self, timeout: float = None, priority: bool = False) -> bool:
+        loop = self._ensure_loop()
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+
+        # Реентерабельный повторный захват из той же таски
+        if current is not None and self._owner is current:
+            self._depth += 1
+            return True
+
+        self._check_watchdog()
+
+        if self._owner is None:
+            if priority or not self.has_pending_high_priority():
+                self._owner = current
+                self._depth = 1
+                self._acquired_at = time.monotonic()
+                return True
+
+        fut = loop.create_future()
+        waiter_entry = (fut, current)
+        if priority:
+            self._high_waiters.append(waiter_entry)
+        else:
+            self._low_waiters.append(waiter_entry)
+
+        start_time = time.monotonic()
+        try:
+            while not fut.done():
+                self._check_watchdog()
+                if fut.done():
+                    break
+                elapsed = time.monotonic() - start_time
+                if timeout is not None and elapsed >= timeout:
+                    raise asyncio.TimeoutError()
+                wait_chunk = 5.0
+                if timeout is not None:
+                    wait_chunk = min(wait_chunk, timeout - elapsed)
+                try:
+                    await asyncio.wait_for(asyncio.shield(fut), timeout=wait_chunk)
+                except asyncio.TimeoutError:
+                    pass
+            return True
+        except BaseException:
+            if waiter_entry in self._high_waiters:
+                self._high_waiters.remove(waiter_entry)
+            if waiter_entry in self._low_waiters:
+                self._low_waiters.remove(waiter_entry)
+            if fut.done() and not fut.cancelled() and fut.exception() is None:
+                self._owner = current
+                self._depth = 1
+                self._acquired_at = time.monotonic()
+                self.release()
+            raise
+
+    def release(self):
+        self._ensure_loop()
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+
+        if current is not None and self._owner is current:
+            self._depth -= 1
+            if self._depth <= 0:
+                self._depth = 0
+                self._owner = None
+                self._acquired_at = 0.0
+                if self._lock and self._lock.locked():
+                    try:
+                        self._lock.release()
+                    except RuntimeError:
+                        pass
+                self._wake_next()
+        elif self._owner is None or getattr(self._owner, "done", lambda: False)():
+            self._depth = 0
+            self._owner = None
+            self._acquired_at = 0.0
+            if self._lock and self._lock.locked():
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
+            self._wake_next()
+
+    def prioritized(self):
+        """Контекстный менеджер для приоритетного захвата замка."""
+        return _PrioritizedLockContext(self)
+
     async def __aenter__(self):
         await self.acquire()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.release()
+        if self.is_owned_by_current_task():
+            self.release()
+
+
+class _PrioritizedLockContext:
+    def __init__(self, lock: LazyLock):
+        self._lock = lock
+
+    async def __aenter__(self):
+        await self._lock.acquire(priority=True)
+        return self._lock
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._lock.release()
+
+
+def has_pending_high_priority() -> bool:
+    """Глобальный хелпер: проверяет наличие ожидающих высокоприоритетных запросов к БД."""
+    fn = getattr(db_lock, "has_pending_high_priority", None)
+    return fn() if callable(fn) else False
 
 # ГАРАНТИЯ БЕЗОПАСНОСТИ:
 # Этот замок (Lock) не даст боту и сайту одновременно пытаться пересоздать подключение.
@@ -278,24 +418,30 @@ async def create_pool():
     """Алиас для инициализации, использует ту же безопасную логику."""
     return await get_pool()
 
-async def wal_checkpoint_truncate(db=None) -> bool:
+async def wal_checkpoint_truncate(db=None, timeout: float = 5.0) -> bool:
     """
     Принудительный асинхронный сброс всех данных из WAL в основной файл базы данных
     и усечение WAL-файла до 0 байт (PRAGMA wal_checkpoint(TRUNCATE)).
+    Защищен таймаутом timeout (по умолчанию 5.0с) для предотвращения дедлоков event loop.
     """
     global _db_connection
     try:
-        async with db_lock:
-            conn = db or _db_connection
-            if conn is None:
-                return True
-            async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE);") as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    busy, log_frames, ckpt_frames = row
-                    print(f"[DB] WAL Checkpoint (TRUNCATE): Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}")
-                    return busy == 0
-                return True
+        async def _do_truncate():
+            async with db_lock:
+                conn = db or _db_connection
+                if conn is None:
+                    return True
+                async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE);") as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        busy, log_frames, ckpt_frames = row
+                        print(f"[DB] WAL Checkpoint (TRUNCATE): Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}")
+                        return busy == 0
+                    return True
+
+        return await asyncio.wait_for(_do_truncate(), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning(f"[DB] WAL Checkpoint (TRUNCATE) timed out after {timeout:.1f}s")
     except Exception as e:
         print(f"[DB] WAL Checkpoint (TRUNCATE) error: {e}")
     return False
@@ -309,8 +455,10 @@ async def close_pool():
             conn = _db_connection
             try:
                 try:
-                    await conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    await asyncio.wait_for(conn.execute("PRAGMA wal_checkpoint(TRUNCATE);"), timeout=5.0)
                     print("[DB] WAL checkpoint (TRUNCATE) completed successfully before close.")
+                except (asyncio.TimeoutError, TimeoutError):
+                    print("[DB] WAL checkpoint on close timed out after 5.0s, proceeding to close.")
                 except Exception as ckpt_e:
                     print(f"[DB] WAL checkpoint on close error: {ckpt_e}")
                 await conn.close()
@@ -337,20 +485,21 @@ async def db_sleep(delay: float):
             saved_depth = getattr(db_lock, "_depth", 1)
             db_lock._depth = 0
             db_lock._owner = None
-            if db_lock._lock and db_lock._lock.locked():
-                db_lock._lock.release()
+            db_lock._acquired_at = 0.0
+            if hasattr(db_lock, "_wake_next"):
+                db_lock._wake_next()
+            elif db_lock._lock and db_lock._lock.locked():
+                try:
+                    db_lock._lock.release()
+                except RuntimeError:
+                    pass
         except RuntimeError:
             saved_depth = 0
     try:
         await asyncio.sleep(delay)
     finally:
         if saved_depth > 0:
-            lock = db_lock._get_lock()
-            await lock.acquire()
-            try:
-                db_lock._owner = asyncio.current_task()
-            except RuntimeError:
-                db_lock._owner = None
+            await db_lock.acquire(priority=True)
             db_lock._depth = saved_depth
 
 
@@ -381,7 +530,8 @@ class db_transaction:
     """
     Асинхронный контекстный менеджер для безопасного выполнения транзакций.
     - Автоматически захватывает db_lock (если текущая задача им еще не владеет).
-    - Защищает от дедлоков и утечек при отмене задач / таймаутах.
+    - Поддерживает приоритезацию (priority=True) для критических операций (create_post).
+    - Защищает от дедлоков и утечек при отмене задач / таймаутах (shielded ROLLBACK).
     - Автоматически обнаруживает и откатывает (ROLLBACK) зависшие осиротевшие транзакции.
     - Предотвращает ошибки SQLite 'cannot start a transaction within a transaction'
       путем использования SAVEPOINT при вложенных транзакциях.
@@ -391,21 +541,23 @@ class db_transaction:
     """
     _sp_counter = 0
 
-    def __init__(self, db=None, immediate: bool = True, max_retries: int = 5, base_delay: float = 0.1):
+    def __init__(self, db=None, immediate: bool = True, max_retries: int = 5, base_delay: float = 0.1, priority: bool = False):
         self.db = db
         self.immediate = immediate
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self.priority = priority
         self._is_nested = False
         self._savepoint_name = None
         self._lock_acquired = False
+        self._tx_started = False
 
     async def __aenter__(self):
         is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
         is_owned = is_owned_fn() if callable(is_owned_fn) else False
         if not is_owned:
             try:
-                await db_lock.acquire()
+                await db_lock.acquire(priority=self.priority)
                 self._lock_acquired = True
             except BaseException:
                 if self._lock_acquired:
@@ -436,6 +588,7 @@ class db_transaction:
                             await self.db.execute("BEGIN IMMEDIATE")
                         else:
                             await self.db.execute("BEGIN")
+                    self._tx_started = True
                     break
                 except Exception as e:
                     err_str = str(e).lower()
@@ -456,6 +609,7 @@ class db_transaction:
                                 await self.db.execute("BEGIN IMMEDIATE")
                             else:
                                 await self.db.execute("BEGIN")
+                        self._tx_started = True
                         break
 
                     if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
@@ -464,7 +618,7 @@ class db_transaction:
                             self._lock_acquired = False
                         await asyncio.sleep(self.base_delay * (2 ** attempt))
                         if not is_owned:
-                            await db_lock.acquire()
+                            await db_lock.acquire(priority=self.priority)
                             self._lock_acquired = True
                     else:
                         raise
@@ -472,57 +626,131 @@ class db_transaction:
             _task_tx_depth.set(depth + 1)
             return self.db
         except BaseException:
+            # Если в __aenter__ случилась отмена задачи или ошибка ПОСЛЕ или ВО ВРЕМЯ попытки BEGIN / SAVEPOINT,
+            # мы обязаны гарантировать откат через shielded ROLLBACK, чтобы соединение не осталось с зомби-транзакцией!
+            if getattr(self, "db", None) is not None:
+                async def _abort_enter():
+                    try:
+                        if self._is_nested and self._savepoint_name:
+                            try:
+                                await self.db.execute(f"ROLLBACK TO {self._savepoint_name}")
+                                await self.db.execute(f"RELEASE {self._savepoint_name}")
+                            except Exception:
+                                pass
+                        elif not self._is_nested:
+                            try:
+                                await self.db.execute("ROLLBACK")
+                            except Exception:
+                                pass
+                    except BaseException:
+                        pass
+                try:
+                    await asyncio.shield(_abort_enter())
+                except BaseException:
+                    pass
+                self._tx_started = False
+
             # Гарантируем немедленное освобождение лока при любой ошибке или таймауте внутри __aenter__
             if self._lock_acquired:
-                db_lock.release()
+                is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+                if callable(is_owned_fn) and is_owned_fn():
+                    db_lock.release()
                 self._lock_acquired = False
             raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         try:
+            # ПРОВЕРКА ВЛАДЕНИЯ ЗАМКОМ:
+            # Если сторожевой таймер (watchdog) сбросил замок из-за зависания (>20с),
+            # мы больше не владеем соединением! Запрещено делать COMMIT или ROLLBACK,
+            # иначе мы перезапишем или сломаем транзакцию нового владельца!
+            is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+            is_owned = is_owned_fn() if callable(is_owned_fn) else False
+            if not is_owned:
+                logger.critical(
+                    f"🚨 [DB_TRANSACTION] Сторожевой таймер сбросил замок у таски {asyncio.current_task()}! "
+                    "Пропускаем COMMIT/ROLLBACK для предотвращения порчи данных нового владельца."
+                )
+                self._lock_acquired = False
+                depth = _task_tx_depth.get()
+                _task_tx_depth.set(max(0, depth - 1))
+                if exc_type is None:
+                    raise RuntimeError("Transaction lock was revoked by watchdog; transaction lost")
+                return
+
             depth = _task_tx_depth.get()
             _task_tx_depth.set(max(0, depth - 1))
 
+            if not self._tx_started:
+                return
+
             if exc_type is not None:
-                # Ошибка или отмена/таймаут
-                if self._is_nested and self._savepoint_name:
+                # Ошибка или отмена/таймаут - ОБЯЗАТЕЛЬНО выполняем ROLLBACK под shield!
+                async def _do_rollback():
                     try:
-                        await self.db.execute(f"ROLLBACK TO {self._savepoint_name}")
-                        await self.db.execute(f"RELEASE {self._savepoint_name}")
-                    except Exception:
+                        if self._is_nested and self._savepoint_name:
+                            try:
+                                await self.db.execute(f"ROLLBACK TO {self._savepoint_name}")
+                                await self.db.execute(f"RELEASE {self._savepoint_name}")
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                await self.db.execute("ROLLBACK")
+                            except Exception:
+                                pass
+                    except BaseException:
                         pass
-                else:
-                    try:
-                        await self.db.execute("ROLLBACK")
-                    except Exception:
-                        pass
+
+                try:
+                    await asyncio.shield(_do_rollback())
+                except BaseException:
+                    pass
             else:
-                # Штатный выход
-                if self._is_nested and self._savepoint_name:
+                # Штатный выход - ОБЯЗАТЕЛЬНО под shield, чтобы внешняя отмена задачи во время COMMIT
+                # не оставила зомби-транзакцию на соединении!
+                async def _do_commit():
+                    if self._is_nested and self._savepoint_name:
+                        try:
+                            await self.db.execute(f"RELEASE {self._savepoint_name}")
+                        except Exception:
+                            pass
+                    else:
+                        for commit_attempt in range(3):
+                            try:
+                                await self.db.execute("COMMIT")
+                                return
+                            except Exception as commit_err:
+                                err_msg = str(commit_err).lower()
+                                if "statements in progress" in err_msg and commit_attempt < 2:
+                                    logger.warning(f"⚠️ [DB_POOL] Statements in progress during COMMIT, retrying ({commit_attempt + 1}/3)...")
+                                    await asyncio.sleep(0.05)
+                                    continue
+                                elif "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg or "cannot commit" in err_msg:
+                                    logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
+                                    return
+                                else:
+                                    logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
+                                    try:
+                                        await self.db.execute("ROLLBACK")
+                                    except Exception:
+                                        pass
+                                    raise
+
+                try:
+                    await asyncio.shield(_do_commit())
+                except BaseException as commit_exc:
+                    # Если COMMIT упал с ошибкой или был прерван, выполняем ROLLBACK под shield!
                     try:
-                        await self.db.execute(f"RELEASE {self._savepoint_name}")
+                        await asyncio.shield(self.db.execute("ROLLBACK"))
                     except Exception:
                         pass
-                else:
-                    for commit_attempt in range(3):
-                        try:
-                            await self.db.execute("COMMIT")
-                            break
-                        except Exception as commit_err:
-                            err_msg = str(commit_err).lower()
-                            if "statements in progress" in err_msg and commit_attempt < 2:
-                                logger.warning(f"⚠️ [DB_POOL] Statements in progress during COMMIT, retrying ({commit_attempt + 1}/3)...")
-                                await asyncio.sleep(0.05)
-                                continue
-                            elif "cannot commit - no transaction is active" in err_msg or "no transaction is active" in err_msg:
-                                logger.warning(f"⚠️ [DB_POOL] COMMIT skipped, no active transaction: {commit_err}")
-                                break
-                            else:
-                                logger.error(f"❌ [DB_POOL] COMMIT failed: {commit_err}")
-                                raise
+                    raise
         finally:
             if self._lock_acquired:
-                db_lock.release()
+                is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+                if callable(is_owned_fn) and is_owned_fn():
+                    db_lock.release()
                 self._lock_acquired = False
 
 
@@ -548,7 +776,7 @@ async def execute_with_retry(func_or_coro, *args, max_retries: int = 5, base_del
                 raise
 
 
-async def safe_begin_immediate(db) -> bool:
+async def safe_begin_immediate(db, priority: bool = False) -> bool:
     """
     Безопасно начинает транзакцию BEGIN IMMEDIATE, если транзакция еще не активна.
     Возвращает True, если транзакция была начата этим вызовом, иначе False.
@@ -559,7 +787,7 @@ async def safe_begin_immediate(db) -> bool:
 
     is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
     if not (callable(is_owned_fn) and is_owned_fn()):
-        await db_lock.acquire()
+        await db_lock.acquire(priority=priority)
 
     depth = _task_tx_depth.get()
     if depth > 0:
@@ -604,17 +832,24 @@ async def safe_commit(db, started_by_caller: bool = True):
         _task_tx_depth.set(depth - 1)
         return
 
+    is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+    is_owned = is_owned_fn() if callable(is_owned_fn) else False
+    if not is_owned:
+        logger.warning("[DB_POOL] safe_commit: lock is no longer owned by current task, skipping COMMIT.")
+        _task_tx_depth.set(0)
+        return
+
     try:
         await db.execute("COMMIT")
     except Exception as e:
-        if "no transaction is active" in str(e).lower():
-            pass
+        err_msg = str(e).lower()
+        if "no transaction is active" in err_msg or "cannot commit" in err_msg:
+            logger.warning(f"[DB_POOL] safe_commit: skipped, no active transaction: {e}")
         else:
             raise
     finally:
         _task_tx_depth.set(max(0, depth - 1))
         if depth <= 1:
-            is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
             if callable(is_owned_fn) and is_owned_fn():
                 db_lock.release()
 
@@ -631,6 +866,13 @@ async def safe_rollback(db, started_by_caller: bool = True):
         _task_tx_depth.set(depth - 1)
         return
 
+    is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+    is_owned = is_owned_fn() if callable(is_owned_fn) else False
+    if not is_owned:
+        logger.warning("[DB_POOL] safe_rollback: lock is no longer owned by current task, skipping ROLLBACK.")
+        _task_tx_depth.set(0)
+        return
+
     try:
         await db.execute("ROLLBACK")
     except Exception:
@@ -638,16 +880,16 @@ async def safe_rollback(db, started_by_caller: bool = True):
     finally:
         _task_tx_depth.set(max(0, depth - 1))
         if depth <= 1:
-            is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
             if callable(is_owned_fn) and is_owned_fn():
                 db_lock.release()
 
 
-async def sqlite_wal_checkpoint_task(interval_seconds: int = 600):
+async def sqlite_wal_checkpoint_task(interval_seconds: int = 600, checkpoint_timeout: float = 5.0):
     """
     Периодическая фоновая задача сброса SQLite WAL в основной файл базы данных.
     - Раз в 10-15 минут выполняет PRAGMA wal_checkpoint(PASSIVE).
     - В ночные часы (03:00 - 06:00) выполняет PRAGMA wal_checkpoint(TRUNCATE) для усечения WAL-файла.
+    - Защищена жестким asyncio.wait_for (по умолчанию 5.0с), чтобы никогда не блокировать event loop.
     """
     import logging
     from datetime import datetime
@@ -674,7 +916,20 @@ async def sqlite_wal_checkpoint_task(interval_seconds: int = 600):
                                 f"💾 [WAL Checkpoint] Mode={mode}, Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}"
                             )
 
-            await execute_with_retry(_do_checkpoint, max_retries=3, base_delay=0.5)
+            try:
+                await asyncio.wait_for(_do_checkpoint(), timeout=checkpoint_timeout)
+            except (asyncio.TimeoutError, TimeoutError):
+                wal_logger.warning(f"⚠️ [WAL Checkpoint] Mode={mode} timed out after {checkpoint_timeout}s, skipping.")
+                # Если ночной TRUNCATE заблокировался, пробуем быстрый PASSIVE без ожидания
+                if mode == "TRUNCATE":
+                    try:
+                        async def _fallback_passive():
+                            async with db_lock:
+                                await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+                        await asyncio.wait_for(_fallback_passive(), timeout=2.0)
+                        wal_logger.info("💾 [WAL Checkpoint] Fallback PASSIVE completed successfully.")
+                    except Exception:
+                        pass
 
         except asyncio.CancelledError:
             break

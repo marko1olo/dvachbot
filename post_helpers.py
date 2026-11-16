@@ -186,6 +186,146 @@ def extract_post_num_from_message(message: Any) -> int | None:
 
     return None
 
+async def _get_author_prefix(author_id: int, board_id: str = "") -> str:
+    """
+    Returns the formatted, HTML-escaped prefix for an author including:
+    - Active debuffs: 💩, 🤮, 🇺🇦, 🇷🇺
+    - Wardrobe item perks & badges:
+        * Monocle (face_monocle): [⚜️ Олигарх]
+        * Crown (hat_crown / hat_golden_crown): 👑 / 👑👑
+        * Luxury watch (equipped_wrist / luxury_watch / rolex / watch): ⌚
+        * Cyber visor (face_cyber_visor): 🥽
+        * Compact set/accessory icons
+    - Color badge aura
+    - VIP title / custom prefix from Users table
+    Respects user self-isolation mode.
+    """
+    if not author_id or author_id <= 0:
+        return ""
+
+    if board_id:
+        from shared_state import board_data
+        b_data = board_data.get(board_id, {})
+        if b_data.get('user_settings', {}).get(author_id, {}).get('is_isolated'):
+            return ""
+
+    from common.db_pool import get_pool
+    import time
+    import json
+
+    db = await get_pool()
+    now_ts = int(time.time())
+    badge_parts = []
+    prefix_str = ""
+
+    async with db.execute(
+        "SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?",
+        (author_id,)
+    ) as c:
+        row = await c.fetchone() if hasattr(c, "fetchone") else None
+        if not row and hasattr(c, "__aiter__"):
+            try:
+                async for r in c:
+                    row = r
+                    break
+            except TypeError:
+                pass
+        if row:
+            if row[0]:
+                try:
+                    items = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    if not isinstance(items, dict):
+                        items = {}
+
+                    # 1. Color badge aura
+                    bce = items.get("badge_color_expires", 0)
+                    is_color_valid = (bce > now_ts) or (items.get("badge_color_active") and bce == 0)
+                    if is_color_valid:
+                        b_col = items.get("badge_color")
+                        if b_col and b_col not in ("none", "off", "0", ""):
+                            emo = COLOR_EMOJIS.get(b_col)
+                            if emo:
+                                badge_parts.append(emo)
+
+                    # 2. Debuff icons
+                    if items.get("shit_until", 0) > now_ts:
+                        badge_parts.append("💩")
+                    if items.get("vomit_until", 0) > now_ts:
+                        badge_parts.append("🤮")
+                    if items.get("flag_ua_until", 0) > now_ts:
+                        badge_parts.append("🇺🇦")
+                    if items.get("flag_ru_until", 0) > now_ts:
+                        badge_parts.append("🇷🇺")
+
+                    # 3. Wardrobe equipment perks & badges
+                    from wardrobe_engine import get_equipped_gear, get_wardrobe_total_stats
+                    equipped = get_equipped_gear(items, current_time=now_ts)
+                    w_stats = get_wardrobe_total_stats(items, current_time=now_ts)
+
+                    # Crown item gives 👑 or 👑👑
+                    has_golden_crown = (
+                        (equipped.get("head") and equipped["head"]["id"] == "hat_golden_crown")
+                        or items.get("equipped_head") == "hat_golden_crown"
+                    )
+                    has_crown = (
+                        (equipped.get("head") and equipped["head"]["id"] == "hat_crown")
+                        or items.get("equipped_head") == "hat_crown"
+                        or items.get("crown")
+                    )
+                    if has_golden_crown:
+                        badge_parts.append("👑👑")
+                    elif has_crown:
+                        badge_parts.append("👑")
+
+                    # Monocle item (face_monocle) gives [⚜️ Олигарх] badge
+                    has_monocle = (
+                        (equipped.get("face") and equipped["face"]["id"] == "face_monocle")
+                        or items.get("equipped_face") == "face_monocle"
+                        or items.get("monocle")
+                    )
+                    if has_monocle:
+                        badge_parts.append("[⚜️ Олигарх]")
+
+                    # Cyber visor gives 🥽
+                    has_visor = (
+                        (equipped.get("face") and equipped["face"]["id"] == "face_cyber_visor")
+                        or items.get("equipped_face") == "face_cyber_visor"
+                    )
+                    if has_visor:
+                        badge_parts.append("🥽")
+
+                    # Luxury watch gives ⌚
+                    has_watch = (
+                        items.get("equipped_wrist") in ("luxury_watch", "rolex", "watch_gold", "watch")
+                        or items.get("luxury_watch")
+                        or items.get("rolex")
+                        or items.get("watch")
+                        or (equipped.get("accessory") and "watch" in str(equipped["accessory"].get("id", "")).lower())
+                    )
+                    if has_watch:
+                        badge_parts.append("⌚")
+
+                    # Other wardrobe set / head compact icons
+                    compact = w_stats.get("compact_post_icon", "").strip()
+                    if compact and compact not in badge_parts and compact not in ("👑", "👑👑", "⚜️", "🥽"):
+                        badge_parts.append(compact)
+
+                except Exception:
+                    pass
+
+            if row[1] and row[2] and now_ts < row[2]:
+                p_val = row[1]
+                if "[👑 Золотой Анон]" in p_val or "Золотой Анон" in p_val:
+                    p_val = "👑👑"
+                prefix_str = escape_html(p_val)
+
+    if prefix_str:
+        badge_parts.append(prefix_str)
+
+    if badge_parts:
+        return " ".join(badge_parts) + " "
+    return ""
+
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru', global_post_num: int | None = None) -> str:
 
     b_data = board_data.get(board_id, {})
@@ -218,7 +358,8 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
         elif rand < 0.015: circle = "🔵 "
         elif rand < 0.018: circle = "⭐ "
 
-    author_prefix = ""
+    author_prefix = await _get_author_prefix(author_id, board_id)
+
     zw_prefix = encode_post_num_zw(global_post_num) if global_post_num else ""
 
     if b_data.get('slavaukraine_mode'): return zw_prefix + f"{author_prefix}💙💛 Пост №{post_num_formatted}"
@@ -244,66 +385,9 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
 
 async def format_header(board_id: str, post_num: int, author_id: int = 0, stream: str = 'ru') -> str:
     """
-    Форматирование заголовка с поддержкой VIP префиксов из Теневого Магазина.
+    Форматирование заголовка с поддержкой VIP префиксов из Теневого Магазина и экипированных бейджей.
     """
-    custom_prefix = ""
-    if author_id > 0:
-        from shared_state import board_data
-        b_data = board_data.get(board_id, {})
-        if b_data.get('user_settings', {}).get(author_id, {}).get('is_isolated'):
-            # В режиме самоизоляции кастомные префиксы, бейджи и дебаффы полностью скрываются
-            res = await _format_header_inner(board_id, post_num, stream)
-            return encode_post_num_zw(post_num) + res
-        from common.db_pool import get_pool
-        import time
-        import json
-        db = await get_pool()
-        has_poop = False
-        has_vomit = False
-        has_flag_ua = False
-        has_flag_ru = False
-        prefix_str = ""
-        badge_emoji = ""
-        compact_icon = ""
-        now_ts = int(time.time())
-        async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
-            async for row in c:
-                if row[0]:
-                    try:
-                        items = json.loads(row[0])
-                        if items.get("shit_until", 0) > now_ts:
-                            has_poop = True
-                        if items.get("vomit_until", 0) > now_ts:
-                            has_vomit = True
-                        if items.get("flag_ua_until", 0) > now_ts:
-                            has_flag_ua = True
-                        if items.get("flag_ru_until", 0) > now_ts:
-                            has_flag_ru = True
-                        bce = items.get("badge_color_expires", 0)
-                        is_color_valid = (bce > now_ts) or (items.get("badge_color_active") and bce == 0)
-                        if is_color_valid:
-                            b_col = items.get("badge_color")
-                            if b_col and b_col not in ("none", "off", "0", ""):
-                                emo = COLOR_EMOJIS.get(b_col)
-                                if emo:
-                                    badge_emoji = f"{emo} "
-                        try:
-                            from wardrobe_engine import get_wardrobe_total_stats
-                            w_stats = get_wardrobe_total_stats(items, current_time=now_ts)
-                            compact_icon = w_stats.get("compact_post_icon", "")
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                if row[1] and row[2] and now_ts < row[2]:
-                    p_val = row[1]
-                    if "[👑 Золотой Анон]" in p_val or "Золотой Анон" in p_val:
-                        p_val = "👑👑"
-                    prefix_str = f"{escape_html(p_val)} "
-
-        debuff_icons = ("💩 " if has_poop else "") + ("🤮 " if has_vomit else "") + ("🇺🇦 " if has_flag_ua else "") + ("🇷🇺 " if has_flag_ru else "")
-        custom_prefix = badge_emoji + debuff_icons + prefix_str
-
+    custom_prefix = await _get_author_prefix(author_id, board_id)
     res = await _format_header_inner(board_id, post_num, stream)
     return encode_post_num_zw(post_num) + custom_prefix + res
 

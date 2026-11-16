@@ -13,6 +13,7 @@ import asyncio
 import atexit
 import random
 import logging
+import threading
 from collections import deque
 from pathlib import Path
 from typing import Optional, Tuple, Dict, List, Union, Set, Any
@@ -35,6 +36,41 @@ def is_video_banner(filename: str) -> bool:
     if not filename:
         return False
     return Path(filename).suffix.lower() in VIDEO_EXTENSIONS
+
+MAX_TELEGRAM_PHOTO_DIMENSION = 10000
+MAX_TELEGRAM_PHOTO_RATIO = 20.0
+QUARANTINED_BANNERS: Set[str] = {"sample_b8d5a566f74cc07816a3635c6ef08a2a.jpg"}
+
+def validate_banner_dimensions(file_path: Union[str, Path]) -> Tuple[bool, Optional[str]]:
+    """
+    Validates whether an image meets Telegram's strict photo dimension requirements:
+    1. Maximum single dimension <= 10000px.
+    2. Aspect ratio max(w/h, h/w) <= 20.0.
+    3. File must be readable and uncorrupted.
+    Returns (is_valid, error_reason).
+    """
+    p = Path(file_path)
+    if p.name in QUARANTINED_BANNERS:
+        return False, f"Quarantined corrupt banner: {p.name}"
+    if not p.exists():
+        return False, f"File not found: {p.name}"
+    if is_video_banner(p.name):
+        return True, None
+    try:
+        from PIL import Image
+        with Image.open(p) as img:
+            w, h = img.size
+            if w <= 0 or h <= 0:
+                return False, f"Invalid zero dimension: {w}x{h}"
+            if max(w, h) > MAX_TELEGRAM_PHOTO_DIMENSION:
+                return False, f"Dimension exceeds {MAX_TELEGRAM_PHOTO_DIMENSION}px: {w}x{h}"
+            ratio = max(w / h, h / w)
+            if ratio > MAX_TELEGRAM_PHOTO_RATIO:
+                return False, f"Aspect ratio {ratio:.2f} exceeds max {MAX_TELEGRAM_PHOTO_RATIO}:1 ({w}x{h})"
+            return True, None
+    except Exception as e:
+        return False, f"Image verify failed: {e}"
+
 
 # Detailed categorization ensuring every single banner is actively utilized across multiple features
 CATEGORY_PATTERNS = {
@@ -148,6 +184,7 @@ CATEGORY_PATTERNS = {
 }
 
 _BANNER_CACHE: Dict[str, str] = {}
+_CACHE_BY_FILENAME: Dict[str, str] = {}
 _CATEGORIZED_BANNERS: Dict[str, List[str]] = {}
 _CATEGORY_DECKS: Dict[str, deque] = {}
 _USER_RECENT_BANNERS: Dict[int, deque] = {}
@@ -155,6 +192,7 @@ _USER_RECENT_BANNERS: Dict[int, deque] = {}
 _LAST_CACHE_SAVE_TIME: float = 0.0
 _CACHE_DIRTY: bool = False
 _CACHE_DEBOUNCE_INTERVAL: float = 5.0
+_SAVE_CACHE_LOCK = threading.RLock()
 
 
 def _init_banners():
@@ -164,12 +202,18 @@ def _init_banners():
 
     # Load cache from disk
     _BANNER_CACHE.clear()
+    _CACHE_BY_FILENAME.clear()
     if CACHE_FILE.exists():
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
                 _BANNER_CACHE.update(loaded)
+                for k, fid in loaded.items():
+                    if isinstance(fid, str) and fid:
+                        fn = k.split(":", 1)[1] if ":" in k else (k.split("_", 1)[1] if "_" in k and k.split("_", 1)[0].isdigit() else k)
+                        if fn not in _CACHE_BY_FILENAME:
+                            _CACHE_BY_FILENAME[fn] = fid
         except Exception as e:
             logger.warning(f"[banner_manager] Failed to load cache file: {e}")
 
@@ -177,7 +221,17 @@ def _init_banners():
     if not BANNERS_DIR.exists():
         os.makedirs(BANNERS_DIR, exist_ok=True)
 
-    all_files = [f.name for f in BANNERS_DIR.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_BANNER_EXTENSIONS]
+    all_files = []
+    for f in BANNERS_DIR.iterdir():
+        if f.is_file() and f.suffix.lower() in SUPPORTED_BANNER_EXTENSIONS:
+            if f.name in QUARANTINED_BANNERS:
+                continue
+            is_valid, err = validate_banner_dimensions(f)
+            if not is_valid:
+                logger.warning(f"[banner_manager] Quarantining invalid banner {f.name}: {err}")
+                QUARANTINED_BANNERS.add(f.name)
+                continue
+            all_files.append(f.name)
     all_files.sort()
 
     _CATEGORIZED_BANNERS.clear()
@@ -197,7 +251,9 @@ def _init_banners():
                 for cat in CATEGORY_PATTERNS:
                     _CATEGORIZED_BANNERS[cat] = [
                         fn for fn in saved_categories.get(cat, [])
-                        if (BANNERS_DIR / fn).exists()
+                        if fn not in QUARANTINED_BANNERS
+                        and (BANNERS_DIR / fn).exists()
+                        and validate_banner_dimensions(BANNERS_DIR / fn)[0]
                     ]
                 _CATEGORIZED_BANNERS["all"] = all_files.copy()
                 _CATEGORIZED_BANNERS["start"] = all_files.copy()
@@ -264,6 +320,7 @@ _init_banners()
 def save_cache(force: bool = False) -> bool:
     """
     Saves the current file_id cache to disk atomically with debouncing.
+    Thread-safe and immune to Windows [WinError 32] / [WinError 5] file locking.
 
     When force=True (used in unit tests, test suites, or explicit sync flush):
         Immediately writes atomically to disk and sets _CACHE_DIRTY = False.
@@ -273,26 +330,56 @@ def save_cache(force: bool = False) -> bool:
         otherwise sets _CACHE_DIRTY = True so it will be flushed on next threshold or shutdown.
     """
     global _LAST_CACHE_SAVE_TIME, _CACHE_DIRTY
-    now = time.time()
+    with _SAVE_CACHE_LOCK:
+        now = time.time()
 
-    if not force:
-        elapsed = now - _LAST_CACHE_SAVE_TIME
-        if CACHE_FILE.exists() and 0 <= elapsed < _CACHE_DEBOUNCE_INTERVAL:
-            _CACHE_DIRTY = True
+        if not force:
+            elapsed = now - _LAST_CACHE_SAVE_TIME
+            if CACHE_FILE.exists() and 0 <= elapsed < _CACHE_DEBOUNCE_INTERVAL:
+                _CACHE_DIRTY = True
+                return False
+
+        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = CACHE_FILE.parent / f"banners_cache_{os.getpid()}_{time.time_ns()}.tmp"
+        try:
+            # Sanitize cache so only pure strings are persisted (defends against Mocks/corrupt keys in test runs)
+            clean_cache = {
+                str(k): str(v) for k, v in list(_BANNER_CACHE.items())
+                if isinstance(v, str) and not hasattr(v, "_mock_return_value")
+            }
+            # Enforce hard upper bound (2500 entries) to prevent unbounded disk growth
+            if len(clean_cache) > 2500:
+                excess = len(clean_cache) - 2000
+                for k in list(clean_cache.keys())[:excess]:
+                    clean_cache.pop(k, None)
+                    _BANNER_CACHE.pop(k, None)
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(clean_cache, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Windows-resilient retry loop for atomic replace
+            max_retries = 8
+            for attempt in range(max_retries):
+                try:
+                    tmp_file.replace(CACHE_FILE)
+                    break
+                except (PermissionError, OSError) as pe:
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(0.015 * (attempt + 1))
+
+            _LAST_CACHE_SAVE_TIME = now
+            _CACHE_DIRTY = False
+            return True
+        except Exception as e:
+            logger.warning(f"[banner_manager] Failed to save banner cache: {e}")
+            try:
+                if tmp_file.exists():
+                    tmp_file.unlink()
+            except Exception:
+                pass
             return False
-
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file = CACHE_FILE.with_suffix(".tmp")
-    try:
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(_BANNER_CACHE, f, ensure_ascii=False, indent=2)
-        tmp_file.replace(CACHE_FILE)
-        _LAST_CACHE_SAVE_TIME = now
-        _CACHE_DIRTY = False
-        return True
-    except Exception as e:
-        logger.warning(f"[banner_manager] Failed to save banner cache: {e}")
-        return False
 
 
 def flush_cache(force: bool = True) -> bool:
@@ -376,6 +463,14 @@ SUBSECTION_CATEGORIES: Dict[str, List[str]] = {
     "games": ["games", "cards", "roulette", "retro", "cyberpunk"],
     "achievements": ["cards", "games", "retro", "cyberpunk", "stats"],
     "motivation": ["calm", "chill", "maid", "night", "retro"],
+    "votemute": ["schizo", "gothic", "duel", "matrix", "cyberpunk", "night"],
+    "judgment": ["gothic", "schizo", "duel", "matrix", "night"],
+    "crime": ["cyberpunk", "matrix", "gothic", "night", "duel"],
+    "heist": ["cyberpunk", "matrix", "night", "duel", "games"],
+    "syndicate": ["cyberpunk", "matrix", "gothic", "duel", "cards"],
+    "event": ["duel", "schizo", "games", "roulette", "cyberpunk"],
+    "reaction": ["calm", "chill", "maid", "retro", "anime"],
+    "reactions": ["calm", "chill", "maid", "retro", "anime"],
 }
 
 
@@ -416,22 +511,63 @@ def resolve_category_candidates(
 
 MAX_TELEGRAM_PHOTO_SIZE = 10485760  # 10 MB limit for sendPhoto
 
-def _get_safe_fs_input_file(path: Path) -> FSInputFile:
+def _get_safe_fs_input_file(path: Path) -> Optional[FSInputFile]:
     if not path.exists():
-        return FSInputFile(str(path))
+        return None
+    if path.name in QUARANTINED_BANNERS:
+        return None
     try:
-        if path.stat().st_size > MAX_TELEGRAM_PHOTO_SIZE and path.suffix.lower() in ('.jpg', '.jpeg', '.png'):
-            compressed_dir = path.parent / ".compressed"
-            compressed_dir.mkdir(exist_ok=True)
-            compressed_file = compressed_dir / path.name
-            if not compressed_file.exists() or compressed_file.stat().st_mtime < path.stat().st_mtime:
-                from PIL import Image
-                with Image.open(path) as img:
-                    img.save(compressed_file, "JPEG", quality=88, optimize=True)
-            if compressed_file.exists() and compressed_file.stat().st_size <= MAX_TELEGRAM_PHOTO_SIZE:
-                return FSInputFile(str(compressed_file))
+        suffix = path.suffix.lower()
+        if suffix in ('.jpg', '.jpeg', '.png', '.webp'):
+            from PIL import Image
+            needs_normalization = False
+            file_size = path.stat().st_size
+            if file_size > MAX_TELEGRAM_PHOTO_SIZE:
+                needs_normalization = True
+
+            try:
+                with Image.open(path) as probe_img:
+                    pw, ph = probe_img.size
+                    ratio = max(pw / max(1, ph), ph / max(1, pw))
+                    if (pw + ph) > 9500 or max(pw, ph) > 9500 or ratio > 18:
+                        needs_normalization = True
+            except Exception as probe_err:
+                logger.warning(f"[banner_manager] Image probe failed for {path.name}: {probe_err}")
+                QUARANTINED_BANNERS.add(path.name)
+                return None
+
+            if needs_normalization:
+                compressed_dir = path.parent / ".compressed"
+                compressed_dir.mkdir(exist_ok=True)
+                compressed_file = compressed_dir / f"{path.stem}_norm.jpg"
+                if not compressed_file.exists() or compressed_file.stat().st_mtime < path.stat().st_mtime:
+                    with Image.open(path) as img:
+                        w, h = img.size
+                        # Safe crop extreme banner strips to max 5:1 ratio
+                        if max(w / max(1, h), h / max(1, w)) > 18:
+                            if h > w:
+                                img = img.crop((0, 0, w, min(h, w * 5)))
+                            else:
+                                img = img.crop((0, 0, min(w, h * 5), h))
+                        # Scale down if max dimension or sum of dimensions exceeds limit
+                        if max(img.size) > 4000 or (img.size[0] + img.size[1]) > 8000:
+                            img.thumbnail((3840, 2160), Image.Resampling.LANCZOS)
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        img.save(compressed_file, "JPEG", quality=88, optimize=True)
+                if compressed_file.exists():
+                    is_valid, _ = validate_banner_dimensions(compressed_file)
+                    if is_valid:
+                        return FSInputFile(str(compressed_file))
+                    return None
+            is_valid, _ = validate_banner_dimensions(path)
+            if not is_valid:
+                QUARANTINED_BANNERS.add(path.name)
+                return None
     except Exception as e:
-        logger.warning(f"[banner_manager] Failed to compress oversized banner {path.name}: {e}")
+        logger.warning(f"[banner_manager] Failed to normalize/compress banner {path.name}: {e}")
+        QUARANTINED_BANNERS.add(path.name)
+        return None
     return FSInputFile(str(path))
 
 
@@ -496,9 +632,12 @@ def get_banner_file(
                 _CATEGORY_DECKS[cat_fallback] = fallback_deck
             chosen_file = fallback_deck.popleft() if fallback_deck else ""
 
-        # Record into user recent history
+        # Record into user recent history (bounded to 5000 users for 1GB VPS memory ceiling)
         if user_id and chosen_file:
             if user_id not in _USER_RECENT_BANNERS:
+                if len(_USER_RECENT_BANNERS) > 5000:
+                    for old_uid in list(_USER_RECENT_BANNERS.keys())[:1000]:
+                        _USER_RECENT_BANNERS.pop(old_uid, None)
                 _USER_RECENT_BANNERS[user_id] = deque(maxlen=8)
             _USER_RECENT_BANNERS[user_id].append(chosen_file)
 
@@ -508,16 +647,33 @@ def get_banner_file(
     # Check if we have a cached file_id from Telegram CDN (scoped to bot_id, or unscoped if no bot_id)
     cached_fid = None
     if bot_id:
-        cached_fid = _BANNER_CACHE.get(f"{bot_id}:{chosen_file}") or _BANNER_CACHE.get(f"{bot_id}_{chosen_file}")
+        cached_fid = (
+            _BANNER_CACHE.get(f"{bot_id}:{chosen_file}")
+            or _BANNER_CACHE.get(f"{bot_id}_{chosen_file}")
+            or _BANNER_CACHE.get(chosen_file)
+            or _CACHE_BY_FILENAME.get(chosen_file)
+        )
     else:
-        cached_fid = _BANNER_CACHE.get(chosen_file)
+        cached_fid = _BANNER_CACHE.get(chosen_file) or _CACHE_BY_FILENAME.get(chosen_file)
     if cached_fid:
         return chosen_file, cached_fid
 
     # Fallback to local FSInputFile
     local_path = BANNERS_DIR / chosen_file
     if local_path.exists():
-        return chosen_file, _get_safe_fs_input_file(local_path)
+        safe_fs = _get_safe_fs_input_file(local_path)
+        if safe_fs is not None:
+            return chosen_file, safe_fs
+        # If safe_fs is None (failed dimension/corrupt), quarantine and fallback
+        QUARANTINED_BANNERS.add(chosen_file)
+        logger.warning(f"[banner_manager] Banner {chosen_file} failed validation, choosing fallback.")
+        fallback_deck = _CATEGORY_DECKS.get("start")
+        while fallback_deck and len(fallback_deck) > 0:
+            fb_file = fallback_deck.popleft()
+            if fb_file not in QUARANTINED_BANNERS and (BANNERS_DIR / fb_file).exists():
+                fb_fs = _get_safe_fs_input_file(BANNERS_DIR / fb_file)
+                if fb_fs is not None:
+                    return fb_file, fb_fs
     return chosen_file, ""
 
 
@@ -600,7 +756,8 @@ async def send_banner_message(
     category: Optional[Union[str, List[str], Tuple[str, ...], Set[str]]] = "start",
     banner_name: Optional[str] = None,
     parse_mode: str = "HTML",
-    strict: bool = False
+    strict: bool = False,
+    reply_to_message_id: Optional[int] = None
 ) -> Optional[types.Message]:
     """
     Sends a photo or video message with banner, caching the file_id automatically per bot.
@@ -618,28 +775,32 @@ async def send_banner_message(
     # Telegram photo and video captions are limited to 1024 characters.
     # If no media available, send as text.
     if not media_payload:
-        return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
+        return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode, reply_to_message_id=reply_to_message_id)
 
     is_vid = is_video_banner(fname)
 
     def _extract_media_file_id(m: Optional[types.Message]) -> Optional[str]:
         if not m:
             return None
+        fid = None
         if getattr(m, "video", None):
-            return m.video.file_id
-        if getattr(m, "animation", None):
-            return m.animation.file_id
-        if getattr(m, "photo", None) and len(m.photo) > 0:
-            return m.photo[-1].file_id
+            fid = getattr(m.video, "file_id", None)
+        elif getattr(m, "animation", None):
+            fid = getattr(m.animation, "file_id", None)
+        elif getattr(m, "photo", None):
+            photos = m.photo
+            if isinstance(photos, (list, tuple)) and len(photos) > 0:
+                fid = getattr(photos[-1], "file_id", None)
+        if isinstance(fid, str) and not hasattr(fid, "_mock_return_value"):
+            return fid
+        return None
 
-    # If caption exceeds 1024 chars:
-    # If reply_markup is attached (UI menu / interactive keyboard), NEVER send a naked banner without buttons!
-    # Truncate caption safely so the buttons are attached directly to the media message.
-    if len(caption) > 1024 and reply_markup is not None:
-        caption = _truncate_html_caption(caption, limit=950)
-
-    # If caption still exceeds 1024 chars (and no reply_markup), send media first (no caption), then reply with text.
-    if len(caption) > 1024:
+    # Telegram photo/video captions are strictly capped at 1024 UTF-16 code units.
+    # We NEVER butcher text with truncation or [Текст сокращен].
+    # If text exceeds 1024 code units or characters, we send the media first,
+    # then immediately send the complete text with the interactive inline keyboard attached.
+    caption_utf16_len = len(caption.encode('utf-16-le')) // 2 if caption else 0
+    if len(caption) > 1024 or caption_utf16_len > 1024:
         media_msg = None
         try:
             if is_vid:
@@ -647,10 +808,27 @@ async def send_banner_message(
             else:
                 media_msg = await bot.send_photo(chat_id=chat_id, photo=media_payload)
             fid = _extract_media_file_id(media_msg)
-            if fid and fname and bot_id:
-                _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
+            if fid and fname:
+                _CACHE_BY_FILENAME[fname] = fid
+                if bot_id:
+                    _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                 save_cache()
         except Exception as e:
+            err_text_long = str(e).lower()
+            is_broken_id_long = any(term in err_text_long for term in (
+                "wrong remote file identifier", "wrong file identifier", "can't unserialize",
+                "media_invalid", "file_id_invalid", "wrong file_id", "invalid file id",
+                "file reference expired", "file is temporarily unavailable", "failed to get http url content"
+            )) or "file identifier" in err_text_long or ("file_id" in err_text_long and ("invalid" in err_text_long or "wrong" in err_text_long))
+            if fname and is_broken_id_long:
+                keys_to_pop = [
+                    k for k in list(_BANNER_CACHE.keys())
+                    if k == fname or k.endswith(f":{fname}") or k.endswith(f"_{fname}")
+                ]
+                for k in keys_to_pop:
+                    _BANNER_CACHE.pop(k, None)
+                _CACHE_BY_FILENAME.pop(fname, None)
+                save_cache(force=True)
             logger.warning(f"[banner_manager] Initial media send failed for {fname}: {e}. Retrying local file...")
             local_path = BANNERS_DIR / fname
             if local_path.exists() and not isinstance(media_payload, FSInputFile):
@@ -692,7 +870,7 @@ async def send_banner_message(
                     return media_msg
         else:
             # Media failed completely, deliver pure text message with keyboard intact
-            return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
+            return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode, reply_to_message_id=reply_to_message_id)
 
     try:
         if is_vid:
@@ -702,7 +880,8 @@ async def send_banner_message(
                 caption=caption,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
-                supports_streaming=True
+                supports_streaming=True,
+                reply_to_message_id=reply_to_message_id
             )
         else:
             msg = await bot.send_photo(
@@ -710,7 +889,8 @@ async def send_banner_message(
                 photo=media_payload,
                 caption=caption,
                 reply_markup=reply_markup,
-                parse_mode=parse_mode
+                parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id
             )
 
         fid = _extract_media_file_id(msg)
@@ -724,9 +904,27 @@ async def send_banner_message(
     except Exception as e:
         err_text = str(e).lower()
 
+        # Immediate FloodWait propagation: never retry with text while Telegram is flood-limiting
+        if any(fl in err_text for fl in ["flood", "too many requests", "retry after"]):
+            m = re.search(r"retry in (\d+)", err_text) or re.search(r"retry after (\d+)", err_text)
+            retry_sec = int(m.group(1)) if m else 5
+            raise TelegramRetryAfter(method=None, message=str(e), retry_after=retry_sec)
+
         # If user blocked bot, chat deleted, or deactivated, do NOT fallback to text!
         if any(term in err_text for term in ("forbidden", "blocked", "chat not found", "user is deactivated", "deactivated")):
             return None
+
+        # Handle Telegram PHOTO_INVALID_DIMENSIONS gracefully without unhandled crash
+        if "photo_invalid_dimensions" in err_text or "invalid dimensions" in err_text:
+            if fname:
+                QUARANTINED_BANNERS.add(fname)
+                logger.warning(f"[banner_manager] Telegram rejected {fname} for PHOTO_INVALID_DIMENSIONS, quarantining.")
+                for k in list(_BANNER_CACHE.keys()):
+                    if k == fname or k.endswith(f":{fname}") or k.endswith(f"_{fname}"):
+                        _BANNER_CACHE.pop(k, None)
+                _CACHE_BY_FILENAME.pop(fname, None)
+                save_cache(force=True)
+            return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode, reply_to_message_id=reply_to_message_id)
 
         # 1. If Telegram failed due to unclosed HTML tag in caption, retry with plain text caption
         if "can't parse entities" in err_text and parse_mode:
@@ -740,7 +938,8 @@ async def send_banner_message(
                         caption=plain_cap,
                         reply_markup=reply_markup,
                         parse_mode=None,
-                        supports_streaming=True
+                        supports_streaming=True,
+                        reply_to_message_id=reply_to_message_id
                     )
                 else:
                     msg = await bot.send_photo(
@@ -748,7 +947,8 @@ async def send_banner_message(
                         photo=media_payload,
                         caption=plain_cap,
                         reply_markup=reply_markup,
-                        parse_mode=None
+                        parse_mode=None,
+                        reply_to_message_id=reply_to_message_id
                     )
                 return msg
             except TelegramRetryAfter:
@@ -759,15 +959,20 @@ async def send_banner_message(
         # 2. Only evict cached file_id if the file_id itself was rejected
         is_broken_id = any(term in err_text for term in (
             "wrong remote file identifier", "wrong file identifier", "can't unserialize",
-            "media_invalid", "file_id_invalid"
-        ))
+            "media_invalid", "file_id_invalid", "wrong file_id", "invalid file id",
+            "file reference expired", "file is temporarily unavailable", "failed to get http url content"
+        )) or "file identifier" in err_text or ("file_id" in err_text and ("invalid" in err_text or "wrong" in err_text))
 
         if fname and is_broken_id:
-            if bot_id and f"{bot_id}:{fname}" in _BANNER_CACHE:
-                _BANNER_CACHE.pop(f"{bot_id}:{fname}", None)
-            if fname in _BANNER_CACHE:
-                _BANNER_CACHE.pop(fname, None)
-            save_cache()
+            # Thorough eviction across all bot_id prefixes and unscoped entries
+            keys_to_pop = [
+                k for k in list(_BANNER_CACHE.keys())
+                if k == fname or k.endswith(f":{fname}") or k.endswith(f"_{fname}")
+            ]
+            for k in keys_to_pop:
+                _BANNER_CACHE.pop(k, None)
+            _CACHE_BY_FILENAME.pop(fname, None)
+            save_cache(force=True)
 
             local_path = BANNERS_DIR / fname
             if local_path.exists() and not isinstance(media_payload, FSInputFile):
@@ -779,7 +984,8 @@ async def send_banner_message(
                             caption=caption,
                             reply_markup=reply_markup,
                             parse_mode=parse_mode,
-                            supports_streaming=True
+                            supports_streaming=True,
+                            reply_to_message_id=reply_to_message_id
                         )
                     else:
                         msg = await bot.send_photo(
@@ -787,11 +993,14 @@ async def send_banner_message(
                             photo=_get_safe_fs_input_file(local_path),
                             caption=caption,
                             reply_markup=reply_markup,
-                            parse_mode=parse_mode
+                            parse_mode=parse_mode,
+                            reply_to_message_id=reply_to_message_id
                         )
                     fid = _extract_media_file_id(msg)
-                    if fid and bot_id:
-                        _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
+                    if fid and fname:
+                        _CACHE_BY_FILENAME[fname] = fid
+                        if bot_id:
+                            _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
                         save_cache()
                     return msg
                 except TelegramRetryAfter:
@@ -800,7 +1009,7 @@ async def send_banner_message(
                     logger.warning(f"[banner_manager] Local media retry also failed for {fname}: {retry_e}")
 
         logger.warning(f"[banner_manager] send_media failed for {fname}, falling back to text: {e}")
-        return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
+        return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode, reply_to_message_id=reply_to_message_id)
 
 
 async def _send_text_with_fallback(
@@ -834,6 +1043,22 @@ async def _send_text_with_fallback(
             m = re.search(r"retry in (\d+)", err_msg1)
             retry_sec = int(m.group(1)) if m else 5
             raise TelegramRetryAfter(method=None, message=str(e1), retry_after=retry_sec)
+        # If reply target was deleted/not found, retry without reply_to_message_id
+        if reply_to_message_id and "reply" in err_msg1 and ("not found" in err_msg1 or "specified" in err_msg1):
+            try:
+                return await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode,
+                    reply_to_message_id=None,
+                    disable_web_page_preview=True
+                )
+            except TelegramRetryAfter:
+                raise
+            except Exception:
+                pass
+
         if parse_mode is not None:
             # HTML parse error or entity mismatch: retry without parse mode (plain text)
             try:
@@ -851,6 +1076,19 @@ async def _send_text_with_fallback(
                 raise
             except Exception as e2:
                 err_msg2 = str(e2).lower()
+                if reply_to_message_id and "reply" in err_msg2 and ("not found" in err_msg2 or "specified" in err_msg2):
+                    try:
+                        clean_text = re.sub(r'<[^>]+>', '', text)
+                        return await bot.send_message(
+                            chat_id=chat_id,
+                            text=clean_text,
+                            reply_markup=reply_markup,
+                            parse_mode=None,
+                            reply_to_message_id=None,
+                            disable_web_page_preview=True
+                        )
+                    except Exception:
+                        pass
                 if not any(ign in err_msg2 for ign in ["forbidden", "blocked", "deactivated", "not found", "too many requests", "retry after", "flood"]):
                     logger.error(f"[banner_manager] Text fallback without parse_mode failed for {chat_id}: {e2}")
         return None
@@ -871,57 +1109,70 @@ async def broadcast_banner_to_users(
     exclude_uid: int,
     caption: str,
     reply_markup: Optional[types.InlineKeyboardMarkup] = None,
-    category: str = "start",
+    category: Union[str, List[str], Tuple[str, ...], Set[str]] = "start",
     parse_mode: str = "HTML",
     on_sent=None,
+    banner_name: Optional[str] = None,
 ) -> List[Tuple[int, int]]:
     """
-    Throttled broadcast: sends banner to each user in user_ids (skipping exclude_uid).
-    Respects Telegram rate limits (sleep between sends), skips dead/blocked chats.
+    High-performance throttled broadcast: sends banner to each user in user_ids (skipping exclude_uid).
+    Uses bounded concurrency (Semaphore=8) and reuses banner_name file_id across all recipients.
+    Respects Telegram rate limits, skips dead/blocked chats.
     on_sent(uid, message_id) — optional async callback per successful send.
     Returns list of (chat_id, message_id) pairs.
     """
     import asyncio
     import random
-    user_list = list(user_ids)
+    user_list = [uid for uid in user_ids if uid != exclude_uid]
     random.shuffle(user_list)
     results: List[Tuple[int, int]] = []
-    for uid in user_list:
-        if uid == exclude_uid:
-            continue
-        try:
-            sent = await send_banner_message(
-                bot=bot,
-                chat_id=uid,
-                caption=caption,
-                reply_markup=reply_markup,
-                category=category,
-                parse_mode=parse_mode,
-            )
-            if not sent:
-                sent = await _send_text_with_fallback(bot, uid, caption, reply_markup, parse_mode)
-            if sent:
-                results.append((uid, sent.message_id))
-                if on_sent:
-                    await on_sent(uid, sent.message_id)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after + 0.5)
+    lock = asyncio.Lock()
+    sem = asyncio.Semaphore(8)
+
+    async def _send_one(uid: int):
+        async with sem:
             try:
                 sent = await send_banner_message(
-                    bot=bot, chat_id=uid, caption=caption,
-                    reply_markup=reply_markup, category=category, parse_mode=parse_mode,
+                    bot=bot,
+                    chat_id=uid,
+                    caption=caption,
+                    reply_markup=reply_markup,
+                    category=category,
+                    banner_name=banner_name,
+                    parse_mode=parse_mode,
                 )
+                if not sent:
+                    sent = await _send_text_with_fallback(bot, uid, caption, reply_markup, parse_mode)
                 if sent:
-                    results.append((uid, sent.message_id))
+                    async with lock:
+                        results.append((uid, sent.message_id))
                     if on_sent:
                         await on_sent(uid, sent.message_id)
-            except Exception:
-                pass
-        except Exception as e:
-            err_s = str(e).lower()
-            if any(x in err_s for x in ["forbidden", "blocked", "chat not found", "deactivated", "kicked"]):
-                continue
-        await asyncio.sleep(0.05)
+            except TelegramRetryAfter as e:
+                backoff = max(1.0, float(getattr(e, "retry_after", 3))) + random.uniform(0.3, 1.2)
+                await asyncio.sleep(backoff)
+                try:
+                    sent = await send_banner_message(
+                        bot=bot, chat_id=uid, caption=caption,
+                        reply_markup=reply_markup, category=category,
+                        banner_name=banner_name, parse_mode=parse_mode,
+                    )
+                    if sent:
+                        async with lock:
+                            results.append((uid, sent.message_id))
+                        if on_sent:
+                            await on_sent(uid, sent.message_id)
+                except Exception:
+                    pass
+            except Exception as e:
+                err_s = str(e).lower()
+                if any(x in err_s for x in ["forbidden", "blocked", "chat not found", "deactivated", "kicked"]):
+                    return
+            await asyncio.sleep(0.04)
+
+    tasks = [_send_one(uid) for uid in user_list]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     return results
 
 

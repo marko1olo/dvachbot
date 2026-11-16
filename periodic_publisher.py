@@ -187,6 +187,9 @@ async def _send_media_group_resilient(
             return "FORBIDDEN"
         except TelegramBadRequest as e:
             logger.warning("BadRequest на %s (%s): %s", chat_id, context, e)
+            msg_lower = str(e).lower()
+            if "chat not found" in msg_lower or "user not found" in msg_lower or "user is deactivated" in msg_lower:
+                return "CHAT_NOT_FOUND"
             return None
         except (TelegramNetworkError, asyncio.TimeoutError) as e:
             logger.warning("Сетевой сбой на %s (%s): %s, попытка %s/%s",
@@ -239,21 +242,53 @@ def _rewind_media_group(media_group: Iterable[InputMediaPhoto]) -> None:
                 pass
 
 
+async def _purge_dead_user(user_id: int, board_id: str = 'b') -> None:
+    """Очищает недоступного/заблокировавшего пользователя из памяти (board_data active) и БД."""
+    try:
+        from shared_state import board_data, storage_lock
+        async with storage_lock:
+            if board_id in board_data and 'users' in board_data[board_id]:
+                active_users = board_data[board_id]['users'].get('active')
+                if hasattr(active_users, 'discard'):
+                    active_users.discard(user_id)
+    except Exception as err:
+        logger.warning("Failed to discard user %s from board_data active: %s", user_id, err)
+
+    try:
+        from shared_state import weekly_active_users
+        if board_id in weekly_active_users and hasattr(weekly_active_users[board_id], 'discard'):
+            weekly_active_users[board_id].discard(user_id)
+    except Exception:
+        pass
+
+    try:
+        import __main__ as main
+        if hasattr(main, 'purge_users_from_board_ram'):
+            await main.purge_users_from_board_ram(board_id, [user_id])
+    except Exception as err:
+        logger.warning("Failed to purge user %s from board RAM: %s", user_id, err)
+
+    try:
+        from common.database import remove_user_from_board
+        await remove_user_from_board(user_id, board_id)
+    except Exception as err:
+        logger.warning("Failed to remove user %s from board DB: %s", user_id, err)
+
+
 async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin, and copies them to the archive."""
     try:
         await bot.send_message(chat_id, "⏳ <i>Рисую 40 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     except TelegramForbiddenError:
         logger.warning("send_stats_to_user forbidden for chat_id %s, purging user", chat_id)
-        try:
-            import __main__ as main
-            if hasattr(main, 'purge_users_from_board_ram'):
-                await main.purge_users_from_board_ram('b', [chat_id])
-            from common.database import remove_user_from_board
-            await remove_user_from_board(chat_id, 'b')
-        except Exception as purge_err:
-            logger.warning("Failed to purge blocked user %s: %s", chat_id, purge_err)
+        await _purge_dead_user(chat_id, 'b')
         return
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e).lower() or "user not found" in str(e).lower() or "user is deactivated" in str(e).lower():
+            logger.warning("send_stats_to_user chat not found for chat_id %s, purging user", chat_id)
+            await _purge_dead_user(chat_id, 'b')
+            return
+        logger.warning("Failed to send initial stats message to %s: %s", chat_id, e)
     except Exception as e:
         logger.warning("Failed to send initial stats message to %s: %s", chat_id, e)
 
@@ -286,14 +321,13 @@ async def send_stats_to_user(bot: Bot, chat_id: int):
         raise
     except TelegramForbiddenError:
         logger.warning("send_stats_to_user TelegramForbiddenError for user %s, purging", chat_id)
-        try:
-            import __main__ as main
-            if hasattr(main, 'purge_users_from_board_ram'):
-                await main.purge_users_from_board_ram('b', [chat_id])
-            from common.database import remove_user_from_board
-            await remove_user_from_board(chat_id, 'b')
-        except Exception:
-            pass
+        await _purge_dead_user(chat_id, 'b')
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e).lower() or "user not found" in str(e).lower() or "user is deactivated" in str(e).lower():
+            logger.warning("send_stats_to_user TelegramBadRequest chat not found for user %s, purging", chat_id)
+            await _purge_dead_user(chat_id, 'b')
+        else:
+            logger.warning("send_stats_to_user TelegramBadRequest for user %s: %s", chat_id, e)
     except Exception as e:
         logger.exception("send_stats_to_user failed")
         try:
@@ -358,7 +392,7 @@ async def _upload_to_archive(archive_bot: Bot, archive_channel_id: int, media_gr
         messages = await _send_media_group_resilient(
             archive_bot, archive_channel_id, media_group, context=f"archive-part{group_idx + 1}"
         )
-        if not messages:
+        if not messages or not isinstance(messages, list):
             logger.warning("Не удалось залить часть %s в архив, пропускаю её в рассылке.", group_idx + 1)
             continue
         group_file_ids = [m.photo[-1].file_id for m in messages if m.photo]
@@ -382,18 +416,12 @@ async def _broadcast_to_users(b_bot: Bot, recipients: Sequence[int], uploaded_gr
             result = await _send_media_group_resilient(
                 b_bot, user_id, media_group, context=f"broadcast-part{group_idx + 1}"
             )
-            if result is None or result == "FORBIDDEN":
+            if result is None or result in ("FORBIDDEN", "CHAT_NOT_FOUND"):
                 user_ok = False
-                if result == "FORBIDDEN":
-                    logger.warning("User %s blocked bot during stats broadcast, purging from board /b/", user_id)
-                    try:
-                        import __main__ as main
-                        if hasattr(main, 'purge_users_from_board_ram'):
-                            await main.purge_users_from_board_ram('b', [user_id])
-                        from common.database import remove_user_from_board
-                        await remove_user_from_board(user_id, 'b')
-                    except Exception as purge_err:
-                        logger.warning("Failed to purge blocked user %s: %s", user_id, purge_err)
+                if result in ("FORBIDDEN", "CHAT_NOT_FOUND"):
+                    reason_desc = "blocked bot" if result == "FORBIDDEN" else "chat not found"
+                    logger.warning("User %s %s during stats broadcast, purging from board /b/", user_id, reason_desc)
+                    await _purge_dead_user(user_id, 'b')
                 break  # заблокировал бота или чат мёртв — не долбим остальными частями
             await asyncio.sleep(BROADCAST_DELAY_BETWEEN_GROUPS)
         if user_ok:

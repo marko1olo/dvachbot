@@ -95,6 +95,31 @@ def _json_serializer(obj):
     if 'Mock' in type(obj).__name__:
         return f"<mock: {type(obj).__name__}>"
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def safe_fromtimestamp(ts: Any, tz: Any = UTC) -> datetime:
+    """
+    Безопасный парсинг timestamp с защитой от OSError [Errno 22] Invalid argument
+    на Windows CRT (при отрицательных ts или ts выше поддерживаемого CRT диапазона).
+    Клампит ts в диапазон [0.0, 4102444800.0] (от 1970-01-01 до 2100-01-01 UTC).
+    При невалидном ts (None, строка, NaN, Inf) или исключении возвращает fallback datetime.now(UTC).
+    """
+    target_tz = tz if tz is not None else UTC
+    if ts is None:
+        return datetime.now(target_tz)
+    try:
+        val = float(ts)
+        import math
+        if math.isnan(val) or math.isinf(val):
+            return datetime.now(target_tz)
+        if val < 0.0:
+            val = 0.0
+        elif val > 4102444800.0:
+            val = 4102444800.0
+        return datetime.fromtimestamp(val, tz=target_tz)
+    except Exception as e:
+        logger.warning(f"safe_fromtimestamp error for ts={ts!r}: {e}, fallback to now(UTC)")
+        return datetime.now(UTC)
 async def _create_tables(db):
     async with db.cursor() as cursor:
         await cursor.execute('''
@@ -266,6 +291,34 @@ async def _create_tables(db):
             option_index INTEGER NOT NULL,
             PRIMARY KEY (post_num, user_id),
             FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+        );
+        """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Votemutes (
+            vote_id TEXT PRIMARY KEY,
+            board_id TEXT NOT NULL,
+            target_id INTEGER NOT NULL,
+            post_num INTEGER NOT NULL,
+            initiator_id INTEGER NOT NULL,
+            created_at REAL NOT NULL,
+            expires_at REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            yes_votes INTEGER NOT NULL DEFAULT 1,
+            no_votes INTEGER NOT NULL DEFAULT 0,
+            required_votes INTEGER NOT NULL DEFAULT 5,
+            card_chat_id INTEGER,
+            card_message_id INTEGER,
+            broadcast_msgs TEXT DEFAULT '[]'
+        );
+        """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS VotemuteVotes (
+            vote_id TEXT NOT NULL,
+            voter_id INTEGER NOT NULL,
+            vote_type TEXT NOT NULL,
+            voted_at REAL NOT NULL,
+            PRIMARY KEY (vote_id, voter_id),
+            FOREIGN KEY (vote_id) REFERENCES Votemutes(vote_id) ON DELETE CASCADE
         );
         """)
         await cursor.execute("""
@@ -997,8 +1050,46 @@ async def _apply_migrations(db):
             print("✅ Migrated: Ensured 'UserImmunity' table exists.")
         except aiosqlite.OperationalError: pass
 
+        try:
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS Votemutes (
+                vote_id TEXT PRIMARY KEY,
+                board_id TEXT NOT NULL,
+                target_id INTEGER NOT NULL,
+                post_num INTEGER NOT NULL,
+                initiator_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                yes_votes INTEGER NOT NULL DEFAULT 1,
+                no_votes INTEGER NOT NULL DEFAULT 0,
+                required_votes INTEGER NOT NULL DEFAULT 5,
+                card_chat_id INTEGER,
+                card_message_id INTEGER,
+                broadcast_msgs TEXT DEFAULT '[]'
+            );
+            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_votemutes_target_status ON Votemutes(board_id, target_id, status);")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_votemutes_post_status ON Votemutes(post_num, status);")
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS VotemuteVotes (
+                vote_id TEXT NOT NULL,
+                voter_id INTEGER NOT NULL,
+                vote_type TEXT NOT NULL,
+                voted_at REAL NOT NULL,
+                PRIMARY KEY (vote_id, voter_id),
+                FOREIGN KEY (vote_id) REFERENCES Votemutes(vote_id) ON DELETE CASCADE
+            );
+            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_votemute_votes_voter ON VotemuteVotes(voter_id);")
+            print("✅ Migrated: Ensured 'Votemutes' and 'VotemuteVotes' tables exist.")
+        except aiosqlite.OperationalError: pass
+
 async def _create_indices(db):
     async with db.cursor() as cursor:
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_votemutes_target_status ON Votemutes(board_id, target_id, status);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_votemutes_post_status ON Votemutes(post_num, status);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_votemute_votes_voter ON VotemuteVotes(voter_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_timestamp ON Posts(board_id, timestamp);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON Posts(thread_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_reply_to ON Posts(board_id, reply_to_post_num);")
@@ -1564,11 +1655,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
             async with db.execute("SELECT user_id, board_id, mute_type, expires_at FROM Mutes") as cursor:
                 async for row in cursor:
                     user_id, board_id, mute_type, expires_at_ts = row
-                    try:
-                        ts_val = min(float(expires_at_ts or 0), 4102444800.0)
-                        expires_at_dt = datetime.fromtimestamp(ts_val, tz=UTC)
-                    except Exception:
-                        expires_at_dt = datetime.fromtimestamp(4102444800.0, tz=UTC)
+                    expires_at_dt = safe_fromtimestamp(expires_at_ts, tz=UTC)
                     if expires_at_dt > datetime.now(UTC):
                         target_boards = [board_id] if board_id in state_data['board_data'] else (list(state_data['board_data'].keys()) if board_id == 'ALL' else [])
                         for tb in target_boards:
@@ -1584,7 +1671,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                     state_data['board_data'][board_id]['threads_data'][thread_id] = {
                         'op_id': op_id,
                         'title': title,
-                        'created_at': datetime.fromtimestamp(created_at_ts, tz=UTC).isoformat(),
+                        'created_at': safe_fromtimestamp(created_at_ts, tz=UTC).isoformat(),
                         'is_archived': bool(is_archived),
                         'posts': [],
                         'subscribers': set(),
@@ -1621,7 +1708,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
 
                     state_data['messages_storage'][post_num] = {
                         "author_id": author_id,
-                        "timestamp": datetime.fromtimestamp(timestamp_ts, tz=UTC),
+                        "timestamp": safe_fromtimestamp(timestamp_ts, tz=UTC),
                         "content": content_data,
                         "board_id": board_id,
                         "thread_id": thread_id,
@@ -1912,10 +1999,22 @@ async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: floa
 
     # Sync in RAM if board_data is available
     try:
-        from shared_state import board_data
-        if board_id in board_data:
+        from shared_state import board_data, BOARDS
+        if board_id == 'ALL':
+            for b in BOARDS:
+                if b in board_data:
+                    if expires_at and expires_at > time.time():
+                        board_data[b].setdefault('shadow_mutes', {})[user_id] = safe_fromtimestamp(expires_at, tz=UTC)
+                    else:
+                        board_data[b].get('shadow_mutes', {}).pop(user_id, None)
+            board_data.setdefault('ALL', {}).setdefault('shadow_mutes', {})
             if expires_at and expires_at > time.time():
-                board_data[board_id].setdefault('shadow_mutes', {})[user_id] = datetime.fromtimestamp(expires_at, UTC)
+                board_data['ALL']['shadow_mutes'][user_id] = safe_fromtimestamp(expires_at, tz=UTC)
+            else:
+                board_data['ALL'].get('shadow_mutes', {}).pop(user_id, None)
+        elif board_id in board_data:
+            if expires_at and expires_at > time.time():
+                board_data[board_id].setdefault('shadow_mutes', {})[user_id] = safe_fromtimestamp(expires_at, tz=UTC)
             else:
                 board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
     except Exception:
@@ -2109,7 +2208,7 @@ async def create_post(
 
             for attempt in range(10):
                 try:
-                    async with db_transaction(db, immediate=True):
+                    async with db_transaction(db, immediate=True, priority=True):
                         # Проверка доски (чтение внутри транзакции безопасно)
                         async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
                             if not await c.fetchone():
@@ -2497,20 +2596,22 @@ async def apply_shadow_mute(
 
     info = await get_shadow_mute_info(user_id, board_id)
 
+    effective_cap = (7 * 86400.0) if board_id == 'ALL' else BASE_CAP_SEC
+
     if info['is_muted']:
         cur_expires = info['expires_at'] or (now_ts + info['remaining_seconds'])
         # ЗАПРЕЩЕНО накручивать штраф или продлевать мут пользователю, который уже находится в активном муте!
         # Мут должен истекать в свой назначенный срок, а не становиться вечным.
-        if duration_seconds <= BASE_CAP_SEC:
+        if duration_seconds <= effective_cap and board_id != 'ALL':
             return cur_expires
-        new_duration = min(BASE_CAP_SEC, duration_seconds)
+        new_duration = min(effective_cap, duration_seconds)
         new_expires_at = now_ts + new_duration
         log_msg = (
             f"⏳ [AUTOSHADOWMUTE] Эскалация мута: user {user_id} на доске {board_id}, "
             f"длительность {new_duration:.0f}с ({new_duration/60:.1f} мин). Причина: {reason}"
         )
     else:
-        new_duration = min(BASE_CAP_SEC, duration_seconds)
+        new_duration = min(effective_cap, duration_seconds)
         new_expires_at = now_ts + new_duration
         log_msg = (
             f"⏳ [AUTOSHADOWMUTE] Выдан теневой мут: user {user_id} на доске {board_id}, "
@@ -3574,42 +3675,49 @@ async def update_post_content(post_num: int, content: dict):
 async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
     """
     Сохраняет информацию об отправленных копиях поста в базу данных.
+    Разбивает массовые вставки на чанки по 200 записей и выполняет каждый чанк
+    в отдельной транзакции без удержания внешнего db_lock, устраняя срывы LazyLock watchdog (>20с).
     """
     if not copies_data:
         return
 
-    from common.db_pool import get_pool, db_lock, db_transaction
+    from common.db_pool import get_pool, db_sleep, db_transaction
 
-    data_to_insert = [(post_num, recipient_id, msg_id) for recipient_id, msg_id in copies_data]
-
+    CHUNK_SIZE = 200
     try:
         async with asyncio.timeout(30.0):
-            async with db_lock:
+            db = await get_pool()
+            for chunk_start in range(0, len(copies_data), CHUNK_SIZE):
+                chunk = copies_data[chunk_start:chunk_start + CHUNK_SIZE]
+                data_to_insert = [(post_num, recipient_id, msg_id) for recipient_id, msg_id in chunk]
+
                 for attempt in range(10):
                     try:
-                        db = await get_pool()
                         async with db_transaction(db):
                             await db.executemany(
                                 "INSERT OR IGNORE INTO PostCopies (post_num, recipient_id, message_id) VALUES (?, ?, ?)",
                                 data_to_insert
                             )
-                        return
+                        break
                     except sqlite3.OperationalError as e:
-                        if "locked" in str(e).lower() or "busy" in str(e).lower():
+                        err_str = str(e).lower()
+                        if "locked" in err_str or "busy" in err_str:
                             await db_sleep(0.1 * (attempt + 1))
                             continue
-                        if "foreign key constraint failed" in str(e).lower():
-                            # Post was deleted before delivery finished, ignore safely
-                            break
-                        print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
+                        if "foreign key constraint failed" in err_str:
+                            return
+                        logger.error(f"⛔ Ошибка при сохранении копий поста #{post_num} в БД: {e}")
                         break
                     except Exception as e:
                         if "foreign key constraint failed" in str(e).lower():
-                            break
-                        print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
+                            return
+                        logger.error(f"⛔ Ошибка при сохранении копий поста #{post_num} в БД: {e}")
                         break
+
+                if chunk_start + CHUNK_SIZE < len(copies_data):
+                    await asyncio.sleep(0.001)
     except Exception as e:
-        print(f"⚠️ add_post_copies timeout / error for #{post_num}: {type(e).__name__} - {e}")
+        logger.warning(f"⚠️ add_post_copies timeout / error for #{post_num}: {type(e).__name__} - {e}")
 async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | None:
     """
     Находит ID автора оригинального поста по ID копии сообщения.
@@ -9176,9 +9284,10 @@ def get_db_connection():
 async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
     """
     Аккуратная ежедневная чистка PostCopies: храним данные ровно retention_days дней (по умолчанию 3).
-    Удаление происходит небольшими чанками по 2,000 строк с микро-паузами db_sleep и периодическим wal_checkpoint.
+    Удаление происходит небольшими чанками по 500 строк с микро-паузами asyncio.sleep и уступкой
+    высокоприоритетным операциям (create_post).
     """
-    from common.db_pool import get_pool, db_lock, db_sleep
+    from common.db_pool import get_pool, db_lock, db_transaction, has_pending_high_priority
     cutoff_ts = time.time() - (retention_days * 86400)
     try:
         db = await get_pool()
@@ -9192,46 +9301,32 @@ async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
             return 0
 
         total_deleted = 0
-        batch_size = 2000
+        batch_size = 500
         while True:
+            # Уступаем высокоприоритетным операциям (созданию постов)
+            while has_pending_high_priority():
+                await asyncio.sleep(0.05)
+
             deleted = 0
-            async with db_lock:
-                await db.execute("BEGIN IMMEDIATE")
-                try:
-                    async with db.execute("""
-                        DELETE FROM PostCopies
-                        WHERE rowid IN (
-                            SELECT rowid FROM PostCopies
-                            WHERE post_num < ?
-                            LIMIT ?
-                        )
-                    """, (threshold_post_num, batch_size)) as cursor:
-                        deleted = cursor.rowcount or 0
-                    await db.execute("COMMIT")
-                except Exception:
-                    try:
-                        await db.execute("ROLLBACK")
-                    except Exception:
-                        import traceback; traceback.print_exc()
-                    raise
+            async with db_transaction(db, immediate=True, priority=False):
+                async with db.execute("""
+                    DELETE FROM PostCopies
+                    WHERE rowid IN (
+                        SELECT rowid FROM PostCopies
+                        WHERE post_num < ?
+                        LIMIT ?
+                    )
+                """, (threshold_post_num, batch_size)) as cursor:
+                    deleted = cursor.rowcount or 0
+
             total_deleted += deleted
             if deleted == 0:
                 break
-            # Периодический пассивный чекпоинт каждые 10к записей для сдерживания размера WAL
-            if total_deleted > 0 and total_deleted % 10000 < batch_size:
-                try:
-                    async with db_lock:
-                        await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-                except Exception:
-                    pass
-            await db_sleep(0.05)
+
+            # Микро-пауза между чанками для передачи управления event loop
+            await asyncio.sleep(0.05)
 
         if total_deleted > 0:
-            try:
-                async with db_lock:
-                    await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-            except Exception:
-                pass
             logging.getLogger("database").info(f"[POSTCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
         return total_deleted
     except Exception as e:
@@ -9243,9 +9338,10 @@ async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
 async def clean_old_channelcopies_daily(retention_days: int = 7) -> int:
     """
     Аккуратная ежедневная чистка ChannelCopies: храним данные ровно retention_days дней (по умолчанию 7).
-    Удаление происходит небольшими чанками по 2,000 строк с микро-паузами db_sleep и периодическим wal_checkpoint.
+    Удаление происходит небольшими чанками по 500 строк с микро-паузами asyncio.sleep и уступкой
+    высокоприоритетным операциям (create_post).
     """
-    from common.db_pool import get_pool, db_lock, db_sleep
+    from common.db_pool import get_pool, db_lock, db_transaction, has_pending_high_priority
     cutoff_ts = time.time() - (retention_days * 86400)
     try:
         db = await get_pool()
@@ -9259,45 +9355,32 @@ async def clean_old_channelcopies_daily(retention_days: int = 7) -> int:
             return 0
 
         total_deleted = 0
-        batch_size = 2000
+        batch_size = 500
         while True:
+            # Уступаем высокоприоритетным операциям (созданию постов)
+            while has_pending_high_priority():
+                await asyncio.sleep(0.05)
+
             deleted = 0
-            async with db_lock:
-                await db.execute("BEGIN IMMEDIATE")
-                try:
-                    async with db.execute("""
-                        DELETE FROM ChannelCopies
-                        WHERE rowid IN (
-                            SELECT rowid FROM ChannelCopies
-                            WHERE post_num < ?
-                            LIMIT ?
-                        )
-                    """, (threshold_post_num, batch_size)) as cursor:
-                        deleted = cursor.rowcount or 0
-                    await db.execute("COMMIT")
-                except Exception:
-                    try:
-                        await db.execute("ROLLBACK")
-                    except Exception:
-                        import traceback; traceback.print_exc()
-                    raise
+            async with db_transaction(db, immediate=True, priority=False):
+                async with db.execute("""
+                    DELETE FROM ChannelCopies
+                    WHERE rowid IN (
+                        SELECT rowid FROM ChannelCopies
+                        WHERE post_num < ?
+                        LIMIT ?
+                    )
+                """, (threshold_post_num, batch_size)) as cursor:
+                    deleted = cursor.rowcount or 0
+
             total_deleted += deleted
             if deleted == 0:
                 break
-            if total_deleted > 0 and total_deleted % 10000 < batch_size:
-                try:
-                    async with db_lock:
-                        await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-                except Exception:
-                    pass
-            await db_sleep(0.05)
+
+            # Микро-пауза между чанками
+            await asyncio.sleep(0.05)
 
         if total_deleted > 0:
-            try:
-                async with db_lock:
-                    await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-            except Exception:
-                pass
             logging.getLogger("database").info(f"[CHANNELCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
         return total_deleted
     except Exception as e:
@@ -9323,51 +9406,42 @@ async def clean_old_media_reposts_daily() -> int:
     считается. Это осознанный размен: смысл у баяна есть, пока помнят
     оригинал.
     """
-    from common.db_pool import get_pool, db_lock, db_sleep
+    from common.db_pool import get_pool, db_lock, db_transaction, has_pending_high_priority
 
     cutoff = time.time() - (MEDIA_REPOSTS_RETENTION_DAYS * 86400)
     total_deleted = 0
-    batch_size = 2000
+    batch_size = 500
     try:
         db = await get_pool()
         if not db:
             return 0
         while True:
+            # Уступаем высокоприоритетным операциям (созданию постов)
+            while has_pending_high_priority():
+                await asyncio.sleep(0.05)
+
             deleted = 0
-            async with db_lock:
-                await db.execute("BEGIN IMMEDIATE")
-                try:
-                    async with db.execute(
-                        """
-                        DELETE FROM MediaReposts
-                        WHERE rowid IN (
-                            SELECT rowid FROM MediaReposts
-                            WHERE times = 1 AND first_seen IS NOT NULL AND first_seen < ?
-                            LIMIT ?
-                        )
-                        """,
-                        (cutoff, batch_size),
-                    ) as cursor:
-                        deleted = cursor.rowcount or 0
-                    await db.execute("COMMIT")
-                except Exception:
-                    try:
-                        await db.execute("ROLLBACK")
-                    except Exception:
-                        import traceback; traceback.print_exc()
-                    raise
+            async with db_transaction(db, immediate=True, priority=False):
+                async with db.execute(
+                    """
+                    DELETE FROM MediaReposts
+                    WHERE rowid IN (
+                        SELECT rowid FROM MediaReposts
+                        WHERE times = 1 AND first_seen IS NOT NULL AND first_seen < ?
+                        LIMIT ?
+                    )
+                    """,
+                    (cutoff, batch_size),
+                ) as cursor:
+                    deleted = cursor.rowcount or 0
+
             total_deleted += deleted
             if deleted == 0:
                 break
-            # Уступаем цикл событий между пачками, как в чистке PostCopies.
-            await db_sleep(0.05)
+            # Уступаем цикл событий между пачками.
+            await asyncio.sleep(0.05)
 
         if total_deleted > 0:
-            try:
-                async with db_lock:
-                    await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-            except Exception:
-                pass
             logging.getLogger("database").info(
                 f"🧹 [REPOSTS_CLEANUP] Удалено {total_deleted:,} записей о медиа "
                 f"старше {MEDIA_REPOSTS_RETENTION_DAYS} дней, показанном один раз."
@@ -9613,9 +9687,28 @@ async def transfer_user_balance(
         return False, "invalid_fee", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
 
     clean_amount = round(float(amount), 2)
+    if clean_amount <= 0:
+        return False, "invalid_amount", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+
+    if clean_amount > 10_000_000:
+        return False, "amount_too_large", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+
     clean_fee = round(float(fee), 2)
     total_deduct = round(clean_amount + clean_fee, 2)
     b_id = board_id or "b"
+
+    # Security check: 5★ Federal Wanted check for sender and receiver
+    try:
+        from common.bot_helpers import _get_user_active_items
+        s_items = await _get_user_active_items(db, sender_id, b_id)
+        if int(s_items.get("wanted_stars", 0) or 0) >= 5:
+            return False, "sender_wanted_5_stars", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+
+        t_items = await _get_user_active_items(db, receiver_id, b_id)
+        if int(t_items.get("wanted_stars", 0) or 0) >= 5:
+            return False, "receiver_wanted_5_stars", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+    except Exception:
+        pass
 
     async with db_transaction(db):
         sender_bal = await get_user_global_balance(db, sender_id)
@@ -10088,6 +10181,8 @@ async def add_to_abu_fund(db, amount: float, donor_id: int = 0, reason: str = ""
                 """,
                 (str(amount), amount)
             )
+            if hasattr(db, "commit"):
+                await db.commit()
         except Exception as e:
             logger.error(f"[ABU_FUND] Error adding {amount} to fund: {e}")
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():

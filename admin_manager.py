@@ -1,7 +1,11 @@
 import asyncio
 import time
+import logging
+
+logger = logging.getLogger("admin_manager")
 from aiogram.filters import Command
 from bot_helpers import *
+from common.bot_helpers import safe_callback_answer
 from post_helpers import *
 from shared_state import *
 from aiogram import Router, F, types
@@ -1075,7 +1079,11 @@ async def on_admin_action(callback: types.CallbackQuery):
     action = parts[1]
 
     if action == "cancel":
-        await callback.message.delete()
+        if isinstance(callback.message, types.Message):
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
         try: await callback.answer("Отменено")
         except Exception: pass
         return
@@ -1102,6 +1110,168 @@ async def on_admin_action(callback: types.CallbackQuery):
         minutes = int(parts[4])
         await callback.answer("Вайпаем...")
         await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)
+
+
+@router.callback_query(F.data.startswith("snitch:"))
+async def on_snitch_action(callback: types.CallbackQuery):
+    await handle_snitch_callback(callback)
+
+
+async def handle_snitch_callback(callback: types.CallbackQuery):
+    """
+    Автостукач (Auto-Snitch): обработка решений администратора в 1 клик.
+    Формат callback_data: snitch:<action>:<user_id>:<board_id>:<post_num>
+    Actions:
+      - ban: сжечь и забанить (забанить юзера + снести посты за 24 часа)
+      - mute: подтвердить шедоумут на 24 часа на всех досках
+      - media: навсегда запретить медиа (shadow_ban_media = 1, Text-only)
+      - pardon: ошибка/оправдать (снять муты, разбанить, разблокировать медиа, очистить страйки)
+    """
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) < 5:
+        await safe_callback_answer(callback, "⚠️ Ошибка формата данных Автостукача", show_alert=True)
+        return
+
+    action = parts[1]
+    try:
+        target_id = int(parts[2])
+    except ValueError:
+        await safe_callback_answer(callback, "⚠️ Неверный ID нарушителя", show_alert=True)
+        return
+
+    board_id = parts[3] or 'b'
+    try:
+        post_num = int(parts[4])
+    except ValueError:
+        post_num = 0
+
+    admin_id = callback.from_user.id
+    from bot_helpers import is_admin
+    from site_tgach.admin_config import ADMIN_IDS
+
+    if not (is_admin(admin_id, board_id) or admin_id in ADMIN_IDS):
+        await safe_callback_answer(callback, "⛔ У вас нет прав администратора!", show_alert=True)
+        return
+
+    action_title = ""
+    alert_feedback = ""
+
+    if action == "ban":
+        deleted_count = 0
+        try:
+            from post_helpers import delete_user_posts
+            deleted_count = await delete_user_posts(callback.bot, target_id, 1440, 'all')
+        except Exception as del_err:
+            logger.warning(f"[Auto-Snitch] Failed to delete user posts for {target_id}: {del_err}")
+
+        await update_user_status(target_id, board_id, 'banned')
+        async with storage_lock:
+            for b in BOARDS:
+                b_data = board_data.get(b)
+                if b_data and 'users' in b_data:
+                    b_data['users']['banned'].add(target_id)
+                    b_data['users']['active'].discard(target_id)
+
+        await log_global_event('bot', f"🔥 SNITCH BAN: Мод {admin_id} сжёг и забанил нарушителя {target_id} на /{board_id}/ (снесено {deleted_count} пст)")
+        action_title = "Сжёг и забанил"
+        alert_feedback = f"Нарушитель забанен, снесено постов: {deleted_count}"
+
+    elif action == "mute":
+        from common.database import update_shadow_mute
+        duration = 86400  # 24 часа
+        for b in BOARDS:
+            await update_shadow_mute(user_id=target_id, board_id=b, duration_seconds=duration, reason="snitch_confirmed_mute_24h")
+        await log_global_event('bot', f"👻 SNITCH MUTE: Мод {admin_id} подтвердил мут 24ч для {target_id} на всех досках")
+        action_title = "Подтвердил мут 24ч"
+        alert_feedback = "Шедоумут на 24 часа подтверждён на всех досках"
+
+    elif action == "media":
+        from common.db_pool import get_pool, db_transaction
+        db = await get_pool()
+        async with db_transaction(db):
+            await db.execute(
+                "UPDATE Users SET shadow_ban_media = 1, nsfw_spoiler = 1 WHERE user_id = ?",
+                (target_id,)
+            )
+        for b in BOARDS:
+            if b in board_data:
+                u_set = board_data[b].setdefault('user_settings', {}).setdefault(target_id, {})
+                u_set['shadow_media'] = True
+        await log_global_event('bot', f"🔇 SNITCH MEDIA: Мод {admin_id} запретил медиа (Text-only) нарушителю {target_id}")
+        action_title = "Запретил медиа (Text-only)"
+        alert_feedback = "Медиа навсегда запрещены для нарушителя"
+
+    elif action == "pardon":
+        from common.database import update_shadow_mute, add_or_activate_user, remove_global_mute
+        from extreme_defense_engine import clear_user_extreme_strikes
+        from common.db_pool import get_pool, db_transaction
+
+        # 1. Снимаем глобальный мут и муты со всех досок
+        await remove_global_mute(target_id)
+        for b in BOARDS:
+            await update_shadow_mute(user_id=target_id, board_id=b, expires_at=0)
+
+        # 2. Разбаниваем и размучиваем во всех кэшах в памяти
+        async with storage_lock:
+            for b in list(BOARDS) + ['ALL']:
+                b_data = board_data.get(b)
+                if b_data:
+                    if 'mutes' in b_data:
+                        b_data['mutes'].pop(target_id, None)
+                    if 'shadow_mutes' in b_data:
+                        b_data['shadow_mutes'].pop(target_id, None)
+                    if 'users' in b_data:
+                        b_data['users']['banned'].discard(target_id)
+                        b_data['users']['active'].add(target_id)
+                    u_set = b_data.get('user_settings', {}).get(target_id)
+                    if u_set:
+                        u_set['shadow_media'] = False
+        await add_or_activate_user(target_id, board_id)
+
+        # 3. В транзакции SQLite сбрасываем cursed_until = 0, shadow_ban_media = 0
+        db = await get_pool()
+        async with db_transaction(db):
+            await db.execute("UPDATE Users SET cursed_until = 0, shadow_ban_media = 0 WHERE user_id = ?", (target_id,))
+
+        # 4. Снимаем народный мут (votemute) и очищаем unbribable_votemute_until со всех досок
+        try:
+            from votemute_engine import lift_unbribable_folk_mute
+            for b in BOARDS:
+                await lift_unbribable_folk_mute(target_id, b, db=db)
+        except Exception as vm_pardon_err:
+            logger.warning(f"Error lifting votemute in snitch pardon: {vm_pardon_err}")
+
+        # 5. Очищаем страйки экстремального контента
+        await clear_user_extreme_strikes(target_id, board_id)
+        await log_global_event('bot', f"🔓 SNITCH PARDON: Мод {admin_id} оправдал и размутил {target_id}")
+        action_title = "Оправдал и размутил (Ложная тревога)"
+        alert_feedback = "Пользователь оправдан, муты сняты, медиа разблокированы"
+
+    else:
+        await safe_callback_answer(callback, f"Неизвестное действие: {action}", show_alert=True)
+        return
+
+    admin_username = callback.from_user.username
+    admin_ref = f"@{admin_username}" if admin_username else f"ID:<code>{admin_id}</code>"
+
+    msg = callback.message
+    if isinstance(msg, types.Message):
+        old_text = getattr(msg, "html_text", None) or getattr(msg, "text", None) or ""
+        cleaned_text = old_text.replace("<i>Выберите действие одной кнопкой:</i>", "").strip()
+        updated_text = (
+            f"{cleaned_text}\n\n"
+            f"✅ <b>Решение принято:</b> {action_title} админом {admin_ref}"
+        )
+        try:
+            await msg.edit_text(updated_text, parse_mode="HTML", reply_markup=None)
+        except Exception as edit_err:
+            logger.warning(f"[handle_snitch_callback] Failed to edit message: {edit_err}")
+
+    try:
+        await safe_callback_answer(callback, alert_feedback or f"Действие выполнено: {action_title}", show_alert=False)
+    except Exception:
+        pass
 
 @router.message(Command("restrict_anime"))
 async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str = 'ru'):

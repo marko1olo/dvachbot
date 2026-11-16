@@ -37,6 +37,7 @@ from shared_state import (
     weekly_active_users,
 )
 from common.database import (
+    safe_fromtimestamp,
     upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies,
     create_post, update_post_content, get_stream_active_users,
     mark_broadcast_posts_sent
@@ -562,7 +563,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             async with storage_lock:
                 messages_storage[post_num] = {
                     'author_id': db_post['author_id'],
-                    'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
+                    'timestamp': safe_fromtimestamp(db_post['timestamp'], tz=UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
                     'content': content_dict,
                     'reactions': reactions_dict,
                     'board_id': db_post['board_id'],
@@ -667,10 +668,16 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                 content_type = content_copy.get('type')
                 if content_type == 'text':
                     if len(full_text) > 4096: full_text = full_text[:4093] + "..."
-                    await bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+                    await asyncio.wait_for(
+                        bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard),
+                        timeout=8.0
+                    )
                 else:
                     if len(full_text) > 1024: full_text = full_text[:1021] + "..."
-                    await bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+                    await asyncio.wait_for(
+                        bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard),
+                        timeout=8.0
+                    )
                 return
             except TelegramRetryAfter as e:
                 wait_sec = e.retry_after + 1
@@ -695,7 +702,10 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     else:
                         return
                 return
-            except (main.TelegramNetworkError, asyncio.TimeoutError, main.aiohttp.ClientError):
+            except asyncio.TimeoutError:
+                runtime_logger.warning(f"⚠️ Timeout (8.0s) editing post copy for user {user_id}")
+                return
+            except (main.TelegramNetworkError, main.aiohttp.ClientError):
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 10)
@@ -1212,7 +1222,7 @@ class MessageDeliveryTask:
                 delivery_phase_for_send = "priority"
                 deferred_reason = "split_priority_first"
         elif (
-            self.delivery_phase == "passive"
+            self.delivery_phase in ("passive", "passive_slice")
             and PRIORITY_SPLIT_FANOUT_ENABLED
             and not self.thread_id
             and len(active_recipients) > self.passive_slice_size
@@ -1455,23 +1465,16 @@ async def board_help_worker(board_id: str, extended_interval: bool = False):
                 now_dt = datetime.now(UTC)
                 from banner_manager import get_banner_file, is_video_banner
                 cat_map = {
-                    1: "summary",
-                    2: "newspaper",
-                    3: "night",
-                    4: "schizo",
-                    5: "digest",
-                    6: "shop"
+                    1: ["summary", "stats", "newspaper"],
+                    2: ["newspaper", "digest", "retro"],
+                    3: ["night", "gothic", "calm", "cyberpunk"],
+                    4: ["schizo", "matrix", "cyberpunk"],
+                    5: ["digest", "summary", "anime", "chill"],
+                    6: ["shop", "market", "maid", "wallet"],
                 }
                 banner_cat = cat_map.get(choice, "start")
-                fname, photo_payload = get_banner_file(category=banner_cat)
-                fid = photo_payload if isinstance(photo_payload, str) else None
-                img_bytes = None
-                if not fid and hasattr(photo_payload, 'path') and os.path.exists(photo_payload.path):
-                    try:
-                        with open(photo_payload.path, 'rb') as bf:
-                            img_bytes = bf.read()
-                    except Exception:
-                        pass
+                from banner_manager import get_banner_delivery_payload
+                fname, fid, img_bytes = get_banner_delivery_payload(category=banner_cat)
                 is_photo = bool(fid or img_bytes)
                 media_type = ('video' if is_video_banner(fname) else 'photo') if is_photo else 'text'
                 content = {
@@ -2093,7 +2096,7 @@ async def site_posts_broadcaster():
                                 async with storage_lock:
                                     messages_storage[post_num] = {
                                         'author_id': author_id,
-                                        'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
+                                        'timestamp': safe_fromtimestamp(post['timestamp'], tz=UTC),
                                         'content': real_content,
                                         'board_id': board_id,
                                         'thread_id': post.get('thread_id'),
