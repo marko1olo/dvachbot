@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from common.task_manager import spawn_task
 
 """
@@ -60,10 +61,13 @@ from site_tgach.neuro_moderator import run_deep_check
 logger = logging.getLogger("tagger")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    _sh = logging.StreamHandler()
+    _sh = logging.StreamHandler(stream=sys.stderr)
     _sh.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(_sh)
 logger.propagate = True
+import sys
+if sys.platform == "win32":
+    sys.stderr.reconfigure(encoding='utf-8')
 
 PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
 GROQ_TIMEOUT = 40.0
@@ -71,6 +75,24 @@ BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насилов
 
 GROQ_COOLDOWN_UNTIL = 0
 TEMP_FAILED_FILES = {}
+
+# Терминальные статусы тегирования — файлы с этими tags не нужно повторно обрабатывать,
+# даже если у них phash IS NULL. Любой новый финальный статус должен добавляться сюда.
+TERMINAL_TAGS = frozenset({
+    "download_failed",
+    "not_found",
+    "format_unsupported",
+    "safety_rejected",
+    "audio",
+    "sticker_animated",
+    "error_too_large",
+    "error",
+    "no_tags",
+    "parse_error",
+    "error_no_tags",
+})
+# SQL-плейсхолдеры для TERMINAL_TAGS (используются в get_tasks и count_tagging_backlog)
+_TERMINAL_TAGS_SQL = "(" + ",".join(f"'{t}'" for t in TERMINAL_TAGS) + ")"
 
 SUSPICIOUS_KEYWORDS = {
     "child",
@@ -457,23 +479,28 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
     exclude_list = list(exclude_fids) if exclude_fids else []
 
     # 1. Из реестра (все необработанные файлы без ограничения по времени)
+    # Исключаем записи с терминальными статусами (download_failed, format_unsupported и т.д.):
+    # они могут иметь phash IS NULL, но повторная обработка бессмысленна и создаёт лог-спам.
+    _terminal_excl = f"AND tags NOT IN {_TERMINAL_TAGS_SQL}"
     if exclude_list:
         ex_slice = exclude_list[:100]
         placeholders = ",".join(["?"] * len(ex_slice))
         query_registry = f"""
             SELECT file_id, file_type, thumbnail_id
             FROM FileRegistry
-            WHERE (tags IS NULL OR tags = '')
+            WHERE (tags IS NULL OR tags = '' OR phash IS NULL)
+              {_terminal_excl}
               AND file_id NOT IN ({placeholders})
             ORDER BY created_at DESC
             LIMIT 50
         """
         params = tuple(ex_slice)
     else:
-        query_registry = """
+        query_registry = f"""
             SELECT file_id, file_type, thumbnail_id
             FROM FileRegistry
-            WHERE (tags IS NULL OR tags = '')
+            WHERE (tags IS NULL OR tags = '' OR phash IS NULL)
+              {_terminal_excl}
             ORDER BY created_at DESC
             LIMIT 50
         """
@@ -842,6 +869,17 @@ async def download_file_with_fallback(file_id: str, primary_bot=None) -> tuple[b
     return None, None, "failed"
 
 
+async def count_tagging_backlog(db) -> int:
+    """Считает количество файлов, ожидающих тегирования (синхронизировано с get_tasks).
+    Терминальные статусы (download_failed, format_unsupported и т.д.) исключены — они
+    никогда не будут переобработаны, даже при phash IS NULL."""
+    async with db.execute(
+        f"SELECT COUNT(*) FROM FileRegistry WHERE (tags IS NULL OR tags = '' OR phash IS NULL)"
+        f" AND tags NOT IN {_TERMINAL_TAGS_SQL}"
+    ) as cursor:
+        return (await cursor.fetchone())[0]
+
+
 # ==========================================
 # ОСНОВНОЙ ЦИКЛ
 # ==========================================
@@ -864,10 +902,7 @@ async def tagging_loop():
         await execute_with_retry(_init_audio_tags, max_retries=3, base_delay=0.2)
 
         async def _count_backlog():
-            async with db.execute(
-                "SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ('image', 'photo') AND (tags IS NULL OR tags = '' OR phash IS NULL)"
-            ) as cursor:
-                return (await cursor.fetchone())[0]
+            return await count_tagging_backlog(db)
 
         total_backlog = await execute_with_retry(_count_backlog, max_retries=3, base_delay=0.2)
         logger.info(f"📊 GLOBAL STATUS: {total_backlog} files waiting.")
@@ -1431,8 +1466,8 @@ async def tagging_loop():
                 else:
                     TEMP_FAILED_FILES[file_id] = {"until": time.time() + 300, "cnt": fail_cnt}
 
-            # Пауза между файлами (строго >= 2.5 сек для защиты API-ключей от спама)
-            await asyncio.sleep(2.5)
+            # Пауза между файлами (строго >= 5 сек для защиты API-ключей от спама)
+            await asyncio.sleep(5.0)
 
         except asyncio.CancelledError:
             break
