@@ -379,7 +379,11 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
     - remaining_lock_sec = max(0, locked_until - current_ts)
     Возвращает словарь с полными актуальными данными.
     """
+    if not isinstance(deposit, dict):
+        deposit = {}
     now = float(current_ts if current_ts is not None else time.time())
+    if math.isnan(now) or math.isinf(now):
+        now = time.time()
 
     tier_id = deposit.get("tier_id", "sych")
     tier_info = get_tier_info(tier_id) or BANK_TIERS["sych"]
@@ -388,13 +392,23 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
     if math.isnan(principal) or math.isinf(principal) or principal < 0:
         principal = 0.0
     daily_rate = float(deposit.get("daily_rate", tier_info["daily_rate"]))
+    if math.isnan(daily_rate) or math.isinf(daily_rate) or daily_rate < 0:
+        daily_rate = float(tier_info["daily_rate"])
     base_accrued = float(deposit.get("accrued_interest", 0.0))
+    if math.isnan(base_accrued) or math.isinf(base_accrued) or base_accrued < 0:
+        base_accrued = 0.0
 
     last_accrual = float(deposit.get("last_accrual_at") or deposit.get("created_at") or now)
+    if math.isnan(last_accrual) or math.isinf(last_accrual):
+        last_accrual = now
     elapsed_seconds = max(0.0, now - last_accrual)
 
     created_at = float(deposit.get("created_at") or now)
+    if math.isnan(created_at) or math.isinf(created_at):
+        created_at = now
     locked_until = float(deposit.get("locked_until") or created_at)
+    if math.isnan(locked_until) or math.isinf(locked_until):
+        locked_until = created_at
     is_locked = now < locked_until
     remaining_lock_sec = max(0.0, locked_until - now)
 

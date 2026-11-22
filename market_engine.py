@@ -790,10 +790,12 @@ async def cancel_market_listing(
                 is_expired = True
 
         if is_expired:
-            await db.execute(
-                "UPDATE MarketListings SET status = 'expired', cancelled_at = ? WHERE id = ?",
+            async with db.execute(
+                "UPDATE MarketListings SET status = 'expired', cancelled_at = ? WHERE id = ? AND status = 'active'",
                 (now, lot_id)
-            )
+            ) as cur_exp:
+                if getattr(cur_exp, "rowcount", 0) == 0:
+                    return False, None, "Лот уже не активен."
             item_dict = {
                 "lot_id": lot_id,
                 "item_id": item_id,
@@ -809,10 +811,12 @@ async def cancel_market_listing(
         active_items = restore_item_to_active_items(active_items, item_id, item_type, item_data, is_seller_cancel=True)
         await _save_user_active_items(db, user_id, s_board or b_id, active_items)
 
-        await db.execute(
-            "UPDATE MarketListings SET status = 'cancelled', cancelled_at = ? WHERE id = ?",
+        async with db.execute(
+            "UPDATE MarketListings SET status = 'cancelled', cancelled_at = ? WHERE id = ? AND status IN ('active', 'expired')",
             (now, lot_id)
-        )
+        ) as cur_upd:
+            if getattr(cur_upd, "rowcount", 0) == 0:
+                return False, None, "Лот уже не активен."
 
         item_dict = {
             "lot_id": lot_id,
