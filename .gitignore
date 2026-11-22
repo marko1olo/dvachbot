@@ -98,3 +98,6 @@ scratch_*.py
 
 assets/banners/.quarantine/
 assets/banners/.compressed/
+.mem_*.json
+combat_cooldowns.json
+

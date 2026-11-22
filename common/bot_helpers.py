@@ -45,14 +45,29 @@ async def safe_callback_answer(callback: types.CallbackQuery, *args, **kwargs) -
     """
     if not callback:
         return False
+    # If no message/toast is requested and query has already been answered, skip to prevent double answer
+    if not args and not kwargs:
+        ans_mock = getattr(callback, "answer", None)
+        if ans_mock and hasattr(ans_mock, "called") and bool(ans_mock.called):
+            return True
+        if bool(getattr(callback, "_answered", False)):
+            return True
     try:
         from aiogram.exceptions import TelegramBadRequest
         if args and isinstance(args[0], str):
-            text = args[0][:195]
+            text = args[0]
+            if len(text) > 195:
+                text = text[:192] + "..."
             args = (text,) + args[1:]
         elif "text" in kwargs and isinstance(kwargs["text"], str):
-            kwargs["text"] = kwargs["text"][:195]
+            text = kwargs["text"]
+            if len(text) > 195:
+                kwargs["text"] = text[:192] + "..."
         await callback.answer(*args, **kwargs)
+        try:
+            setattr(callback, "_answered", True)
+        except Exception:
+            pass
         return True
     except TelegramBadRequest as e:
         logging.getLogger("runtime").debug("safe_callback_answer: query expired or invalid: %s", e)
@@ -1751,12 +1766,89 @@ async def _safe_delete_message(msg: Any) -> bool:
         return False
 
 
+_MENU_MESSAGE_OWNERS: dict[tuple[int, int], int] = {}
+
+def record_menu_owner(chat_id: int, message_id: int, owner_id: int) -> None:
+    if not (isinstance(chat_id, int) and isinstance(message_id, int) and isinstance(owner_id, int)):
+        return
+    if len(_MENU_MESSAGE_OWNERS) > 5000:
+        for k in list(_MENU_MESSAGE_OWNERS.keys())[:1000]:
+            _MENU_MESSAGE_OWNERS.pop(k, None)
+    _MENU_MESSAGE_OWNERS[(chat_id, message_id)] = owner_id
+
+def track_menu_owner(chat_or_tuple: Any, message_or_owner: Any = None, owner_id: Optional[int] = None) -> None:
+    """
+    Tracks menu ownership across messages and callbacks. Supports:
+    track_menu_owner((chat_id, message_id), user_id)
+    track_menu_owner(chat_id, message_id, user_id)
+    track_menu_owner(message, user_id)
+    """
+    if owner_id is not None:
+        chat_id = chat_or_tuple
+        msg_id = message_or_owner
+        uid = owner_id
+    elif isinstance(chat_or_tuple, (tuple, list)) and len(chat_or_tuple) == 2:
+        chat_id, msg_id = chat_or_tuple
+        uid = message_or_owner
+    else:
+        chat_id = getattr(getattr(chat_or_tuple, "chat", None), "id", None)
+        msg_id = getattr(chat_or_tuple, "message_id", None)
+        uid = message_or_owner
+
+    if isinstance(chat_id, int) and isinstance(msg_id, int) and isinstance(uid, int):
+        record_menu_owner(chat_id, msg_id, uid)
+
+def get_menu_owner(message: Optional[Any]) -> Optional[int]:
+    if not message or getattr(message, "__class__", None).__name__ == "InaccessibleMessage":
+        return None
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    msg_id = getattr(message, "message_id", None)
+    if isinstance(chat_id, int) and isinstance(msg_id, int):
+        owner = _MENU_MESSAGE_OWNERS.get((chat_id, msg_id))
+        if isinstance(owner, int):
+            return owner
+    reply = getattr(message, "reply_to_message", None)
+    if reply and hasattr(reply, "from_user") and reply.from_user and hasattr(reply.from_user, "id"):
+        reply_user_id = getattr(reply.from_user, "id", None)
+        if isinstance(reply_user_id, int):
+            return reply_user_id
+    return None
+
+def check_menu_owner(
+    callback: Any,
+    original_user_id: Optional[int] = None
+) -> bool:
+    """
+    Checks if callback.from_user.id belongs to the original owner of the menu message in groups.
+    If original_user_id is not provided, tries to resolve from tracked owners or reply_to_message.
+    In private chats, always returns True.
+    """
+    msg = getattr(callback, "message", None)
+    if not msg or getattr(msg, "__class__", None).__name__ == "InaccessibleMessage":
+        return True
+    chat = getattr(msg, "chat", None)
+    chat_type = getattr(chat, "type", None)
+    chat_id = getattr(chat, "id", None)
+    if isinstance(chat_type, str) and chat_type == "private":
+        return True
+    if isinstance(chat_id, int) and chat_id > 0:
+        return True
+
+    owner_id = original_user_id if isinstance(original_user_id, int) else get_menu_owner(msg)
+    user = getattr(callback, "from_user", None)
+    caller_id = getattr(user, "id", None)
+    if isinstance(owner_id, int) and isinstance(caller_id, int) and caller_id != owner_id:
+        return False
+    return True
+
+
 async def render_menu_transition(
     callback: Union[types.CallbackQuery, types.Message],
     text: str,
     reply_markup: Optional[types.InlineKeyboardMarkup] = None,
     category: Optional[str] = None,
-    prefer_banner: bool = False
+    prefer_banner: bool = False,
+    original_user_id: Optional[int] = None
 ) -> None:
     """
     Universal Safe View Renderer / Transition Helper for DvachBot Telegram UI.
@@ -1804,6 +1896,26 @@ async def render_menu_transition(
         elif hasattr(callback, "from_user") and callback.from_user and hasattr(callback.from_user, "id"):
             chat_id = callback.from_user.id
 
+    target_owner_id = original_user_id if isinstance(original_user_id, int) else None
+    if target_owner_id is None:
+        if (isinstance(callback, types.Message) or hasattr(callback, "from_user")) and getattr(callback, "from_user", None):
+            uid = getattr(callback.from_user, "id", None)
+            if isinstance(uid, int):
+                target_owner_id = uid
+        elif is_callback and msg:
+            target_owner_id = get_menu_owner(msg)
+            if target_owner_id is None and getattr(callback, "from_user", None):
+                uid = getattr(callback.from_user, "id", None)
+                if isinstance(uid, int):
+                    target_owner_id = uid
+
+    def _track_transition_owner(res_msg: Any) -> None:
+        if res_msg and hasattr(res_msg, "chat") and hasattr(res_msg, "message_id") and isinstance(target_owner_id, int):
+            c_id = getattr(res_msg.chat, "id", None)
+            m_id = getattr(res_msg, "message_id", None)
+            if isinstance(c_id, int) and isinstance(m_id, int):
+                record_menu_owner(c_id, m_id, target_owner_id)
+
     async def _safe_answer_if_needed(toast: Optional[str] = None) -> None:
         if not cb:
             return
@@ -1834,6 +1946,7 @@ async def render_menu_transition(
                     parse_mode="HTML"
                 )
                 if sent:
+                    _track_transition_owner(sent)
                     await _safe_answer_if_needed()
                     return
             except Exception:
@@ -1880,6 +1993,7 @@ async def render_menu_transition(
                     )
                     if inspect.isawaitable(res):
                         await res
+                    _track_transition_owner(msg)
                     await _safe_answer_if_needed()
                     return
             except TelegramBadRequest as ex:
@@ -1910,6 +2024,7 @@ async def render_menu_transition(
                 sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
 
             if sent:
+                _track_transition_owner(sent)
                 await _safe_delete_message(msg)
 
             await _safe_answer_if_needed()
@@ -1918,6 +2033,7 @@ async def render_menu_transition(
             # Source is media, but target is text (prefer_banner is False or UTF-16 len > 1024)
             sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
             if sent:
+                _track_transition_owner(sent)
                 await _safe_delete_message(msg)
 
             await _safe_answer_if_needed()
@@ -1945,6 +2061,7 @@ async def render_menu_transition(
                 sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
 
             if sent:
+                _track_transition_owner(sent)
                 await _safe_delete_message(msg)
 
             await _safe_answer_if_needed()
@@ -1961,6 +2078,7 @@ async def render_menu_transition(
                     )
                     if inspect.isawaitable(res):
                         await res
+                    _track_transition_owner(msg)
                     await _safe_answer_if_needed()
                     return
             except TelegramBadRequest as ex:
@@ -1988,6 +2106,7 @@ async def render_menu_transition(
             # Fallback if edit_text fails (e.g. message too old or was deleted)
             sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)
             if sent:
+                _track_transition_owner(sent)
                 await _safe_delete_message(msg)
 
             await _safe_answer_if_needed()

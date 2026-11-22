@@ -8,6 +8,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 import io
+import html
 import random
 import re
 import numpy as np
@@ -3049,9 +3050,12 @@ def _format_text_report(data: UserStatsCardData) -> str:
         winrate = int(round((data.duel_wins / total_duels) * 100))
         duel_line = f"\n⚔️ <b>PvP-Дуэли:</b> {data.duel_wins}W - {data.duel_losses}L ({winrate}%)"
 
+    safe_schizo = html.escape(str(data.schizo_name))
+    safe_role = html.escape(str(data.role_name))
+    safe_prefix = f"({html.escape(str(data.custom_prefix))})" if data.custom_prefix else ""
     res = (
-        f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/{data.board_id}/)\n\n"
-        f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
+        f"☘️ <b>Статистика пользователя {safe_schizo}</b> (/{data.board_id}/)\n\n"
+        f"👤 <b>Статус:</b> {safe_role} {safe_prefix}\n"
         f"🏅 <b>Ранг борды:</b> #{data.rank} из {data.total_users}\n"
         f"📝 <b>Написано постов:</b> {data.posts_count:,}\n"
         f"🎭 <b>Получено реакций:</b> +{data.rx_received:,} (Одобрение: {data.approval_pct}%)\n"

@@ -14,6 +14,7 @@ Renders a complete RPG character sheet with visual paperdoll layering for:
 
 import os
 import io
+import html
 import time
 from typing import Dict, Any, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
@@ -346,7 +347,8 @@ def build_character_html_card(
     has_shit = active_items.get("shit_until", 0) > now_ts or active_items.get("shit_covered_until", 0) > now_ts
     has_vomit = active_items.get("vomit_until", 0) > now_ts
 
-    head_name = CLOTHING_CATALOG.get(equipped_head, {}).get("name") if equipped_head in CLOTHING_CATALOG else ("👽 Шапочка из фольги" if has_tinfoil else ("👑 VIP Корона" if custom_prefix else "<i>(Пусто)</i>"))
+    safe_prefix = html.escape(custom_prefix) if custom_prefix else None
+    head_name = CLOTHING_CATALOG.get(equipped_head, {}).get("name") if equipped_head in CLOTHING_CATALOG else ("👽 Шапочка из фольги" if has_tinfoil else (f"👑 VIP Корона ({safe_prefix})" if safe_prefix else "<i>(Пусто)</i>"))
     torso_name = CLOTHING_CATALOG.get(equipped_torso, {}).get("name", "<i>(Пусто)</i>")
     face_name = CLOTHING_CATALOG.get(equipped_face, {}).get("name", "<i>(Пусто)</i>")
     feet_name = CLOTHING_CATALOG.get(equipped_feet, {}).get("name", "<i>(Пусто)</i>")
@@ -394,9 +396,9 @@ def build_character_html_card(
     color_info = COLOR_PALETTE.get(badge_color, {"name": "Стандартный", "emoji": "⚪️"})
 
     lines = [
-        f"🎭 <b>ДОСЬЕ И КАРТОЧКА ПЕРСОНАЖА [#{anon_id}]</b>",
+        f"🎭 <b>ДОСЬЕ И КАРТОЧКА ПЕРСОНАЖА [#{html.escape(str(anon_id))}]</b>",
         f"<code>{'—'*28}</code>",
-        f"👤 <b>Статус:</b> {custom_prefix if custom_prefix else 'Битард'} | <b>Аура:</b> {color_info['emoji']} {color_info['name']}",
+        f"👤 <b>Статус:</b> {safe_prefix if safe_prefix else 'Битард'} | <b>Аура:</b> {color_info['emoji']} {color_info['name']}",
         f"💰 <b>Капитал:</b> <code>{bal_str}</code> | <b>Постов:</b> <code>{posts_count}</code>",
         f"🏆 <b>Трофеи:</b> <code>{ach_cnt}/{total_ach}</code> ({int(ach_cnt/total_ach*100)}%)",
         "",
