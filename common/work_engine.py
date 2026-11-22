@@ -14,6 +14,9 @@ import threading
 _WORK_ENGINE_LOCK = threading.RLock()
 _GLOBAL_JOB_TIMERS: Dict[Tuple[int, str], int] = {}
 
+MAX_COMBINED_MULTIPLIER: float = 2.25
+MAX_SHIFT_REWARD_CAP: int = 45000
+
 
 class JobResult(tuple):
     """
@@ -47,6 +50,22 @@ class JobResult(tuple):
             if isinstance(a, dict)
         )
         return instance
+
+    @property
+    def is_success(self) -> bool:
+        return self[0]
+
+    @property
+    def amount_change(self) -> int:
+        return self[1]
+
+    @property
+    def text_message(self) -> str:
+        return self[2]
+
+    @property
+    def item_dropped(self) -> Optional[str]:
+        return self[3]
 
     def __getitem__(self, index):
         if index == 4:
@@ -1747,6 +1766,35 @@ def is_night_shift_active(current_time: Optional[int] = None) -> bool:
     return 0 <= msk_hour < 7
 
 
+def format_fatigue_recovery_time(seconds: int | float) -> str:
+    """Форматирует секунды восстановления усталости в понятное человеку время."""
+    try:
+        sec = max(0, int(round(float(seconds))))
+    except (ValueError, TypeError, OverflowError):
+        return "0 сек."
+    if sec <= 0:
+        return "сейчас"
+    if sec < 60:
+        return f"{sec} сек."
+    if sec < 3600:
+        m = sec // 60
+        s = sec % 60
+        if s > 0 and m < 5:
+            return f"{m} мин. {s} сек."
+        return f"{m} мин."
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    if h >= 24:
+        d = h // 24
+        rem_h = h % 24
+        if rem_h > 0:
+            return f"{d} дн. {rem_h} ч."
+        return f"{d} дн."
+    if m > 0:
+        return f"{h} ч. {m} мин."
+    return f"{h} ч."
+
+
 def get_user_daily_fatigue_info(recent_shifts: Any, now: Optional[float] = None) -> Dict[str, Any]:
     """
     Returns daily fatigue metrics for the rolling 24-hour window across all vacancies.
@@ -1755,25 +1803,45 @@ def get_user_daily_fatigue_info(recent_shifts: Any, now: Optional[float] = None)
             'shifts_today': N,
             'efficiency_pct': 100/80/55/35/20,
             'tier_desc': '1-3 смены (100%)',
-            'next_tier_at': 4
+            'next_tier_at': 4,
+            'recovery_sec': seconds_until_first_shift_decay,
+            'recovery_text': human_readable_recovery_time
         }
     """
     if now is None:
         now = time.time()
 
-    total_shifts_today = 0
+    all_valid = []
+
+    def _extract_valid_ts(ts):
+        if isinstance(ts, (int, float)):
+            if 0 <= (now - ts) < 86400:
+                all_valid.append(ts)
+                return True
+        elif isinstance(ts, str):
+            try:
+                v = float(ts)
+                if 0 <= (now - v) < 86400:
+                    all_valid.append(v)
+                    return True
+            except (ValueError, TypeError):
+                pass
+        return False
+
     if isinstance(recent_shifts, dict):
         for jid, timestamps in recent_shifts.items():
             if isinstance(timestamps, list):
-                total_shifts_today += sum(1 for ts in timestamps if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400)
-            elif isinstance(timestamps, (int, float)) and 0 <= (now - timestamps) < 86400:
-                total_shifts_today += 1
+                for ts in timestamps:
+                    _extract_valid_ts(ts)
+            else:
+                _extract_valid_ts(timestamps)
     elif isinstance(recent_shifts, list):
-        total_shifts_today = sum(1 for ts in recent_shifts if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400)
+        for ts in recent_shifts:
+            _extract_valid_ts(ts)
     elif isinstance(recent_shifts, (int, float)):
-        total_shifts_today = max(0, int(recent_shifts))
-    else:
-        total_shifts_today = 0
+        _extract_valid_ts(recent_shifts)
+
+    total_shifts_today = len(all_valid)
 
     if total_shifts_today <= 3:
         eff = 100
@@ -1796,24 +1864,185 @@ def get_user_daily_fatigue_info(recent_shifts: Any, now: Optional[float] = None)
         desc = "16+ смен (20%)"
         next_at = None
 
+    recovery_sec = 0
+    recovery_text = ""
+    if all_valid and total_shifts_today > 3:
+        oldest_ts = min(all_valid)
+        recovery_sec = max(0, int(oldest_ts + 86400 - now))
+        if recovery_sec > 0:
+            recovery_text = f"через {format_fatigue_recovery_time(recovery_sec)}"
+
     return {
         "shifts_today": total_shifts_today,
         "efficiency_pct": eff,
         "tier_desc": desc,
         "next_tier_at": next_at,
+        "recovery_sec": recovery_sec,
+        "recovery_text": recovery_text,
     }
 
 
 def format_fatigue_badge(fatigue_info: Dict[str, Any]) -> str:
     """
     Formats player-visible fatigue badge:
-    `⚡ Смена за сутки: N | Эффективность: P%` (or with `(усталость -X%)` when < 100%).
+    `⚡ Смена за сутки: N | Эффективность: P%` (with recovery info when < 100%).
     """
     shifts = fatigue_info.get("shifts_today", 0)
     eff = fatigue_info.get("efficiency_pct", 100)
+    rec = fatigue_info.get("recovery_text", "")
     if eff < 100:
-        return f"⚡ Смена за сутки: {shifts} | Эффективность: {eff}% (усталость -{100 - eff}%)"
+        rec_suffix = f" • спад {rec}" if rec else ""
+        return f"⚡ Смена за сутки: {shifts} | Эффективность: {eff}% (усталость -{100 - eff}%{rec_suffix})"
     return f"⚡ Смена за сутки: {shifts} | Эффективность: {eff}%"
+
+
+def format_vacancy_dossier(
+    job_id: str,
+    user_shifts: int = 0,
+    current_items: Optional[dict] = None
+) -> str:
+    """
+    Генерирует подробную, структурированную карточку вакансии для игрока:
+    - Название, тир и описание.
+    - Стаж и статус доступности (сколько смен не хватает).
+    - Диапазон зарплаты (с учетом текущего шмота и ночного тарифа).
+    - Время кулдауна (с учетом тапок).
+    - Риск и сумма штрафа при провале (с учетом защиты шлема/сета).
+    - Выпадение лута (название предмета и процент дропа).
+    - Рекомендуемый шмот / синергии.
+    """
+    if job_id not in WORK_VACANCIES:
+        return "❌ Вакансия не найдена."
+
+    job = WORK_VACANCIES[job_id]
+    items = current_items or {}
+
+    title = job.get("title", job_id)
+    tier = job.get("tier", "Работа")
+    desc = job.get("desc", "")
+
+    req_shifts = job.get("required_shifts", 0)
+    user_shifts = max(0, int(user_shifts or items.get("work_shifts", 0)))
+    if user_shifts >= req_shifts:
+        lock_status = "✅ <b>Доступно для работы</b>"
+    else:
+        left_shifts = req_shifts - user_shifts
+        lock_status = f"🔒 <b>Заблокировано</b> (требуется {req_shifts} смен, у тебя {user_shifts}, осталось {left_shifts})"
+
+    r_min, r_max = job.get("reward_range", (0, 0))
+    gear_mult = 1.0
+    active_synergies = []
+    equipped_feet = items.get("equipped_feet")
+    equipped_torso = items.get("equipped_torso")
+    equipped_head = items.get("equipped_head")
+    equipped_face = items.get("equipped_face")
+
+    if equipped_torso == "body_wasserman":
+        gear_mult += 0.25
+        active_synergies.append("🦺 Жилетка (+25%)")
+    if equipped_head == "hat_crown" and job_id in ["courier", "deputy", "scam", "escort_sugar", "abu_consigliere", "shadow_oligarch", "cam_model", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
+        gear_mult += 0.20
+        active_synergies.append("👑 Корона (+20%)")
+    if equipped_face in ["face_wasserman_glasses", "face_thug_glasses"] and job_id in ["captcha", "it_freelance", "spy", "crypto_wiper", "crypto_cartel", "propaganda_troll", "matrix_architect", "mod_b", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
+        gear_mult += 0.15
+        active_synergies.append("👓 Очки (+15%)")
+
+    now = int(time.time())
+    if is_night_shift_active(now):
+        gear_mult *= 1.5
+        active_synergies.append("🌙 Ночь x1.5")
+
+    gear_mult = min(MAX_COMBINED_MULTIPLIER, gear_mult)
+    est_min = int(round(r_min * gear_mult))
+    est_max = int(round(r_max * gear_mult))
+    if gear_mult > 1.0:
+        syn_txt = f" <i>(с бонусами: {', '.join(active_synergies)})</i>"
+        reward_txt = f"<code>{r_min:,} — {r_max:,} ₪</code> ➔ <b>{est_min:,} — {est_max:,} ₪</b>{syn_txt}"
+    else:
+        reward_txt = f"<b>{r_min:,} — {r_max:,} ₪</b>"
+
+    base_cd = job.get("cooldown_sec", 60)
+    if equipped_feet == "feet_slippers":
+        eff_cd = int(base_cd * 0.8)
+        cd_note = " <i>(скидка 20% от тапок)</i>"
+    else:
+        eff_cd = base_cd
+        cd_note = ""
+    cd_txt = format_fatigue_recovery_time(eff_cd) + cd_note
+
+    risk_pct = float(job.get("risk_pct", 0.0)) * 100.0
+    penalty = job.get("penalty", 0)
+    has_fine_immunity = (equipped_head == "hat_helmet")
+    if has_fine_immunity:
+        risk_txt = "0% <i>(иммунитет от 🪖 Шлема ОМОНа)</i>"
+    elif risk_pct <= 0:
+        risk_txt = "0% (без риска)"
+    else:
+        risk_txt = f"{risk_pct:.0f}% (штраф при провале: -{penalty:,.0f} ₪)"
+
+    drop_item = job.get("item_drop")
+    drop_chance = float(job.get("item_drop_chance", 0.0)) * 100.0
+    if drop_item and drop_chance > 0:
+        drop_names = {
+            "trash_lootbox": "🗑️ Мусорный Лутбокс",
+            "gold_safe": "👑 Золотой Сейф",
+            "whale_safe": "🐋 Сейф Олигарха",
+            "janitor_broom": "🧹 Метла Дворника",
+            "knife_gun": "🔪 Заточка",
+            "shield_gun": "🔰 Зеркальный Щит",
+            "shield": "🔰 Зеркальный Щит",
+            "schizopill": "💊 Шизо-Таблетка",
+            "pepperspray": "🧯 Перцовый баллончик",
+            "megaphone": "📢 Мегафон",
+            "partyvan": "🚔 Пативэн-Ган",
+        }
+        item_label = drop_names.get(drop_item, f"📦 {drop_item}")
+        drop_txt = f"{item_label} (шанс: {drop_chance:.1f}%)"
+    else:
+        drop_txt = "нет"
+
+    recs = []
+    if job.get("penalty", 0) > 0:
+        recs.append("🪖 Шлем ОМОНа (0% штрафов)")
+    if base_cd >= 1800:
+        recs.append("👟 Тапки Сыча (-20% к кулдауну)")
+    if job_id in ["courier", "deputy", "scam", "escort_sugar", "abu_consigliere", "shadow_oligarch", "cam_model", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
+        recs.append("👑 Корона (+20% чаевых)")
+    if job_id in ["captcha", "it_freelance", "spy", "crypto_wiper", "crypto_cartel", "propaganda_troll", "matrix_architect", "mod_b", "deep_state_operator", "cheburnet_leviathan", "zog_chairman", "dvach_creator"]:
+        recs.append("👓 Очки Вассермана (+15% ЗП)")
+    recs.append("🦺 Жилетка Вассермана (+25% ЗП)")
+
+    gear_rec_txt = ", ".join(recs[:3])
+
+    lines = [
+        f"💼 <b>{title}</b>",
+        f"🎖 <i>{tier}</i>\n",
+        f"📝 {desc}\n",
+        f"📊 <b>Статус:</b> {lock_status}",
+        f"💰 <b>Зарплата:</b> {reward_txt}",
+        f"⏳ <b>Кулдаун:</b> {cd_txt}",
+        f"⚠️ <b>Риск провала:</b> {risk_txt}",
+        f"🎁 <b>Возможный лут:</b> {drop_txt}",
+        f"👔 <b>Полезный шмот:</b> <i>{gear_rec_txt}</i>",
+    ]
+
+    return "\n".join(lines)
+
+
+def format_all_vacancies_summary(user_shifts: int = 0) -> str:
+    """
+    Возвращает краткий обзор всех доступных и заблокированных профессий с требованиями.
+    """
+    lines = ["📋 <b>СПИСОК ВСЕХ ПРОФЕССИЙ И ТРЕБОВАНИЙ:</b>\n"]
+    for jid, job in WORK_VACANCIES.items():
+        req = job.get("required_shifts", 0)
+        status_icon = "✅" if user_shifts >= req else "🔒"
+        r_min, r_max = job.get("reward_range", (0, 0))
+        lines.append(
+            f"{status_icon} <b>{job['title']}</b>\n"
+            f"   • Требования: {req} смен | ЗП: {r_min:,}–{r_max:,} ₪ | КД: {job['cooldown_sec']//60} мин."
+        )
+    return "\n".join(lines)
 
 
 def execute_job_action(
@@ -1854,19 +2083,16 @@ def execute_job_action(
         if effective_uid is not None:
             try:
                 from shared_state import get_user_work_cooldowns
-                shared_ts = get_user_work_cooldowns(effective_uid).get(job_id, 0)
+                u_cds = get_user_work_cooldowns(effective_uid)
+                if job_id in u_cds:
+                    if u_cds[job_id] <= 0:
+                        shared_ts = 0
+                        work_timers[job_id] = 0
+                    else:
+                        shared_ts = u_cds[job_id]
             except Exception:
                 shared_ts = 0
             mem_ts = _GLOBAL_JOB_TIMERS.get((effective_uid, job_id), 0)
-            try:
-                from shared_state import get_user_work_cooldowns
-                if effective_uid is not None and get_user_work_cooldowns(effective_uid).get(job_id, 0) == 0:
-                    shared_ts = 0
-                    mem_ts = 0
-                    local_ts = 0
-                    work_timers[job_id] = 0
-            except Exception:
-                pass
             shared_ts = max(shared_ts, mem_ts)
 
         try:
@@ -1886,7 +2112,6 @@ def execute_job_action(
                 pass
 
         last_time = max(local_ts, shared_ts)
-        passed = max(0, now - last_time) if last_time <= now else 0
 
         # Resolve equipped items with durability / expiration validation
         try:
@@ -1923,6 +2148,34 @@ def execute_job_action(
         if feet == "feet_slippers":
             base_cd = int(base_cd * 0.8)
 
+        # Sanity check against future/corrupted timestamps to prevent eternal cooldown trap
+        if last_time > now:
+            if (last_time - now) <= base_cd:
+                # Timestamp was stored as expires_at; remaining cooldown is (last_time - now)
+                left_sec = last_time - now
+                if left_sec >= 3600:
+                    h = left_sec // 3600
+                    m = (left_sec % 3600) // 60
+                    cd_str = f"{h} ч {m} мин"
+                elif left_sec >= 60:
+                    cd_str = f"{left_sec // 60} мин"
+                else:
+                    cd_str = f"{left_sec} сек"
+                return JobResult(False, 0, f"⏳ Кулдаун! Эта смена будет доступна через {cd_str}.", None)
+            else:
+                # Impossible future timestamp (> base_cd) -> auto-heal so user is not stuck forever
+                last_time = 0
+                work_timers[job_id] = 0
+                if effective_uid is not None:
+                    try:
+                        from shared_state import set_user_work_cooldown
+                        set_user_work_cooldown(effective_uid, job_id, 0)
+                    except Exception:
+                        pass
+                passed = base_cd
+        else:
+            passed = max(0, now - last_time) if last_time > 0 else base_cd
+
         if passed < base_cd and last_time > 0:
             left_sec = base_cd - passed
             if left_sec >= 3600:
@@ -1944,7 +2197,14 @@ def execute_job_action(
 
         req_shifts = job.get("required_shifts", 0)
         if total_shifts < req_shifts:
-            return JobResult(False, 0, f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}).", None)
+            left_shifts = req_shifts - total_shifts
+            return JobResult(
+                False,
+                0,
+                f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}, осталось: {left_shifts}). "
+                f"Отрабатывай доступные смены для повышения квалификации!",
+                None
+            )
 
         # Atomic cooldown reservation: prevent any concurrent request from passing the gate
         work_timers[job_id] = now
@@ -2036,24 +2296,48 @@ def execute_job_action(
         else:
             fatigue_mult = 0.20
 
+        all_valid_ts = []
+        if isinstance(raw_recent, dict):
+            for jid, timestamps in raw_recent.items():
+                if isinstance(timestamps, list):
+                    for ts in timestamps:
+                        if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400:
+                            all_valid_ts.append(ts)
+        elif isinstance(raw_recent, list):
+            for ts in raw_recent:
+                if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400:
+                    all_valid_ts.append(ts)
+
+        rec_sec = 0
+        rec_text = ""
+        if all_valid_ts and current_shift_num > 3:
+            oldest_ts = min(all_valid_ts)
+            rec_sec = max(0, int(oldest_ts + 86400 - now))
+            if rec_sec > 0:
+                rec_text = format_fatigue_recovery_time(rec_sec)
+
         if fatigue_mult < 1.0:
             fatigue_pct = int(round((1.0 - fatigue_mult) * 100))
             buff_notes.append(f"⚡ Усталость: -{fatigue_pct}% (смена #{current_shift_num})")
-            fatigue_badge = f"⚡ Смена за сутки: {current_shift_num} | Эффективность: {int(round(fatigue_mult * 100))}% (усталость -{fatigue_pct}%)"
+            rec_suffix = f" • спад через {rec_text}" if rec_text else ""
+            fatigue_badge = f"⚡ Смена за сутки: {current_shift_num} | Эффективность: {int(round(fatigue_mult * 100))}% (усталость -{fatigue_pct}%{rec_suffix})"
         else:
             fatigue_badge = f"⚡ Смена за сутки: {current_shift_num} | Эффективность: 100%"
 
         def _record_shift_completion(jid: str):
             work_timers[jid] = now
             shifts_dict = current_items.get("recent_shifts")
-            if not isinstance(shifts_dict, dict):
-                shifts_dict = {}
             cleaned = {}
-            for k, v in shifts_dict.items():
-                if isinstance(v, list):
-                    valid = [ts for ts in v if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
-                    if valid:
-                        cleaned[k] = valid
+            if isinstance(shifts_dict, dict):
+                for k, v in shifts_dict.items():
+                    if isinstance(v, list):
+                        valid = [ts for ts in v if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+                        if valid:
+                            cleaned[k] = valid
+            elif isinstance(shifts_dict, list):
+                valid = [ts for ts in shifts_dict if isinstance(ts, (int, float)) and 0 <= (now - ts) < 86400]
+                if valid:
+                    cleaned[jid] = valid
             cleaned.setdefault(jid, []).append(now)
             current_items["recent_shifts"] = cleaned
 

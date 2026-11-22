@@ -10,6 +10,7 @@ import html
 import json
 import logging
 import math
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -85,6 +86,7 @@ __all__ = [
     "get_market_listing",
     "classify_item",
     "find_item_by_name_or_id",
+    "parse_market_price",
     "get_user_sellable_items_list",
     "extract_item_for_escrow",
     "restore_item_to_active_items",
@@ -192,6 +194,57 @@ def classify_item(item_id: str) -> Tuple[str, str, Dict[str, Any]]:
         return "lootbox", f"📦 {clean_id}", {}
 
     return "pharma", f"📦 {clean_id}", {}
+
+
+def parse_market_price(price_input: Any) -> Optional[float]:
+    """
+    Безопасно парсит цену для Барахолки:
+    - Числа и строки: 500, '500', '50k', '50к', '1.5m', '1.5м', '50 000', '500 ₪', '500 руб'
+    - Отклоняет: None, '', 'abc', 'nan', 'inf', '-inf', отрицательные числа, 0, < 1.0, > 100 000 000.
+    Возвращает float >= 1.0 (округленный до 2 знаков) или None при некорректном вводе.
+    """
+    if price_input is None:
+        return None
+
+    if isinstance(price_input, (int, float)):
+        if math.isnan(price_input) or math.isinf(price_input) or price_input < 1.0 or price_input > 100_000_000:
+            return None
+        return round(float(price_input), 2)
+
+    if not isinstance(price_input, str):
+        return None
+
+    txt = price_input.strip().lower()
+    if not txt:
+        return None
+
+    if txt in ("nan", "+nan", "-nan", "inf", "-inf", "+inf", "infinity", "-infinity"):
+        return None
+
+    # Replace currency & common abbreviations
+    txt = txt.replace("кк", "m").replace("kk", "m")
+    txt = txt.replace("к", "k").replace("м", "m")
+    for sfx in ["шекелей", "шекеля", "шекель", "рублей", "рубля", "руб", "р.", "р", "₪", "$"]:
+        txt = txt.replace(sfx, "")
+
+    # Remove spaces between digits and normalize comma
+    txt = re.sub(r'(?<=\d)\s+(?=\d)', '', txt).replace(" ", "").replace(",", ".")
+    if not txt:
+        return None
+
+    try:
+        if txt.endswith("k"):
+            val = float(txt[:-1]) * 1000.0
+        elif txt.endswith("m"):
+            val = float(txt[:-1]) * 1000000.0
+        else:
+            val = float(txt)
+
+        if math.isnan(val) or math.isinf(val) or val < 1.0 or val > 100_000_000:
+            return None
+        return round(val, 2)
+    except (ValueError, OverflowError):
+        return None
 
 
 def find_item_by_name_or_id(query: str) -> Optional[Tuple[str, str, str]]:
@@ -623,14 +676,18 @@ async def create_market_listing(
     2. Создает запись в таблице MarketListings со статусом 'active'.
     Возвращает (success: bool, listing_dict: Optional[dict], error_msg: str).
     """
-    try:
-        price = round(float(price), 2)
-    except (ValueError, TypeError):
-        return False, None, "Некорректная цена."
-    if math.isnan(price) or math.isinf(price) or price < 1.0:
-        return False, None, "Цена предмета на Базаре должна быть не менее 1.00 ₪."
-    if price > 100_000_000:
-        return False, None, "Максимальная цена предмета на Базаре — 100 000 000 ₪."
+    parsed_price = parse_market_price(price)
+    if parsed_price is None:
+        try:
+            num_val = float(price)
+            if num_val < 1.0:
+                return False, None, "Цена предмета на Базаре должна быть не менее 1.00 ₪."
+            if num_val > 100_000_000:
+                return False, None, "Максимальная цена предмета на Базаре — 100 000 000 ₪."
+        except Exception:
+            pass
+        return False, None, "Некорректная цена. Укажите сумму от 1 до 100 000 000 ₪."
+    price = parsed_price
 
     await ensure_market_schema(db)
     board_id = seller_board_id or "b"
@@ -825,7 +882,8 @@ async def buy_market_listing(
 
         ok, _ = await deduct_user_global_balance(db, buyer_id, b_id, price)
         if not ok:
-            return False, 0, 0.0, 0.0, 0.0, None, f"Недостаточно шекелей для покупки лота ({price:,.0f} ₪)."
+            cur_bal = await get_user_global_balance(db, buyer_id)
+            return False, 0, 0.0, 0.0, 0.0, None, f"Недостаточно шекелей в кошельке (баланс: {cur_bal:,.2f} ₪, требуется: {price:,.2f} ₪). Пополни баланс или заработай на /work!"
 
         raw_fee = price * 0.05
         fee = max(1.0, round(raw_fee, 2)) if price >= 1.0 else round(raw_fee, 2)
@@ -1145,7 +1203,6 @@ def build_market_main_menu_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub"),
         ],
         [
-            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
             InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
@@ -1180,10 +1237,7 @@ def build_my_lots_kb(items: List[Dict[str, Any]], page: int, total_pages: int) -
         kb_rows.append(nav_row)
 
     kb_rows.append([
-        InlineKeyboardButton(text="🏷 Продать еще (/sell)", callback_data="market_sell_menu"),
         InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub"),
-    ])
-    kb_rows.append([
         InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
@@ -1205,7 +1259,7 @@ def build_market_catalog_kb(
         kb.append([
             InlineKeyboardButton(
                 text=f"{item['item_name']} — {price_str}",
-                callback_data=f"market_lot:{item['id']}"
+                callback_data=f"market_lot:{item['id']}:{category}:{sort_order}:{page}"
             )
         ])
 
@@ -1255,11 +1309,12 @@ async def _render_market_view(
     target: types.Message | types.CallbackQuery,
     text: str,
     kb: InlineKeyboardMarkup,
-    category: str = "shop"
+    category: str = "shop",
+    prefer_banner: bool = True
 ):
     """Универсально отображает или обновляет представление Базара."""
     from common.bot_helpers import render_menu_transition
-    await render_menu_transition(target, text, kb, category=category, prefer_banner=True)
+    await render_menu_transition(target, text, kb, category=category, prefer_banner=prefer_banner)
 
 
 # -----------------------------------------------------------------------------
@@ -1383,8 +1438,8 @@ async def cmd_market(message: types.Message, board_id: str | None = None, stream
             "<code>────────────────────────</code>",
         ]
         if not items:
-            lines.append("\n<i>В этой категории сейчас нет активных лотов.</i>")
-            lines.append("<i>Будь первым — продай что-нибудь через /sell!</i>")
+            lines.append("\n🛒 <b>На рынке пока нет товаров. Будь первым, кто выставит лот!</b>")
+            lines.append("<i>Выстави ненужный шмот или пушку командой <code>/sell &lt;предмет&gt; &lt;цена&gt;</code></i>")
         else:
             for it in items:
                 p_str = f"{int(it['price']):,} ₪" if it['price'].is_integer() else f"{it['price']:,.2f} ₪"
@@ -1438,20 +1493,30 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
 
     parts = (message.text or "").split()[1:]
 
+    # Если передан 1 аргумент (пользователь указал предмет, но забыл цену)
+    if len(parts) == 1:
+        resolved = find_item_by_name_or_id(parts[0])
+        if resolved:
+            item_id, item_type, item_name = resolved
+            safe_name = html.escape(item_name)
+            await message.answer(
+                f"⚠️ Ты указал предмет <b>{safe_name}</b>, но забыл указать цену продажи!\n"
+                f"Пример: <code>/sell {parts[0]} 500</code>",
+                parse_mode="HTML"
+            )
+            return
+
     # Если переданы аргументы: /sell <предмет> <цена>
     if len(parts) >= 2:
-        raw_price = parts[-1].lower().replace("к", "k").replace("₪", "").replace(",", ".")
+        raw_price = parts[-1]
         raw_item = " ".join(parts[:-1])
 
-        try:
-            if raw_price.endswith("k"):
-                price = float(raw_price[:-1]) * 1000
-            elif raw_price.endswith("m"):
-                price = float(raw_price[:-1]) * 1000000
-            else:
-                price = float(raw_price)
-        except ValueError:
-            await message.answer("❌ Неверный формат цены. Пример: <code>/sell заточка 500</code>", parse_mode="HTML")
+        price = parse_market_price(raw_price)
+        if price is None:
+            await message.answer(
+                "❌ Укажи корректную цену от 1 до 100 000 000 ₪, например: <code>/sell заточка 500</code>",
+                parse_mode="HTML"
+            )
             return
 
         resolved = find_item_by_name_or_id(raw_item)
@@ -1479,7 +1544,7 @@ async def cmd_sell(message: types.Message, board_id: str | None = None, stream: 
             f"🏷 <b>ЛОТ #{listing['id']} УСПЕШНО ВЫСТАВЛЕН НА БАЗАР!</b>\n\n"
             f"📦 <b>Предмет:</b> {safe_name}\n"
             f"💰 <b>Цена продажи:</b> <code>{price:,.2f} ₪</code>\n"
-            f"💸 <b>Налог Абу (5%):</b> <code>-{fee_est:,.2f} ₪</code>\n"
+            f"💸 <b>Комиссия Базара (5%):</b> <code>-{fee_est:,.2f} ₪</code>\n"
             f"💵 <b>Ты получишь при покупке:</b> <code>+{payout_est:,.2f} ₪</code>\n\n"
             f"<i>Предмет перемещен на эскроу-склад Базара. Ты можешь снять его в /market в разделе «Мои лоты».</i>"
         )
@@ -1593,8 +1658,8 @@ async def cb_market_cat(callback: types.CallbackQuery, board_id: str | None = No
         ]
 
         if not items:
-            lines.append("\n<i>В этой категории сейчас нет активных лотов.</i>")
-            lines.append("<i>Будь первым — продай что-нибудь через /sell!</i>")
+            lines.append("\n🛒 <b>На рынке пока нет товаров. Будь первым, кто выставит лот!</b>")
+            lines.append("<i>Выстави ненужный шмот или пушку командой <code>/sell &lt;предмет&gt; &lt;цена&gt;</code></i>")
         else:
             for it in items:
                 p_str = f"{int(it['price']):,} ₪" if it['price'].is_integer() else f"{it['price']:,.2f} ₪"
@@ -1616,8 +1681,12 @@ async def cb_market_lot(callback: types.CallbackQuery, board_id: str | None = No
     try:
         b_id = board_id or "b"
         user_id = callback.from_user.id
-        raw_id = callback.data.split(":", 1)[1]
+        parts = callback.data.split(":")
+        raw_id = parts[1] if len(parts) > 1 else ""
         lot_id = int(raw_id) if raw_id.isdigit() else 0
+        category = parts[2] if len(parts) > 2 else ""
+        sort_order = parts[3] if len(parts) > 3 else "price_asc"
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1
 
         db = await get_pool()
         lot = await get_market_listing(db, lot_id)
@@ -1647,13 +1716,17 @@ async def cb_market_lot(callback: types.CallbackQuery, board_id: str | None = No
         if desc_text:
             desc_text = f"\n{desc_text}\n"
 
+        fee_est = max(1.0, round(price * 0.05, 2)) if price >= 1.0 else round(price * 0.05, 2)
+        payout_est = round(price - fee_est, 2)
+
         safe_lot_name = html.escape(lot['item_name'])
         text = (
             f"🏷 <b>ЛОТ #{lot['id']}: {safe_lot_name}</b>\n\n"
             f"📁 <b>Категория:</b> {MARKET_CATEGORIES.get(lot['item_type'], lot['item_type'])}\n"
-            f"💰 <b>Цена:</b> <code>{price_str}</code>\n"
+            f"💰 <b>Цена лота:</b> <code>{price_str}</code>\n"
+            f"🏛 <b>Комиссия рынка (5%):</b> <code>{fee_est:,.2f} ₪</code> <i>(продавец получит {payout_est:,.2f} ₪)</i>\n"
             f"{desc_text}\n"
-            f"🏛 <i>Включает 5% сбор Абу при покупке. Товар передается мгновенно.</i>"
+            f"🛡 <i>Товар депонирован на эскроу-складе и передается покупателю моментально.</i>"
         )
 
         kb_rows = []
@@ -1662,8 +1735,9 @@ async def cb_market_lot(callback: types.CallbackQuery, board_id: str | None = No
         else:
             kb_rows.append([InlineKeyboardButton(text=f"💰 Купить за {price_str}", callback_data=f"market_buy:{lot['id']}")])
 
+        cat = category or lot.get('item_type', 'weapons')
         kb_rows.append([
-            InlineKeyboardButton(text="◀️ Назад в каталог", callback_data=f"market_cat:{lot['item_type']}:price_asc:1"),
+            InlineKeyboardButton(text="◀️ Назад в каталог", callback_data=f"market_cat:{cat}:{sort_order}:{page}"),
             InlineKeyboardButton(text="🛒 Главная Базара", callback_data="market_main_hub"),
         ])
         kb_rows.append([
@@ -1897,7 +1971,7 @@ async def cb_market_my_lots(callback: types.CallbackQuery, board_id: str | None 
                 [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
                 [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
             ])
-            await _render_market_view(callback, text, kb, category="market")
+            await _render_market_view(callback, text, kb, category="market", prefer_banner=False)
             return
 
         lines = [
@@ -1910,7 +1984,7 @@ async def cb_market_my_lots(callback: types.CallbackQuery, board_id: str | None 
 
         kb = build_my_lots_kb(items, page, total_pages)
         text = "\n".join(lines)
-        await _render_market_view(callback, text, kb, category="market")
+        await _render_market_view(callback, text, kb, category="market", prefer_banner=False)
     finally:
         await safe_callback_answer(callback)
 
@@ -1945,7 +2019,7 @@ async def cb_market_cancel(callback: types.CallbackQuery, board_id: str | None =
             [InlineKeyboardButton(text="◀️ Назад на Базар", callback_data="market_main_hub")],
             [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
-        await _render_market_view(callback, text, kb, category="market")
+        await _render_market_view(callback, text, kb, category="market", prefer_banner=False)
         await callback.answer("✅ Лот снят с продажи", show_alert=False)
     finally:
         await safe_callback_answer(callback)
@@ -2067,9 +2141,8 @@ async def cb_market_do_sell(callback: types.CallbackQuery, board_id: str | None 
             return
 
         item_id = parts[1]
-        try:
-            price = float(parts[2])
-        except (ValueError, OverflowError):
+        price = parse_market_price(parts[2])
+        if price is None:
             await callback.answer("❌ Некорректная цена.", show_alert=True)
             return
 

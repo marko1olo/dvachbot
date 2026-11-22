@@ -122,6 +122,48 @@ def get_tier_info(tier_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def format_remaining_time(seconds: int | float) -> str:
+    """
+    Форматирует секунды в человекочитаемую строку:
+    - 45 -> "45 сек."
+    - 135 -> "2 мин. 15 сек."
+    - 1800 -> "30 мин."
+    - 8124 -> "2 ч. 15 мин."
+    - 259200 -> "3 дн." (или "3 дн. 2 ч.")
+    - <= 0 -> "0 сек."
+    """
+    try:
+        sec = int(round(float(seconds)))
+    except (ValueError, TypeError, OverflowError):
+        return "0 сек."
+
+    if sec <= 0:
+        return "0 сек."
+
+    if sec < 60:
+        return f"{sec} сек."
+
+    if sec < 3600:
+        m = sec // 60
+        s = sec % 60
+        if s > 0 and m < 10:
+            return f"{m} мин. {s} сек."
+        return f"{m} мин."
+
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    if h >= 24:
+        d = h // 24
+        rem_h = h % 24
+        if rem_h > 0:
+            return f"{d} дн. {rem_h} ч."
+        return f"{d} дн."
+
+    if m > 0:
+        return f"{h} ч. {m} мин."
+    return f"{h} ч."
+
+
 # -----------------------------------------------------------------------------
 # User Pending Deposit State Tracking & Amount Parsers
 # -----------------------------------------------------------------------------
@@ -195,6 +237,9 @@ def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float
     txt = re.sub(r'(?<=\d)\s+(?=\d)', '', txt).replace(" ", "").replace(",", ".")
 
     if not txt:
+        return None
+
+    if txt in ("nan", "+nan", "-nan", "inf", "-inf", "+inf", "infinity", "-infinity"):
         return None
 
     # Ключевые слова
@@ -393,6 +438,7 @@ def calculate_deposit_state(deposit: Dict[str, Any], current_ts: Optional[float]
         "total_value": round(total_value, 2),
         "is_locked": is_locked,
         "remaining_lock_sec": int(remaining_lock_sec),
+        "remaining_lock_text": format_remaining_time(remaining_lock_sec),
         "elapsed_seconds": int(elapsed_seconds),
         "status": deposit.get("status", "active"),
         "withdrawn_at": deposit.get("withdrawn_at"),
@@ -645,10 +691,9 @@ async def withdraw_bank_deposit(
 
         elif tier_id == "skuf":
             if is_locked and not force_early:
-                rem_h = int(state["remaining_lock_sec"] / 3600)
-                rem_m = int((state["remaining_lock_sec"] % 3600) / 60)
+                rem_str = format_remaining_time(state["remaining_lock_sec"])
                 return False, 0.0, 0.0, 0.0, 0.0, False, (
-                    f"Депозит Сыча заблокирован (осталось {rem_h}ч {rem_m}м). "
+                    f"Депозит Сыча заблокирован (осталось {rem_str}). "
                     f"При досрочном снятии все начисленные проценты (+{total_accrued:,.2f} ₪) сгорят, "
                     f"а с тела вклада удержится штраф 3% ({round(principal * 0.03, 2):,.2f} ₪)."
                 )
@@ -669,11 +714,11 @@ async def withdraw_bank_deposit(
 
         elif tier_id == "mmm_abu":
             if is_locked and not force_early:
-                rem_h = int(state["remaining_lock_sec"] / 3600)
-                rem_m = int((state["remaining_lock_sec"] % 3600) / 60)
+                rem_str = format_remaining_time(state["remaining_lock_sec"])
                 return False, 0.0, 0.0, 0.0, 0.0, False, (
-                    f"Пирамида МММ Абу заблокирована на 24 часа (осталось {rem_h}ч {rem_m}м). "
-                    f"Досрочный вывод не предусмотрен правилами пирамиды."
+                    f"Пирамида МММ Абу заблокирована на 24 часа (осталось {rem_str}). "
+                    f"При досрочном выводе все начисленные проценты (+{total_accrued:,.2f} ₪) сгорят, "
+                    f"а с тела вклада удержится штраф 10% ({round(principal * 0.10, 2):,.2f} ₪)."
                 )
 
             if is_locked and force_early:
@@ -966,11 +1011,9 @@ def build_bank_dashboard_view(
         for idx, d in enumerate(deposits[:2], 1):
             lock_txt = ""
             if d["is_locked"]:
-                rem_h = int(d["remaining_lock_sec"] / 3600)
-                rem_m = int((d["remaining_lock_sec"] % 3600) / 60)
-                lock_txt = f" 🔒 <i>(блок {rem_h}ч {rem_m}м)</i>"
+                lock_txt = f" 🔒 <i>(разблокировка через {format_remaining_time(d['remaining_lock_sec'])})</i>"
             else:
-                lock_txt = " 🔓 <i>(готов)</i>"
+                lock_txt = " 🔓 <i>(готов к выводу)</i>"
 
             tier_icon = BANK_TIERS.get(d["tier_id"], {}).get("icon", "📦")
             lines.append(
@@ -1117,7 +1160,7 @@ def build_withdraw_deposits_view(
     ]
     kb_rows = []
     for d in page_deposits:
-        lock_txt = "🔒 (досрочно)" if d["is_locked"] else "🔓 (готов)"
+        lock_txt = f"🔒 ({format_remaining_time(d['remaining_lock_sec'])})" if d["is_locked"] else "🔓 (готов)"
         lines.append(f"• Вклад <b>#{d['id']}</b> ({d['short_name']}): <code>{d['total_value']:,.2f} ₪</code> {lock_txt}")
         kb_rows.append([
             InlineKeyboardButton(
@@ -1153,11 +1196,24 @@ async def _render_bank_view(
     target: types.Message | types.CallbackQuery,
     text: str,
     kb: InlineKeyboardMarkup,
-    category: str = "bank"
+    category: str = "bank",
+    original_user_id: int | None = None
 ):
     """Универсально отображает или обновляет представление Банка с сохранением клавиатуры."""
-    from common.bot_helpers import render_menu_transition
-    await render_menu_transition(target, text, kb, category=category, prefer_banner=True)
+    from common.bot_helpers import render_menu_transition, track_menu_owner
+    user_id = original_user_id
+    if not isinstance(user_id, int):
+        u = getattr(target, "from_user", None)
+        if u and hasattr(u, "id") and isinstance(u.id, int):
+            user_id = u.id
+
+    msg = getattr(target, "message", None) if hasattr(target, "message") else target
+    chat_id = getattr(getattr(msg, "chat", None), "id", None)
+    msg_id = getattr(msg, "message_id", None)
+    if isinstance(chat_id, int) and isinstance(msg_id, int) and isinstance(user_id, int):
+        track_menu_owner((chat_id, msg_id), user_id)
+
+    await render_menu_transition(target, text, kb, category=category, prefer_banner=True, original_user_id=user_id)
 
 # -----------------------------------------------------------------------------
 # Telegram Command Handlers
@@ -1181,7 +1237,14 @@ async def cmd_bank(message: types.Message, board_id: str | None = None, stream: 
         dirty_bal = 0.0
 
     text, kb = build_bank_dashboard_view(wallet_balance, total_principal, total_accrued, deposits, dirty_balance=dirty_bal)
-    await _render_bank_view(message, text, kb, category="bank")
+
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    msg_id = getattr(message, "message_id", None)
+    if isinstance(chat_id, int) and isinstance(msg_id, int) and isinstance(user_id, int):
+        from common.bot_helpers import track_menu_owner
+        track_menu_owner((chat_id, msg_id), user_id)
+
+    await _render_bank_view(message, text, kb, category="bank", original_user_id=user_id)
 
 
 @bank_router.message(Command("deposit", "вклад", "депозит", ignore_case=True, ignore_mention=True))
@@ -1225,14 +1288,22 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
             amount = math.floor(wallet_balance * 0.5 * 100.0) / 100.0
         else:
             try:
+                if raw_amt in ("nan", "+nan", "-nan", "inf", "-inf", "+inf", "infinity", "-infinity"):
+                    raise ValueError("Disallowed float literal")
                 if raw_amt.endswith("k"):
                     amount = float(raw_amt[:-1]) * 1000
                 elif raw_amt.endswith("m"):
                     amount = float(raw_amt[:-1]) * 1000000
                 else:
                     amount = float(raw_amt)
-            except ValueError:
-                await message.answer("❌ Неверный формат суммы. Пример: <code>/deposit 500 skuf</code>", parse_mode="HTML")
+                if math.isnan(amount) or math.isinf(amount) or amount <= 0:
+                    await message.answer("❌ Укажи положительную сумму от 10 до 1 000 000 000 ₪, например: <code>/deposit 500 skuf</code>", parse_mode="HTML")
+                    return
+                if amount > 1_000_000_000:
+                    await message.answer("❌ Максимальная сумма разового вклада — 1 000 000 000 ₪, например: <code>/deposit 50000 sych</code>", parse_mode="HTML")
+                    return
+            except (ValueError, OverflowError):
+                await message.answer("❌ Неверный формат суммы. Укажи число, например: <code>/deposit 500 skuf</code>", parse_mode="HTML")
                 return
 
         canon_tier = normalize_tier_id(raw_tier) or "sych"
@@ -1408,20 +1479,19 @@ async def cmd_withdraw(message: types.Message, board_id: str | None = None, stre
             combined_text = prefix + text_view
             if len(combined_text) > 3500:
                 combined_text = combined_text[:3450] + "\n..."
-            await _render_bank_view(message, combined_text, kb_view, category="bank")
+            await _render_bank_view(message, combined_text, kb_view, category="bank", original_user_id=user_id)
             return
 
         if target_dep["is_locked"]:
             # Показываем предупреждение о досрочном снятии
             penalty_val = round(target_dep["principal"] * (0.03 if target_dep["tier_id"] == "skuf" else 0.10), 2)
             payout_val = round(target_dep["principal"] - penalty_val, 2)
-            rem_h = int(target_dep["remaining_lock_sec"] / 3600)
-            rem_m = int((target_dep["remaining_lock_sec"] % 3600) / 60)
+            rem_str = format_remaining_time(target_dep["remaining_lock_sec"])
 
             warn_text = (
                 f"⚠️ <b>ВНИМАНИЕ! ДОСРОЧНОЕ СНЯТИЕ ВКЛАДА #{deposit_id}</b>\n\n"
                 f"Тариф: <b>{target_dep['tier_name']}</b>\n"
-                f"Вклад заблокирован еще на <b>{rem_h}ч {rem_m}м</b>.\n\n"
+                f"Вклад заблокирован еще на <b>{rem_str}</b>.\n\n"
                 f"При досрочном выводе:\n"
                 f"• Сгорят ВСЕ начисленные проценты: <b>+{target_dep['accrued_interest']:,.2f} ₪</b>\n"
                 f"• Штраф: <b>-{penalty_val:,.2f} ₪</b>\n"
@@ -1471,13 +1541,13 @@ async def cmd_withdraw(message: types.Message, board_id: str | None = None, stre
         combined_text = prefix + text_view
         if len(combined_text) > 3500:
             combined_text = combined_text[:3450] + "\n..."
-        await _render_bank_view(message, combined_text, kb_view, category="bank")
+        await _render_bank_view(message, combined_text, kb_view, category="bank", original_user_id=user_id)
         return
 
     # Интерактивное меню вывода с постраничной пагинацией (всегда укладывается в лимиты Telegram)
     total_p, total_a, deposits = await get_user_bank_summary(db, user_id)
     text, kb = build_withdraw_deposits_view(deposits, page=0)
-    await _render_bank_view(message, text, kb, category="bank")
+    await _render_bank_view(message, text, kb, category="bank", original_user_id=user_id)
 
 
 # -----------------------------------------------------------------------------
@@ -1485,9 +1555,12 @@ async def cmd_withdraw(message: types.Message, board_id: str | None = None, stre
 # -----------------------------------------------------------------------------
 
 @bank_router.callback_query(F.data.in_(["bank_main_hub", "bank_view"]))
-async def cb_bank_hub(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_hub(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Главный экран Банка по колбэку."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
     try:
         clear_user_pending_deposit(callback.from_user.id)
         b_id = board_id or "b"
@@ -1505,15 +1578,18 @@ async def cb_bank_hub(callback: types.CallbackQuery, board_id: str | None = None
             dirty_bal = 0.0
 
         text, kb = build_bank_dashboard_view(wallet_balance, total_principal, total_accrued, deposits, dirty_balance=dirty_bal)
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
     finally:
         await safe_callback_answer(callback)
 
 
 @bank_router.callback_query(F.data == "bank_refresh")
-async def cb_bank_refresh(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_refresh(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Обновление начисленных процентов на лету в режиме реального времени."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
     answered = False
     try:
         b_id = board_id or "b"
@@ -1531,7 +1607,7 @@ async def cb_bank_refresh(callback: types.CallbackQuery, board_id: str | None = 
             dirty_bal = 0.0
 
         text, kb = build_bank_dashboard_view(wallet_balance, total_principal, total_accrued, deposits, dirty_balance=dirty_bal)
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
         await safe_callback_answer(callback, "🔄 Проценты пересчитаны!", show_alert=False)
         answered = True
     finally:
@@ -1540,9 +1616,12 @@ async def cb_bank_refresh(callback: types.CallbackQuery, board_id: str | None = 
 
 
 @bank_router.callback_query(F.data == "bank_deposit_menu")
-async def cb_bank_deposit_menu(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_deposit_menu(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Меню выбора тарифа депозита."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
     try:
         set_user_pending_deposit(callback.from_user.id, "sych", chat_id=callback.message.chat.id, board_id=board_id or "b")
         text = (
@@ -1554,15 +1633,18 @@ async def cb_bank_deposit_menu(callback: types.CallbackQuery, board_id: str | No
             "<i>Нажми на нужный тариф ниже или напиши сумму сообщением прямо в чат:</i>"
         )
         kb = build_deposit_tiers_kb()
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or callback.from_user.id)
     finally:
         await safe_callback_answer(callback)
 
 
 @bank_router.callback_query(F.data.startswith("bank_deposit_tier:") | F.data.startswith("bank_sel_tier_"))
-async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Экран выбора суммы и готовых пресетов для выбранного тарифа."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
     try:
         raw = callback.data
         tier_id = raw.split(":", 1)[1] if ":" in raw else raw.replace("bank_sel_tier_", "")
@@ -1573,15 +1655,18 @@ async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | No
         wallet_balance = await get_user_global_balance(db, user_id)
 
         text, kb = build_deposit_presets_kb(tier_id, wallet_balance)
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
     finally:
         await safe_callback_answer(callback)
 
 
 @bank_router.callback_query(F.data.startswith("bank_do_deposit:") | F.data.startswith("bank_dep_"))
-async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Исполнение создания депозита по нажатию пресета с надежной валидацией входных данных."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
     answered = False
     try:
         b_id = board_id or "b"
@@ -1658,7 +1743,7 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
             [InlineKeyboardButton(text="◀️ Назад в Банк", callback_data="bank_main_hub")],
             [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
         await callback.answer("✅ Вклад успешно открыт!", show_alert=False)
         answered = True
     except Exception as e:
@@ -1672,9 +1757,13 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
 
 
 @bank_router.callback_query(F.data.in_(["bank_withdraw_menu"]) | F.data.startswith("bank_withdraw_page:"))
-async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Список депозитов, доступных для вывода, с постраничной пагинацией."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
+    answered = False
     try:
         clear_user_pending_deposit(callback.from_user.id)
         b_id = board_id or "b"
@@ -1684,8 +1773,12 @@ async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | N
         try:
             from common.bot_helpers import _get_user_active_items
             ai_data = await _get_user_active_items(db, user_id, b_id)
+            from criminal_syndicate_engine import apply_wanted_decay, sync_user_criminal_status
+            if apply_wanted_decay(ai_data, current_ts=time.time()):
+                await sync_user_criminal_status(db, user_id, ai_data)
             if int(ai_data.get("wanted_stars", 0) or 0) >= 5:
                 await callback.answer("🚨 Вы находитесь в федеральном розыске (5★)! Все банковские операции заблокированы.", show_alert=True)
+                answered = True
                 return
         except Exception:
             pass
@@ -1699,15 +1792,20 @@ async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | N
 
         total_p, total_a, deposits = await get_user_bank_summary(db, user_id)
         text, kb = build_withdraw_deposits_view(deposits, page=page)
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
     finally:
-        await safe_callback_answer(callback)
+        if not answered:
+            await safe_callback_answer(callback)
 
 
 @bank_router.callback_query(F.data == "bank_withdraw_all_ready")
-async def cb_bank_withdraw_all_ready(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_withdraw_all_ready(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Пакетное снятие всех разблокированных депозитов без штрафов."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
+    answered = False
     try:
         b_id = board_id or "b"
         user_id = callback.from_user.id
@@ -1716,8 +1814,12 @@ async def cb_bank_withdraw_all_ready(callback: types.CallbackQuery, board_id: st
         try:
             from common.bot_helpers import _get_user_active_items
             ai_data = await _get_user_active_items(db, user_id, b_id)
+            from criminal_syndicate_engine import apply_wanted_decay, sync_user_criminal_status
+            if apply_wanted_decay(ai_data, current_ts=time.time()):
+                await sync_user_criminal_status(db, user_id, ai_data)
             if int(ai_data.get("wanted_stars", 0) or 0) >= 5:
                 await callback.answer("🚨 Вы находитесь в федеральном розыске (5★)! Все банковские операции заблокированы.", show_alert=True)
+                answered = True
                 return
         except Exception:
             pass
@@ -1727,8 +1829,9 @@ async def cb_bank_withdraw_all_ready(callback: types.CallbackQuery, board_id: st
 
         if not ready_deposits:
             await callback.answer("У вас нет готовых к снятию вкладов без штрафа.", show_alert=True)
+            answered = True
             text, kb = build_withdraw_deposits_view(deposits, page=0)
-            await _render_bank_view(callback, text, kb, category="bank")
+            await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
             return
 
         total_withdrawn = 0.0
@@ -1745,26 +1848,34 @@ async def cb_bank_withdraw_all_ready(callback: types.CallbackQuery, board_id: st
         if withdrawn_cnt == 0:
             err_msg = html.escape(str(last_err or "ошибка списания"))
             await callback.answer(f"❌ Не удалось снять вклады: {err_msg}"[:199], show_alert=True)
+            answered = True
         else:
             await callback.answer(f"✅ Успешно снято {withdrawn_cnt} вкладов на сумму {total_withdrawn:,.2f} ₪!", show_alert=True)
+            answered = True
 
         _, _, remaining_deposits = await get_user_bank_summary(db, user_id)
         text, kb = build_withdraw_deposits_view(remaining_deposits, page=0)
-        await _render_bank_view(callback, text, kb, category="bank")
+        await _render_bank_view(callback, text, kb, category="bank", original_user_id=original_user_id or user_id)
     finally:
-        await safe_callback_answer(callback)
+        if not answered:
+            await safe_callback_answer(callback)
 
 
 @bank_router.callback_query(F.data.startswith("bank_withdraw_sel:"))
-async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Обработка выбора депозита для вывода (проверка блокировки и штрафов)."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
+    answered = False
     try:
         b_id = board_id or "b"
         user_id = callback.from_user.id
         raw_id = callback.data.split(":", 1)[1] if ":" in callback.data else ""
         if not raw_id.isdigit():
             await callback.answer("❌ Некорректный номер вклада.", show_alert=True)
+            answered = True
             return
         dep_id = int(raw_id)
 
@@ -1773,8 +1884,12 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
         try:
             from common.bot_helpers import _get_user_active_items
             ai_data = await _get_user_active_items(db, user_id, b_id)
+            from criminal_syndicate_engine import apply_wanted_decay, sync_user_criminal_status
+            if apply_wanted_decay(ai_data, current_ts=time.time()):
+                await sync_user_criminal_status(db, user_id, ai_data)
             if int(ai_data.get("wanted_stars", 0) or 0) >= 5:
                 await callback.answer("🚨 Вы находитесь в федеральном розыске (5★)! Все банковские операции заблокированы.", show_alert=True)
+                answered = True
                 return
         except Exception:
             pass
@@ -1783,19 +1898,19 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
 
         if not target_dep:
             await callback.answer("❌ Депозит не найден.", show_alert=True)
+            answered = True
             return
 
         if target_dep["is_locked"]:
             penalty_pct = 0.03 if target_dep["tier_id"] == "skuf" else 0.10
             penalty_val = round(target_dep["principal"] * penalty_pct, 2)
             payout_val = round(target_dep["principal"] - penalty_val, 2)
-            rem_h = int(target_dep["remaining_lock_sec"] / 3600)
-            rem_m = int((target_dep["remaining_lock_sec"] % 3600) / 60)
+            rem_str = format_remaining_time(target_dep["remaining_lock_sec"])
 
             warn_text = (
                 f"⚠️ <b>ВНИМАНИЕ! ДОСРОЧНОЕ СНЯТИЕ ВКЛАДА #{dep_id}</b>\n\n"
                 f"Тариф: <b>{target_dep['tier_name']}</b>\n"
-                f"Вклад заблокирован еще на <b>{rem_h}ч {rem_m}м</b>.\n\n"
+                f"Вклад заблокирован еще на <b>{rem_str}</b>.\n\n"
                 f"При досрочном выводе:\n"
                 f"• Сгорят ВСЕ начисленные проценты: <b>+{target_dep['accrued_interest']:,.2f} ₪</b>\n"
                 f"• Штраф ({int(penalty_pct*100)}%): <b>-{penalty_val:,.2f} ₪</b>\n"
@@ -1807,7 +1922,7 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
                 [InlineKeyboardButton(text="◀️ Назад к вкладам", callback_data="bank_withdraw_menu")],
                 [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
             ])
-            await _render_bank_view(callback, warn_text, kb, category="bank")
+            await _render_bank_view(callback, warn_text, kb, category="bank", original_user_id=original_user_id or user_id)
             return
 
         # Разблокированный депозит — выводим
@@ -1815,6 +1930,7 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
         if not ok:
             err_msg = html.escape(str(err or "Ошибка вывода"))
             await callback.answer(f"❌ {err_msg}"[:199], show_alert=True)
+            answered = True
             return
 
         default_note = "\n🚨 <b>ОБЛАВА ОБЭП!</b> 50% суммы конфисковано в пользу государства." if is_default else ""
@@ -1830,26 +1946,47 @@ async def cb_bank_withdraw_sel(callback: types.CallbackQuery, board_id: str | No
             [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
             [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
-        await _render_bank_view(callback, resp, kb, category="bank")
+        await _render_bank_view(callback, resp, kb, category="bank", original_user_id=original_user_id or user_id)
         await callback.answer("✅ Шекели зачислены в кошелек!", show_alert=False)
+        answered = True
     finally:
-        await safe_callback_answer(callback)
+        if not answered:
+            await safe_callback_answer(callback)
 
 
 @bank_router.callback_query(F.data.startswith("bank_withdraw_confirm:"))
-async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str | None = None):
+async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str | None = None, original_user_id: int | None = None):
     """Подтвержденное досрочное снятие депозита со штрафом."""
-    from common.bot_helpers import safe_callback_answer
+    from common.bot_helpers import safe_callback_answer, check_menu_owner
+    if not check_menu_owner(callback, original_user_id=original_user_id):
+        await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
+        return
+    answered = False
     try:
         b_id = board_id or "b"
         user_id = callback.from_user.id
         raw_id = callback.data.split(":", 1)[1] if ":" in callback.data else ""
         if not raw_id.isdigit():
             await callback.answer("❌ Некорректный номер вклада.", show_alert=True)
+            answered = True
             return
         dep_id = int(raw_id)
 
         db = await get_pool()
+
+        try:
+            from common.bot_helpers import _get_user_active_items
+            ai_data = await _get_user_active_items(db, user_id, b_id)
+            from criminal_syndicate_engine import apply_wanted_decay, sync_user_criminal_status
+            if apply_wanted_decay(ai_data, current_ts=time.time()):
+                await sync_user_criminal_status(db, user_id, ai_data)
+            if int(ai_data.get("wanted_stars", 0) or 0) >= 5:
+                await callback.answer("🚨 Вы находитесь в федеральном розыске (5★)! Все банковские операции заблокированы.", show_alert=True)
+                answered = True
+                return
+        except Exception:
+            pass
+
         ok, payout, principal, interest, penalty, is_default, err = await withdraw_bank_deposit(
             db, dep_id, user_id, b_id, force_early=True
         )
@@ -1857,6 +1994,7 @@ async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str 
         if not ok:
             err_msg = html.escape(str(err or "Ошибка досрочного вывода"))
             await callback.answer(f"❌ {err_msg}"[:199], show_alert=True)
+            answered = True
             return
 
         resp = (
@@ -1870,10 +2008,12 @@ async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str 
             [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
             [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
         ])
-        await _render_bank_view(callback, resp, kb, category="bank")
+        await _render_bank_view(callback, resp, kb, category="bank", original_user_id=original_user_id or user_id)
         await callback.answer("✅ Досрочный вывод завершен", show_alert=False)
+        answered = True
     finally:
-        await safe_callback_answer(callback)
+        if not answered:
+            await safe_callback_answer(callback)
 
 
 # -----------------------------------------------------------------------------

@@ -1,81 +1,116 @@
 # -*- coding: utf-8 -*-
 """
-tests/test_work_fatigue.py — Unit tests for work fatigue and rolling 24h shifts decay per vacancy.
+tests/test_work_fatigue.py — Unit tests for work fatigue, rolling 24h shifts decay, and cross-vacancy fatigue tiers.
 """
 import time
 from common.work_engine import execute_job_action
 
-def test_work_fatigue_progression():
-    """Verify each consecutive shift on the SAME vacancy in 24h reduces payout progressively down to 20% floor."""
-    items = {"work_shifts": 0, "work_cooldowns": {}, "recent_shifts": {}}
-    now = 1000000
 
-    # First shift (shifts_today = 0): multiplier 1.0 (100%)
+def test_work_fatigue_progression():
+    """Verify each consecutive shift tier in rolling 24h reduces payout down to 20% floor according to the 5-tier scale."""
+    now = int(time.time())
+    items = {
+        "work_shifts": 0,
+        "work_cooldowns": {},
+        "recent_shifts": {},
+        "equipped_head": "hat_helmet"  # Fine immunity for deterministic test
+    }
+
+    # Shift 1 (shifts_today = 0): Tier 1 -> 100% (no fatigue note)
     success, r0, msg0, _ = execute_job_action("bottles", items)
     assert success is True
     assert r0 >= 15
     assert len(items["recent_shifts"]["bottles"]) == 1
-    assert "Усталость" not in msg0
+    assert "Усталость: -" not in msg0
+    assert "Эффективность: 100%" in msg0
 
     # Advance time past bottles cooldown (180s)
     items["work_cooldowns"]["bottles"] = now - 500
 
-    # Second shift (shifts_today = 1): multiplier 0.85 (85%)
+    # Shift 2 (shifts_today = 1): Still Tier 1 -> 100%
     success, r1, msg1, _ = execute_job_action("bottles", items)
     assert success is True
     assert len(items["recent_shifts"]["bottles"]) == 2
-    assert "Усталость" in msg1
-    assert "-15%" in msg1
+    assert "Усталость: -" not in msg1
+    assert "Эффективность: 100%" in msg1
 
-    # Advance time past bottles cooldown again
+    # Shift 3 (shifts_today = 2): Still Tier 1 -> 100%
     items["work_cooldowns"]["bottles"] = now - 500
-
-    # Third shift (shifts_today = 2): multiplier 0.85^2 = 0.7225 (~72%)
     success, r2, msg2, _ = execute_job_action("bottles", items)
     assert success is True
     assert len(items["recent_shifts"]["bottles"]) == 3
-    assert "Усталость" in msg2
-    assert "-28%" in msg2
+    assert "Усталость: -" not in msg2
+    assert "Эффективность: 100%" in msg2
+
+    # Shift 4 (shifts_today = 3): Tier 2 -> 80% (-20% fatigue)
+    items["work_cooldowns"]["bottles"] = now - 500
+    success, r3, msg3, _ = execute_job_action("bottles", items)
+    assert success is True
+    assert len(items["recent_shifts"]["bottles"]) == 4
+    assert "Усталость: -20%" in msg3
+    assert "Эффективность: 80%" in msg3
+
+    # Fast forward to shift 7 (shifts_today = 6): Tier 3 -> 55% (-45% fatigue)
+    items["recent_shifts"]["bottles"] = [now - 1000 - i * 60 for i in range(6)]
+    items["work_cooldowns"]["bottles"] = now - 500
+    success, r6, msg6, _ = execute_job_action("bottles", items)
+    assert success is True
+    assert "Усталость: -45%" in msg6
+    assert "Эффективность: 55%" in msg6
+
+    # Fast forward to shift 11 (shifts_today = 10): Tier 4 -> 35% (-65% fatigue)
+    items["recent_shifts"]["bottles"] = [now - 1000 - i * 60 for i in range(10)]
+    items["work_cooldowns"]["bottles"] = now - 500
+    success, r10, msg10, _ = execute_job_action("bottles", items)
+    assert success is True
+    assert "Усталость: -65%" in msg10
+    assert "Эффективность: 35%" in msg10
+
+    # Fast forward to shift 16 (shifts_today = 15): Tier 5 floor -> 20% (-80% fatigue floor)
+    items["recent_shifts"]["bottles"] = [now - 1000 - i * 60 for i in range(15)]
+    items["work_cooldowns"]["bottles"] = now - 500
+    success, r15, msg15, _ = execute_job_action("bottles", items)
+    assert success is True
+    assert "Усталость: -80%" in msg15
+    assert "Эффективность: 20%" in msg15
 
 
 def test_work_fatigue_separate_per_vacancy():
-    """Verify fatigue on one vacancy (e.g. bottles) does NOT affect other vacancies (e.g. courier)."""
+    """Verify cross-vacancy daily fatigue tracking: previous shifts on any vacancy count towards daily fatigue."""
     now = int(time.time())
-    # User has 3 previous shifts on 'bottles' (fatigued)
+    # User has 3 previous shifts on 'bottles' in the last 24h
     items = {
         "work_shifts": 10,  # Unlocks courier (req: 8)
         "equipped_head": "hat_helmet",  # Immunity to work fines for deterministic tests
         "work_cooldowns": {"bottles": now - 500, "courier": now - 5000},
         "recent_shifts": {
-            "bottles": [now - 600, now - 300]
+            "bottles": [now - 600, now - 300, now - 100]
         }
     }
 
-    # Working 'courier' for the first time today: NO fatigue from bottles!
+    # Working 'courier' now is the 4th shift overall -> enters Tier 2 (-20% fatigue)
     success_c1, r_c1, msg_c1, _ = execute_job_action("courier", items)
     assert success_c1 is True
-    assert "Усталость" not in msg_c1
+    assert "Усталость: -20%" in msg_c1
+    assert "Эффективность: 80%" in msg_c1
     assert len(items["recent_shifts"]["courier"]) == 1
     # Bottles shifts still preserved
-    assert len(items["recent_shifts"]["bottles"]) == 2
+    assert len(items["recent_shifts"]["bottles"]) == 3
 
-    # Advance courier cooldown
+    # Advance courier cooldown and work 'courier' again (5th shift overall -> still Tier 2, 80%)
     items["work_cooldowns"]["courier"] = now - 5000
-
-    # Second shift on 'courier': now courier has its own fatigue (-15%)
     success_c2, r_c2, msg_c2, _ = execute_job_action("courier", items)
     assert success_c2 is True
-    assert "Усталость" in msg_c2
-    assert "-15%" in msg_c2
+    assert "Усталость: -20%" in msg_c2
+    assert "Эффективность: 80%" in msg_c2
     assert len(items["recent_shifts"]["courier"]) == 2
 
-    # Advance bottles cooldown and work 'bottles' (this will be 3rd shift for bottles -> -28%)
+    # Advance bottles cooldown and work 'bottles' (6th shift overall -> still Tier 2, 80%)
     items["work_cooldowns"]["bottles"] = now - 500
     success_b3, r_b3, msg_b3, _ = execute_job_action("bottles", items)
     assert success_b3 is True
-    assert "Усталость" in msg_b3
-    assert "-28%" in msg_b3
-    assert len(items["recent_shifts"]["bottles"]) == 3
+    assert "Усталость: -20%" in msg_b3
+    assert len(items["recent_shifts"]["bottles"]) == 4
 
 
 def test_work_fatigue_floor_and_rolling_24h_reset():
@@ -91,7 +126,7 @@ def test_work_fatigue_floor_and_rolling_24h_reset():
 
     success, reward, msg, _ = execute_job_action("bottles", items)
     assert success is True
-    # At 15 shifts today, 0.85^15 = ~0.087, capped at 0.20 floor (-80%)
+    # At 15 shifts today, 16th shift hits 0.20 floor (-80%)
     assert "-80%" in msg
     assert reward >= 1
 
@@ -106,7 +141,8 @@ def test_work_fatigue_floor_and_rolling_24h_reset():
     success_fresh, reward_fresh, msg_fresh, _ = execute_job_action("bottles", items_fresh)
     assert success_fresh is True
     # Fatigue should be completely cleared
-    assert "Усталость" not in msg_fresh
+    assert "Усталость: -" not in msg_fresh
+    assert "Эффективность: 100%" in msg_fresh
     assert len(items_fresh["recent_shifts"]["bottles"]) == 1
 
 
@@ -116,11 +152,11 @@ def test_work_fatigue_legacy_list_migration():
     items_legacy = {
         "work_shifts": 5,
         "work_cooldowns": {"bottles": now - 3600},
-        "recent_shifts": [now - 300]  # 1 legacy shift
+        "recent_shifts": [now - 300, now - 200, now - 100]  # 3 legacy shifts
     }
+    # 4th shift -> Tier 2 (-20%)
     success, reward, msg, _ = execute_job_action("bottles", items_legacy)
     assert success is True
     assert isinstance(items_legacy["recent_shifts"], dict)
-    assert "-15%" in msg
-    assert len(items_legacy["recent_shifts"]["bottles"]) == 2
-
+    assert "-20%" in msg
+    assert len(items_legacy["recent_shifts"]["bottles"]) == 4
