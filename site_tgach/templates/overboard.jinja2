@@ -181,6 +181,7 @@
                 <div class="thread-container" id="thread-{{ post.id }}">
                 {% endif %}
                     <div class="post" id="post-{{ post.id }}" data-reports="{{ post.report_count }}">
+                        <a id="p{{ post.id }}" class="post-anchor"></a>
                         <div class="post-header">
                             <a href="/{{ post.board_id }}/" class="is-op-badge" style="background:var(--text-secondary); margin-right:5px; text-decoration:none;">/{{ post.board_id }}/</a>
                             <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
@@ -237,7 +238,7 @@
                                             {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
                                             {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                             {% if file.type == 'image' or file.type == 'photo' %}
-                                                <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
+                                                <a href="{{ file_orig_src }}" target="_blank" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                                     {% if file.blurhash %}
                                                         <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
                                                     {% endif %}
@@ -273,7 +274,7 @@
                                                        onerror="handleImageError(this)">
                                                 </video>
                                             {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
-                                                <div class="file-thumb lazy-media-wrapper" 
+                                                <a href="{{ file_orig_src }}" target="_blank" class="file-thumb lazy-media-wrapper" 
                                                     data-src="{{ file_orig_src }}" 
                                                     data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                     data-filename="{{ file.filename }}"
@@ -290,7 +291,8 @@
                                                            style="object-fit: cover; width: 100%; height: 100%; background: transparent;">
                                                     </video>
                                                     <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
-                                                    {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
+                                                    <noscript><video src="{{ file_orig_src }}" {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %} controls playsinline style="max-width: 100%; max-height: 250px;"></video></noscript>
+                                                    </a>
                                                 </div>
                                             {% endif %}
                                         {% endif %}
@@ -368,6 +370,7 @@
                             <div class="latest-replies-container" style="margin-top: 10px; padding-top: 5px; border-top: 1px dashed var(--border-separator);">
                                 {% for reply in post.latest_replies %}
                                     <div class="post overboard-reply" id="post-{{ reply.id }}">
+                                        <a id="p{{ reply.id }}" class="post-anchor"></a>
                                         <div class="post-header">
                                             <span><a href="/{{ reply.board_id }}/res/{{ post.id }}.html#post-{{ reply.id }}" class="post-num-link" data-post-num="{{ reply.id }}">#{{ reply.id }}</a></span>
                                             <time class="ts-recalc" data-ts="{{ reply.timestamp }}">{{ reply.timestamp | format_timestamp }}</time>
@@ -379,7 +382,7 @@
                                                         {% set f_orig_src = (f.original_file_id and '/files/' ~ f.original_file_id) or f.original_url %}
                                                         {% set f_thumb_src = (f.thumbnail_file_id and '/files/' ~ f.thumbnail_file_id) or f.thumbnail_url or (f.original_file_id and '/thumb/' ~ f.original_file_id) or f.original_url %}
                                                         {% if f.type in ['video', 'gif', 'animation', 'video_note'] %}
-                                                            <div class="file-thumb lazy-media-wrapper" 
+                                                            <a href="{{ file_orig_src }}" target="_blank" class="file-thumb lazy-media-wrapper" 
                                                                 style="width: 80px; height: 80px;"
                                                                 data-src="{{ f_orig_src }}" 
                                                                 data-file-id="{{ f.thumbnail_file_id or f.original_file_id }}"
@@ -392,7 +395,8 @@
                                                                     {% if f_thumb_src %}poster="{{ f_thumb_src }}"{% endif %}
                                                                     onerror="handleImageError(this)"
                                                                     style="width: 100%; height: 100%; object-fit: cover;"></video>
-                                                            </div>
+                                                            <noscript><video src="{{ file_orig_src }}" {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %} controls playsinline style="max-width: 100%; max-height: 250px;"></video></noscript>
+                                                            </a>
                                                         {% else %}
                                                             <a href="{{ f_orig_src }}" 
                                                                 class="file-thumb" 

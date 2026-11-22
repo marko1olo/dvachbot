@@ -123,6 +123,71 @@
 
 console.log('main.js loaded successfully');
 
+// Universal Storage Polyfill for Private Browsing / Blocked Storage / Strict Sandboxes
+(function() {
+    function createMemoryStorage() {
+        var store = {};
+        return {
+            getItem: function(key) { return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null; },
+            setItem: function(key, val) { store[key] = String(val); },
+            removeItem: function(key) { delete store[key]; },
+            clear: function() { store = {}; },
+            get length() { return Object.keys(store).length; },
+            key: function(idx) { return Object.keys(store)[idx] || null; }
+        };
+    }
+    var storageAvailable = false;
+    try {
+        if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage !== null) {
+            var test = '__test_ls__';
+            window.localStorage.setItem(test, test);
+            window.localStorage.removeItem(test);
+            storageAvailable = true;
+        }
+    } catch (e) {
+        storageAvailable = false;
+    }
+    if (!storageAvailable && typeof window !== 'undefined') {
+        try {
+            Object.defineProperty(window, 'localStorage', {
+                value: createMemoryStorage(),
+                writable: true,
+                configurable: true,
+                enumerable: true
+            });
+        } catch (e) {
+            try {
+                window.localStorage = createMemoryStorage();
+            } catch (e2) {}
+        }
+    }
+    var sessionAvailable = false;
+    try {
+        if (typeof window !== 'undefined' && 'sessionStorage' in window && window.sessionStorage !== null) {
+            var testSession = '__test_ss__';
+            window.sessionStorage.setItem(testSession, testSession);
+            window.sessionStorage.removeItem(testSession);
+            sessionAvailable = true;
+        }
+    } catch (e) {
+        sessionAvailable = false;
+    }
+    if (!sessionAvailable && typeof window !== 'undefined') {
+        try {
+            Object.defineProperty(window, 'sessionStorage', {
+                value: createMemoryStorage(),
+                writable: true,
+                configurable: true,
+                enumerable: true
+            });
+        } catch (e) {
+            try {
+                window.sessionStorage = createMemoryStorage();
+            } catch (e2) {}
+        }
+    }
+})();
+
 (function() {
     try {
         const themeColors = {
@@ -134,9 +199,13 @@ console.log('main.js loaded successfully');
             'terminal': '#000000', 'ocean': '#0b192f', 'forest': '#2f3d34', 'gothic': '#100c13', 'noir': '#1a1a1a'
         };
 
-        let theme = localStorage.getItem('theme');
+        let theme = null;
         try {
-            const settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+            theme = localStorage.getItem('theme');
+        } catch(e) { theme = null; }
+        try {
+            const rawSettings = localStorage.getItem('user_settings') || '{}';
+            const settings = JSON.parse(rawSettings) || {};
             if (settings.theme) theme = settings.theme;
         } catch(e) {}
         if (!theme) {
@@ -1164,7 +1233,11 @@ const HistoryManager = {
         } catch (e) { console.error('History logic error', e); }
     },
     renderPage(container) {
-        const history = JSON.parse(localStorage.getItem(this.KEY) || '[]');
+        let history = [];
+        try {
+            history = JSON.parse(localStorage.getItem(this.KEY) || '[]');
+            if (!Array.isArray(history)) history = [];
+        } catch(e) { history = []; }
         const loader = document.getElementById('history-loading');
         const clearBtn = document.getElementById('clear-history-btn');
         
@@ -3311,11 +3384,16 @@ const AdminUtils = {
 };
 const VpnManager = {
     init() {
-        const match = document.cookie.match(new RegExp('(^| )user_country=([^;]+)'));
-        const country = match ? match[2] : 'XX';
+        let country = 'XX';
+        try {
+            const match = (document.cookie || '').match(new RegExp('(^| )user_country=([^;]+)'));
+            country = match ? match[2] : 'XX';
+        } catch(e) { country = 'XX'; }
 
-        sessionStorage.setItem('user_country', country);
-        sessionStorage.setItem('geo_checked', 'true');
+        try {
+            sessionStorage.setItem('user_country', country);
+            sessionStorage.setItem('geo_checked', 'true');
+        } catch(e) {}
 
         // Блокируем показ модалки для поисковых роботов и парсеров
         const botPattern = /bot|crawl|slurp|spider|mediapartners|whatsapp|telegram|discord|facebook|pinterest/i;
@@ -14339,7 +14417,11 @@ const SystemDock = {
                 </a>
             `}).join('');
         } catch(e) { 
-            const saved = JSON.parse(localStorage.getItem('favourite_threads') || '[]');
+            let saved = [];
+            try {
+                saved = JSON.parse(localStorage.getItem('favourite_threads') || '[]');
+                if (!Array.isArray(saved)) saved = [];
+            } catch(err) { saved = []; }
             if (saved.length === 0) {
                  container.innerHTML = `<div class="dock-empty-state">${t('dock_no_favs', 'Нет избранных')}</div>`;
                  return;
@@ -15556,15 +15638,21 @@ const TrollManager = {
     },
 };
 document.addEventListener('DOMContentLoaded', () => {
-    const match = document.cookie.match(new RegExp('(^| )stream=([^;]+)'));
-    const currentStream = match ? match[2] : 'ru';
+    let currentStream = 'ru';
+    try {
+        const match = (document.cookie || '').match(new RegExp('(^| )stream=([^;]+)'));
+        currentStream = match ? match[2] : 'ru';
+    } catch(e) { currentStream = 'ru'; }
     const radio = document.querySelector(`input[name="stream_setting"][value="${currentStream}"]`);
     if(radio) radio.checked = true;
 });
 
 document.addEventListener("DOMContentLoaded", function() {
     // Check if already shown recently (24h TTL)
-    const shownAt = parseInt(localStorage.getItem('ru_vpn_alert_shown') || '0', 10);
+    let shownAt = 0;
+    try {
+        shownAt = parseInt(localStorage.getItem('ru_vpn_alert_shown') || '0', 10);
+    } catch(e) { shownAt = 0; }
     if (shownAt && (Date.now() - shownAt) < 86400000) {
         return;
     }
