@@ -726,9 +726,28 @@ def get_casino_hub_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="💳 Мой Кошелек (/wallet)", callback_data="prof_wallet"),
-            InlineKeyboardButton(text="🎭 Персонаж RPG (/avatar)", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
         ],
         [
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_casino_insufficient_funds_keyboard(balance: int = 0) -> InlineKeyboardMarkup:
+    """
+    Клавиатура быстрого выхода при недостатке средств в казино (0 ₪ или < MIN_CASINO_BET).
+    Предлагает пользователю пойти на работу (/work) или забрать ежедневный бонус (/daily),
+    а также вернуться в хаб казино или главное меню.
+    """
+    buttons = [
+        [
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
             InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
@@ -780,11 +799,16 @@ def get_slots_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyb
     buttons = [
         [InlineKeyboardButton(text=spin_text, callback_data=f"cas:slots:spin:{bet}")],
         preset_row,
-        [
-            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
-            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
-        ]
     ]
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -804,11 +828,16 @@ def get_slots_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
     buttons = [
         top_row,
         preset_row,
-        [
-            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
-            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
-        ]
     ]
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -828,11 +857,16 @@ def get_coinflip_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineK
             InlineKeyboardButton(text=f"👑 На Решку ({format_shekels(bet)})", callback_data=f"cas:coin:tails:{bet}"),
         ],
         preset_row,
-        [
-            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
-            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
-        ]
     ]
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -858,6 +892,11 @@ def get_coinflip_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarku
     if ctrl_row:
         buttons.append(ctrl_row)
     buttons.append(preset_row)
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
     buttons.append([
         InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
         InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
@@ -888,11 +927,16 @@ def get_blackjack_lobby_keyboard(bet: int = 100, balance: int = 10000) -> Inline
         [InlineKeyboardButton(text=f"🃏 Раздать карты ({format_shekels(bet)})", callback_data=f"cas:bj:start:{bet}")],
         preset_row,
         ctrl_row,
-        [
-            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
-            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
-        ]
     ]
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -930,10 +974,15 @@ def get_blackjack_replay_keyboard(bet: int = 100, balance: int = 10000) -> Inlin
             InlineKeyboardButton(text="⚙️ Выбрать ставку", callback_data=f"cas:bj:lobby:{bet}"),
             InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
         ],
-        [
-            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
-        ]
     ]
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -950,11 +999,16 @@ def get_roulette_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineK
     buttons = [
         [InlineKeyboardButton(text=f"💥 Взвести курок ({format_shekels(bet)})", callback_data=f"cas:roulette:shoot:{bet}")],
         preset_row,
-        [
-            InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
-            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
-        ]
     ]
+    if balance < MIN_CASINO_BET:
+        buttons.append([
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
+        InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

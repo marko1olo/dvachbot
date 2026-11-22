@@ -13,8 +13,34 @@ import random
 import time
 import asyncio
 import math
+import json
 from contextlib import asynccontextmanager
 from typing import Tuple, Dict, Any, Optional, List
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+
+def _sanitize_active_items(active_items: Any) -> Dict[str, Any]:
+    """
+    Безопасно нормализует active_items.
+    Если передан None, пустая строка, битый/поврежденный JSON, список или другой некорректный тип,
+    предотвращает падение с ValueError, AttributeError или TypeError и возвращает валидный dict.
+    """
+    if active_items is None:
+        return {}
+    if isinstance(active_items, dict):
+        return active_items
+    if isinstance(active_items, str):
+        trimmed = active_items.strip()
+        if not trimmed:
+            return {}
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, dict):
+                return parsed
+            return {}
+        except Exception:
+            return {}
+    return {}
 
 
 def format_shekels(amount: int | float, show_sign: bool = False) -> str:
@@ -261,9 +287,10 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
     the 11th opening guarantees a 7-day wardrobe drop (hat, glasses, shoes).
     """
     now = int(time.time())
+    active_items = _sanitize_active_items(active_items)
 
     # Pity System check (10 openings without wearable -> 11th is guaranteed)
-    pity_counter = active_items.get("lootbox_pity_counter", 0) if active_items else 0
+    pity_counter = active_items.get("lootbox_pity_counter", 0)
     if pity_counter >= LOOTBOX_PITY_THRESHOLD:
         cid, base_name, desc, slot, dur = random.choice(TRASH_PITY_WARDROBE_POOL)
         return (
@@ -413,9 +440,10 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
     the 11th opening guarantees an apparel drop (head, face, feet, torso).
     """
     now = int(time.time())
+    active_items = _sanitize_active_items(active_items)
 
     # Pity System check (10 openings without wearable -> 11th is guaranteed)
-    pity_counter = active_items.get("lootbox_pity_counter", 0) if active_items else 0
+    pity_counter = active_items.get("lootbox_pity_counter", 0)
     if pity_counter >= LOOTBOX_PITY_THRESHOLD:
         cid, base_name, desc, slot = random.choice(GOLD_PITY_WARDROBE_POOL)
         is_permanent_drop = (random.random() < 0.10)
@@ -553,8 +581,8 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
 
 
 def apply_lootbox_reward(
-    active_items: Dict[str, Any],
-    payload: Dict[str, Any],
+    active_items: Any,
+    payload: Optional[Dict[str, Any]],
     base_cash: int,
     case_type: str = "gold"
 ) -> Tuple[Dict[str, Any], int, Optional[str]]:
@@ -564,6 +592,8 @@ def apply_lootbox_reward(
     Enforces maximum 7-day cap on all protective buffs.
     """
     from wardrobe_engine import CLOTHING_CATALOG, add_item_duration
+    active_items = _sanitize_active_items(active_items)
+    payload = payload if isinstance(payload, dict) else {}
     recycle_msg = None
     final_cash = base_cash
     now = int(time.time())
@@ -986,4 +1016,30 @@ def format_lootbox_result_card(
     if balance_after is not None:
         lines.append(f"\n💳 Твой баланс: <b>{format_shekels(balance_after)}</b>")
     return "\n".join(lines)
+
+
+def roll_whale_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, Dict[str, Any], int]:
+    """
+    Proxy to whale_economy_engine.roll_whale_safe with active_items sanitization.
+    """
+    from whale_economy_engine import roll_whale_safe as _rws
+    return _rws(active_items=_sanitize_active_items(active_items))
+
+
+def get_lootbox_insufficient_funds_keyboard(case_type: str = "trash", balance: int = 0) -> InlineKeyboardMarkup:
+    """
+    Клавиатура быстрого выхода при недостатке шекелей на открытие кейса/сейфа.
+    Предлагает заработать шекели на работе (/work) или получить ежедневный бонус (/daily).
+    """
+    buttons = [
+        [
+            InlineKeyboardButton(text="💼 Пойти на работу (/work)", callback_data="work_hub"),
+            InlineKeyboardButton(text="🎁 Ежедневный бонус (/daily)", callback_data="bonus_daily"),
+        ],
+        [
+            InlineKeyboardButton(text="🛒 В Магазин (/shop)", callback_data="shop_main_hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 

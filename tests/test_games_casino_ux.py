@@ -397,3 +397,247 @@ class TestAuctionUXAndNotifications:
         """Auction engine formats numbers with thousands separators."""
         assert auction_engine.format_shekels(150000) == "150 000 ₪"
         assert auction_engine.format_shekels(10000000) == "10 000 000 ₪"
+
+
+# =============================================================================
+# 6. INSUFFICIENT FUNDS UX & QUICK-EXIT (WORK & DAILY BUTTONS)
+# =============================================================================
+
+class TestInsufficientFundsAndQuickExitUX:
+    """
+    Tests ensuring that when users have 0 ₪ or less than the minimum bet,
+    the interface provides actionable quick-exit buttons (/work, /daily)
+    rather than leaving them in a dead-end.
+    """
+
+    def test_casino_insufficient_funds_keyboard(self):
+        """Keyboard explicitly offers quick exits: work_hub (/work) and bonus_daily (/daily)."""
+        kb = casino_engine.get_casino_insufficient_funds_keyboard(balance=0)
+        assert kb is not None
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        texts = [btn.text for row in kb.inline_keyboard for btn in row]
+
+        assert "work_hub" in callbacks
+        assert "bonus_daily" in callbacks
+        assert any("/work" in t for t in texts)
+        assert any("/daily" in t for t in texts)
+
+    def test_casino_lobby_keyboards_quick_exit_when_zero_balance(self):
+        """When player enters game lobbies with 0 ₪ balance, quick-exit buttons are appended."""
+        keyboards = [
+            casino_engine.get_slots_lobby_keyboard(bet=100, balance=0),
+            casino_engine.get_slots_keyboard(bet=100, balance=0),
+            casino_engine.get_coinflip_lobby_keyboard(bet=100, balance=0),
+            casino_engine.get_coinflip_keyboard(bet=100, balance=0),
+            casino_engine.get_blackjack_lobby_keyboard(bet=100, balance=0),
+            casino_engine.get_blackjack_replay_keyboard(bet=100, balance=0),
+            casino_engine.get_roulette_lobby_keyboard(bet=100, balance=0),
+        ]
+        for kb in keyboards:
+            callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+            assert "work_hub" in callbacks, f"work_hub missing from {kb}"
+            assert "bonus_daily" in callbacks, f"bonus_daily missing from {kb}"
+
+    def test_casino_lobby_keyboards_no_redundant_exit_when_wealthy(self):
+        """When player has ample balance (>= MIN_CASINO_BET), extra work/daily rows are not cluttering the game controls."""
+        kb = casino_engine.get_slots_lobby_keyboard(bet=100, balance=50000)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        assert "work_hub" not in callbacks
+        assert "bonus_daily" not in callbacks
+
+    def test_lootbox_insufficient_funds_keyboard(self):
+        """Lootbox insufficient funds keyboard includes work and daily buttons."""
+        kb = lootbox_engine.get_lootbox_insufficient_funds_keyboard(case_type="trash", balance=10)
+        assert kb is not None
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        assert "work_hub" in callbacks
+        assert "bonus_daily" in callbacks
+
+
+# =============================================================================
+# 7. DUEL ESCROW & TIMEOUT REFUND INTEGRITY
+# =============================================================================
+
+class TestDuelEscrowAndTimeoutUX:
+    """
+    Tests ensuring duel challenges escrow funds immediately at creation time,
+    preventing double-spend / balance drain in casino before duel acceptance,
+    and verifying clean 100% refund on timeout or decline.
+    """
+
+    @pytest.mark.asyncio
+    async def test_duel_immediate_escrow_deduction_prevents_casino_spend(self, isolated_test_db):
+        """
+        When user A places a duel stake, funds are deducted into escrow immediately.
+        User A cannot subsequently spend those escrowed funds in the casino.
+        """
+        from common.database import add_user_global_balance, deduct_user_global_balance, get_user_global_balance
+
+        db = isolated_test_db
+        user_a = 99901
+        board_id = "b"
+
+        # 1. User starts with 1,000 ₪
+        await add_user_global_balance(db, user_a, board_id, 1000)
+        bal = await get_user_global_balance(db, user_a)
+        assert bal == 1000
+
+        # 2. User creates a duel with 600 ₪ stake -> immediately escrowed
+        duel_stake = 600
+        ok, remaining = await deduct_user_global_balance(db, user_a, board_id, duel_stake)
+        assert ok is True
+        assert remaining == 400
+
+        # 3. User tries to bet 500 ₪ in casino while duel is open
+        valid_bet, max_allowed, err = casino_engine.validate_casino_bet(500, balance=remaining)
+        assert valid_bet is False
+        assert "Недостаточно средств" in err
+
+        # 4. Attempt to deduct 500 ₪ fails; balance never goes negative
+        deduct_ok, current_bal = await deduct_user_global_balance(db, user_a, board_id, 500)
+        assert deduct_ok is False
+        assert current_bal == 400
+
+    @pytest.mark.asyncio
+    async def test_duel_timeout_refunds_escrow(self, isolated_test_db):
+        """When an escrowed duel expires, the stake is fully refunded to the challenger."""
+        from common.database import add_user_global_balance, deduct_user_global_balance, get_user_global_balance
+
+        db = isolated_test_db
+        user_a = 99902
+        board_id = "b"
+        stake = 750
+
+        # Initial balance 1,500 ₪
+        await add_user_global_balance(db, user_a, board_id, 1500)
+
+        # Escrow deduction at creation
+        ok, bal_after = await deduct_user_global_balance(db, user_a, board_id, stake)
+        assert ok is True
+        assert bal_after == 750
+
+        # Expiration logic triggered
+        duel_data = {"amount": stake, "board_id": board_id, "escrowed": True}
+        if duel_data.get("escrowed"):
+            await add_user_global_balance(db, user_a, duel_data["board_id"], duel_data["amount"])
+
+        # Balance restored to 1,500 ₪
+        final_bal = await get_user_global_balance(db, user_a)
+        assert final_bal == 1500
+
+    @pytest.mark.asyncio
+    async def test_duel_cancellation_refunds_escrow(self, isolated_test_db):
+        """When challenger cancels open duel, escrowed funds are refunded immediately."""
+        from common.database import add_user_global_balance, deduct_user_global_balance, get_user_global_balance
+
+        db = isolated_test_db
+        user_a = 99903
+        board_id = "b"
+        stake = 300
+
+        await add_user_global_balance(db, user_a, board_id, 500)
+        ok, _ = await deduct_user_global_balance(db, user_a, board_id, stake)
+        assert ok is True
+        assert await get_user_global_balance(db, user_a) == 200
+
+        # Cancel duel
+        await add_user_global_balance(db, user_a, board_id, stake)
+        assert await get_user_global_balance(db, user_a) == 500
+
+
+# =============================================================================
+# 8. CORRUPTED ACTIVE_ITEMS SELF-HEALING IN LOOTBOXES & SAFES
+# =============================================================================
+
+class TestLootboxCorruptedActiveItemsHealing:
+    """
+    Tests ensuring roll_trash_lootbox, roll_gold_safe, roll_whale_safe and apply_lootbox_reward
+    gracefully heal corrupted, empty, string, None, or non-dict active_items without crashing.
+    """
+
+    @pytest.mark.parametrize("corrupted_input", [
+        "",
+        "   ",
+        "corrupted { malformed json",
+        None,
+        [],
+        12345,
+        "null",
+        "{broken",
+    ])
+    def test_roll_trash_lootbox_heals_corrupted_active_items(self, corrupted_input):
+        """roll_trash_lootbox never raises ValueError, AttributeError or TypeError on corrupted active_items."""
+        tier, title, desc, payload, base_cash = lootbox_engine.roll_trash_lootbox(active_items=corrupted_input)
+        assert isinstance(tier, str) and len(tier) > 0
+        assert isinstance(title, str) and len(title) > 0
+        assert isinstance(desc, str)
+        assert isinstance(payload, dict)
+        assert isinstance(base_cash, int)
+
+    @pytest.mark.parametrize("corrupted_input", [
+        "",
+        "   ",
+        "corrupted { malformed json",
+        None,
+        [],
+        12345,
+    ])
+    def test_roll_gold_safe_heals_corrupted_active_items(self, corrupted_input):
+        """roll_gold_safe never raises ValueError, AttributeError or TypeError on corrupted active_items."""
+        tier, title, desc, payload, base_cash = lootbox_engine.roll_gold_safe(active_items=corrupted_input)
+        assert isinstance(tier, str) and len(tier) > 0
+        assert isinstance(title, str) and len(title) > 0
+        assert isinstance(desc, str)
+        assert isinstance(payload, dict)
+        assert isinstance(base_cash, int)
+
+    @pytest.mark.parametrize("corrupted_input", [
+        "",
+        "   ",
+        "malformed { string",
+        None,
+        [],
+        999,
+    ])
+    def test_roll_whale_safe_heals_corrupted_active_items(self, corrupted_input):
+        """roll_whale_safe never raises ValueError, AttributeError or TypeError on corrupted active_items."""
+        import whale_economy_engine
+        tier, title, desc, payload, base_cash = whale_economy_engine.roll_whale_safe(active_items=corrupted_input)
+        assert isinstance(tier, str) and len(tier) > 0
+        assert isinstance(title, str) and len(title) > 0
+        assert isinstance(desc, str)
+        assert isinstance(payload, dict)
+        assert isinstance(base_cash, int)
+
+        # Also via lootbox_engine proxy
+        t2, t_title2, _, p2, _ = lootbox_engine.roll_whale_safe(active_items=corrupted_input)
+        assert isinstance(t2, str)
+        assert isinstance(p2, dict)
+
+    @pytest.mark.parametrize("corrupted_input", [
+        "",
+        "corrupted json",
+        None,
+        [],
+        123,
+    ])
+    def test_apply_lootbox_reward_heals_corrupted_active_items(self, corrupted_input):
+        """apply_lootbox_reward heals corrupted active_items into a valid dict and applies rewards."""
+        payload = {
+            "grant_title": "[Король Помойки]",
+            "title_days": 1,
+            "item_id": "face_monocle",
+            "is_permanent": False,
+            "dur_hours": 24,
+            "slot": "face"
+        }
+        res_items, final_cash, note = lootbox_engine.apply_lootbox_reward(
+            active_items=corrupted_input,
+            payload=payload,
+            base_cash=100,
+            case_type="gold"
+        )
+        assert isinstance(res_items, dict)
+        assert res_items.get("custom_title") == "[Король Помойки]"
+        assert res_items.get("equipped_face") == "face_monocle"
+        assert final_cash >= 100

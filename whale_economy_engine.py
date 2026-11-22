@@ -57,6 +57,15 @@ def roll_whale_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str,
     P_0 = 50,000 ₪, burns 70% of case cost to abu_yacht_fund.
     Returns: (tier, title, description, payload, base_cash)
     """
+    if isinstance(active_items, str):
+        try:
+            parsed = json.loads(active_items) if active_items.strip() else {}
+            active_items = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            active_items = {}
+    elif not isinstance(active_items, dict):
+        active_items = {}
+
     now = int(time.time())
     r = random.random()
 
@@ -194,7 +203,17 @@ async def buy_whale_safe(db: Any, user_id: int, board_id: str = "b") -> Dict[str
                 (user_id, board_id)
             ) as c:
                 row = await c.fetchone()
-                ai = json.loads(row[0]) if (row and row[0]) else {}
+                raw_ai = row[0] if (row and row[0]) else {}
+                if isinstance(raw_ai, str):
+                    try:
+                        parsed = json.loads(raw_ai) if raw_ai.strip() else {}
+                        ai = parsed if isinstance(parsed, dict) else {}
+                    except Exception:
+                        ai = {}
+                elif isinstance(raw_ai, dict):
+                    ai = raw_ai
+                else:
+                    ai = {}
 
             # Check daily escalation counter reset
             reset_ts = ai.get("whale_safes_reset_ts", 0)
@@ -1033,7 +1052,17 @@ async def execute_oligarch_raid(
                 (target_id, board_id)
             ) as c:
                 row = await c.fetchone()
-                ai = json.loads(row[0]) if (row and row[0]) else {}
+                raw_ai = row[0] if (row and row[0]) else {}
+                if isinstance(raw_ai, str):
+                    try:
+                        parsed = json.loads(raw_ai) if raw_ai.strip() else {}
+                        ai = parsed if isinstance(parsed, dict) else {}
+                    except Exception:
+                        ai = {}
+                elif isinstance(raw_ai, dict):
+                    ai = raw_ai
+                else:
+                    ai = {}
 
             # Defense A: Diplomatic Passport (blocks raid completely)
             if ai.get("diplomatic_passport_until", 0) > now or ai.get("diplomatic_passport"):
