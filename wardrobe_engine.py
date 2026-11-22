@@ -1098,13 +1098,16 @@ def check_wardrobe_collection_achievements(active_items: Any) -> List[Dict[str, 
 def apply_armor_durability_hit(
     active_items: Dict[str, Any],
     slot: str = "body",
-    damage_pct: float = 0.10
+    damage_pct: float = 0.10,
+    auto_unequip: bool = False
 ) -> Tuple[bool, str]:
     """
     Applies durability damage to the equipped item in the specified slot.
     - slot: 'body'/'torso', 'head', 'face', 'feet' (or direct item_id).
     - damage_pct: fraction or percentage of durability lost (e.g. 0.10 for 10%).
+    - auto_unequip: if True, unequips the item when durability hits 0.
     If item durability reaches 0, it becomes broken and its stat defense is disabled.
+    Guarantees durability never drops below 0.0 (-1, -5 clamped to 0.0).
     """
     if not isinstance(active_items, dict):
         return False, "Неверный формат инвентаря."
@@ -1129,7 +1132,7 @@ def apply_armor_durability_hit(
     dur_key = f"{item_id}_durability"
     broken_key = f"{item_id}_broken"
 
-    # Current durability
+    # Current durability with strict non-negative clamping
     curr_dur = active_items.get(dur_key)
     if isinstance(active_items.get(item_id), dict):
         curr_dur = active_items[item_id].get("durability", curr_dur)
@@ -1140,6 +1143,7 @@ def apply_armor_durability_hit(
             curr_dur = float(curr_dur)
         except (ValueError, TypeError):
             curr_dur = 100.0
+    curr_dur = max(0.0, min(100.0, curr_dur))
 
     is_already_broken = (
         bool(active_items.get(broken_key, False))
@@ -1152,6 +1156,8 @@ def apply_armor_durability_hit(
         if isinstance(active_items.get(item_id), dict):
             active_items[item_id]["durability"] = 0.0
             active_items[item_id]["broken"] = True
+        if auto_unequip:
+            unequip_slot(active_items, slot)
         return False, f"Предмет {item_name} уже сломан и требует ремонта!"
 
     if (
@@ -1175,6 +1181,8 @@ def apply_armor_durability_hit(
         if isinstance(active_items.get(item_id), dict):
             active_items[item_id]["durability"] = 0.0
             active_items[item_id]["broken"] = True
+        if auto_unequip:
+            unequip_slot(active_items, slot)
         return True, f"Предмет {item_name} сломался! Защита отключена до ремонта."
 
     active_items[broken_key] = False
@@ -1204,6 +1212,7 @@ def calculate_item_repair_cost(
             cur_dur = float(current_durability)
         except (ValueError, TypeError):
             cur_dur = 100.0
+    cur_dur = max(0.0, min(100.0, cur_dur))
 
     if cur_dur > 1.0:
         missing_ratio = max(0.0, min(1.0, (100.0 - cur_dur) / 100.0))
@@ -1270,6 +1279,7 @@ def repair_wardrobe_item(
             curr_dur = float(curr_dur)
         except (ValueError, TypeError):
             curr_dur = 100.0
+        curr_dur = max(0.0, min(100.0, curr_dur))
 
     if curr_dur is not None and curr_dur >= 100.0 and not is_broken:
         return False, f"Предмет {item_name} полностью исправен и не требует ремонта.", 0

@@ -92,6 +92,45 @@ _COMBAT_ENGINE_LOCK = asyncio.Lock()
 # Target attack records: (attacker_id, target_id) -> last_attack_ts
 _TARGET_PAIR_LAST_ATTACK: Dict[Tuple[int, int], float] = {}
 
+# In-memory PvP Target Debounce Locks: target_id -> last_attack_monotonic
+_COMBAT_TARGET_DEBOUNCE: Dict[int, float] = {}
+DEFAULT_COMBAT_DEBOUNCE_SEC: float = 3.0
+
+
+def check_and_set_combat_debounce(target_id: int, debounce_sec: float = DEFAULT_COMBAT_DEBOUNCE_SEC) -> Tuple[bool, float]:
+    """
+    Combat Debounce Lock:
+    Prevents race condition spam and rapid-fire duplicate attacks against the same target within debounce_sec (default 3.0s).
+    Returns:
+      (is_debounced: bool, remaining_sec: float)
+      If is_debounced is True, the target is under active debounce lock and the attack must be throttled.
+      If False, target lock is acquired and attack can proceed.
+    """
+    now = time.monotonic()
+    last_attack = _COMBAT_TARGET_DEBOUNCE.get(target_id, 0.0)
+    elapsed = now - last_attack
+    if elapsed < debounce_sec:
+        remaining = max(0.1, round(debounce_sec - elapsed, 2))
+        return True, remaining
+    _COMBAT_TARGET_DEBOUNCE[target_id] = now
+    return False, 0.0
+
+
+def release_combat_debounce(target_id: int) -> None:
+    """Releases target debounce lock early if attack was aborted or refunded."""
+    _COMBAT_TARGET_DEBOUNCE.pop(target_id, None)
+
+
+def is_combat_target_debounced(target_id: int, debounce_sec: float = DEFAULT_COMBAT_DEBOUNCE_SEC) -> bool:
+    """Read-only check if target is currently locked by combat debounce."""
+    now = time.monotonic()
+    return (now - _COMBAT_TARGET_DEBOUNCE.get(target_id, 0.0)) < debounce_sec
+
+
+def clear_combat_debounce() -> None:
+    """Clears all active combat debounce locks (useful for test resets)."""
+    _COMBAT_TARGET_DEBOUNCE.clear()
+
 load_combat_cooldowns()
 
 @dataclass
@@ -278,6 +317,34 @@ def calculate_combat_duration_and_backfire(
         else:
             base_duration = 1200   # 20 minutes
             backfire_chance = 0.75
+    elif w_type == "curse":
+        # Curse debuff durations: 30m -> 15m -> 5m -> 1m
+        if attacks_24h == 0:
+            base_duration = 1800   # 30 minutes
+            backfire_chance = 0.0
+        elif attacks_24h == 1:
+            base_duration = 900    # 15 minutes
+            backfire_chance = 0.15
+        elif attacks_24h == 2:
+            base_duration = 300    # 5 minutes
+            backfire_chance = 0.35
+        else:
+            base_duration = 60     # 1 minute
+            backfire_chance = 0.65
+    elif w_type == "shit":
+        # Shit debuff durations: 10m -> 5m -> 2m -> 1m
+        if attacks_24h == 0:
+            base_duration = 600    # 10 minutes
+            backfire_chance = 0.0
+        elif attacks_24h == 1:
+            base_duration = 300    # 5 minutes
+            backfire_chance = 0.15
+        elif attacks_24h == 2:
+            base_duration = 120    # 2 minutes
+            backfire_chance = 0.35
+        else:
+            base_duration = 60     # 1 minute
+            backfire_chance = 0.60
     else:  # shoot (мут-ган)
         # Mute-gun base durations: 15m -> 10m -> 5m -> 1m
         if attacks_24h == 0:
@@ -319,14 +386,29 @@ def calculate_combat_duration_and_backfire(
 
     final_duration = max(60, int(round(base_duration * multiplier)))
 
-    # 4. Wardrobe mute duration reduction (hat_helmet -50%, set_riot_police -70%)
+    # 4. Wardrobe reductions & immunities (helmet -50%, riot police -70%, shit/schizo immunities)
     if target_items:
         try:
             from wardrobe_engine import get_wardrobe_total_stats
             w_stats = get_wardrobe_total_stats(target_items)
-            mute_red = w_stats.get("mute_reduction_pct", 0)
-            if mute_red > 0:
-                final_duration = max(60, int(round(final_duration * (1.0 - mute_red / 100.0))))
+
+            # Special weapon immunities
+            if w_type == "shit" and w_stats.get("shit_immunity"):
+                return 0, False, backfire_chance
+            if w_type == "curse" and w_stats.get("schizo_immunity"):
+                return 0, False, backfire_chance
+
+            # Mute reduction for silencing weapons
+            if w_type in ("partyvan", "shoot", "mute_gun"):
+                mute_red = w_stats.get("mute_reduction_pct", 0)
+                if mute_red > 0:
+                    final_duration = max(60, int(round(final_duration * (1.0 - mute_red / 100.0))))
+
+            # Debuff reduction for mental curses
+            if w_type == "curse":
+                debuff_red = w_stats.get("debuff_reduction_pct", 0.0)
+                if debuff_red > 0:
+                    final_duration = max(60, int(round(final_duration * (1.0 - debuff_red))))
         except Exception:
             pass
 
@@ -418,6 +500,7 @@ def reset_combat_moderation_state():
     """Resets memory state for tests."""
     _ATTACKER_COMBAT_HISTORY.clear()
     _TARGET_PAIR_LAST_ATTACK.clear()
+    _COMBAT_TARGET_DEBOUNCE.clear()
     active_combat_appeals.clear()
 
 
