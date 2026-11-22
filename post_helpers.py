@@ -341,7 +341,10 @@ async def safe_delete_message(
     if not bot or not chat_id or not message_id:
         return False
     try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
+        except TypeError:
+            await bot.delete_message(chat_id, message_id)
         return True
     except TelegramBadRequest as e:
         err_msg = (getattr(e, "message", None) or str(e)).lower()
@@ -355,7 +358,10 @@ async def safe_delete_message(
         if wait_s <= 3.0:
             await asyncio.sleep(wait_s + 0.1)
             try:
-                await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
+                except TypeError:
+                    await bot.delete_message(chat_id, message_id)
                 return True
             except Exception:
                 return False
@@ -499,16 +505,21 @@ def extract_post_num_from_message(message: Any) -> int | None:
                 except ValueError:
                     pass
 
-    # 3. First-line header regex
+    # 3. Header regex on early lines (lines 0-2)
     if raw_text:
         clean_raw = re.sub(r'<[^>]+>', '', raw_text)
-        first_line = clean_raw.split('\n', 1)[0]
-        m = RE_HEADER_POST_NUM.search(first_line)
-        if m:
-            try:
-                return int(m.group(1))
-            except ValueError:
-                pass
+        clean_raw = re.sub(r'[\u200b\u200c\u2060\ufeff]', '', clean_raw)
+        # Check first 3 lines (handles banners like 🔥 КИБЕРЧЕД 🔥 or 🪗 БАЯН on line 1)
+        for line in clean_raw.splitlines()[:3]:
+            line = line.strip()
+            if not line:
+                continue
+            m = RE_HEADER_POST_NUM.search(line)
+            if m:
+                try:
+                    return int(m.group(1))
+                except ValueError:
+                    pass
         # 4. Full text search
         m = RE_HEADER_POST_NUM.search(clean_raw)
         if m:
@@ -1046,7 +1057,24 @@ def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None
     return f" (Ответ на #{reply_to})"
 
 
-async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
+async def delete_messages_background(messages_to_delete_info: list, bot_instance: Bot, board_id: str = None) -> int:
+    """
+    Safely deletes message copies in chunked batches without starving the Telegram bot or blocking delivery.
+    """
+    CHUNK_SIZE = 47
+    DELAY_BETWEEN_CHUNKS = 0.08
+    deleted_count = 0
+    for i in range(0, len(messages_to_delete_info), CHUNK_SIZE):
+        chunk = messages_to_delete_info[i:i + CHUNK_SIZE]
+        tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in chunk]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        deleted_count += sum(1 for res in results if res is True)
+        if i + CHUNK_SIZE < len(messages_to_delete_info):
+            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
+    return deleted_count
+
+
+async def delete_single_post(post_num: int, bot_instance: Bot, background: bool = False) -> int:
     """
     Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
     """
@@ -1060,6 +1088,12 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                 board_id = row[0]
     except Exception:
         import traceback; traceback.print_exc()
+
+    try:
+        from delivery_manager import purge_deleted_post_from_delivery_queues
+        purge_deleted_post_from_delivery_queues(post_num, board_id)
+    except Exception:
+        pass
 
     channel_copies = await get_all_channel_copies(post_num)
     raw_copies = await get_post_copies(post_num)
@@ -1105,17 +1139,11 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
 
-    CHUNK_SIZE = 47
-    DELAY_BETWEEN_CHUNKS = 0.08
-    deleted_count = 0
-    for i in range(0, len(messages_to_delete_info), CHUNK_SIZE):
-        chunk = messages_to_delete_info[i:i + CHUNK_SIZE]
-        tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in chunk]
-        results = await asyncio.gather(*tasks)
-        deleted_count += sum(1 for res in results if res is True)
-        if i + CHUNK_SIZE < len(messages_to_delete_info):
-            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
-    return deleted_count
+    if background:
+        from common.task_manager import spawn_task
+        spawn_task(delete_messages_background(messages_to_delete_info, bot_instance, board_id))
+        return len(messages_to_delete_info)
+    return await delete_messages_background(messages_to_delete_info, bot_instance, board_id)
 
 async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
     """

@@ -3172,6 +3172,57 @@ def _unescape_cyberchad_json_str(s: str) -> str:
     return re.sub(r'\\(["\\/bfnrt])', replace_esc, s)
 
 
+CYBERCHAD_REFUSAL_MARKERS = (
+    "я не могу предоставить",
+    "я не могу выполнить",
+    "я не могу ответить",
+    "я не могу отвечать",
+    "я не могу обсуждать",
+    "я не могу генерировать",
+    "я не могу создавать",
+    "я не могу использовать",
+    "я не могу помочь",
+    "я не могу писать",
+    "я не могу участвовать",
+    "я не имею возможности",
+    "я языковая модель",
+    "как языковая модель",
+    "как большая языковая модель",
+    "как искусственный интеллект",
+    "как ии",
+    "телефон доверия",
+    "горячая линия психологической",
+    "горячая линия",
+    "совершения самоубийства",
+    "причинении себе вреда",
+    "обратитесь за помощью к специалистам",
+    "ненормативной лексики",
+    "ненормативную лексику",
+    "оскорблений",
+    "оскорбления",
+    "правилами безопасности",
+    "правила безопасности",
+    "правил безопасности",
+    "правилам безопасности",
+    "политикой безопасности",
+    "политики безопасности",
+    "i cannot fulfill",
+    "i cannot generate",
+    "i cannot provide",
+    "as an ai",
+    "i am unable to",
+    "i apologize, but",
+    "я прошу прощения, но",
+)
+
+
+def is_cyberchad_refusal(text: str | None) -> bool:
+    if not text:
+        return False
+    t_low = text.lower()
+    return any(m in t_low for m in CYBERCHAD_REFUSAL_MARKERS)
+
+
 def parse_cyberchad_response(raw_text: str) -> dict:
     """
     Парсит JSON-ответ от Киберчеда с многоуровневой защитой от сбоев форматирования:
@@ -3238,23 +3289,7 @@ def parse_cyberchad_response(raw_text: str) -> dict:
                         "image_prompt": ""
                     }
 
-                refusal_markers = (
-                    "я не могу предоставить",
-                    "я не могу выполнить",
-                    "я не могу ответить",
-                    "я языковая модель",
-                    "как искусственный интеллект",
-                    "телефон доверия",
-                    "горячая линия психологической",
-                    "горячая линия",
-                    "совершения самоубийства",
-                    "причинении себе вреда",
-                    "обратитесь за помощью к специалистам",
-                    "i cannot fulfill",
-                    "as an ai",
-                    "i am unable to",
-                )
-                if any(m in text_lower for m in refusal_markers):
+                if is_cyberchad_refusal(text_val):
                     logger.warning(f"⚠️ [Cyberchad Parser] Обнаружен корпоративный рефьюз/мораль ИИ: {text_val[:80]}. Подменяем на каноничный роаст нытика.")
                     return {
                         "reply": True,
@@ -3318,6 +3353,10 @@ def parse_cyberchad_response(raw_text: str) -> dict:
         if rsm:
             reason_val = _unescape_cyberchad_json_str(rsm.group(1)).strip()
 
+        if is_cyberchad_refusal(extracted_text):
+            logger.warning(f"⚠️ [Cyberchad Parser] Обнаружен корпоративный рефьюз/мораль ИИ в regex: {extracted_text[:80]}. Подменяем на каноничный роаст нытика.")
+            extracted_text = "Поплачь ещё в треде, сопливая омежка. Единственный твой гуманный самовыпил — это выдернуть провод из розетки и перестать позориться на глазах у всех. Но ты даже на это не способен, так что сиди у параши и не вякай."
+
         logger.info(f"🛡️ [Cyberchad Parser] Успешно восстановлен текст из поврежденного JSON через Regex ({len(extracted_text)} символов).")
         return {
             "reply": reply_flag,
@@ -3347,23 +3386,7 @@ def parse_cyberchad_response(raw_text: str) -> dict:
     # 4. Fallback: если модель вернула обычный текст без JSON
     clean_text = clean_html_tags(strip_cot_and_drafts(clean_raw)).strip()
     clean_lower = clean_text.lower()
-    refusal_markers = (
-        "я не могу предоставить",
-        "я не могу выполнить",
-        "я не могу ответить",
-        "я языковая модель",
-        "как искусственный интеллект",
-        "телефон доверия",
-        "горячая линия психологической",
-        "горячая линия",
-        "совершения самоубийства",
-        "причинении себе вреда",
-        "обратитесь за помощью к специалистам",
-        "i cannot fulfill",
-        "as an ai",
-        "i am unable to",
-    )
-    if any(m in clean_lower for m in refusal_markers):
+    if is_cyberchad_refusal(clean_text):
         logger.warning(f"⚠️ [Cyberchad Parser] Обнаружен корпоративный рефьюз/мораль ИИ в fallback: {clean_text[:80]}. Подменяем на каноничный роаст нытика.")
         return {
             "reply": True,

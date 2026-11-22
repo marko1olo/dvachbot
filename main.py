@@ -3066,57 +3066,13 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         import traceback
         print(f"Критическая ошибка в delete_user_posts: {e}\n{traceback.format_exc()}")
         return 0
-async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
+async def delete_single_post(post_num: int, bot_instance: Bot, background: bool = False) -> int:
     """
     Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
+    Делегирует в каноническую реализацию post_helpers.delete_single_post с защитой от блокировок.
     """
-    board_id = None
-    try:
-        db = await get_pool()
-        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                board_id = row[0]
-    except Exception:
-        pass
-
-    channel_copies = await get_all_channel_copies(post_num)
-    messages_to_delete_info = await get_post_copies(post_num)
-    deleted_from_db = await delete_post_by_num(post_num)
-    if not deleted_from_db and not messages_to_delete_info and not channel_copies:
-        return 0
-    async with storage_lock:
-        post_data = messages_storage.pop(post_num, None)
-        if post_data:
-            if not board_id:
-                board_id = post_data.get('board_id')
-            if board_id and board_id in THREAD_BOARDS:
-                thread_id = post_data.get('thread_id')
-                if thread_id:
-                    b_data = board_data.get(board_id, {})
-                    threads_data = get_threads_data(board_id)
-                    if thread_id in threads_data:
-                        try:
-                            if 'posts' in threads_data[thread_id]:
-                                threads_data[thread_id]['posts'].remove(post_num)
-                        except (ValueError, KeyError):
-                            pass
-        message_copies_in_mem = post_to_messages.pop(post_num, {})
-        for uid, mid_or_list in message_copies_in_mem.items():
-            if isinstance(mid_or_list, list):
-                for mid in mid_or_list:
-                    message_to_post.pop((uid, mid), None)
-            else:
-                message_to_post.pop((uid, mid_or_list), None)
-    if channel_copies:
-        await _delete_posts_from_channels([(chan_id, msg_id, board_id) for chan_id, msg_id in channel_copies], bot_instance)
-    if not messages_to_delete_info:
-        return 1 if deleted_from_db else 0
-
-    tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in messages_to_delete_info]
-    results = await asyncio.gather(*tasks)
-    deleted_count = sum(1 for res in results if res is True)
-    return max(1 if deleted_from_db else 0, deleted_count)
+    from post_helpers import delete_single_post as _ph_delete_single_post
+    return await _ph_delete_single_post(post_num, bot_instance, background=background)
 async def send_moderation_notice(user_id: int, action: str, board_id: str, duration: str = None, deleted_posts: int = 0, stream: str = 'ru'):
 
     b_data = board_data[board_id]
@@ -12995,6 +12951,7 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None = None)
     board_id = board_id or 'b'
     user_id = callback.from_user.id
     job_id = callback.data.replace("work_do_", "")
+    now = int(time.time())
 
     db = await get_pool()
     ans_text = None
@@ -13098,8 +13055,12 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None = None)
                 if cur_bal > 0:
                     await deduct_user_global_balance(db, user_id, board_id, cur_bal)
                     await record_user_transaction(db, user_id, -cur_bal, 'work', f'Частичный штраф на работе ({job_id})')
+                    ans_text = f"{outcome_msg}\n(Списано {int(cur_bal)} ₪ из {amount_change} ₪ — остаток штрафа прощён!)"
+                else:
+                    ans_text = f"{outcome_msg}\n(Баланс 0 ₪ — штраф списан без ухода в минус!)"
             else:
                 await record_user_transaction(db, user_id, -amount_change, 'work', f'Штраф на работе ({job_id})')
+                ans_text = outcome_msg
             async with db_transaction(db):
                 await db.execute(
                     "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
@@ -13266,7 +13227,7 @@ async def cb_casino_main_hub(callback: types.CallbackQuery, board_id: str | None
     finally:
         await safe_callback_answer(callback)
 
-@dp.callback_query(F.data == "economy_daily")
+@dp.callback_query(F.data.in_(["economy_daily", "bonus_daily"]))
 async def cb_economy_daily(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
     user_id = callback.from_user.id
@@ -15567,11 +15528,11 @@ def _generate_passport_text(ctx: PassportContext) -> str:
     )
 
 @dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я", ignore_case=True, ignore_mention=True))
-async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
+async def cmd_passport(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
     Генерирует паспорт анона — сразу красивая PNG-карточка с кнопками навигации.
     """
-    if not board_id: return
+    board_id = board_id or "b"
 
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
@@ -15581,6 +15542,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
 
     from stats_generator import generate_user_stats_card
     from aiogram.types import BufferedInputFile
+    from common.text_utils import safe_tg_caption
     import asyncio
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -15626,8 +15588,9 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         if stars > 0:
             text_report += f"\n🚨 <b>Статус розыска:</b> {'⭐️' * stars} (Награда за голову: <code>{int(bounty):,} ₪</code>! Сбрось через /bribe_cop или жди ареста)"
         if photo_buf:
+            safe_caption = safe_tg_caption(text_report, max_len=1024)
             photo = BufferedInputFile(photo_buf.getvalue(), filename='passport.png')
-            await message.answer_photo(photo, caption=text_report, reply_markup=kb, parse_mode="HTML")
+            await message.answer_photo(photo, caption=safe_caption, reply_markup=kb, parse_mode="HTML")
         else:
             await message.answer(text_report, reply_markup=kb, parse_mode="HTML")
     except Exception as e:
@@ -15705,11 +15668,13 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
         if stars > 0:
             text_report += f"\n🚨 <b>Статус розыска:</b> {'⭐️' * stars} (Награда за голову: <code>{int(bounty):,} ₪</code>! Сбрось через /bribe_cop или жди ареста)"
         if photo_buf:
+            from common.text_utils import safe_tg_caption
+            safe_caption = safe_tg_caption(text_report, max_len=1024)
             photo = BufferedInputFile(photo_buf.getvalue(), filename='passport.png')
             if callback.message and not isinstance(callback.message, types.InaccessibleMessage):
                 try:
                     await callback.message.edit_media(
-                        media=types.InputMediaPhoto(media=photo, caption=text_report, parse_mode="HTML"),
+                        media=types.InputMediaPhoto(media=photo, caption=safe_caption, parse_mode="HTML"),
                         reply_markup=kb
                     )
                 except Exception:
@@ -15717,7 +15682,7 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
             else:
                 try:
                     target_chat = callback.message.chat.id if (callback.message and hasattr(callback.message, 'chat')) else callback.from_user.id
-                    await callback.bot.send_photo(chat_id=target_chat, photo=photo, caption=text_report, reply_markup=kb, parse_mode="HTML")
+                    await callback.bot.send_photo(chat_id=target_chat, photo=photo, caption=safe_caption, reply_markup=kb, parse_mode="HTML")
                 except Exception:
                     pass
     except Exception as e:
@@ -15749,12 +15714,12 @@ async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stre
 
 
 @dp.message(Command("dossier", "досье", "дело", "case", "личноедело", "пробив", ignore_case=True, ignore_mention=True))
-async def cmd_dossier(message: types.Message, board_id: str | None, stream: str = 'ru'):
+async def cmd_dossier(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
     Генерирует платное секретное 'Личное Дело Анона' (стоимость 750 ₪).
     50% вероятность ошибки архива (подсовывание чужого дела, легендарного персонажа или искажение параметров).
     """
-    if not board_id: return
+    board_id = board_id or "b"
 
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
@@ -16126,13 +16091,13 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     ]
 
     # 5. Контекстно-зависимые оперативные заметки
-    bal = int(stats['balance'])
-    mutes = stats['mutes_count']
-    cringe = stats['cringe_factor']
-    posts_cnt = stats['posts_count']
-    rx_rec = stats['rx_received']
-    rx_giv = stats['rx_given']
-    role_str = stats['role'].upper()
+    bal = int(stats.get('balance', 0))
+    mutes = stats.get('mutes_count', 0)
+    cringe = stats.get('cringe_factor', 0.0)
+    posts_cnt = stats.get('posts_count', 0)
+    rx_rec = stats.get('rx_received', 0)
+    rx_giv = stats.get('rx_given', 0)
+    role_str = (stats.get('role') or stats.get('role_name') or 'Аноним').upper()
 
     context_notes = []
 
@@ -16370,8 +16335,10 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     else:
         reliability = "🟢 СТУКАЧ-ОСВЕДОМИТЕЛЬ 3-ГО РАНГА"
 
-    prefix_str = f" [{stats['custom_prefix']}]" if stats.get('custom_prefix') else ""
+    prefix_str = f" [{escape_html(str(stats['custom_prefix']))}]" if stats.get('custom_prefix') else ""
     is_self = " (Твоё личное дело)" if original_target_id == caller_id and not error_mode else ""
+    safe_schizo_name = escape_html(str(schizo_name))
+    safe_role_str = escape_html(str(role_str))
 
     lines = [
         f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА [{get_anon_id(target_id)}]</b>{is_self}",
@@ -16380,8 +16347,8 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
         lines.append(warning_banner)
     lines.extend([
         f"<code>{'═'*26}</code>",
-        f"👤 <b>Позывной:</b> {schizo_name}{prefix_str}",
-        f"🎖 <b>Статус:</b> {role_str}",
+        f"👤 <b>Позывной:</b> {safe_schizo_name}{prefix_str}",
+        f"🎖 <b>Статус:</b> {safe_role_str}",
         f"⚖️ <b>Благонадежность:</b> {reliability}",
         f"<code>{'—'*26}</code>",
         f"📝 <b>Постов на борде:</b> <code>{posts_cnt:,}</code> (Ранг #{stats['rank']}/{stats['total_users']})",
@@ -20036,8 +20003,8 @@ async def cq_tagcloud_menu(callback: types.CallbackQuery):
         print(f"⚠️ Ошибка в cq_tagcloud_menu: {e}")
 
 @dp.message(Command("help", "помощь", "справка", "команды", "хелп", ignore_case=True, ignore_mention=True))
-async def cmd_help(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
+async def cmd_help(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    board_id = board_id or "b"
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     from help_text import get_help_hub_page
     start_text = get_help_hub_page("main", lang=lang)
@@ -20057,8 +20024,8 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
         pass
 
 @dp.message(Command("boards", "board", "доски", "борды", "каналы", ignore_case=True, ignore_mention=True))
-async def cmd_boards(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
+async def cmd_boards(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    board_id = board_id or "b"
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     from help_text import get_help_hub_page
     boards_text = get_help_hub_page("boards", lang=lang)
@@ -23687,6 +23654,11 @@ async def auto_memory_cleaner():
                             post_to_messages.pop(pnum, None)
                         removed["evicted_posts_from_ram"] = len(drop_pnums)
 
+                    copy_limit = max(100, int(MAX_COPY_MAP_POSTS_IN_MEMORY or 2000))
+                    if len(post_to_messages) > copy_limit:
+                        trimmed_posts, _ = _trim_post_copy_maps_unlocked(copy_limit)
+                        removed["evicted_post_to_messages"] = trimmed_posts
+
                     # message_to_post управляется как независимый LRU BoundedDict до BOT_MESSAGE_TO_POST_LIMIT (15000).
                     # Мы не сбрасываем его при вытеснении постов из messages_storage, чтобы ответы на старые посты резолвились.
                     MAX_CAP = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "15000"))
@@ -23696,6 +23668,22 @@ async def auto_memory_cleaner():
                         for k in drop_keys:
                             message_to_post.pop(k, None)
                         removed["stale_message_to_post"] = excess
+
+                    # Prune posts_pending_deletion if set gets too large (> 1000)
+                    if len(posts_pending_deletion) > 1000:
+                        excess_del = len(posts_pending_deletion) - 500
+                        for p in sorted(posts_pending_deletion)[:excess_del]:
+                            posts_pending_deletion.discard(p)
+                        removed["pruned_pending_deletions"] = excess_del
+
+                # Prune stale delivery metrics
+                try:
+                    from delivery_manager import prune_stale_cumulative_post_metrics
+                    pruned_metrics = prune_stale_cumulative_post_metrics(max_age_sec=1800.0, max_keep=300)
+                    if pruned_metrics:
+                        removed["pruned_delivery_metrics"] = pruned_metrics
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -31527,40 +31515,68 @@ def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id
     return builder.as_markup()
 
 
-async def process_report_pipeline(bot, message: types.Message, reported_msg: types.Message, author_id: int, board_id: str, stream: str = 'ru'):
+async def process_report_pipeline(
+    bot,
+    message: types.Message,
+    reported_msg: types.Message | None = None,
+    author_id: int = 0,
+    board_id: str = 'b',
+    stream: str = 'ru',
+    post_num: int | None = None,
+    reason_text: str = ""
+):
     """
     Background pipeline: fetches suspect history, runs AI analysis, sends feedback to user, notifies all admins.
+    Safely handles both reply_to_message reports and direct post_num reports.
     """
     chat_id = message.chat.id
-    msg_id = reported_msg.message_id
-    reporter_id = message.from_user.id
-    reporter_name = message.from_user.username or message.from_user.full_name or str(reporter_id)
+    msg_id = reported_msg.message_id if reported_msg else 0
+    reporter_user = getattr(message, 'from_user', None)
+    reporter_id = getattr(reporter_user, 'id', 0) if reporter_user else 0
+    reporter_name = (
+        getattr(reporter_user, 'username', None)
+        or getattr(reporter_user, 'full_name', None)
+        or str(reporter_id)
+    )
 
     # 1. Resolve post_num and thread_id if available
-    post_num = None
     thread_id = None
-    async with storage_lock:
-        lookup_key = (reported_msg.chat.id, reported_msg.message_id)
-        post_num = message_to_post.get(lookup_key)
-    if not post_num:
-        info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
-        if info:
-            post_num = info[0]
+    if not post_num and reported_msg:
+        from post_helpers import extract_post_num_from_message
+        post_num = extract_post_num_from_message(reported_msg)
+        if not post_num:
+            async with storage_lock:
+                lookup_key = (reported_msg.chat.id, reported_msg.message_id)
+                post_num = message_to_post.get(lookup_key)
+        if not post_num:
+            info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
+            if info:
+                post_num = info[0]
 
-    reported_text = reported_msg.text or reported_msg.caption or '<медиа>'
+    reported_text = ""
     if post_num:
         p_data = await get_post_by_num(post_num)
         if p_data:
             thread_id = p_data.get("thread_id") or post_num
-            if not reported_msg.text and not reported_msg.caption and p_data.get("text_content"):
+            board_id = p_data.get("board_id") or board_id or 'b'
+            if not author_id:
+                author_id = p_data.get("author_id", 0)
+            if p_data.get("text_content"):
                 reported_text = p_data.get("text_content")
+            elif isinstance(p_data.get("content"), dict):
+                reported_text = p_data["content"].get("text") or p_data["content"].get("caption") or ""
+
+    if not reported_text and reported_msg:
+        reported_text = reported_msg.text or reported_msg.caption or '<медиа>'
+    if not reported_text:
+        reported_text = reason_text or '<пост без текста>'
 
     # 2. Fetch suspect dossier (15-20 posts + media descriptions)
     dossier_text, total_posts, posts_24h = await fetch_user_report_dossier(author_id, limit=15)
 
     # 3. AI analysis
     ai_res = await analyze_report_with_ai(reported_text, dossier_text)
-    analysis_text = ai_res["full_analysis"]
+    analysis_text = ai_res.get("full_analysis", "Анализ завершен.")
 
     # 4. Extract anon verdict for reporting user
     anon_verdict = ""
@@ -31576,7 +31592,7 @@ async def process_report_pipeline(bot, message: types.Message, reported_msg: typ
         user_reply = (
             f"✅ Репорт принят на рассмотрение. <b>СПАСИБО УЁБОК!</b>\n\n"
             f"🤖 <b>Вердикт нейромодератора:</b>\n"
-            f"<blockquote>{anon_verdict}</blockquote>\n"
+            f"<blockquote>{escape_html(anon_verdict)}</blockquote>\n"
             f"<i>Досье подозреваемого ({total_posts} постов) направлено администраторам.</i>"
         )
         feedback_msg = await message.answer(user_reply, parse_mode="HTML")
@@ -31587,14 +31603,15 @@ async def process_report_pipeline(bot, message: types.Message, reported_msg: typ
     # 6. Notify all admins with interactive multi-select keyboard
     post_link_str = f"<a href=\"https://tgach.top/{board_id}/res/{thread_id or post_num}.html#post-{post_num}\">#{post_num}</a>" if post_num else f"сообщение <code>{msg_id}</code>"
     anon_suspect_name = generate_anon_name(author_id) if author_id else "Неизвестный"
+    reason_line = f"\n💬 <b>Причина:</b> <i>{escape_html(reason_text)}</i>" if reason_text else ""
 
     admin_report_text = (
         f"🚨 <b>РЕПОРТ В /{board_id}/</b>\n\n"
-        f"👤 <b>На кого:</b> <code>{author_id}</code> (<b>{anon_suspect_name}</b>)\n"
-        f"📩 <b>Пост:</b> {post_link_str}\n"
+        f"👤 <b>На кого:</b> <code>{author_id}</code> (<b>{escape_html(anon_suspect_name)}</b>)\n"
+        f"📩 <b>Пост:</b> {post_link_str}{reason_line}\n"
         f"💬 <b>Текст:</b> <blockquote>{escape_html(reported_text[:300])}</blockquote>\n"
         f"📊 <b>Активность:</b> {total_posts} постов (за 24ч: {posts_24h})\n\n"
-        f"🤖 <b>АНАЛИЗ НЕЙРОСЕТИ:</b>\n{analysis_text}\n\n"
+        f"🤖 <b>АНАЛИЗ НЕЙРОСЕТИ:</b>\n{escape_html(analysis_text)}\n\n"
         f"🔍 <b>Репортёр:</b> <code>{reporter_id}</code> (@{escape_html(reporter_name)})"
     )
 
@@ -31617,30 +31634,112 @@ async def process_report_pipeline(bot, message: types.Message, reported_msg: typ
     if post_num:
         try:
             db = await get_pool()
+            report_reason_db = f"Report from TG:{reporter_id}" + (f": {reason_text[:200]}" if reason_text else "")
             await db.execute(
                 "INSERT INTO Reports (post_num, category, reason, sender_ip_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                (post_num, "user_report", f"Report from TG:{reporter_id}", str(reporter_id), time.time())
+                (post_num, "user_report", report_reason_db, str(reporter_id), time.time())
             )
         except Exception as e:
             runtime_logger.error(f"Error inserting into Reports table: {e}", exc_info=True)
 
 
 @dp.message(Command("report", "mods", "moderator", "rep"))
-async def cmd_report(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
+async def cmd_report(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    board_id = board_id or "b"
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
 
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
-    if not message.reply_to_message:
-        msg = "⚠️ Ответьте на подозрительное сообщение командой <code>/report</code>, чтобы позвать модераторов и запустить проверку нейросетью."
-        if lang == 'en': msg = "⚠️ Reply to a suspicious message with <code>/report</code> to alert moderators and trigger AI analysis."
-        elif lang == 'jp': msg = "⚠️ 違反報告するメッセージに返信して <code>/report</code> を送信してください。"
+    reporter_id = message.from_user.id
+    raw_text = message.text or message.caption or ""
+    # Strip zero-width characters that might have been copied from post headers
+    clean_text = re.sub(r'[\u200b\u200c\u2060\ufeff]', '', raw_text).strip()
+
+    reported_msg = message.reply_to_message
+    post_num = None
+    reason_text = ""
+    author_id = 0
+
+    # 1. Check if post number is specified in arguments: /report 593558 [reason]
+    parts = clean_text.split(maxsplit=2)
+    if len(parts) > 1:
+        m = re.search(r'(?:#|№|post-|p/|\b)(\d{3,9})\b', parts[1])
+        if m:
+            post_num = int(m.group(1))
+            reason_text = parts[2] if len(parts) > 2 else ""
+        elif not reported_msg:
+            # Check entire argument for post number pattern
+            from post_helpers import extract_post_num_from_message
+            post_num = extract_post_num_from_message(clean_text)
+            if not post_num:
+                reason_text = clean_text[len(parts[0]):].strip()
+
+    # 2. If no post_num from arguments, resolve from reply_to_message
+    if not post_num and reported_msg:
+        from post_helpers import extract_post_num_from_message
+        post_num = extract_post_num_from_message(reported_msg)
+        if not post_num:
+            async with storage_lock:
+                lookup_key = (reported_msg.chat.id, reported_msg.message_id)
+                post_num = message_to_post.get(lookup_key)
+        if not post_num:
+            info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
+            if info:
+                post_num = info[0]
+        # Any argument after /report is the reason
+        if len(parts) > 1 and not reason_text:
+            reason_text = clean_text[len(parts[0]):].strip()
+
+    # 3. If still no post_num and no reply_to_message: output clear, friendly instructions
+    if not post_num and not reported_msg:
+        if lang == 'en':
+            msg = (
+                "⚠️ <b>How to report to moderators:</b>\n\n"
+                "• Reply to a suspicious message with <code>/report [reason]</code>\n"
+                "• Or specify post number: <code>/report 12345 [reason]</code>\n\n"
+                "Moderators and AI neural analysis will review the post immediately."
+            )
+        elif lang == 'jp':
+            msg = (
+                "⚠️ <b>モデレーターへの通報方法:</b>\n\n"
+                "• 違反メッセージに返信して <code>/report [理由]</code> を送信\n"
+                "• または投稿番号を指定: <code>/report 12345 [理由]</code>\n\n"
+                "モデレーターとAIによる確認が直ちに開始されます。"
+            )
+        else:
+            msg = (
+                "⚠️ <b>Как отправить жалобу модераторам:</b>\n\n"
+                "• Ответьте на подозрительное сообщение командой <code>/report [причина]</code>\n"
+                "• Либо укажите номер поста: <code>/report 12345 [причина]</code>\n\n"
+                "Модераторы и нейросеть мгновенно получат сигнал и проверят нарушителя."
+            )
         await message.answer(msg, parse_mode="HTML")
         return
 
-    reporter_id = message.from_user.id
+    # 4. If post_num was resolved, verify post existence and fetch author_id
+    if post_num:
+        p_data = await get_post_by_num(post_num)
+        if not p_data:
+            if lang == 'en':
+                msg = f"⚠️ Post <code>#{post_num}</code> was not found in the database."
+            elif lang == 'jp':
+                msg = f"⚠️ 投稿 <code>#{post_num}</code> がデータベースに見つかりませんでした。"
+            else:
+                msg = f"⚠️ Пост <code>#{post_num}</code> не найден в базе данных."
+            await message.answer(msg, parse_mode="HTML")
+            return
+        author_id = p_data.get("author_id", 0)
+        board_id = p_data.get("board_id") or board_id
+    elif reported_msg:
+        author_id = await get_author_id_by_reply(message) or 0
+
+    # 5. Prevent self-reporting
+    if author_id and author_id == reporter_id:
+        await message.answer("🤡 Репортишь сам себя, дебил?", parse_mode="HTML")
+        return
+
+    # 6. Cooldown check
     now = time.time()
     last_report_ts = _REPORT_USER_COOLDOWNS.get(reporter_id, 0)
     if now - last_report_ts < 30.0:
@@ -31654,27 +31753,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
         await message.answer(msg, parse_mode="HTML")
         return
 
-    reported_msg = message.reply_to_message
-
-    # Get author id of reported message
-    author_id = await get_author_id_by_reply(message)
-    if not author_id:
-        author_id = 0
-
-    if author_id == message.from_user.id:
-        await message.answer("🤡 Репортишь сам себя, дебил?", parse_mode="HTML")
-        return
-
-    # Check if post was already reported and is open in Reports table
-    post_num = None
-    async with storage_lock:
-        lookup_key = (reported_msg.chat.id, reported_msg.message_id)
-        post_num = message_to_post.get(lookup_key)
-    if not post_num:
-        info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
-        if info:
-            post_num = info[0]
-
+    # 7. Check if post was already reported and is open in Reports table
     if post_num:
         try:
             db = await get_pool()
@@ -31696,8 +31775,17 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
 
     _REPORT_USER_COOLDOWNS[reporter_id] = now
 
-    # Spawn asynchronous pipeline
-    spawn_task(process_report_pipeline(message.bot, message, reported_msg, author_id, board_id, stream))
+    # 8. Spawn asynchronous pipeline
+    spawn_task(process_report_pipeline(
+        bot=message.bot,
+        message=message,
+        reported_msg=reported_msg,
+        author_id=author_id,
+        board_id=board_id,
+        stream=stream,
+        post_num=post_num,
+        reason_text=reason_text
+    ))
 
 
 @dp.message(Command("feedback", "suggest", "обратная_связь", "предложение", "жалоба", "багрепорт", "bugreport"))

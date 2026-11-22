@@ -227,7 +227,7 @@ async def test_post_helpers_header_html_sanitization(isolated_test_db):
 # ==============================================================================
 
 @pytest.mark.asyncio
-async def test_post_helpers_thread_header_isolation():
+async def test_post_helpers_thread_header_isolation(isolated_test_db):
     """
     Verifies that when an anon has activated is_isolated (self-isolation mode),
     the (OP) badge is suppressed in thread headers to protect their anonymity.
