@@ -429,27 +429,27 @@ class TestAdversarialRaidOligarch:
         for v in voters:
             await common.database.deduct_user_global_balance(db, v, "b", 5000.0)
 
-        # Test Case 2: Mega-Oligarch with 10,000,000 ₪ (10% = 1,000,000 ₪ -> CAPPED at 200,000 ₪)
+        # Test Case 2: Mega-Oligarch with 10,000,000 ₪ (10% = 1,000,000 ₪ -> CAPPED at 1,000,000 ₪)
         oli2 = 91070
         await common.database.add_user_global_balance(db, oli2, "b", 10000000.0)
 
         res2 = await execute_oligarch_raid(db, voters, oli2, "b")
         assert res2["ok"] is True
-        assert res2["confiscated"] == 200000.0  # CAPPED at 200,000 ₪
-        assert res2["burned_to_abu"] == 140000.0  # 70% of 200,000
-        assert res2["distributed_total"] == 60000.0  # 30% of 200,000
-        assert res2["per_voter"] == 12000.0  # 60,000 / 5
+        assert res2["confiscated"] == 1000000.0  # CAPPED at 1,000,000 ₪
+        assert res2["burned_to_abu"] == 700000.0  # 70% of 1,000,000
+        assert res2["distributed_total"] == 300000.0  # 30% of 1,000,000
+        assert res2["per_voter"] == 60000.0  # 300,000 / 5
 
         # Oligarch 2 balance after raid
-        assert await common.database.get_user_global_balance(db, oli2) == 9800000.0
+        assert await common.database.get_user_global_balance(db, oli2) == 9000000.0
 
-        # Abu Fund increased by 140,000 ₪
+        # Abu Fund increased by 700,000 ₪
         fund_after = await common.database.get_abu_fund_total(db)
-        assert round(fund_after - fund_mid, 2) == 140000.0
+        assert round(fund_after - fund_mid, 2) == 700000.0
 
-        # Voters received 12,000 ₪ each (800 + 12,000 = 12,800 ₪)
+        # Voters received 60,000 ₪ each (800 + 60,000 = 60,800 ₪)
         for v in voters:
-            assert await common.database.get_user_global_balance(db, v) == 12800.0
+            assert await common.database.get_user_global_balance(db, v) == 60800.0
 
     @pytest.mark.asyncio
     async def test_raid_target_not_oligarch_or_auto_selection(self, isolated_test_db):

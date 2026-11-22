@@ -698,6 +698,16 @@ def calculate_wealth_tax(balance: float, idle_hours: float = 0.0, deposit_balanc
     if not isinstance(balance, (int, float)) or math.isnan(balance) or math.isinf(balance) or balance <= 5000:
         return 0.0
 
+    if not isinstance(idle_hours, (int, float)) or math.isnan(idle_hours) or math.isinf(idle_hours) or idle_hours < 0:
+        clean_idle = 0.0
+    else:
+        clean_idle = float(idle_hours)
+
+    if not isinstance(deposit_balance, (int, float)) or math.isnan(deposit_balance) or math.isinf(deposit_balance) or deposit_balance <= 0:
+        clean_dep = 0.0
+    else:
+        clean_dep = float(deposit_balance)
+
     if balance <= 50000:
         rate = 0.003
     elif balance <= 500000:
@@ -707,12 +717,12 @@ def calculate_wealth_tax(balance: float, idle_hours: float = 0.0, deposit_balanc
     else:
         rate = 0.050
 
-    if balance > 500000 and idle_hours >= 72.0:
+    if balance > 500000 and clean_idle >= 72.0:
         rate *= 1.5
 
     base_tax = balance * rate
-    if deposit_balance > 0 and balance > 0:
-        dep_portion = min(float(deposit_balance), float(balance))
+    if clean_dep > 0 and balance > 0:
+        dep_portion = min(clean_dep, float(balance))
         dep_discount = dep_portion * rate * 0.50
         base_tax = max(0.0, base_tax - dep_discount)
 
@@ -845,10 +855,18 @@ async def process_daily_wealth_tax(db: Any) -> Dict[str, Any]:
                 if actual_tax > 0:
                     affected_count += 1
                     total_tax_collected += actual_tax
-                    await record_user_transaction(
-                        db, uid, -actual_tax, 'tax',
-                        f'Налог Абу на богатство ({actual_tax:,} ₪)'
-                    )
+                    if wallet_cut > 0:
+                        w_amt_str = f"{int(wallet_cut):,}" if wallet_cut == int(wallet_cut) else f"{wallet_cut:,.2f}"
+                        await record_user_transaction(
+                            db, uid, -round(wallet_cut, 2), 'tax',
+                            f'Налог Абу на богатство ({w_amt_str} ₪)'
+                        )
+                    if bank_cut > 0:
+                        b_amt_str = f"{int(bank_cut):,}" if bank_cut == int(bank_cut) else f"{bank_cut:,.2f}"
+                        await record_user_transaction(
+                            db, uid, 0, 'bank_wealth_tax',
+                            f'Налог со вклада (-{b_amt_str} ₪)'
+                        )
                     details.append({"user_id": uid, "tax": actual_tax, "balance_before": total_bal})
 
             if total_tax_collected > 0:

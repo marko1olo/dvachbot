@@ -14,6 +14,7 @@ import math
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiogram import Router, F, types
@@ -43,7 +44,142 @@ __all__ = [
     "get_active_auctions",
     "check_raid_proletarian",
     "auction_router",
+    "format_shekels",
+    "format_outbid_notification",
+    "format_anti_sniping_notice",
+    "auction_bid_in_flight_guard",
+    "is_bid_in_flight",
+    "check_bid_debounce",
 ]
+
+def format_shekels(amount: int | float, show_sign: bool = False) -> str:
+    """
+    Красивое форматирование шекелей с разделителями тысяч (пробел) и защитой от float-артефактов:
+    например, '1 500 ₪' вместо '1500.0000000001 ₪'.
+    """
+    if amount is None or (isinstance(amount, float) and (math.isnan(amount) or math.isinf(amount))):
+        return "0 ₪"
+    try:
+        rounded = round(float(amount), 2)
+        if abs(rounded - round(rounded)) < 1e-5:
+            val_int = int(round(rounded))
+            sign_prefix = "+" if (show_sign and val_int > 0) else ""
+            formatted = f"{val_int:,}".replace(",", " ")
+            return f"{sign_prefix}{formatted} ₪"
+        else:
+            sign_prefix = "+" if (show_sign and rounded > 0) else ""
+            formatted = f"{rounded:,.2f}".replace(",", " ")
+            return f"{sign_prefix}{formatted} ₪"
+    except (ValueError, TypeError, OverflowError):
+        return "0 ₪"
+
+
+# In-flight lock & debouncing for auction bids
+_user_bid_locks: Dict[int, asyncio.Lock] = {}
+_bidding_inflight: Dict[int, float] = {}
+_bid_meta_lock = asyncio.Lock()
+user_bid_last_action: Dict[int, float] = {}
+
+
+class AuctionBidInFlightError(Exception):
+    """Выбрасывается при попытке сделать параллельную ставку до завершения предыдущей транзакции."""
+    pass
+
+
+async def get_user_bid_lock(user_id: int) -> asyncio.Lock:
+    """Возвращает или создает per-user asyncio.Lock для сериализации ставок."""
+    async with _bid_meta_lock:
+        if user_id not in _user_bid_locks:
+            _user_bid_locks[user_id] = asyncio.Lock()
+        return _user_bid_locks[user_id]
+
+
+def is_bid_in_flight(user_id: int) -> bool:
+    """Проверяет, обрабатывается ли ставка прямо сейчас для данного пользователя."""
+    lock = _user_bid_locks.get(user_id)
+    if lock is not None and lock.locked():
+        return True
+    return user_id in _bidding_inflight
+
+
+@asynccontextmanager
+async def auction_bid_in_flight_guard(user_id: int, timeout: float = 0.0):
+    """
+    Контекстный менеджер защиты от спама кнопками ставки (/bid).
+    Блокирует параллельные запросы до завершения списания депозита и обновления лота.
+    """
+    user_lock = await get_user_bid_lock(user_id)
+    if user_lock.locked() and timeout <= 0.0:
+        raise AuctionBidInFlightError("⏳ Ваша предыдущая ставка ещё обрабатывается! Подождите завершения транзакции.")
+
+    acquired = False
+    try:
+        if timeout > 0.0:
+            try:
+                await asyncio.wait_for(user_lock.acquire(), timeout=timeout)
+                acquired = True
+            except asyncio.TimeoutError:
+                raise AuctionBidInFlightError("⏳ Ваша предыдущая ставка ещё обрабатывается! Подождите завершения транзакции.")
+        else:
+            await user_lock.acquire()
+            acquired = True
+
+        _bidding_inflight[user_id] = time.time()
+        yield
+    finally:
+        _bidding_inflight.pop(user_id, None)
+        if acquired and user_lock.locked():
+            user_lock.release()
+
+
+def check_bid_debounce(user_id: int, min_interval: float = 1.0) -> Tuple[bool, str]:
+    """
+    Защита от быстрого спама ставками (debouncing).
+    Возвращает (is_allowed, error_message).
+    """
+    now = time.time()
+    last = user_bid_last_action.get(user_id, 0.0)
+    if now - last < min_interval:
+        rem = round(min_interval - (now - last), 1)
+        return False, f"⏳ Не части! Подожди {rem} сек. перед следующей ставкой."
+    user_bid_last_action[user_id] = now
+    return True, ""
+
+
+def format_outbid_notification(
+    auction_id: int,
+    lot_title: str,
+    refunded_amount: int | float,
+    new_bid: int | float,
+    new_leader_name: str = "Другой участник"
+) -> str:
+    """
+    Формирует подробное и понятное уведомление при перебитии ставки игрока:
+    - Четко сообщает о перебитии ставки.
+    - Подтверждает 100% возврат заблокированного депозита из эскроу на баланс.
+    - Указывает актуальную лидирующую ставку лота.
+    """
+    return (
+        f"🔔 <b>ВНИМАНИЕ! ТВОЮ СТАВКУ ПЕРЕБИЛИ!</b>\n\n"
+        f"🏛️ <b>Аукцион:</b> #{auction_id} ({lot_title})\n"
+        f"👤 <b>Новый лидер:</b> {new_leader_name}\n"
+        f"⚡ <b>Новая ставка:</b> {format_shekels(new_bid)}\n\n"
+        f"💰 <b>Возврат депозита:</b> Твоя заблокированная ставка {format_shekels(refunded_amount)} "
+        f"автоматически и в полном объёме возвращена на твой баланс (100% эскроу-возврат)!\n\n"
+        f"👉 Чтобы вернуть лидерство, сделай новую ставку: <code>/bid {auction_id} {int(new_bid) + 1000}</code>"
+    )
+
+
+def format_anti_sniping_notice(extension_sec: int = 300) -> str:
+    """
+    Формирует понятное уведомление о срабатывании анти-снайпинг таймера (продление торгов при ставке на последних секундах).
+    """
+    mins = extension_sec // 60
+    return (
+        f"🚨 <b>АНТИ-СНАЙПИНГ:</b> До завершения торгов оставалось менее {mins} минут!\n"
+        f"Время аукциона автоматически продлено на +{mins} мин. (+{extension_sec} сек.), "
+        f"чтобы исключить снайпинг в последнюю секунду и дать честный шанс всем участникам."
+    )
 
 auction_router = Router(name="auction_router")
 
@@ -397,7 +533,12 @@ async def cmd_bid(message: types.Message):
         return
 
     db = await get_pool()
-    res = await place_auction_bid(db, auction_id, user_id, user_name, bid_amount, board_id)
+    try:
+        async with auction_bid_in_flight_guard(user_id):
+            res = await place_auction_bid(db, auction_id, user_id, user_name, bid_amount, board_id)
+    except AuctionBidInFlightError as err_inflight:
+        await message.reply(str(err_inflight))
+        return
 
     if not res.get("ok"):
         err_msg = html.escape(str(res.get('error', 'Неизвестная ошибка')))
@@ -405,10 +546,14 @@ async def cmd_bid(message: types.Message):
         return
 
     snipe_txt = (
-        "\n\n🚨 <b>АНТИ-СНАЙПИНГ:</b> До конца оставалось менее 5 минут! Время аукциона продлено на +300 секунд."
+        f"\n\n{format_anti_sniping_notice(300)}"
         if res.get("extended") else ""
     )
-    prev_txt = "\nПредыдущему лидеру возвращено 100% ставки из эскроу." if res.get("previous_winner") else ""
+    prev_txt = (
+        f"\n\n🔄 <b>Авто-возврат депозита:</b> Предыдущему лидеру #{res.get('previous_winner')} "
+        f"100% заблокированного депозита немедленно и автоматически возвращено на баланс!"
+        if res.get("previous_winner") else ""
+    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
@@ -416,7 +561,7 @@ async def cmd_bid(message: types.Message):
     await message.reply(
         f"🔨 <b>СТАВКА ПРИНЯТА!</b>\n\n"
         f"Аукцион: <b>#{auction_id}</b>\n"
-        f"Твоя ставка: <code>{int(bid_amount):,} ₪</code>\n"
+        f"Твоя ставка: <code>{format_shekels(bid_amount)}</code>\n"
         f"Статус: <b>Лидер аукциона 👑</b>"
         f"{prev_txt}{snipe_txt}",
         reply_markup=kb,
@@ -452,8 +597,8 @@ async def cmd_whale_safe(message: types.Message, board_id: str | None = None, **
         f"🌟 <b>Тир:</b> {res['tier']}\n"
         f"🎁 <b>Награда:</b> <b>{safe_title}</b>\n"
         f"📝 <i>{safe_desc}</i>{rec_str}\n\n"
-        f"🔥 <i>70% стоимости ({res['burned_to_abu']:,.0f} ₪) навсегда сожжено в Фонд Яхты Абу!</i>\n"
-        f"Твой новый баланс: <code>{int(res['new_balance']):,} ₪</code>"
+        f"🔥 <i>70% стоимости ({format_shekels(res['burned_to_abu'])}) навсегда сожжено в Фонд Яхты Абу!</i>\n"
+        f"Твой новый баланс: <code>{format_shekels(res['new_balance'])}</code>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],

@@ -11,7 +11,63 @@ Includes strict duplicate cashback caps, fixed scrap recycling, bundle caps, and
 
 import random
 import time
-from typing import Tuple, Dict, Any, Optional
+import asyncio
+import math
+from contextlib import asynccontextmanager
+from typing import Tuple, Dict, Any, Optional, List
+
+
+def format_shekels(amount: int | float, show_sign: bool = False) -> str:
+    """
+    Красивое форматирование шекелей с разделителями тысяч (пробел) и защитой от float-артефактов:
+    например, '1 500 ₪' вместо '1500.0000000001 ₪'.
+    """
+    if amount is None or (isinstance(amount, float) and (math.isnan(amount) or math.isinf(amount))):
+        return "0 ₪"
+    try:
+        rounded = round(float(amount), 2)
+        if abs(rounded - round(rounded)) < 1e-5:
+            val_int = int(round(rounded))
+            sign_prefix = "+" if (show_sign and val_int > 0) else ""
+            formatted = f"{val_int:,}".replace(",", " ")
+            return f"{sign_prefix}{formatted} ₪"
+        else:
+            sign_prefix = "+" if (show_sign and rounded > 0) else ""
+            formatted = f"{rounded:,.2f}".replace(",", " ")
+            return f"{sign_prefix}{formatted} ₪"
+    except (ValueError, TypeError, OverflowError):
+        return "0 ₪"
+
+
+# -----------------------------------------------------------------------------
+# Rarity Tiers & Visual Gradation (UX Resilience)
+# -----------------------------------------------------------------------------
+RARITY_TIERS = {
+    "common": {"code": "common", "name": "Обычный", "emoji": "⚪", "badge": "⚪ Обычный"},
+    "rare": {"code": "rare", "name": "Редкий", "emoji": "🔵", "badge": "🔵 Редкий"},
+    "epic": {"code": "epic", "name": "Эпический", "emoji": "🟣", "badge": "🟣 Эпический"},
+    "legendary": {"code": "legendary", "name": "Легендарный", "emoji": "🟡", "badge": "🟡 Легендарный"},
+}
+
+
+def get_rarity_info(tier_str: str) -> Dict[str, str]:
+    """
+    Определяет уровень редкости и бейдж (Обычный ⚪, Редкий 🔵, Эпический 🟣, Легендарный 🟡)
+    по заголовку тира предмета.
+    """
+    lower = (tier_str or "").lower()
+    if any(k in lower for k in ("легендарн", "джекпот", "мифическ", "навсегда", "супер-джекпот")) or "🟡" in tier_str or "🌟" in tier_str:
+        return RARITY_TIERS["legendary"]
+    if any(k in lower for k in ("эпическ", "элитн", "гарант", "гардероб")) or "🟣" in tier_str or "👗" in tier_str:
+        return RARITY_TIERS["epic"]
+    if any(k in lower for k in ("редк", "боевой", "расходник", "щит")) or "🔵" in tier_str or "✨" in tier_str or "⚔️" in tier_str:
+        return RARITY_TIERS["rare"]
+    return RARITY_TIERS["common"]
+
+
+def format_rarity_badge(tier_str: str) -> str:
+    """Возвращает форматированный бейдж редкости с соответствующим эмодзи."""
+    return get_rarity_info(tier_str)["badge"]
 
 # -----------------------------------------------------------------------------
 # Rebalanced Drop Tables (F2.1)
@@ -211,7 +267,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
     if pity_counter >= LOOTBOX_PITY_THRESHOLD:
         cid, base_name, desc, slot, dur = random.choice(TRASH_PITY_WARDROBE_POOL)
         return (
-            "👗 ГАРАНТ: БАЗОВЫЙ ШМОТ (7 ДНЕЙ)",
+            "🟣 ЭПИЧЕСКИЙ [ГАРАНТ: Базовый шмот 7 дней]",
             base_name,
             f"{desc} (Сработал Гарант: 10 открытий без шмота!)",
             {"item_id": cid, "dur_hours": dur, "slot": slot, "pity_triggered": True},
@@ -225,7 +281,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
         jp_sub = random.random()
         if jp_sub < 0.50:
             return (
-                "🔥 ДЖЕКПОТ! (ЛЕГЕНДАРНЫЙ)",
+                "🟡 ЛЕГЕНДАРНЫЙ [Джекпот Абу]",
                 "💰 Пачка шекелей (+350 ₪) + Титул [Король Помойки]!",
                 "Из мусорного пакета выпала пачка шекелей и корона повелителя помоек!",
                 {"grant_title": "[Король Помойки]", "title_days": 1},
@@ -233,7 +289,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         elif jp_sub < 0.85:
             return (
-                "🔥 ДЖЕКПОТ! (ЛЕГЕНДАРНЫЙ)",
+                "🟡 ЛЕГЕНДАРНЫЙ [Джекпот Абу]",
                 "🔇 Мут-Ган (/shoot на 1 час)!",
                 "Оружие для отстрела рака и неадекватов реплаем!",
                 {"mute_gun": True},
@@ -241,7 +297,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         else:
             return (
-                "🔥 ДЖЕКПОТ! (ЛЕГЕНДАРНЫЙ)",
+                "🟡 ЛЕГЕНДАРНЫЙ [Джекпот Абу]",
                 "🚔 Пативэн-Ган (/partyvan)!",
                 "Настоящая милицейская рация для вызова ОМОНа на тред!",
                 {"partyvan_gun": True},
@@ -253,7 +309,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
         rare_roll = random.random()
         if rare_roll < 0.25:
             return (
-                "✨ РЕДКИЙ ПРЕДМЕТ",
+                "🟣 ЭПИЧЕСКИЙ [Редкий предмет]",
                 "👽 Шапочка из фольги (на 6 часов)",
                 "Экранирует твою голову от грабежей (/rob) и говна (/shit) на 6 часов!",
                 {
@@ -266,7 +322,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         elif rare_roll < 0.50:
             return (
-                "✨ РЕДКИЙ ПРЕДМЕТ",
+                "🟣 ЭПИЧЕСКИЙ [Редкий предмет]",
                 "🛡️ Зеркальный Щит (на 6 часов)",
                 "Отражает выстрелы Мут-Гана обратно в стрелка!",
                 {"reflect_shield_until": now + 6 * 3600, "shield_until": now + 6 * 3600},
@@ -274,7 +330,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         elif rare_roll < 0.75:
             return (
-                "👗 БАЗОВЫЙ ШМОТ (7 ДНЕЙ)",
+                "🟣 ЭПИЧЕСКИЙ [Базовый шмот 7 дней]",
                 "📦 Пакет из Пятерочки (на 7 дней)",
                 "Головной убор труъ-анонима! Дает шанс выбивать лутбоксы на работе.",
                 {"item_id": "hat_bag", "dur_hours": 168, "slot": "head"},
@@ -282,7 +338,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         elif rare_roll < 0.90:
             return (
-                "✨ РЕДКИЙ ПРЕДМЕТ",
+                "🟣 ЭПИЧЕСКИЙ [Редкий предмет]",
                 "🎨 Цветной Бейдж ника (на 48 часов)",
                 "Открывает доступ к кастомному цвету ника (/color) на 48 часов!",
                 {"badge_color_active": True, "badge_color_expires": now + 48 * 3600},
@@ -290,7 +346,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         else:
             return (
-                "✨ РЕДКИЙ СТАТУС",
+                "🟣 ЭПИЧЕСКИЙ [Редкий статус]",
                 "🏷️ Титул «Сборщик Стеклотары» (на 24 часа)",
                 "Почетное звание санитара тредов и собирателя бутылок!",
                 {"grant_title": "[Сборщик Стеклотары]", "title_days": 1},
@@ -302,7 +358,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
         cons_roll = random.random()
         if cons_roll < 0.35:
             return (
-                "⚔️ РАСХОДНИК",
+                "🔵 РЕДКИЙ [Боевой расходник]",
                 "🐒 Кусок говна (/shit)",
                 "Тяжелый снаряд для метания в неугодных анонов.",
                 {"shit_gun": True},
@@ -310,7 +366,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         elif cons_roll < 0.65:
             return (
-                "⚔️ РАСХОДНИК",
+                "🔵 РЕДКИЙ [Боевой расходник]",
                 "💊 Аминазин (Лекарство)",
                 "Моментально смывает все дебаффы (говно, понос, шизу).",
                 {"pills_gun": True},
@@ -318,7 +374,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         elif cons_roll < 0.85:
             return (
-                "⚔️ РАСХОДНИК",
+                "🔵 РЕДКИЙ [Боевой расходник]",
                 "🔪 Заточка (/rob)",
                 "Острая пика для отжима 10-30% шекелей у цели.",
                 {"knife_gun": True},
@@ -326,7 +382,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
             )
         else:
             return (
-                "⚔️ РАСХОДНИК",
+                "🔵 РЕДКИЙ [Боевой расходник]",
                 "🧯 Перцовый Баллончик (Авто-защита)",
                 "При попытке ограбить тебя ослепляет нападающего и отбирает его деньги!",
                 {"pepperspray_gun": True},
@@ -337,7 +393,7 @@ def roll_trash_lootbox(active_items: Optional[Dict[str, Any]] = None) -> Tuple[s
     else:
         name, desc, cashback = random.choice(TRASH_ITEMS)
         return (
-            "🗑️ ДВАЧЕВСКИЙ МУСОР",
+            "⚪ ОБЫЧНЫЙ [Двачевский мусор]",
             name,
             f"{desc} (Кешбэк: +{cashback} ₪)",
             {},
@@ -364,7 +420,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
         cid, base_name, desc, slot = random.choice(GOLD_PITY_WARDROBE_POOL)
         is_permanent_drop = (random.random() < 0.10)
         if is_permanent_drop:
-            title = "🌟 ГАРАНТ: ЛЕГЕНДАРНЫЙ ШМОТ (НАВСЕГДА)"
+            title = "🟡 ЛЕГЕНДАРНЫЙ [ГАРАНТ: Вечный шмот навсегда]"
             item_name = f"{base_name} 🌟 [НАВСЕГДА]"
             payload = {
                 "item_id": cid,
@@ -376,7 +432,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 "pity_triggered": True,
             }
         else:
-            title = "👗 ГАРАНТ: ЭЛИТНЫЙ ШМОТ (30 ДНЕЙ)"
+            title = "🟣 ЭПИЧЕСКИЙ [ГАРАНТ: Элитный шмот 30 дней]"
             item_name = f"{base_name} [на 30 дней]"
             payload = {
                 "item_id": cid,
@@ -394,7 +450,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
         jp_sub = random.random()
         if jp_sub < 0.25:
             return (
-                "🌟 МИФИЧЕСКИЙ ДЖЕКПОТ",
+                "🟡 ЛЕГЕНДАРНЫЙ [Мифический джекпот]",
                 "💰 Золотой Слиток Абу (+1 500 ₪)!",
                 "Из сейфа посыпались новенькие хрустящие пачки шекелей!",
                 {},
@@ -402,7 +458,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
             )
         elif jp_sub < 0.65:
             return (
-                "🌟 МИФИЧЕСКИЙ ДЖЕКПОТ",
+                "🟡 ЛЕГЕНДАРНЫЙ [Мифический джекпот]",
                 "🚔 Пативэн-Ган + 👽 Шапочка из фольги (12ч)!",
                 "Комплект силовика: вызов ОМОНа и защита от грабежа на 12 часов!",
                 {
@@ -414,7 +470,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
             )
         elif jp_sub < 0.95:
             return (
-                "🌟 МИФИЧЕСКИЙ ДЖЕКПОТ",
+                "🟡 ЛЕГЕНДАРНЫЙ [Шмот навсегда]",
                 "👑 Золотая Шапочка из Фольги 🌟 [НАВСЕГДА]",
                 "Уникальный мифический артефакт! Пассивная защита от грабежей навсегда!",
                 {
@@ -427,7 +483,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
             )
         else:
             return (
-                "👑 СУПЕР-ДЖЕКПОТ КИТА",
+                "🟡 ЛЕГЕНДАРНЫЙ [Супер-джекпот кита]",
                 "💰 КЕШ (+3 000 ₪) + Титул «Золотой Кит»!",
                 "Легендарный куш! Казна Абу опустошена на 3 000 ₪!",
                 {
@@ -444,7 +500,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
         # 10% Chance to drop PERMANENT (🌟 НАВСЕГДА), 90% 30 days
         is_permanent_drop = (random.random() < 0.10)
         if is_permanent_drop:
-            title = "🌟 ЛЕГЕНДАРНЫЙ ШМОТ (НАВСЕГДА)"
+            title = "🟡 ЛЕГЕНДАРНЫЙ [Шмот навсегда]"
             item_name = f"{base_name} 🌟 [НАВСЕГДА]"
             payload = {
                 "item_id": cid,
@@ -455,7 +511,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
                 "title_days": 1
             }
         else:
-            title = "👗 ЭЛИТНЫЙ ШМОТ (30 ДНЕЙ)"
+            title = "🟣 ЭПИЧЕСКИЙ [Элитный шмот 30 дней]"
             item_name = f"{base_name} [на 30 дней]"
             payload = {
                 "item_id": cid,
@@ -471,7 +527,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
         w_choice = "pepperspray_gun" if random.random() < 0.5 else "knife_gun"
         w_name = "🧯 Перцовка" if w_choice == "pepperspray_gun" else "🔪 Заточка"
         return (
-            "⚔️ БОЕВОЙ НАБОР",
+            "🔵 РЕДКИЙ [Боевой набор]",
             f"🛡️ Зеркальный Щит + {w_name} + 💊 Аминазин",
             "Комплект обороны от гопников и отражения атак!",
             {
@@ -488,7 +544,7 @@ def roll_gold_safe(active_items: Optional[Dict[str, Any]] = None) -> Tuple[str, 
     else:
         name, desc, cashback = random.choice(PREMIUM_JUNK)
         return (
-            "💎 ЦЕННАЯ НАХОДКА",
+            "⚪ ОБЫЧНЫЙ [Ценная находка]",
             name,
             f"{desc} (Продано скупу за: +{cashback} ₪)",
             {},
@@ -541,7 +597,7 @@ def apply_lootbox_reward(
                 # Permanent duplicate: min(120, max(40, int(price * 0.20)))
                 cashback = min(120, max(40, int(price * 0.20)))
                 final_cash += cashback
-                note = f"♻️ <b>Вечный дубликат «{item_name}» сдан в ломбард:</b> +{cashback} ₪ в кошелек!"
+                note = f"♻️ <b>У тебя уже есть этот предмет!</b> Вечный дубликат «{item_name}» сдан в ломбард. Начислен кэшбэк: +{cashback} ₪ в кошелек!"
                 recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
             else:
                 add_item_duration(active_items, item_id, 0, is_permanent=True)
@@ -553,7 +609,7 @@ def apply_lootbox_reward(
                 # Fixed scrap recycling: Rolling timed apparel when permanent is already owned gives fixed 35 ₪ scrap
                 cashback = 35
                 final_cash += cashback
-                note = f"♻️ <b>Вещь «{item_name}» уже есть навсегда!</b> Утиль: +{cashback} ₪!"
+                note = f"♻️ <b>У тебя уже есть этот предмет!</b> Вещь «{item_name}» уже есть навсегда! Начислен кэшбэк (Утиль: +{cashback} ₪)!"
                 recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
             else:
                 add_item_duration(active_items, item_id, dur_hours, is_permanent=False)
@@ -581,7 +637,7 @@ def apply_lootbox_reward(
                     break
             if has_duplicate_weapon:
                 final_cash += 80
-                bundle_note = "♻️ <b>Оружие из набора уже заряжено:</b> компенсация +80 ₪!"
+                bundle_note = f"♻️ <b>У тебя уже есть этот предмет!</b> Оружие из набора уже заряжено: Начислен кэшбэк (компенсация +80 ₪)!"
                 recycle_msg = (recycle_msg + "\n" + bundle_note) if recycle_msg else bundle_note
 
             # Activate weapons and consumables from bundle
@@ -647,7 +703,7 @@ def apply_lootbox_reward(
                         if case_type == "whale":
                             cb = min(cb, 15000)
                         final_cash += cb
-                        note = f"♻️ <b>Оружие уже заряжено:</b> утиль +{cb} ₪ в кошелек!"
+                        note = f"♻️ <b>У тебя уже есть этот предмет!</b> Оружие уже заряжено: Начислен кэшбэк (утиль +{cb} ₪ в кошелек)!"
                         recycle_msg = (recycle_msg + "\n" + note) if recycle_msg else note
                     else:
                         active_items[k] = True
@@ -798,4 +854,136 @@ async def can_open_lootbox_persistent(db, user_id: int, case_type: str) -> bool:
     """Асинхронно проверяет доступность открытия лутбокса по постоянным лимитам из SQLite."""
     allowed, _, _ = await check_lootbox_daily_limit_persistent(db, user_id, case_type)
     return allowed
+
+
+# -----------------------------------------------------------------------------
+# Balance Validation & Insufficient Funds Alerts
+# -----------------------------------------------------------------------------
+
+def validate_lootbox_funds(balance: int | float, case_type: str, custom_price: Optional[int] = None) -> Tuple[bool, int, str]:
+    """
+    Проверяет, достаточно ли средств у пользователя на открытие кейса/сейфа.
+    Возвращает (is_allowed, case_price, alert_message).
+    При нехватке формирует понятный информативный алерт для callback.answer(show_alert=True).
+    """
+    price = custom_price if custom_price is not None else get_lootbox_price(case_type)
+    try:
+        bal = 0 if balance is None or (isinstance(balance, float) and (math.isnan(balance) or math.isinf(balance))) else int(balance)
+    except (ValueError, TypeError, OverflowError):
+        bal = 0
+
+    if bal < price:
+        diff = price - bal
+        msg = (
+            f"❌ Недостаточно шекелей для открытия!\n"
+            f"Стоимость кейса: {format_shekels(price)}\n"
+            f"Твой баланс: {format_shekels(bal)}\n"
+            f"Не хватает: {format_shekels(diff)}"
+        )
+        return False, price, msg
+    return True, price, ""
+
+
+# -----------------------------------------------------------------------------
+# In-Flight Locks & Debouncing (Button Spam & Double-Click Protection)
+# -----------------------------------------------------------------------------
+
+_user_lootbox_locks: Dict[int, asyncio.Lock] = {}
+_lootbox_inflight: Dict[int, float] = {}
+_lootbox_meta_lock = asyncio.Lock()
+user_lootbox_last_action: Dict[int, float] = {}
+
+
+class LootboxInFlightError(Exception):
+    """Выбрасывается при попытке открыть кейс, пока предыдущее открытие ещё не завершилось."""
+    pass
+
+
+async def get_user_lootbox_lock(user_id: int) -> asyncio.Lock:
+    """Возвращает или создает per-user asyncio.Lock для сериализации открытия лутбоксов."""
+    async with _lootbox_meta_lock:
+        if user_id not in _user_lootbox_locks:
+            _user_lootbox_locks[user_id] = asyncio.Lock()
+        return _user_lootbox_locks[user_id]
+
+
+def is_lootbox_in_flight(user_id: int) -> bool:
+    """Проверяет, открывается ли кейс прямо сейчас для данного пользователя."""
+    lock = _user_lootbox_locks.get(user_id)
+    if lock is not None and lock.locked():
+        return True
+    return user_id in _lootbox_inflight
+
+
+@asynccontextmanager
+async def lootbox_in_flight_guard(user_id: int, timeout: float = 0.0):
+    """
+    Контекстный менеджер защиты от спама кнопками 'Открыть кейс/сейф'.
+    Блокирует параллельные запросы до завершения транзакции списания и начисления.
+    """
+    user_lock = await get_user_lootbox_lock(user_id)
+    if user_lock.locked() and timeout <= 0.0:
+        raise LootboxInFlightError("⏳ Кейс уже открывается! Пожалуйста, дождитесь окончания анимации.")
+
+    acquired = False
+    try:
+        if timeout > 0.0:
+            try:
+                await asyncio.wait_for(user_lock.acquire(), timeout=timeout)
+                acquired = True
+            except asyncio.TimeoutError:
+                raise LootboxInFlightError("⏳ Кейс уже открывается! Пожалуйста, дождитесь окончания анимации.")
+        else:
+            await user_lock.acquire()
+            acquired = True
+
+        _lootbox_inflight[user_id] = time.time()
+        yield
+    finally:
+        _lootbox_inflight.pop(user_id, None)
+        if acquired and user_lock.locked():
+            user_lock.release()
+
+
+def check_lootbox_debounce(user_id: int, min_interval: float = 1.0) -> Tuple[bool, str]:
+    """
+    Защита от быстрого спама кликами открытия лутбоксов (debouncing).
+    Возвращает (is_allowed, error_message).
+    """
+    now = time.time()
+    last = user_lootbox_last_action.get(user_id, 0.0)
+    if now - last < min_interval:
+        rem = round(min_interval - (now - last), 1)
+        return False, f"⏳ Не спеши! Подожди {rem} сек. перед следующим открытием кейса."
+    user_lootbox_last_action[user_id] = now
+    return True, ""
+
+
+def format_lootbox_result_card(
+    case_name: str,
+    tier: str,
+    item_title: str,
+    item_desc: str,
+    cashback_amount: int = 0,
+    recycle_note: Optional[str] = None,
+    balance_after: Optional[int | float] = None
+) -> str:
+    """
+    Форматирует информативную карточку результата открытия лутбокса с четким бейджем редкости,
+    описанием и указанием кэшбэка при наличии.
+    """
+    rarity_badge = format_rarity_badge(tier)
+    lines = [
+        f"🎁 <b>ОТКРЫТ {case_name.upper()}!</b>\n",
+        f"⭐ <b>Редкость:</b> {rarity_badge}",
+        f"📦 <b>Дроп:</b> <b>{item_title}</b>",
+        f"📝 <i>{item_desc}</i>",
+    ]
+    if cashback_amount > 0:
+        lines.append(f"💰 <b>Начислен кэшбэк:</b> +{format_shekels(cashback_amount)}")
+    if recycle_note:
+        lines.append(f"\n{recycle_note}")
+    if balance_after is not None:
+        lines.append(f"\n💳 Твой баланс: <b>{format_shekels(balance_after)}</b>")
+    return "\n".join(lines)
 

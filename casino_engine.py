@@ -8,6 +8,8 @@ Features interactive lobbies, non-triggering previews, bet adjusters, and atomic
 import random
 import time
 import asyncio
+import math
+from contextlib import asynccontextmanager
 from typing import List, Tuple, Dict, Optional, Any
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -15,6 +17,28 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 session_lock = asyncio.Lock()
 active_bj_sessions: Dict[int, Dict[str, Any]] = {}
 active_roulette_sessions: Dict[int, Dict[str, Any]] = {}
+
+
+def format_shekels(amount: int | float, show_sign: bool = False) -> str:
+    """
+    Красивое форматирование баланса и выигрышей с разделителями тысяч (пробел)
+    и защитой от float-артефактов (например, '1 500 ₪' вместо '1500.0000000001 ₪').
+    """
+    if amount is None or (isinstance(amount, float) and (math.isnan(amount) or math.isinf(amount))):
+        return "0 ₪"
+    try:
+        rounded = round(float(amount), 2)
+        if abs(rounded - round(rounded)) < 1e-5:
+            val_int = int(round(rounded))
+            sign_prefix = "+" if (show_sign and val_int > 0) else ""
+            formatted = f"{val_int:,}".replace(",", " ")
+            return f"{sign_prefix}{formatted} ₪"
+        else:
+            sign_prefix = "+" if (show_sign and rounded > 0) else ""
+            formatted = f"{rounded:,.2f}".replace(",", " ")
+            return f"{sign_prefix}{formatted} ₪"
+    except (ValueError, TypeError, OverflowError):
+        return "0 ₪"
 
 # -----------------------------------------------------------------------------
 # Configuration & Payout Tables
@@ -48,7 +72,14 @@ def get_max_bet_for_balance(balance: int | float) -> int:
     - Олигархи (500,000 < баланс <= 2,000,000 ₪): максимальная ставка = 500,000 ₪.
     - Киты / Мультимиллионеры (баланс > 2,000,000 ₪): абсолютный потолок максимальной ставки = 1,000,000 ₪.
     """
-    bal = max(0, int(balance))
+    try:
+        if balance is None or not isinstance(balance, (int, float)) or math.isnan(balance) or math.isinf(balance):
+            bal = 0
+        else:
+            bal = max(0, int(balance))
+    except (ValueError, TypeError, OverflowError):
+        bal = 0
+
     if bal <= 10_000:
         return 1_000
     elif bal <= 100_000:
@@ -66,31 +97,71 @@ def get_dynamic_max_bet(balance: int | float) -> int:
     return get_max_bet_for_balance(balance)
 
 
-def validate_casino_bet(bet: int, balance: int | float) -> Tuple[bool, int, str]:
+def validate_casino_bet(bet: Any, balance: int | float) -> Tuple[bool, int, str]:
     """
     Validates a bet against MIN_CASINO_BET and dynamic cap based on balance.
+    Enforces positive integer bets (rejects floats, fractions, negative values, NaN/Inf).
     Returns: (is_valid, max_allowed, error_msg)
     """
-    bal = max(0, int(balance))
+    try:
+        if balance is None or not isinstance(balance, (int, float)) or math.isnan(balance) or math.isinf(balance):
+            bal = 0
+        else:
+            bal = max(0, int(balance))
+    except (ValueError, TypeError, OverflowError):
+        bal = 0
+
     max_allowed = min(MAX_CASINO_BET, get_max_bet_for_balance(bal))
-    if bet < MIN_CASINO_BET:
+
+    if bet is None or not isinstance(bet, (int, float)) or math.isnan(bet) or math.isinf(bet):
+        return False, max_allowed, "Некорректная ставка."
+
+    try:
+        bet_int = int(bet)
+    except (ValueError, TypeError, OverflowError):
+        return False, max_allowed, "Некорректная ставка."
+
+    # Float fraction check (e.g. 10.5) to prevent float precision exploit
+    if bet != bet_int:
+        return False, max_allowed, "Ставка должна быть целым числом шекелей."
+
+    if bet_int < MIN_CASINO_BET:
         return False, max_allowed, f"Минимальная ставка: {MIN_CASINO_BET} ₪"
-    if bet > max_allowed:
+    if bet_int > max_allowed:
         return False, max_allowed, f"Максимальная ставка для вашего баланса ({bal:,} ₪): {max_allowed:,} ₪"
-    if bet > bal:
+    if bet_int > bal:
         return False, max_allowed, f"Недостаточно средств. Ваш баланс: {bal:,} ₪"
     return True, max_allowed, ""
 
 
-def clamp_bet_to_limits(bet: int, balance: int | float) -> int:
+def clamp_bet_to_limits(bet: Any, balance: int | float) -> int:
     """
     Clamps bet between MIN_CASINO_BET and dynamic maximum allowed bet.
+    Safely sanitizes NaN, Inf, negative values and floats.
     """
-    bal = max(0, int(balance))
+    try:
+        if balance is None or not isinstance(balance, (int, float)) or math.isnan(balance) or math.isinf(balance):
+            bal = 0
+        else:
+            bal = max(0, int(balance))
+    except (ValueError, TypeError, OverflowError):
+        bal = 0
+
     max_allowed = min(MAX_CASINO_BET, get_max_bet_for_balance(bal))
     if max_allowed < MIN_CASINO_BET:
         return MIN_CASINO_BET
-    return max(MIN_CASINO_BET, min(max_allowed, bet))
+
+    try:
+        if bet is None or not isinstance(bet, (int, float)) or math.isnan(bet):
+            bet_int = MIN_CASINO_BET
+        elif math.isinf(bet):
+            bet_int = max_allowed if bet > 0 else MIN_CASINO_BET
+        else:
+            bet_int = int(bet)
+    except (ValueError, TypeError, OverflowError):
+        bet_int = MIN_CASINO_BET
+
+    return max(MIN_CASINO_BET, min(max_allowed, bet_int))
 
 
 # Jackpot & High-Win Tax
@@ -103,11 +174,25 @@ def calculate_jackpot_tax(net_profit: int | float, multiplier: float = 1.0) -> T
       * В сообщении указывается: "🏛️ Налог Абу (10%): -X ₪ перечислено в фонд яхты".
     Returns: (tax_amount, player_profit_after_tax, tax_message)
     """
-    net = int(net_profit)
+    if (
+        net_profit is None
+        or not isinstance(net_profit, (int, float))
+        or math.isnan(net_profit)
+        or math.isinf(net_profit)
+    ):
+        return 0, 0, ""
+
+    try:
+        net = int(net_profit)
+    except (ValueError, TypeError, OverflowError):
+        return 0, 0, ""
+
     if net <= 0:
         return 0, 0, ""
 
-    if net >= 10_000 or multiplier >= 4.0:
+    mult = float(multiplier) if isinstance(multiplier, (int, float)) and not math.isnan(multiplier) else 1.0
+
+    if net >= 10_000 or mult >= 4.0:
         tax = int(round(net * 0.10))
         payout = net - tax
         message = f"🏛️ Налог Абу (10%): -{tax} ₪ перечислено в фонд яхты"
@@ -211,6 +296,77 @@ SPIN_COOLDOWN_MESSAGE = "⏳ Не части! Колесу нужно остан
 user_casino_last_action: Dict[int, float] = {}
 user_win_streaks: Dict[int, int] = {}
 
+# In-flight transaction locks to prevent double-clicks and button spam
+_user_inflight_locks: Dict[int, asyncio.Lock] = {}
+_inflight_in_progress: Dict[int, float] = {}
+_inflight_meta_lock = asyncio.Lock()
+
+
+class CasinoInFlightError(Exception):
+    """Выбрасывается при параллельном клике/запросе, пока предыдущее действие в казино не завершено."""
+    pass
+
+
+async def get_user_casino_lock(user_id: int) -> asyncio.Lock:
+    """Возвращает или создает per-user asyncio.Lock для сериализации действий в казино."""
+    async with _inflight_meta_lock:
+        if user_id not in _user_inflight_locks:
+            _user_inflight_locks[user_id] = asyncio.Lock()
+        return _user_inflight_locks[user_id]
+
+
+def is_casino_in_flight(user_id: int) -> bool:
+    """Проверяет, выполняется ли в данный момент транзакция в казино для указанного пользователя."""
+    lock = _user_inflight_locks.get(user_id)
+    if lock is not None and lock.locked():
+        return True
+    return user_id in _inflight_in_progress
+
+
+@asynccontextmanager
+async def casino_in_flight_guard(user_id: int, action_name: str = "spin", timeout: float = 0.0):
+    """
+    Асинхронный контекстный менеджер защиты от дабл-клика и спама кнопками.
+    Блокирует повторное исполнение до завершения текущей транзакции.
+    При повторном тапе во время незавершенной операции выбрасывает CasinoInFlightError.
+    """
+    user_lock = await get_user_casino_lock(user_id)
+    if user_lock.locked() and timeout <= 0.0:
+        raise CasinoInFlightError("⏳ Предыдущая ставка или вращение ещё обрабатывается! Подождите завершения.")
+
+    acquired = False
+    try:
+        if timeout > 0.0:
+            try:
+                await asyncio.wait_for(user_lock.acquire(), timeout=timeout)
+                acquired = True
+            except asyncio.TimeoutError:
+                raise CasinoInFlightError("⏳ Предыдущая ставка или вращение ещё обрабатывается! Подождите завершения.")
+        else:
+            await user_lock.acquire()
+            acquired = True
+
+        _inflight_in_progress[user_id] = time.time()
+        yield
+    finally:
+        _inflight_in_progress.pop(user_id, None)
+        if acquired and user_lock.locked():
+            user_lock.release()
+
+
+def check_action_debounce(user_id: int, action: str = "spin", min_interval: float = 1.0) -> Tuple[bool, str]:
+    """
+    Проверка дебаунса для защиты от спама кнопками.
+    Возвращает (is_allowed, error_message).
+    """
+    now = time.time()
+    last = user_casino_last_action.get(user_id, 0.0)
+    if now - last < min_interval:
+        rem = round(min_interval - (now - last), 1)
+        return False, f"⏳ Не части! Подожди {rem} сек. перед следующим действием."
+    user_casino_last_action[user_id] = now
+    return True, ""
+
 
 class CooldownResult(tuple):
     """
@@ -237,6 +393,21 @@ class CooldownResult(tuple):
         return self.message
 
 
+def clean_casino_cache():
+    """Prunes old timestamps from user_casino_last_action, in-flight trackers and win streaks to avoid unbounded growth."""
+    now = time.time()
+    cutoff = now - 3600.0
+    for uid, ts in list(user_casino_last_action.items()):
+        if ts < cutoff:
+            user_casino_last_action.pop(uid, None)
+    for uid, ts in list(_inflight_in_progress.items()):
+        if ts < cutoff:
+            _inflight_in_progress.pop(uid, None)
+    for uid, lock in list(_user_inflight_locks.items()):
+        if not lock.locked() and uid not in user_casino_last_action:
+            _user_inflight_locks.pop(uid, None)
+
+
 def check_casino_cooldown(user_id: int, cooldown_sec: float = CASINO_COOLDOWN_SECONDS) -> CooldownResult:
     """
     Prevents script-bot hammering and rapid martingale bets.
@@ -250,6 +421,8 @@ def check_casino_cooldown(user_id: int, cooldown_sec: float = CASINO_COOLDOWN_SE
         rem = round(cooldown_sec - elapsed, 1)
         return CooldownResult(False, rem, SPIN_COOLDOWN_MESSAGE)
     user_casino_last_action[user_id] = now
+    if len(user_casino_last_action) > 10000:
+        clean_casino_cache()
     return CooldownResult(True, 0.0, "")
 
 
@@ -269,13 +442,20 @@ def calculate_vip_table_rake(bet: int) -> Tuple[int, int]:
     - If bet >= 2,000 ₪: 2% VIP table fee sent straight to Abu's Fund.
     Returns: (rake_amount, active_bet)
     """
-    if bet > 50000:
-        rake = max(10, int(bet * 0.10))
-        return rake, bet - rake
-    elif bet >= 2000:
-        rake = max(10, int(bet * 0.02))
-        return rake, bet - rake
-    return 0, bet
+    try:
+        b = int(bet) if not (isinstance(bet, float) and (math.isnan(bet) or math.isinf(bet))) else 0
+    except (ValueError, TypeError, OverflowError):
+        b = 0
+
+    if b <= 0:
+        return 0, 0
+    if b > 50000:
+        rake = max(10, int(b * 0.10))
+        return rake, b - rake
+    elif b >= 2000:
+        rake = max(10, int(b * 0.02))
+        return rake, b - rake
+    return 0, b
 
 
 def is_burn_vip_rake(bet: int) -> bool:
@@ -430,8 +610,14 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
     chamber = random.randint(1, 6)
     is_bullet = (chamber == 1)
 
-    session = active_roulette_sessions.get(user_id, {"streak": 0, "bet": bet})
-    locked_bet = session.get("bet", bet) if user_id in active_roulette_sessions else bet
+    try:
+        b_clean = int(bet) if not (isinstance(bet, float) and (math.isnan(bet) or math.isinf(bet))) else MIN_CASINO_BET
+    except Exception:
+        b_clean = MIN_CASINO_BET
+    b_clean = min(MAX_ROULETTE_BET, max(MIN_CASINO_BET, b_clean))
+
+    session = active_roulette_sessions.get(user_id, {"streak": 0, "bet": b_clean})
+    locked_bet = session.get("bet", b_clean) if user_id in active_roulette_sessions else b_clean
     locked_bet = min(MAX_ROULETTE_BET, max(MIN_CASINO_BET, locked_bet))
 
     if is_bullet:
@@ -543,7 +729,6 @@ def get_casino_hub_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎭 Персонаж RPG (/avatar)", callback_data="avatar_view"),
         ],
         [
-            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
             InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
@@ -591,8 +776,9 @@ def get_slots_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineKeyb
         InlineKeyboardButton(text=format_bet_amount(p), callback_data=f"cas:slots:lobby:{p}")
         for p in presets
     ]
+    spin_text = f"🎰 Крутить барабан (1000 ₪)" if bet == 1000 else f"🎰 Крутить барабан ({format_shekels(bet)})"
     buttons = [
-        [InlineKeyboardButton(text=f"🎰 Крутить барабан ({bet} ₪)", callback_data=f"cas:slots:spin:{bet}")],
+        [InlineKeyboardButton(text=spin_text, callback_data=f"cas:slots:spin:{bet}")],
         preset_row,
         [
             InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
@@ -606,9 +792,9 @@ def get_slots_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarkup:
     dynamic_max = min(MAX_CASINO_BET, get_max_bet_for_balance(balance))
     bet = min(dynamic_max, max(MIN_CASINO_BET, bet))
     doubled = min(dynamic_max, bet * 2)
-    top_row = [InlineKeyboardButton(text=f"🔄 Крутить снова ({bet} ₪)", callback_data=f"cas:slots:spin:{bet}")]
+    top_row = [InlineKeyboardButton(text=f"🔄 Крутить снова ({format_shekels(bet)})", callback_data=f"cas:slots:spin:{bet}")]
     if doubled <= balance and doubled <= dynamic_max and doubled > bet:
-        top_row.append(InlineKeyboardButton(text=f"2x Ставка ({format_bet_amount(doubled)})", callback_data=f"cas:slots:spin:{doubled}"))
+        top_row.append(InlineKeyboardButton(text=f"2x Ставка ({format_shekels(doubled)})", callback_data=f"cas:slots:spin:{doubled}"))
 
     presets = get_adaptive_bet_presets(balance, bet, dynamic_max)
     preset_row = [
@@ -638,8 +824,8 @@ def get_coinflip_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineK
     ]
     buttons = [
         [
-            InlineKeyboardButton(text=f"🦅 На Орла ({bet} ₪)", callback_data=f"cas:coin:heads:{bet}"),
-            InlineKeyboardButton(text=f"👑 На Решку ({bet} ₪)", callback_data=f"cas:coin:tails:{bet}"),
+            InlineKeyboardButton(text=f"🦅 На Орла ({format_shekels(bet)})", callback_data=f"cas:coin:heads:{bet}"),
+            InlineKeyboardButton(text=f"👑 На Решку ({format_shekels(bet)})", callback_data=f"cas:coin:tails:{bet}"),
         ],
         preset_row,
         [
@@ -661,12 +847,12 @@ def get_coinflip_keyboard(bet: int, balance: int = 10000) -> InlineKeyboardMarku
     ]
     ctrl_row = []
     if doubled <= balance and doubled <= dynamic_max and doubled > bet:
-        ctrl_row.append(InlineKeyboardButton(text=f"x2 Ставка ({format_bet_amount(doubled)})", callback_data=f"cas:coin:preset:{doubled}"))
+        ctrl_row.append(InlineKeyboardButton(text=f"x2 Ставка ({format_shekels(doubled)})", callback_data=f"cas:coin:preset:{doubled}"))
 
     buttons = [
         [
-            InlineKeyboardButton(text=f"🦅 Орел ({bet} ₪)", callback_data=f"cas:coin:heads:{bet}"),
-            InlineKeyboardButton(text=f"👑 Решка ({bet} ₪)", callback_data=f"cas:coin:tails:{bet}"),
+            InlineKeyboardButton(text=f"🦅 Орел ({format_shekels(bet)})", callback_data=f"cas:coin:heads:{bet}"),
+            InlineKeyboardButton(text=f"👑 Решка ({format_shekels(bet)})", callback_data=f"cas:coin:tails:{bet}"),
         ],
     ]
     if ctrl_row:
@@ -699,7 +885,7 @@ def get_blackjack_lobby_keyboard(bet: int = 100, balance: int = 10000) -> Inline
         InlineKeyboardButton(text="💰 ВА-БАНК", callback_data=f"cas:bj:lobby:{max_bet}"),
     ]
     buttons = [
-        [InlineKeyboardButton(text=f"🃏 Раздать карты ({bet:,} ₪)", callback_data=f"cas:bj:start:{bet}")],
+        [InlineKeyboardButton(text=f"🃏 Раздать карты ({format_shekels(bet)})", callback_data=f"cas:bj:start:{bet}")],
         preset_row,
         ctrl_row,
         [
@@ -725,7 +911,6 @@ def get_blackjack_keyboard(bet: int, can_double: bool = True) -> InlineKeyboardM
             InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
         ],
         [
-            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
             InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
@@ -738,15 +923,14 @@ def get_blackjack_replay_keyboard(bet: int = 100, balance: int = 10000) -> Inlin
     double_bet = min(dynamic_max, min(balance, bet * 2)) if balance >= bet * 2 else bet
     buttons = [
         [
-            InlineKeyboardButton(text=f"🔄 Повторить ({bet:,} ₪)", callback_data=f"cas:bj:start:{bet}"),
-            InlineKeyboardButton(text=f"⚡ Удвоить ({double_bet:,} ₪)", callback_data=f"cas:bj:start:{double_bet}")
+            InlineKeyboardButton(text=f"🔄 Повторить ({format_shekels(bet)})", callback_data=f"cas:bj:start:{bet}"),
+            InlineKeyboardButton(text=f"⚡ Удвоить ({format_shekels(double_bet)})", callback_data=f"cas:bj:start:{double_bet}")
         ],
         [
             InlineKeyboardButton(text="⚙️ Выбрать ставку", callback_data=f"cas:bj:lobby:{bet}"),
             InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
         ],
         [
-            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main"),
             InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
         ]
     ]
@@ -764,7 +948,7 @@ def get_roulette_lobby_keyboard(bet: int = 100, balance: int = 10000) -> InlineK
         for p in presets
     ]
     buttons = [
-        [InlineKeyboardButton(text=f"💥 Взвести курок ({bet} ₪)", callback_data=f"cas:roulette:shoot:{bet}")],
+        [InlineKeyboardButton(text=f"💥 Взвести курок ({format_shekels(bet)})", callback_data=f"cas:roulette:shoot:{bet}")],
         preset_row,
         [
             InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
@@ -781,7 +965,7 @@ def get_roulette_keyboard(bet: int, current_mult: float) -> InlineKeyboardMarkup
             InlineKeyboardButton(text="💥 Нажать на спуск еще раз!", callback_data=f"cas:roulette:shoot:{bet}"),
         ],
         [
-            InlineKeyboardButton(text=f"💰 Забрать {win_amount} ₪ (x{current_mult:.2f})", callback_data=f"cas:roulette:cashout:{bet}"),
+            InlineKeyboardButton(text=f"💰 Забрать {format_shekels(win_amount)} (x{current_mult:.2f})", callback_data=f"cas:roulette:cashout:{bet}"),
         ],
         [
             InlineKeyboardButton(text="◀️ Назад в Казино", callback_data="cas:hub"),
