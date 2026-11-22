@@ -11,6 +11,7 @@ CONTROLLED_STOP_DRAIN_TIMEOUT_SEC: float = max(0.0, float(BOT_CONTROLLED_STOP_DR
 
 import os
 import asyncio
+import aiohttp
 import shared_state
 from shared_state import (
     BroadcastConfig,
@@ -32,6 +33,7 @@ from shared_state import (
     pending_edit_lock,
     pending_edit_tasks,
     post_to_messages,
+    message_to_post,
     posts_pending_deletion,
     remove_blocked_user_copies,
     runtime_logger,
@@ -65,6 +67,66 @@ else:
 UTC = timezone.utc
 
 _POST_EDIT_SEMAPHORE = asyncio.Semaphore(10)
+
+# Кратковременный кэш зависающих получателей для предотвращения каскадных таймаутов редактирования:
+# user_id -> (consecutive_timeouts, timestamp_monotonic)
+_stale_edit_recipients: dict[int, tuple[int, float]] = {}
+STALE_EDIT_RECIPIENT_TTL: float = 300.0  # 5 минут TTL
+MAX_CONSECUTIVE_EDIT_TIMEOUTS: int = 2   # После 2 таймаутов подряд — мгновенный пропуск
+
+
+def get_stale_edit_recipients() -> dict[int, tuple[int, float]]:
+    return _stale_edit_recipients
+
+
+def clear_stale_edit_recipients() -> None:
+    _stale_edit_recipients.clear()
+
+
+def is_stale_edit_recipient(user_id: int) -> bool:
+    fail_cnt, last_fail = _stale_edit_recipients.get(user_id, (0, 0.0))
+    if fail_cnt >= MAX_CONSECUTIVE_EDIT_TIMEOUTS:
+        if time.monotonic() - last_fail < STALE_EDIT_RECIPIENT_TTL:
+            return True
+        else:
+            _stale_edit_recipients.pop(user_id, None)
+    return False
+
+
+def mark_stale_edit_recipient(user_id: int, count: int = 1) -> None:
+    _stale_edit_recipients[user_id] = (count, time.monotonic())
+
+
+async def remove_dead_post_copy(post_num: int, user_id: int, message_id: int) -> None:
+    """
+    Удаляет конкретную мертвую копию (сообщение удалено пользователем или не подлежит редактированию)
+    из post_to_messages, message_to_post в RAM и таблицы PostCopies в SQLite.
+    """
+    async with storage_lock:
+        message_to_post.pop((user_id, message_id), None)
+        copies = post_to_messages.get(post_num)
+        if isinstance(copies, dict):
+            mid_val = copies.get(user_id)
+            if isinstance(mid_val, list):
+                if message_id in mid_val:
+                    mid_val.remove(message_id)
+                if not mid_val:
+                    copies.pop(user_id, None)
+            elif mid_val == message_id:
+                copies.pop(user_id, None)
+
+    try:
+        from common.db_pool import get_pool, db_lock
+        db = await get_pool()
+        if db is not None:
+            async with db_lock:
+                await db.execute(
+                    "DELETE FROM PostCopies WHERE post_num = ? AND recipient_id = ? AND message_id = ?",
+                    (post_num, user_id, message_id)
+                )
+                await db.commit()
+    except Exception as e:
+        runtime_logger.debug("Error deleting dead PostCopy (%s, %s, %s): %s", post_num, user_id, message_id, e)
 
 PRIORITY_PASSIVE_MEDIA_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE)
 
@@ -200,7 +262,7 @@ import time
 from dataclasses import dataclass
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramNetworkError
 from collections import defaultdict
 import logging
 
@@ -666,8 +728,20 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
         user_specific_texts[user_id] = full_text
 
     async def _edit_one(user_id: int, message_id: int):
-        max_attempts = 4
-        delay = 1.0
+        # 1. Проверка stale-кэша перед взятием семафора и сетевым вызовом
+        fail_cnt, last_fail = _stale_edit_recipients.get(user_id, (0, 0.0))
+        now = time.monotonic()
+        if fail_cnt >= MAX_CONSECUTIVE_EDIT_TIMEOUTS:
+            if now - last_fail < STALE_EDIT_RECIPIENT_TTL:
+                runtime_logger.debug(
+                    f"⏭️ [EDIT_STALE_SKIP] Пропуск редактирования для user {user_id} (таймаутов: {fail_cnt}, TTL {STALE_EDIT_RECIPIENT_TTL - (now - last_fail):.1f}s)"
+                )
+                return
+            else:
+                _stale_edit_recipients.pop(user_id, None)
+
+        max_attempts = 2
+        delay = 0.5
         async with _POST_EDIT_SEMAPHORE:
             for attempt in range(max_attempts):
                 try:
@@ -684,9 +758,9 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                                 parse_mode="HTML",
                                 reply_markup=final_keyboard,
                                 fallback_to_caption=True,
-                                request_timeout=3.5,
+                                request_timeout=2.0,
                             ),
-                            timeout=4.0
+                            timeout=2.5
                         )
                     else:
                         if len(full_text) > 1024: full_text = full_text[:1021] + "..."
@@ -699,28 +773,47 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                                 parse_mode="HTML",
                                 reply_markup=final_keyboard,
                                 fallback_to_text=True,
-                                request_timeout=3.5,
+                                request_timeout=2.0,
                             ),
-                            timeout=4.0
+                            timeout=2.5
                         )
+                    # Успешное редактирование — сброс счетчика ошибок
+                    _stale_edit_recipients.pop(user_id, None)
                     return
                 except TelegramRetryAfter as e:
                     wait_sec = e.retry_after + 1
-                    if attempt < max_attempts - 1:
+                    if attempt < max_attempts - 1 and wait_sec <= 5:
                         await asyncio.sleep(wait_sec)
                         continue
                     else:
                         return
                 except TelegramBadRequest as e:
                     error_message_lower = e.message.lower()
+                    # 1. Зачистка мертвых копий (удалено пользователем или не подлежит правке)
+                    if (
+                        "message to edit not found" in error_message_lower
+                        or "message can't be edited" in error_message_lower
+                        or "message to delete not found" in error_message_lower
+                    ):
+                        await remove_dead_post_copy(post_num, user_id, message_id)
+                        return
+                    # 2. Блокировка или удаление чата пользователя
+                    if (
+                        "chat not found" in error_message_lower
+                        or "user not found" in error_message_lower
+                        or "user is deactivated" in error_message_lower
+                        or "bot was blocked by the user" in error_message_lower
+                    ):
+                        _stale_edit_recipients.pop(user_id, None)
+                        await remove_blocked_user_copies(user_id)
+                        b_users = board_data.get(board_id, {}).get('users', {}).get('active')
+                        if isinstance(b_users, set):
+                            b_users.discard(user_id)
+                        return
                     ignored_errors = (
                         "message is not modified",
-                        "message to edit not found",
-                        "chat not found",
                         "there is no text in the message to edit",
                         "there is no caption in the message to edit",
-                        "message can't be edited",
-                        "message to delete not found",
                         "voice_messages_forbidden",
                     )
                     if any(err in error_message_lower for err in ignored_errors):
@@ -730,25 +823,28 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                         match = re.search(r'retry after (\d+)', error_message_lower)
                         if match:
                             wait_sec = int(match.group(1)) + 1
-                        if attempt < max_attempts - 1:
+                        if attempt < max_attempts - 1 and wait_sec <= 5:
                             await asyncio.sleep(wait_sec)
                             continue
                         else:
                             return
                     return
                 except asyncio.TimeoutError:
-                    if attempt < 1:
-                        await asyncio.sleep(0.5)
-                        continue
-                    runtime_logger.debug(f"Timeout (4.0s) editing post copy for user {user_id}")
+                    fail_cnt, _ = _stale_edit_recipients.get(user_id, (0, 0.0))
+                    _stale_edit_recipients[user_id] = (fail_cnt + 1, time.monotonic())
+                    runtime_logger.debug(
+                        f"Timeout (2.5s) editing post copy for user {user_id} (consecutive timeouts: {fail_cnt + 1})"
+                    )
                     return
-                except (main.TelegramNetworkError, main.aiohttp.ClientError):
+                except (TelegramNetworkError, aiohttp.ClientError):
+                    fail_cnt, _ = _stale_edit_recipients.get(user_id, (0, 0.0))
+                    _stale_edit_recipients[user_id] = (fail_cnt + 1, time.monotonic())
                     if attempt < max_attempts - 1:
                         await asyncio.sleep(delay)
-                        delay = min(delay * 2, 6)
                         continue
                     return
-                except (main.TelegramForbiddenError, TelegramForbiddenError):
+                except TelegramForbiddenError:
+                    _stale_edit_recipients.pop(user_id, None)
                     await remove_blocked_user_copies(user_id)
                     b_users = board_data.get(board_id, {}).get('users', {}).get('active')
                     if isinstance(b_users, set):
@@ -757,15 +853,29 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                 except Exception as e:
                     runtime_logger.warning(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
                     return
-    # Собираем список (uid, mid) без запуска тасок — чтобы chunking реально работал
-    recipients_list = [
-        (uid, sorted(msgs)[0])
-        for uid, msgs in user_messages_map.items()
-        if msgs
-    ]
+
+    # Собираем список (uid, mid) с фильтрацией stale-юзеров — чтобы не создавать мертвые таски
+    now = time.monotonic()
+    active_recipients = []
+    for uid, msgs in user_messages_map.items():
+        if not msgs:
+            continue
+        fail_cnt, last_fail = _stale_edit_recipients.get(uid, (0, 0.0))
+        if fail_cnt >= MAX_CONSECUTIVE_EDIT_TIMEOUTS:
+            if now - last_fail < STALE_EDIT_RECIPIENT_TTL:
+                runtime_logger.debug(
+                    "⏭️ [EDIT_STALE_SKIP] Пропуск юзера %s из recipients_list (таймаутов: %d)",
+                    uid, fail_cnt
+                )
+                continue
+            else:
+                _stale_edit_recipients.pop(uid, None)
+        active_recipients.append((uid, sorted(msgs)[0]))
+
+    recipients_list = active_recipients
 
     CHUNK_SIZE = 10
-    DELAY_BETWEEN_CHUNKS = 0.4
+    DELAY_BETWEEN_CHUNKS = 0.25
     for i in range(0, len(recipients_list), CHUNK_SIZE):
         chunk = recipients_list[i:i + CHUNK_SIZE]
         # Передаём голые корутины — gather запускает их сам, строго в пределах чанка
