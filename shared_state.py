@@ -755,8 +755,9 @@ class BoundedDict(OrderedDict):
 
 BOT_MESSAGES_STORAGE_LIMIT = int(os.getenv("BOT_MESSAGES_STORAGE_LIMIT", "12000"))
 BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "5000"))
+BOT_COPY_CACHE_POST_LIMIT = int(os.getenv("BOT_COPY_CACHE_POST_LIMIT", "2000"))
 messages_storage = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
-post_to_messages = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
+post_to_messages = BoundedDict(max_size=BOT_COPY_CACHE_POST_LIMIT)
 message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
 
 @dataclass

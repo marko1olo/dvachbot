@@ -529,6 +529,24 @@ class MessageBroadcaster:
         consecutive_success_chunks = 0
 
         while queue:
+            if self.post_num and self.post_num in posts_pending_deletion:
+                queue.clear()
+                remaining_recipients_for_later.clear()
+                interrupted_reason = "post_deleted_pending_deletion"
+                runtime_logger.info(
+                    "delivery_cancelled_post_deleted %s",
+                    json.dumps(
+                        {
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                break
+
             if shared_state.is_shutting_down or shared_state.drain_shutdown_requested:
                 remaining_recipients_for_later.update(queue)
                 queue.clear()
@@ -1080,8 +1098,10 @@ class MessageBroadcaster:
         ):
             _log_plain_fallback(reason)
             sent_msgs = []
-            fallback_text = text if text is not None else _plain_delivery_text()
-            parts = split_text(fallback_text, 4096)
+            raw_text = text if (text is not None and text.strip()) else _plain_delivery_text()
+            fallback_text = raw_text.strip() or "📎 [Сообщение]"
+            raw_parts = split_text(fallback_text, 4096)
+            parts = [p for p in raw_parts if p.strip()] or [fallback_text]
             target_reply_id = reply_to_id if reply_to_id is not None else reply_to_mid
             for i, part in enumerate(parts):
                 try:
@@ -1095,7 +1115,20 @@ class MessageBroadcaster:
                         request_timeout=request_timeout,
                     )
                 except TelegramBadRequest as tb_err:
-                    if "message to be replied not found" in tb_err.message.lower() and target_reply_id:
+                    err_low = tb_err.message.lower()
+                    if (
+                        "user_is_blocked" in err_low
+                        or "chat not found" in err_low
+                        or "user not found" in err_low
+                        or "bot was blocked by the user" in err_low
+                        or "user is deactivated" in err_low
+                    ):
+                        self.blocked_users.add(uid)
+                        raise TelegramForbiddenError(method=tb_err.method, message=tb_err.message)
+                    if "flood control" in err_low or "retry after" in err_low:
+                        wait_sec = int(re.search(r'\d+', tb_err.message).group()) if re.search(r'\d+', tb_err.message) else 15
+                        raise TelegramRetryAfter(method=tb_err.method, message=tb_err.message, retry_after=wait_sec)
+                    if "message to be replied not found" in err_low and target_reply_id:
                         target_reply_id = None
                         m = await self.bot_instance.send_message(
                             chat_id=uid,
@@ -1107,7 +1140,9 @@ class MessageBroadcaster:
                             request_timeout=request_timeout,
                         )
                     else:
-                        raise
+                        runtime_logger.warning("plain_text_fallback_failed for user %s: %s", uid, tb_err)
+                        self.stats['errors'] += 1
+                        return None
                 sent_msgs.append(m)
             self.stats['success'] += 1
             return sent_msgs
@@ -1158,7 +1193,21 @@ class MessageBroadcaster:
 
         async def _send_text_fallback(reason: str):
             ct = str(current_content.get("type") or "").split('.')[-1].lower()
-            is_voice_fallback = (reason == "voice_messages_forbidden" or ct == "voice")
+            is_voice_fallback = (
+                reason in ("voice_messages_forbidden", "voices_forbidden", "voice_messages_restricted")
+                or ct == "voice"
+            )
+            is_video_note_fallback = (
+                reason in ("video_notes_forbidden", "video_note_forbidden", "video_notes_restricted", "can't send video note")
+                or ct == "video_note"
+            )
+            is_sticker_fallback = (
+                reason in ("stickers_forbidden", "sticker_forbidden", "can't send sticker", "can't send stickers")
+                or ct == "sticker"
+            )
+
+            head_part = (head or self.base_head_html or "").strip()
+            has_head = bool(clean_html_tags(head_part).strip())
 
             if is_voice_fallback:
                 # Extract transcription from all available layers
@@ -1195,13 +1244,13 @@ class MessageBroadcaster:
                     t_str = convert_site_tags_to_telegram(str(transcription).strip())
                     voice_body_parts.append(f"🎤 <b>[Голосовое сообщение]</b>:\n{t_str}")
                 else:
-                    voice_body_parts.append("🎤 <i>[Голосовое сообщение недоступно из-за ваших настроек приватности Telegram]</i>")
+                    voice_body_parts.append("🎤 <i>[Голосовое сообщение]</i>")
 
                 if ref_link:
                     voice_body_parts.append(f"🔗 <a href=\"{ref_link}\">{ref_link}</a>")
 
-                head_part = head or self.base_head_html
-                fallback_text = f"{head_part}\n\n" + "\n\n".join(voice_body_parts)
+                voice_body = "\n\n".join(voice_body_parts)
+                fallback_text = f"{head_part}\n\n{voice_body}" if has_head else voice_body
 
                 runtime_logger.info(
                     "delivery_voice_text_fallback %s",
@@ -1219,11 +1268,96 @@ class MessageBroadcaster:
                         separators=(",", ":"),
                     ),
                 )
+            elif is_video_note_fallback:
+                ref_link = _get_thread_or_board_link()
+                note_body_parts = ["📹 <b>[Видеосообщение]</b>"]
+                note_text = (
+                    current_content.get("text")
+                    or current_content.get("caption")
+                    or (self.content.get("text") if isinstance(self.content, dict) else None)
+                    or (self.content.get("caption") if isinstance(self.content, dict) else None)
+                )
+                if note_text:
+                    t_str = convert_site_tags_to_telegram(str(note_text).strip())
+                    note_body_parts.append(t_str)
+                if ref_link:
+                    note_body_parts.append(f"🔗 <a href=\"{ref_link}\">{ref_link}</a>")
+
+                note_body = "\n\n".join(note_body_parts)
+                fallback_text = f"{head_part}\n\n{note_body}" if has_head else note_body
+
+                runtime_logger.info(
+                    "delivery_video_note_text_fallback %s",
+                    json.dumps(
+                        {
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
+                            "uid": uid,
+                            "reason": reason,
+                            "ref_link": ref_link,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            elif is_sticker_fallback:
+                ref_link = _get_thread_or_board_link()
+                st_emoji = (
+                    current_content.get("emoji")
+                    or (current_content.get("sticker", {}).get("emoji") if isinstance(current_content.get("sticker"), dict) else None)
+                    or ""
+                )
+                emoji_label = f" {st_emoji}" if st_emoji else ""
+                sticker_body_parts = [f"🎭 <b>[Стикер{emoji_label}]</b>"]
+                if ref_link:
+                    sticker_body_parts.append(f"🔗 <a href=\"{ref_link}\">{ref_link}</a>")
+
+                sticker_body = "\n\n".join(sticker_body_parts)
+                fallback_text = f"{head_part}\n\n{sticker_body}" if has_head else sticker_body
+
+                runtime_logger.info(
+                    "delivery_sticker_text_fallback %s",
+                    json.dumps(
+                        {
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
+                            "uid": uid,
+                            "reason": reason,
+                            "emoji": st_emoji,
+                            "ref_link": ref_link,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
             else:
-                fallback_text = full_text
+                body_candidate = (full_text or "").strip()
                 media_url = current_content.get("image_url")
-                if media_url and str(media_url) not in fallback_text:
-                    fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
+                ref_link = _get_thread_or_board_link()
+
+                if not clean_html_tags(body_candidate).strip():
+                    media_labels = {
+                        'photo': '🖼 [Изображение]',
+                        'video': '🎬 [Видео]',
+                        'animation': '🎞 [GIF]',
+                        'document': '📄 [Документ]',
+                        'audio': '🎵 [Аудиозапись]',
+                    }
+                    label = media_labels.get(ct, '📎 [Вложение]')
+                    media_body_parts = [f"<b>{label}</b>"]
+                    if media_url:
+                        media_body_parts.append(f"🔗 <a href=\"{escape_html(str(media_url))}\">{escape_html(str(media_url))}</a>")
+                    elif ref_link:
+                        media_body_parts.append(f"🔗 <a href=\"{ref_link}\">{ref_link}</a>")
+                    media_body = "\n\n".join(media_body_parts)
+                    fallback_text = f"{head_part}\n\n{media_body}" if has_head else media_body
+                else:
+                    fallback_text = body_candidate
+                    if media_url and str(media_url) not in fallback_text:
+                        fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
+
                 if not self.media_url_fallback_logged:
                     runtime_logger.warning(
                         "delivery_media_url_text_fallback %s",
@@ -1240,8 +1374,14 @@ class MessageBroadcaster:
                         ),
                     )
                     self.media_url_fallback_logged = True
+
+            raw_parts = split_text(fallback_text, 4096)
+            parts = [p for p in raw_parts if clean_html_tags(p).strip()]
+            if not parts:
+                safe_clean = clean_html_tags(fallback_text).strip()
+                parts = [fallback_text if safe_clean else "📎 [Сообщение]"]
+
             sent_msgs = []
-            parts = split_text(fallback_text, 4096)
             cur_reply_id = reply_to_mid
             for i, part in enumerate(parts):
                 try:
@@ -1257,6 +1397,18 @@ class MessageBroadcaster:
                     )
                 except TelegramBadRequest as tb_err:
                     err_low = tb_err.message.lower()
+                    if (
+                        "user_is_blocked" in err_low
+                        or "chat not found" in err_low
+                        or "user not found" in err_low
+                        or "bot was blocked by the user" in err_low
+                        or "user is deactivated" in err_low
+                    ):
+                        self.blocked_users.add(uid)
+                        raise TelegramForbiddenError(method=tb_err.method, message=tb_err.message)
+                    if "flood control" in err_low or "retry after" in err_low:
+                        wait_sec = int(re.search(r'\d+', tb_err.message).group()) if re.search(r'\d+', tb_err.message) else 15
+                        raise TelegramRetryAfter(method=tb_err.method, message=tb_err.message, retry_after=wait_sec)
                     if "message to be replied not found" in err_low and cur_reply_id:
                         cur_reply_id = None
                         m = await self.bot_instance.send_message(
@@ -1271,8 +1423,20 @@ class MessageBroadcaster:
                         )
                     elif _telegram_parse_error(err_low):
                         return await _send_plain_text_parts("text_fallback_parse_error", _plain_delivery_text(), reply_to_id=cur_reply_id)
+                    elif "message text is empty" in err_low or "text is empty" in err_low:
+                        plain_safe = clean_html_tags(part).strip() or "📎 [Сообщение]"
+                        m = await self.bot_instance.send_message(
+                            chat_id=uid,
+                            text=plain_safe,
+                            reply_to_message_id=cur_reply_id if i == 0 else None,
+                            reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
+                            disable_notification=is_sage,
+                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                            request_timeout=request_timeout,
+                        )
                     else:
-                        raise
+                        runtime_logger.warning("text_fallback_unknown_bad_request for user %s: %s", uid, tb_err)
+                        return await _send_plain_text_parts("text_fallback_unknown_bad_request", reply_to_id=cur_reply_id)
                 sent_msgs.append(m)
             self.stats['success'] += 1
             return sent_msgs
@@ -1992,6 +2156,18 @@ class MessageBroadcaster:
                 if "user_is_blocked" in err_low:
                     self.blocked_users.add(uid)
                     raise TelegramForbiddenError(method=e.method, message=e.message)
+                is_photo_size_err = ct == 'photo' and (
+                    "too big for a photo" in err_low
+                    or "photo_invalid_dimensions" in err_low
+                    or ("file of size" in err_low and "photo" in err_low)
+                )
+                if is_photo_size_err and not getattr(self, f'_photo_doc_tried_{uid}', False):
+                    setattr(self, f'_photo_doc_tried_{uid}', True)
+                    runtime_logger.info(
+                        f"ℹ️ [PHOTO_SIZE_FALLBACK] Photo invalid dimensions or too big in post #{self.post_num} ({e.message}). Retrying as send_document..."
+                    )
+                    current_content['type'] = 'document'
+                    continue
                 if "photo_invalid_dimensions" in err_low or "webpage_media_empty" in err_low:
                     self.media_group_fallback_to_text = True
                     self.media_group_invalid_dimensions = True
@@ -2008,18 +2184,6 @@ class MessageBroadcaster:
                 ):
                     self.media_url_text_fallback = True
                     return await _send_text_fallback("telegram_rejected_media_url")
-                is_photo_size_err = ct == 'photo' and (
-                    "too big for a photo" in err_low
-                    or "photo_invalid_dimensions" in err_low
-                    or ("file of size" in err_low and "photo" in err_low)
-                )
-                if is_photo_size_err and not getattr(self, f'_photo_doc_tried_{uid}', False):
-                    setattr(self, f'_photo_doc_tried_{uid}', True)
-                    runtime_logger.info(
-                        f"ℹ️ [PHOTO_SIZE_FALLBACK] Photo too big for send_photo in post #{self.post_num} ({e.message}). Retrying as send_document..."
-                    )
-                    current_content['type'] = 'document'
-                    continue
                 if "too big" in err_low or "file of size" in err_low:
                     if current_content.get('type') == 'media_group' and current_content.get('media'):
                         print(f"⚠️[Anti-Fat] Пост #{self.post_num}: Обнаружен жирный файл. Запуск фильтрации...")
@@ -2085,9 +2249,15 @@ class MessageBroadcaster:
                 elif "flood control" in err_low or "retry after" in err_low:
                     wait_sec = int(re.search(r'\d+', e.message).group()) if re.search(r'\d+', e.message) else 15
                     raise TelegramRetryAfter(method=e.method, message=e.message, retry_after=wait_sec)
-                elif "voice_messages_forbidden" in err_low:
-                    runtime_logger.info(f"ℹ️ User {uid} has voice messages forbidden. Delivering text fallback.")
+                elif any(k in err_low for k in ("voice_messages_forbidden", "voices_forbidden", "voice_messages_restricted")):
+                    runtime_logger.info(f"ℹ️ User {uid} has voice messages forbidden ({e.message}). Delivering text fallback.")
                     return await _send_text_fallback("voice_messages_forbidden")
+                elif any(k in err_low for k in ("video_notes_forbidden", "video_note_forbidden", "video_notes_restricted", "can't send video note")):
+                    runtime_logger.info(f"ℹ️ User {uid} has video notes forbidden ({e.message}). Delivering text fallback.")
+                    return await _send_text_fallback("video_notes_forbidden")
+                elif any(k in err_low for k in ("stickers_forbidden", "sticker_forbidden", "can't send sticker", "can't send stickers")):
+                    runtime_logger.info(f"ℹ️ User {uid} has stickers forbidden ({e.message}). Delivering text fallback.")
+                    return await _send_text_fallback("stickers_forbidden")
                 elif any(bad_id_str in err_low for bad_id_str in [
                     "wrong remote file identifier", "unserialize", "wrong padding",
                     "invalid file_id", "wrong file identifier", "media_file_invalid",

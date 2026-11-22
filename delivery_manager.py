@@ -294,23 +294,55 @@ cumulative_post_metrics = defaultdict(lambda: {
     'success': 0, 'priority': 0, 'passive': 0, 'errors': 0, 'blocks': 0, 'start_time': 0, 'total': 0
 })
 
-def prune_stale_cumulative_post_metrics(max_age_sec: float = 3600.0, max_keep: int = 500):
-    if len(cumulative_post_metrics) <= max_keep:
-        return
+def prune_stale_cumulative_post_metrics(max_age_sec: float = 1800.0, max_keep: int = 300) -> int:
+    """
+    Prunes stale cumulative delivery metrics to prevent memory creep.
+    Always cleans entries older than max_age_sec (default 30m) and caps total entries to max_keep.
+    """
     now = time.time()
     stale = [
         k for k, v in list(cumulative_post_metrics.items())
-        if now - v.get('start_time', now) > max_age_sec
+        if not v or (now - v.get('start_time', 0) > max_age_sec)
     ]
+    removed = 0
     for k in stale:
         cumulative_post_metrics.pop(k, None)
+        removed += 1
     if len(cumulative_post_metrics) > max_keep:
         sorted_keys = sorted(
             cumulative_post_metrics.keys(),
             key=lambda k: cumulative_post_metrics[k].get('start_time', 0)
         )
-        for k in sorted_keys[:len(cumulative_post_metrics) - max_keep]:
+        excess = len(cumulative_post_metrics) - max_keep
+        for k in sorted_keys[:excess]:
             cumulative_post_metrics.pop(k, None)
+            removed += 1
+    return removed
+
+
+def purge_deleted_post_from_delivery_queues(post_num: int, board_id: str = None) -> int:
+    """
+    Instantly removes any pending delivery items for post_num from in-memory message_queues.
+    Returns the number of purged queue items.
+    """
+    from collections import deque
+    removed_count = 0
+    boards = [board_id] if board_id else list(message_queues.keys())
+    for b in boards:
+        q = message_queues.get(b)
+        if not q or not hasattr(q, '_queue'):
+            continue
+        new_deque = deque()
+        while q._queue:
+            item = q._queue.popleft()
+            if isinstance(item, dict) and item.get("post_num") == post_num:
+                removed_count += 1
+            else:
+                new_deque.append(item)
+        q._queue = new_deque
+    if removed_count:
+        runtime_logger.info("purge_deleted_post_from_delivery_queues: removed %s items for #%s", removed_count, post_num)
+    return removed_count
 # ENABLE_MULTILANG is canonical in shared_state.py (imported via *)
 RE_YOU_PATTERN = re.compile(r'>>(\d+)')
 
@@ -815,6 +847,13 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                         "there is no text in the message to edit",
                         "there is no caption in the message to edit",
                         "voice_messages_forbidden",
+                        "voices_forbidden",
+                        "voice_messages_restricted",
+                        "video_notes_forbidden",
+                        "video_note_forbidden",
+                        "video_notes_restricted",
+                        "stickers_forbidden",
+                        "sticker_forbidden",
                     )
                     if any(err in error_message_lower for err in ignored_errors):
                         return
@@ -1179,6 +1218,14 @@ class MessageDeliveryTask:
                 delivery_deferred_recipients=len(passive_recipients_for_later),
             ))
             delivered_now_count = len(delivery_results)
+            if self.post_num in posts_pending_deletion or getattr(delivery_results, "interrupted_reason", None) == "post_deleted_pending_deletion":
+                passive_recipients_for_later.clear()
+                if self.msg_data.get("durable_delivery_id"):
+                    await _delete_durable_delivery_item(self.msg_data, "post_pending_deletion")
+                cumulative_post_metrics.pop((self.board_id, self.post_num), None)
+                runtime_logger.info(f"[{self.board_id}] Доставка поста #{self.post_num} отменена: пост удален.")
+                return
+
             budget_deferred = getattr(delivery_results, "remaining_recipients", set())
             if budget_deferred:
                 budget_deferred_count = len(budget_deferred)
