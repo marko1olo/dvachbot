@@ -1,10 +1,25 @@
 <!DOCTYPE html>
 <html lang="{{ request.state.lang or 'ru' }}">
 <head>
-    <meta charset="UTF-8">
+        <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var t = s.theme || localStorage.getItem('theme');
+                if (!t) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+                    else t = 'light';
+                }
+                if (t) {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+<meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Мои ответы - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+    <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
     <link rel="icon" href="/static/favicon.ico">
     <style>
         .replies-container {

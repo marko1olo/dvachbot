@@ -10,7 +10,7 @@
     <meta property="og:title" content="О проекте — ТГАЧ">
     <meta property="og:description" content="TGACH — анонимный веб-архив имиджборд, подробная статистика, персональные паспорта и тренды.">
     <meta property="og:image" content="/static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+    <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
     <link rel="icon" href="/static/favicon.ico">
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#212121">
@@ -535,6 +535,8 @@
         function closeModal() {
             document.querySelectorAll('.modal').forEach(el => el.classList.remove('active'));
             document.getElementById('modal-overlay').classList.remove('active');
+            document.body.classList.remove('modal-open');
+            document.body.style.paddingRight = '';
             setTimeout(() => {
                 document.querySelectorAll('.modal').forEach(el => el.style.display = 'none');
                 document.getElementById('modal-overlay').style.display = 'none';

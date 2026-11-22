@@ -1005,6 +1005,51 @@ logging.getLogger("asyncio").addFilter(NoParsingFilter())
 logging.getLogger("uvicorn.error").addFilter(NoParsingFilter())
 BUMP_LIMIT = 600
 CAPTCHA_SESSIONS = {}
+
+
+def verify_captcha_solution(session: dict, captcha_value: str | None, captcha_x: float | None = None, captcha_y: float | None = None) -> bool:
+    """Validates user captcha solution against session data. Returns True if valid, False otherwise."""
+    if not session or not isinstance(session, dict):
+        return False
+    mode = session.get("mode")
+    if not mode:
+        return False
+    try:
+        if mode == "monkey":
+            if captcha_x is None or captcha_y is None:
+                return False
+            return abs(captcha_x - session["target_x"]) <= 25 and abs(captcha_y - session["target_y"]) <= 25
+        elif mode == "bottle":
+            val = int(captcha_value or -999)
+            final_angle = (session["start_angle"] + val) % 360
+            return final_angle < 15 or final_angle > 345
+        elif mode == "math":
+            return str(session.get("answer")) == str(captcha_value).strip()
+        elif mode == "word":
+            return str(session.get("word")).strip() == str(captcha_value).strip()
+        elif mode in ("escobar", "fan", "spank"):
+            return str(captcha_value).strip().lower() == "success"
+        elif mode == "find_odd":
+            return str(captcha_value).strip() == str(session.get("trap_index")).strip()
+        elif mode == "humiliation":
+            required = session.get("phrase", "").strip().lower()
+            given = (captcha_value or "").strip().lower()
+            return bool(required and required == given)
+        elif mode == "clock":
+            if not captcha_value:
+                return False
+            user_h, user_m = map(float, str(captcha_value).split(":"))
+            target_h = session["target_h"]
+            target_m = session["target_m"]
+            def angle_diff(a, b):
+                diff = abs(a - b) % 360
+                return min(diff, 360 - diff)
+            return angle_diff(user_h, target_h) <= 15 and angle_diff(user_m, target_m) <= 15
+        elif mode == "can":
+            return str(captcha_value).strip().lower() == "opened"
+        return False
+    except Exception:
+        return False
 SPAM_WORDS_CACHE: Dict[str, set] = defaultdict(set)
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -1876,7 +1921,7 @@ class ConnectionManager:
 
     async def _safe_send(self, connection: WebSocket, message: str, key: str):
         try:
-            await asyncio.wait_for(connection.send_text(message), timeout=0.4)
+            await asyncio.wait_for(connection.send_text(message), timeout=2.0)
         except Exception:
             try:
                 parts = key.split("/", 2)
@@ -2544,7 +2589,7 @@ async def ddos_guard_middleware(request: Request, call_next):
     # 5. Проверка через внешнюю функцию безопасности (check_ddos)
     if check_ddos(client_ip):
         logger.warning(f"⛔ DDOS BLACKLISTED: {client_ip}")
-        return StreamingResponse(slow_death_generator(), media_type="text/plain")
+        return Response("Forbidden", status_code=403)
 
     # Если всё хорошо — пропускаем запрос дальше
     response = await call_next(request)
@@ -6362,7 +6407,11 @@ async def api_makaba_posting(
             return JSONResponse(
                 {"Error": t("captcha_expired"), "Status": "Error"}, status_code=403
             )
-        del CAPTCHA_SESSIONS[captcha_id]
+        cap_session = CAPTCHA_SESSIONS.pop(captcha_id, None)
+        if not cap_session or not verify_captcha_solution(cap_session, captcha_value):
+            return JSONResponse(
+                {"Error": t("captcha_invalid", "Неверная капча"), "Status": "Error"}, status_code=403
+            )
 
     limit_seconds = 60 if is_new_thread else 15
     action_key = "thread" if is_new_thread else "post"
@@ -11007,7 +11056,10 @@ async def _proxy_protected_telegram_file(
             async for chunk in resp.content.iter_chunked(64 * 1024):
                 if chunk:
                     yield chunk
-        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError, asyncio.CancelledError) as e:
+        except asyncio.CancelledError:
+            logger.debug(f"ℹ️ [STREAM_PROXY] Client aborted stream ({file_id})")
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError) as e:
             logger.warning(f"⚠️ [STREAM_PROXY] Upstream file stream interrupted ({file_id}): {e}")
         finally:
             await close_upstream()
@@ -11028,7 +11080,7 @@ async def _proxy_external_url(
 ):
     if not is_safe_url(url):
         logger.warning(f"🛡️ SSRF BLOCKED external proxy request: {url}")
-        raise HTTPException(status_code=400, detail="Unsafe URL")
+        raise HTTPException(status_code=404, detail="File unavailable")
     session = _get_shared_aiohttp_session()
     try:
         request_headers = {
@@ -11141,7 +11193,10 @@ async def _proxy_external_url(
             async for chunk in resp.content.iter_chunked(64 * 1024):
                 if chunk:
                     yield chunk
-        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError, asyncio.CancelledError, OSError) as e:
+        except asyncio.CancelledError:
+            logger.debug(f"Proxy external file stream cancelled ({url[:80]})")
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError, OSError) as e:
             logger.warning(f"Proxy external file stream interrupted ({url[:80]}): {e}")
         except Exception as e:
             # Handle client aborts / h11 LocalProtocolError without dumping huge tracebacks
@@ -11244,7 +11299,7 @@ async def get_telegram_file(
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"Error checking is_file_permanently_failed for file {file_id}: {e}")
+        pass
 
     # Parse skip and fallback parameters early for fast bypass
     skipped_types = [s.strip().lower() for s in skip.split(",") if s.strip()] if skip else []

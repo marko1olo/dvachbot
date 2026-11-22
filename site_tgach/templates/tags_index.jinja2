@@ -1,10 +1,25 @@
 <!DOCTYPE html>
 <html lang="{{ request.state.lang or 'ru' }}">
 <head>
-    <meta charset="UTF-8">
+        <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var t = s.theme || localStorage.getItem('theme');
+                if (!t) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+                    else t = 'light';
+                }
+                if (t) {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+<meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ meta_title }} — ТГАЧ</title>
-    <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+    <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
     <link rel="icon" href="/static/favicon.ico">
     <meta name="description" content="{{ meta_description }}">
     
@@ -34,8 +49,13 @@
         }
 
         .tag-item {
-            display: inline-block;
-            margin: 8px 15px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 36px;
+            padding: 4px 12px;
+            margin: 6px 8px;
+            box-sizing: border-box;
             text-decoration: none;
             color: var(--accent-primary);
             transition: all 0.2s ease;
@@ -94,8 +114,16 @@
                     </a>
                 {% endfor %}
             {% else %}
-                <div style="padding: 40px; opacity: 0.5;">
-                    {{ request.state.t('no_tags_found') or 'Теги еще не извлечены. Нужно больше постов!' }}
+                <div class="empty-state" style="margin: 20px auto; border: none; box-shadow: none; background: transparent;">
+                    <div class="empty-state-icon">🏷️</div>
+                    <div class="empty-state-title">{{ request.state.t('no_tags_title', 'Теги пока не найдены') }}</div>
+                    <p class="empty-state-desc">
+                        {{ request.state.t('no_tags_found', 'Теги еще не извлечены. Нейро-ядро анализирует контент. Загляните позже или создайте тред с медиа!') }}
+                    </p>
+                    <div class="empty-state-actions">
+                        <a href="/b/" class="btn btn-secondary" style="min-height: 38px; padding: 8px 16px;">📋 В /b/</a>
+                        <a href="/" class="btn btn-primary" style="min-height: 38px; padding: 8px 16px;">🏠 На главную</a>
+                    </div>
                 </div>
             {% endif %}
         </div>

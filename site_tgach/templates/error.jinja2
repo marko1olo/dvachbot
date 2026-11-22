@@ -1,10 +1,25 @@
 <!DOCTYPE html>
 <html lang="{{ request.state.lang or 'ru' }}">
 <head>
-    <meta charset="UTF-8">
+        <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var t = s.theme || localStorage.getItem('theme');
+                if (!t) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+                    else t = 'light';
+                }
+                if (t) {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+<meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ошибка {{ status_code }} - ТГАЧ</title>
-    <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+    <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
 </head>
 <img src="/static/img/mascot/mascot_confused.png" class="corner-mascot" alt="">
 <body>
@@ -39,10 +54,10 @@
             }, 100);
         });
     </script>
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; text-align: center;">
-        <h1 style="font-size: 6em; margin: 0; color: var(--action-danger);">{{ status_code }}</h1>
-        <h2 style="margin-top: 0;">{{ detail }}</h2>
-        <p style="color: var(--text-secondary); max-width: 500px;">
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80vh; text-align: center; padding: 20px; box-sizing: border-box;">
+        <h1 style="font-size: clamp(3.5em, 8vw, 6em); margin: 0; color: var(--action-danger);">{{ status_code }}</h1>
+        <h2 style="margin-top: 0; font-size: clamp(1.2em, 4vw, 1.8em);">{{ detail }}</h2>
+        <p style="color: var(--text-secondary); max-width: 500px; line-height: 1.5;">
             {% if status_code == 404 %}
                 {{ request.state.t('error_404_desc') }}
                 <br>{{ request.state.t('error_404_fun') }}
@@ -51,7 +66,17 @@
                 {{ request.state.t('error_500_fun') }}
             {% endif %}
         </p>
-        <a href="/" class="btn btn-primary" style="margin-top: 20px;">{{ request.state.t('error_return') }}</a>
+        <div class="error-actions" style="display: flex; gap: 12px; margin-top: 25px; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 480px;">
+            <button type="button" onclick="if(window.history.length > 1) { window.history.back(); } else { window.location.href='/b/'; }" class="btn btn-secondary" style="min-height: 38px; min-width: 140px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; cursor: pointer;">
+                🔙 {{ request.state.t('error_back_board', 'Вернуться на доску') }}
+            </button>
+            <a href="/{{ board_id or 'b' }}/catalog/" class="btn btn-secondary" style="min-height: 38px; min-width: 140px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; text-decoration: none;">
+                🗂️ {{ request.state.t('error_catalog', 'В каталог') }}
+            </a>
+            <a href="/" class="btn btn-primary" style="min-height: 38px; min-width: 140px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; text-decoration: none;">
+                🏠 {{ request.state.t('error_return', 'На главную') }}
+            </a>
+        </div>
     </div>
 </body>
 </html>

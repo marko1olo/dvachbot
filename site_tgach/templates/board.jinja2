@@ -11,11 +11,26 @@
     <!DOCTYPE html>
     <html lang="{{ request.state.lang or 'ru' }}">
     <head>
-        <meta charset="UTF-8">
+            <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var t = s.theme || localStorage.getItem('theme');
+                if (!t) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+                    else t = 'light';
+                }
+                if (t) {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+<meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{{ board_info.name }} - {{ request.state.t('site_name') }}</title>
         <link rel="preload" href="/static/fonts/Roboto.woff2" as="font" type="font/woff2" crossorigin>
-        <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+        <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
         <link rel="icon" href="/static/favicon.ico">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
         <meta property="og:site_name" content="ТГАЧ">
@@ -296,12 +311,11 @@
                                     <a href="/{{ board_id }}/res/{{ post.id }}.html" class="post-num-link" target="_blank" rel="noopener noreferrer">#{{ post.id }}</a>
                                     {% if post.is_pinned %} <span title="Закреплен" style="color:var(--accent-primary); margin-left:5px;">📌</span> {% endif %}
                                     {% if post.is_endless %} <span title="Бесконечный тред" style="color:var(--accent-link); margin-left:5px;">🔄</span> {% endif %}
-                                    {% if post.is_op %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
+                                    {% if post.is_op_yours or (session.user and post.author_id == session.user.id) %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
                                     {% if post.thread_type == 'image' %}<span class="thread-type-badge tt-image" style="font-size:0.7em;">🖼️ IMG</span>{% endif %}
                                     {% if post.thread_type == 'video' %}<span class="thread-type-badge tt-video" style="font-size:0.7em;">🎬 VID</span>{% endif %}
                                     {% if post.thread_type == 'audio' %}<span class="thread-type-badge tt-audio" style="font-size:0.7em;">🎵 AUD</span>{% endif %}
                                     {% if post.thread_type == 'media' %}<span class="thread-type-badge tt-media" style="font-size:0.7em;">📁 MEDIA</span>{% endif %}
-                                    {% if post.is_op %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
                                 </span>
                                 <span>{% if post.is_archived %} 🔒{% endif %}</span>
                                 <span class="ts-recalc" data-ts="{{ post.timestamp }}">{{ post.timestamp | format_timestamp }}</span>
@@ -385,12 +399,14 @@
                                                                preload="metadata" 
                                                                muted 
                                                                playsinline
+                                                               webkit-playsinline
+                                                               webkit-playsinline
                                                                loop
                                                                data-src="{{ file_orig_src }}"
                                                                data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                                {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                                onerror="handleImageError(this)"
-                                                               style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                                               style="object-fit: cover; width: 100%; height: 100%; background: transparent;">
                                                         </video>
                                                         <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
                                                     </div>
@@ -543,12 +559,13 @@
                                                                    preload="metadata" 
                                                                    muted 
                                                                    playsinline
+                                                                   webkit-playsinline
                                                                    loop
                                                                    data-src="{{ file_orig_src }}"
                                                                    data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                                    {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                                    onerror="handleImageError(this)"
-                                                                   style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                                                   style="object-fit: cover; width: 100%; height: 100%; background: transparent;">
                                                             </video>
                                                             <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
                                                         </div>
@@ -653,7 +670,10 @@
         <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
         <div class="modal" id="quick-reply-modal" style="display: none;"></div>
         <div class="modal" id="report-modal" style="display: none;">
-            <h3>{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0;">{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+                <button type="button" class="btn btn-secondary modal-close-btn" onclick="closeModal();" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+            </div>
             <form id="report-form">
                 <div class="form-group">
                     <label for="report-category">{{ request.state.t('report_category') }}</label>
@@ -669,13 +689,16 @@
                     <textarea id="report-reason" name="reason" rows="3" required></textarea>
                 </div>
                 <input type="hidden" id="report-post-num-input" name="post_num">
-                <button type="submit">{{ request.state.t('report_send') }}</button>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal();">{{ request.state.t('btn_cancel', 'Отмена') }}</button>
+                    <button type="submit" class="btn btn-primary">{{ request.state.t('report_send') }}</button>
+                </div>
             </form>
         </div>
         <div class="modal" id="feedback-modal" style="display: none;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                 <h3 style="margin: 0;">✉️ Связь с Админом</h3>
-                <button class="btn btn-secondary modal-close-btn" style="padding: 0 8px;">&times;</button>
+                <button class="btn btn-secondary modal-close-btn" onclick="closeModal();" style="padding: 0 8px;">&times;</button>
             </div>
             <form id="feedback-form" onsubmit="event.preventDefault(); sendFeedback(this);">
                 <div class="form-group">
@@ -705,7 +728,7 @@
         <div class="modal" id="settings-modal" style="display: none;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
                 <h3 style="margin: 0; border: none; padding: 0;">{{ request.state.t('settings_modal_title') }}</h3>
-                <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+                <button type="button" onclick="closeModal();" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
             </div>
             <form id="settings-form">
                 <div class="form-group">
@@ -828,7 +851,7 @@
                     <a href="/history/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">История просмотров</a>
                 </div>
                 <div style="margin-top: 20px; text-align: right;">
-                    <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+                    <button type="button" onclick="closeModal();" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
                 </div>
             </form>
         </div>
@@ -880,7 +903,7 @@
                     <input type="file" name="new_images" multiple>
                 </div>
                 <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
-                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('stealth-edit-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';">Отмена</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal();">Отмена</button>
                     <button type="submit" class="btn btn-primary" style="background-color: #e67e22; border-color: #d35400;">Сохранить тихо</button>
                 </div>
             </form>
@@ -948,7 +971,7 @@
         <div class="modal" id="shadow-ban-modal" style="display: none;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border-primary); padding-bottom: 10px;">
                 <h3 style="margin: 0; border: none;">{{ request.state.t('shadow_modal_title') }}</h3>
-                <button onclick="document.getElementById('shadow-ban-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+                <button onclick="closeModal();" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
             </div>
             <form id="shadow-ban-form">
                 <input type="hidden" id="shadow-ban-post-num" name="post_num">
@@ -962,7 +985,7 @@
                     </select>
                 </div>
                 <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
-                    <button type="button" onclick="document.getElementById('shadow-ban-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary">{{ request.state.t('btn_cancel') }}</button>
+                    <button type="button" onclick="closeModal();" class="btn btn-secondary">{{ request.state.t('btn_cancel') }}</button>
                     <button type="submit" class="btn btn-primary" style="background-color: purple; border-color: purple;">{{ request.state.t('btn_shadow_confirm') }}</button>
                 </div>
             </form>

@@ -1,10 +1,25 @@
 <!DOCTYPE html>
 <html lang="{{ request.state.lang or 'ru' }}">
 <head>
-    <meta charset="UTF-8">
+        <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var t = s.theme || localStorage.getItem('theme');
+                if (!t) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+                    else t = 'light';
+                }
+                if (t) {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+<meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ТГАЧ :: Центр Управления</title>
-    <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+    <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
     <link rel="icon" href="/static/favicon.ico">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -945,6 +960,15 @@
     <script src="/static/js/main.min.js?v=10.3"></script>
     <script src="/static/js/admin.js?v=10.1"></script>
     <script>
+        function esc(s) {
+            if (s === null || s === undefined) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
         let activityChartInstance = null;
         const AdminFeed = {
             socket: null,
@@ -980,7 +1004,7 @@
                     <span style="color:#2ecc71">[LIVE ${timeStr}]</span> 
                     <span style="color:orange">/${post.board_id}/</span> 
                     <a href="/${post.board_id}/res/0.html#post-${post.id}" target="_blank" style="color:#3498db">#${post.id}</a> 
-                    <b>(ID: ${post.author_id})</b>: ${content}
+                    <b>(ID: ${esc(post.author_id)})</b>: ${esc(content)}
                 `;
                 
                 container.appendChild(div);
@@ -1238,7 +1262,7 @@
                     return `
                     <div class="report-card" style="background: var(--bg-input); border: 1px solid var(--action-danger); border-left-width: 5px; padding: 15px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                         <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom: 1px solid var(--border-separator); padding-bottom: 5px;">
-                            <strong style="color: var(--action-danger); font-size: 1.1em;">${r.category}</strong>
+                            <strong style="color: var(--action-danger); font-size: 1.1em;">${esc(r.category)}</strong>
                             <span style="color: var(--text-secondary); font-size: 0.9em;">${dateStr}</span>
                         </div>
                         <div style="margin-bottom: 10px; padding: 10px; background: var(--bg-hover); border-radius: 4px; font-family: monospace; font-size: 0.95em;">
@@ -1246,10 +1270,10 @@
                                 <b>Пост #${r.post_num}</b> в /${r.board_id}/ 
                                 (<a href="${postLink}" target="_blank">Перейти к посту</a>)
                             </div>
-                            <div style="opacity: 0.8; max-height: 100px; overflow-y: auto;">${text}</div>
+                            <div style="opacity: 0.8; max-height: 100px; overflow-y: auto;">${esc(text)}</div>
                         </div>
                         <div style="margin-bottom: 15px;">
-                            <b>Причина:</b> <span style="color: var(--text-primary);">${r.reason}</span>
+                            <b>Причина:</b> <span style="color: var(--text-primary);">${esc(r.reason)}</span>
                         </div>
                         <div class="report-actions" style="display:flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
                             <button class="btn btn-secondary" onclick="AdminAction.dismissReport(${r.id})">✅ Отклонить</button>
@@ -1774,7 +1798,7 @@
                             Target: <b>/${item.target_board}/</b>
                         </div>
                         <div style="background:var(--bg-hover); padding:5px; border-radius:4px; font-style:italic; margin-bottom:10px;">
-                            "${item.comment || 'Без комментария'}"
+                            "${esc(item.comment || 'Без комментария')}"
                         </div>
                         <div style="display:flex; gap:10px; align-items:center;">
                             <select id="stream-select-${item.id}" style="width:auto; padding:5px;">
@@ -1782,7 +1806,7 @@
                                 <option value="en">EN</option>
                                 <option value="jp">JP</option>
                             </select>
-                            <button class="btn btn-primary btn-small" onclick="approveRequest(${item.id}, '${item.url}', '${item.target_board}')">✅ Одобрить</button>
+                            <button class="btn btn-primary btn-small" data-id="${esc(item.id)}" data-url="${esc(item.url)}" data-board="${esc(item.target_board)}" onclick="approveRequest(this.dataset.id, this.dataset.url, this.dataset.board)">✅ Одобрить</button>
                             <button class="btn btn-secondary btn-small" onclick="rejectRequest(${item.id})" style="color:red;">❌ Отказать</button>
                         </div>
                     </div>
@@ -2087,7 +2111,7 @@
 
                 const postsDiv = document.getElementById('ui-posts-list');
                 postsDiv.innerHTML = data.last_posts.map(p => {
-                    const txt = p.content.text ? p.content.text.substring(0, 100) : '[Медиа]';
+                    const txt = p.content.text ? esc(p.content.text.substring(0, 100)) : '[Медиа]';
                     return `<div style="border-bottom:1px solid #444; padding:2px 0;">[${new Date(p.timestamp*1000).toLocaleTimeString()}] /${p.board_id}/ #${p.id}: ${txt}</div>`;
                 }).join('');
 
@@ -2110,7 +2134,7 @@
                 const historyHtml = posts.reverse().map(p => 
                     `<div style="border-bottom:1px solid #333; padding:4px 0; font-family:monospace; font-size:12px; color:#aaa;">
                         [HISTORY ${p.time}] <span style="color:orange">/${p.board}/</span> 
-                        #${p.id} (ID: ${p.author}): ${p.text}
+                        #${esc(p.id)} (ID: ${esc(p.author)}): ${esc(p.text)}
                     </div>`
                 ).join('');
                 

@@ -207,7 +207,7 @@ const CONSTANTS = {
     MAX_FILES: 5,
     TOAST_DURATION: 3000,
     AUDIO_EXTENSIONS: /\.(mp3|ogg|wav|m4a|opus|flac|aac)$/i,
-    YOUTUBE_REGEX: /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/gi,
+    YOUTUBE_REGEX: /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i,
     CAPS_REGEX: /([А-ЯA-Z0-9\s\W]{5,})([.!?]|$)/g,
     HISTORY_KEY: 'viewed_threads_history',
     HIDDEN_POSTS_KEY: 'hidden_posts',
@@ -4044,11 +4044,133 @@ window.showThreadSummary = async (threadId) => {
     }
 };
 const PoW = {
+    modalEl: null,
+    isSolving: false,
+    cancelled: false,
+
+    createOrGetModal() {
+        let modal = document.getElementById('pow-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'pow-modal';
+            modal.innerHTML = `
+                <div class="pow-modal-card" role="dialog" aria-modal="true" aria-labelledby="pow-modal-title">
+                    <div class="pow-modal-icon" id="pow-icon">🛡️</div>
+                    <div class="pow-modal-title" id="pow-modal-title">${t('pow_modal_title', 'Выполняется проверка браузера...')}</div>
+                    <div class="pow-modal-desc" id="pow-modal-desc">${t('pow_modal_desc', 'Защита от автоматического спама (Proof of Work). Пожалуйста, подождите...')}</div>
+                    <div class="pow-progress-wrapper" id="pow-progress-wrapper">
+                        <div class="pow-progress-bar" id="pow-progress-bar"></div>
+                    </div>
+                    <div class="pow-status-info" id="pow-status-info">${t('pow_computing', 'Вычисление криптографического токена...')}</div>
+                    <div class="pow-actions" id="pow-actions" style="display: none;">
+                        <button type="button" class="btn btn-primary" id="pow-retry-btn" style="min-height: 38px;">${t('pow_retry', 'Повторить')}</button>
+                        <button type="button" class="btn btn-secondary" id="pow-cancel-btn" style="min-height: 38px;">${t('btn_cancel', 'Отмена')}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        this.modalEl = modal;
+        return modal;
+    },
+
+    showModal() {
+        const modal = this.createOrGetModal();
+        const icon = modal.querySelector('#pow-icon');
+        const title = modal.querySelector('#pow-modal-title');
+        const desc = modal.querySelector('#pow-modal-desc');
+        const progressWrapper = modal.querySelector('#pow-progress-wrapper');
+        const statusInfo = modal.querySelector('#pow-status-info');
+        const actions = modal.querySelector('#pow-actions');
+
+        if (icon) icon.textContent = '🛡️';
+        if (title) title.textContent = t('pow_modal_title', 'Выполняется проверка браузера...');
+        if (desc) desc.textContent = t('pow_modal_desc', 'Защита от автоматического спама (Proof of Work). Пожалуйста, подождите...');
+        if (progressWrapper) progressWrapper.style.display = 'block';
+        if (statusInfo) statusInfo.textContent = t('pow_computing', 'Вычисление криптографического токена...');
+        if (actions) actions.style.display = 'none';
+
+        modal.style.display = 'flex';
+        requestAnimationFrame(() => modal.classList.add('active'));
+    },
+
+    updateProgress(iterations) {
+        if (!this.modalEl) return;
+        const statusInfo = this.modalEl.querySelector('#pow-status-info');
+        if (statusInfo) {
+            statusInfo.textContent = `${t('pow_iterations', 'Итераций:')} ${iterations.toLocaleString()}`;
+        }
+    },
+
+    showSuccess() {
+        if (!this.modalEl) return;
+        const icon = this.modalEl.querySelector('#pow-icon');
+        const title = this.modalEl.querySelector('#pow-modal-title');
+        const statusInfo = this.modalEl.querySelector('#pow-status-info');
+        if (icon) icon.textContent = '✅';
+        if (title) title.textContent = t('pow_success', 'Проверка успешно пройдена!');
+        if (statusInfo) statusInfo.textContent = t('pow_ready', 'Отправка данных...');
+        setTimeout(() => this.hideModal(), 350);
+    },
+
+    showError(onRetry, onCancel) {
+        if (!this.modalEl) return;
+        const icon = this.modalEl.querySelector('#pow-icon');
+        const title = this.modalEl.querySelector('#pow-modal-title');
+        const desc = this.modalEl.querySelector('#pow-modal-desc');
+        const progressWrapper = this.modalEl.querySelector('#pow-progress-wrapper');
+        const statusInfo = this.modalEl.querySelector('#pow-status-info');
+        const actions = this.modalEl.querySelector('#pow-actions');
+        const retryBtn = this.modalEl.querySelector('#pow-retry-btn');
+        const cancelBtn = this.modalEl.querySelector('#pow-cancel-btn');
+
+        if (icon) icon.textContent = '⚠️';
+        if (title) title.textContent = t('pow_err_title', 'Ошибка проверки браузера');
+        if (desc) desc.textContent = t('pow_err_desc', 'Не удалось вычислить PoW-токен. Проверьте соединение или повторите попытку.');
+        if (progressWrapper) progressWrapper.style.display = 'none';
+        if (statusInfo) statusInfo.textContent = t('pow_err_tip', 'Нажмите "Повторить" для возобновления проверки.');
+        if (actions) actions.style.display = 'flex';
+
+        if (retryBtn) {
+            retryBtn.onclick = (e) => {
+                e.preventDefault();
+                if (typeof onRetry === 'function') onRetry();
+            };
+        }
+        if (cancelBtn) {
+            cancelBtn.onclick = (e) => {
+                e.preventDefault();
+                this.hideModal();
+                if (typeof onCancel === 'function') onCancel();
+            };
+        }
+    },
+
+    hideModal() {
+        if (!this.modalEl) return;
+        this.modalEl.classList.remove('active');
+        setTimeout(() => {
+            if (this.modalEl) this.modalEl.style.display = 'none';
+        }, 300);
+    },
+
     async solve(challenge, difficulty) {
         const prefix = "0".repeat(difficulty);
         let nonce = 0;
+        this.cancelled = false;
+
+        // Try WebWorker first for smooth UI thread
+        if (window.Worker && window.Blob && window.URL) {
+            try {
+                return await this.solveWithWorker(challenge, difficulty);
+            } catch (workerErr) {
+                console.warn("PoW WebWorker failed, falling back to main thread:", workerErr);
+            }
+        }
+
         const encoder = new TextEncoder();
         while (true) {
+            if (this.cancelled) throw new Error("PoW cancelled by user");
             nonce++;
             const str = challenge + nonce;
             const buffer = encoder.encode(str);
@@ -4056,44 +4178,122 @@ const PoW = {
             const hashArray = Array.from(new Uint8Array(hashBuffer));
             const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
             if (hashHex.startsWith(prefix)) {
+                this.updateProgress(nonce);
                 return nonce;
             }
             if (nonce % 500 === 0) {
+                this.updateProgress(nonce);
                 await new Promise(r => setTimeout(r, 0));
             }
         }
     },
+
+    solveWithWorker(challenge, difficulty) {
+        return new Promise((resolve, reject) => {
+            const workerCode = `
+                self.onmessage = async function(e) {
+                    const { challenge, difficulty } = e.data;
+                    const prefix = "0".repeat(difficulty);
+                    let nonce = 0;
+                    const encoder = new TextEncoder();
+                    while (true) {
+                        nonce++;
+                        const str = challenge + nonce;
+                        const buffer = encoder.encode(str);
+                        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+                        const hashArray = Array.from(new Uint8Array(hashBuffer));
+                        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                        if (hashHex.startsWith(prefix)) {
+                            self.postMessage({ type: 'done', nonce });
+                            return;
+                        }
+                        if (nonce % 1000 === 0) {
+                            self.postMessage({ type: 'progress', nonce });
+                        }
+                    }
+                };
+            `;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const workerUrl = URL.createObjectURL(blob);
+            const worker = new Worker(workerUrl);
+
+            worker.onmessage = (e) => {
+                if (e.data.type === 'progress') {
+                    this.updateProgress(e.data.nonce);
+                } else if (e.data.type === 'done') {
+                    worker.terminate();
+                    URL.revokeObjectURL(workerUrl);
+                    resolve(e.data.nonce);
+                }
+            };
+
+            worker.onerror = (err) => {
+                worker.terminate();
+                URL.revokeObjectURL(workerUrl);
+                reject(err);
+            };
+
+            worker.postMessage({ challenge, difficulty });
+        });
+    },
+
     async attachToForm(formData, formElement) {
-        try {
+        const btn = formElement ? formElement.querySelector('button[type="submit"]') : null;
+        let oldText = '';
+        if (btn) {
+            oldText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = t('pow_mining', '🛡️ Проверка браузера...');
+            btn.style.cursor = 'wait';
+        }
+
+        const runPoW = async () => {
+            this.showModal();
             const res = await fetch('/api/pow/challenge');
-            if (!res.ok) return;
+            if (!res.ok) {
+                this.hideModal();
+                return;
+            }
             const data = await res.json();
             const { challenge, difficulty } = data;
-            if (!difficulty || difficulty === 0) return;
-            const btn = formElement.querySelector('button[type="submit"]');
-            let oldText = '';
-            if (btn) {
-                oldText = btn.textContent;
-                btn.disabled = true;
-                btn.textContent = t('pow_mining', '🛡️ Mining...');
-                btn.style.cursor = 'wait';
+            if (!difficulty || difficulty === 0) {
+                this.hideModal();
+                return;
             }
             const nonce = await this.solve(challenge, difficulty);
             formData.append('pow_challenge', challenge);
             formData.append('pow_nonce', nonce);
-            if (btn) {
-                btn.textContent = oldText;
-                btn.disabled = false;
-                btn.style.cursor = '';
-            }
-        } catch (e) {
-            console.error("PoW Error:", e);
-            const btn = formElement.querySelector('button[type="submit"]');
-            if (btn) {
-                 btn.disabled = false;
-                 btn.textContent = 'Error';
-            }
-        }
+            this.showSuccess();
+        };
+
+        return new Promise((resolve, reject) => {
+            const attempt = async () => {
+                try {
+                    await runPoW();
+                    if (btn) {
+                        btn.textContent = oldText;
+                        btn.disabled = false;
+                        btn.style.cursor = '';
+                    }
+                    resolve();
+                } catch (e) {
+                    console.error("PoW Error:", e);
+                    this.showError(
+                        () => attempt(),
+                        () => {
+                            this.cancelled = true;
+                            if (btn) {
+                                btn.textContent = oldText;
+                                btn.disabled = false;
+                                btn.style.cursor = '';
+                            }
+                            reject(e);
+                        }
+                    );
+                }
+            };
+            attempt();
+        });
     }
 };
 const SonicID = {
@@ -8996,7 +9196,7 @@ const FormManager = {
             }
             this.hideFloating();
         } else {
-            if (this.floatingBox && window.innerWidth > 768) {
+            if (this.floatingBox) {
                 this.showFloating(event, postNum);
             } else {
                 const fallbackForm = document.querySelector('#post-form') || this.mainForm || (this.forms && this.forms[0]);
@@ -9355,12 +9555,20 @@ const VideoPopupManager = {
     _bindEvents() {
         this._boundEsc = this._handleEsc.bind(this);
         this._boundClick = this._handleClick.bind(this);
+        this._boundTouch = (e) => {
+            if (e.target === this.overlay) {
+                e.preventDefault();
+                this.close();
+            }
+        };
         document.addEventListener('keydown', this._boundEsc);
         this.overlay.addEventListener('click', this._boundClick);
+        this.overlay.addEventListener('touchend', this._boundTouch);
     },
     _unbindEvents() {
         if (this._boundEsc) document.removeEventListener('keydown', this._boundEsc);
         if (this._boundClick && this.overlay) this.overlay.removeEventListener('click', this._boundClick);
+        if (this._boundTouch && this.overlay) this.overlay.removeEventListener('touchend', this._boundTouch);
     }
 };
 const GalleryManager = {
@@ -9440,6 +9648,11 @@ const GalleryManager = {
         document.addEventListener('keydown', e => {
             if (this.els.viewer.style.display === 'none') return;
             if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) || document.querySelector('.modal.active')) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this.close();
+                return;
+            }
             if (e.key === 'ArrowRight') this.next();
             if (e.key === 'ArrowLeft') this.prev();
             if (e.key === ' ') { e.preventDefault(); this.toggleSlideshow(document.getElementById('iv-slide-btn')); }
@@ -9748,6 +9961,10 @@ const GalleryManager = {
                 }
             } 
             else if (!this.state.hasMoved && !this.state.isZooming && e.changedTouches.length === 1) {
+                const target = e.target;
+                if (!target.closest('.iv-content-element, button, .iv-button, .iv-tools, .iv-info-bar, a, input')) {
+                    this.handleBackgroundClick();
+                }
             }
 
             this.state.pan = false;
@@ -11335,12 +11552,12 @@ const PostRenderer = {
                     }
                     else if (f.type === 'video_note') {
                         if (type === 'chat') {
-                            imgContent += `<video class="post-video video-note lazy-load${blurClass}" data-src="${safeUrl}" ${safeThumb ? `poster="${safeThumb}"` : ''} autoplay loop muted playsinline onclick="event.preventDefault(); event.stopPropagation(); this.paused ? this.play() : this.pause();" style="border-radius: 50%; object-fit: cover;" referrerpolicy="no-referrer"></video>`;
+                            imgContent += `<video class="post-video video-note lazy-load${blurClass}" data-src="${safeUrl}" ${safeThumb ? `poster="${safeThumb}"` : ''} autoplay loop muted playsinline webkit-playsinline onclick="event.preventDefault(); event.stopPropagation(); this.paused ? this.play() : this.pause();" style="border-radius: 50%; object-fit: cover; background: transparent;" referrerpolicy="no-referrer"></video>`;
                         } else {
                             const badgeType = 'VIDEO'; 
                             imgContent += `<div class="file-thumb lazy-media-wrapper" data-src="${safeUrl}" data-filename="${filename}" data-type="video">
                                 ${blurHtml || ''}
-                                <video class="post-image lazy-load${blurClass}" data-src="${safeUrl}" ${safeThumb ? `poster="${safeThumb}"` : ''} preload="metadata" muted playsinline loop style="object-fit: cover; width: 100%; height: 100%; background: #000;"></video>
+                                <video class="post-image lazy-load${blurClass}" data-src="${safeUrl}" ${safeThumb ? `poster="${safeThumb}"` : ''} preload="metadata" muted playsinline webkit-playsinline loop style="object-fit: cover; width: 100%; height: 100%; background: transparent;"></video>
                                 <span class="lazy-badge">${badgeType}</span>
                                 ${bayanHtml || ''}
                             </div>`;
@@ -11353,7 +11570,7 @@ const PostRenderer = {
                             const badgeType = (f.type === 'gif' || f.type === 'animation') ? 'GIF' : 'VIDEO';
                             imgContent += `<div class="file-thumb lazy-media-wrapper" data-src="${safeUrl}" data-filename="${filename}" data-type="${f.type === 'gif' ? 'gif' : 'video'}">
                                 ${blurHtml}
-                                <video class="post-image lazy-load${blurClass}" data-src="${safeUrl}" ${safeThumb ? `poster="${safeThumb}"` : ''} preload="metadata" muted playsinline loop style="object-fit: cover; width: 100%; height: 100%; background: #000;"></video>
+                                <video class="post-image lazy-load${blurClass}" data-src="${safeUrl}" ${safeThumb ? `poster="${safeThumb}"` : ''} preload="metadata" muted playsinline webkit-playsinline loop style="object-fit: cover; width: 100%; height: 100%; background: transparent;"></video>
                                 <span class="lazy-badge">${badgeType}</span>
                                 ${bayanHtml}
                             </div>`;
@@ -14744,14 +14961,26 @@ const SmartLoader = {
             img.onerror = onError;
             img.src = targetSrc;
         } else {
-            img.onloadeddata = () => {
-                img.classList.add('loaded');
-                if (parent) parent.classList.remove('is-loading');
+            img.playsInline = true;
+            img.setAttribute('playsinline', '');
+            img.setAttribute('webkit-playsinline', '');
+            img.muted = true;
+            img.setAttribute('muted', '');
+            let loadedHandled = false;
+            const onVideoLoaded = () => {
+                if (loadedHandled) return;
+                loadedHandled = true;
+                this.onLoadFinished(img, parent, true);
             };
+            img.onloadeddata = onVideoLoaded;
+            img.onloadedmetadata = onVideoLoaded;
+            img.oncanplay = onVideoLoaded;
             img.onerror = () => {
+                if (loadedHandled) return;
+                loadedHandled = true;
                 this.onLoadFinished(img, parent, false);
             };
-            
+
             img.src = targetSrc;
             img.load();
             this.activeCount = Math.max(0, this.activeCount - 1);

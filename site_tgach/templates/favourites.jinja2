@@ -1,10 +1,25 @@
 <!DOCTYPE html>
 <html lang="{{ request.state.lang or 'ru' }}">
 <head>
-    <meta charset="UTF-8">
+        <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var t = s.theme || localStorage.getItem('theme');
+                if (!t) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+                    else t = 'light';
+                }
+                if (t) {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+<meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Избранное - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.min.css?v=10.2">
+    <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
     <link rel="icon" href="/static/favicon.ico">
 </head>
 <body {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
@@ -90,7 +105,10 @@
     </div>
     
     <div class="modal" id="report-modal" style="display: none;">
-        <h3>{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+            <button type="button" class="btn btn-secondary modal-close-btn" onclick="closeModal();" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
         <form id="report-form">
             <div class="form-group">
                 <label for="report-category">{{ request.state.t('report_category') }}</label>
@@ -106,7 +124,10 @@
                 <textarea id="report-reason" name="reason" rows="3" required></textarea>
             </div>
             <input type="hidden" id="report-post-num-input" name="post_num">
-            <button type="submit">{{ request.state.t('report_send') }}</button>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="closeModal();">{{ request.state.t('btn_cancel', 'Отмена') }}</button>
+                <button type="submit" class="btn btn-primary">{{ request.state.t('report_send') }}</button>
+            </div>
         </form>
     </div>
 
@@ -114,7 +135,7 @@
         <!-- Шапка с кнопкой закрытия -->
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
             <h3 style="margin: 0; border: none; padding: 0;">{{ request.state.t('settings_modal_title') }}</h3>
-            <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+            <button type="button" onclick="closeModal();" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
         </div>
         
         <form id="settings-form">
@@ -235,7 +256,7 @@
 
             <!-- Кнопка сохранения -->
             <div style="margin-top: 20px; text-align: right;">
-                <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+                <button type="button" onclick="closeModal();" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
             </div>
         </form>
     </div>
