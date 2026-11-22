@@ -147,6 +147,24 @@
     }
     </script>
     <link rel="canonical" href="{{ request.url }}">
+    <noscript>
+        <style>
+            #app-loader { display: none; visibility: hidden; pointer-events: none; z-index: -1; }
+            .is-hidden-by-toggle { display: block; }
+            .thread-replies { display: block; }
+            .no-js-notice {
+                background: var(--bg-secondary, #2a2a2a);
+                color: var(--text-primary, #fff);
+                padding: 10px 15px;
+                margin: 10px auto;
+                text-align: center;
+                border: 1px solid var(--accent-primary, #f90);
+                border-radius: 4px;
+                max-width: 800px;
+                font-size: 0.9em;
+            }
+        </style>
+    </noscript>
 </head>
 <body class="page-thread {% if board_id == 'wh40k' %}theme-conan override-theme{% endif %}"
     data-user-id="{{ request.state.user_hash }}" 
@@ -164,6 +182,11 @@
             <div class="loader-spinner"></div>
         </div>
     </div>
+        <noscript>
+            <div class="no-js-notice">
+                ℹ️ JavaScript отключен. Вы просматриваете легкую статическую версию TGACH.
+            </div>
+        </noscript>
     <script>
         (function() {
             try {

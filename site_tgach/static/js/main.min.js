@@ -8126,19 +8126,95 @@ const FormManager = {
         };
         document.addEventListener('paste', this._pasteListener);
     },
+    _undoStack: [],
+    _redoStack: [],
+    _lastUndoVal: null,
+    _undoSnapshotTimer: null,
+    pushUndoSnapshot(textarea, immediate = false) {
+        if (!textarea) return;
+        const val = textarea.value;
+        const selStart = textarea.selectionStart || 0;
+        const selEnd = textarea.selectionEnd || 0;
+        if (this._lastUndoVal === val) return;
+
+        const record = () => {
+            if (this._lastUndoVal === val) return;
+            this._undoStack.push({ val, selStart, selEnd });
+            if (this._undoStack.length > 100) this._undoStack.shift();
+            this._lastUndoVal = val;
+            this._redoStack = [];
+        };
+
+        if (immediate) {
+            if (this._undoSnapshotTimer) clearTimeout(this._undoSnapshotTimer);
+            record();
+        } else {
+            if (this._undoSnapshotTimer) clearTimeout(this._undoSnapshotTimer);
+            this._undoSnapshotTimer = setTimeout(record, 200);
+        }
+    },
+    undoText(textarea) {
+        if (!textarea || this._undoStack.length === 0) return;
+        const current = { val: textarea.value, selStart: textarea.selectionStart, selEnd: textarea.selectionEnd };
+        if (this._undoStack.length > 0 && this._undoStack[this._undoStack.length - 1].val === textarea.value) {
+            this._redoStack.push(this._undoStack.pop());
+        }
+        if (this._undoStack.length === 0) return;
+        const prev = this._undoStack.pop();
+        this._redoStack.push(current);
+        this._lastUndoVal = prev.val;
+        textarea.value = prev.val;
+        if (typeof textarea.setSelectionRange === 'function') {
+            textarea.setSelectionRange(prev.selStart, prev.selEnd);
+        }
+        this.autoResize(textarea);
+    },
+    redoText(textarea) {
+        if (!textarea || this._redoStack.length === 0) return;
+        const next = this._redoStack.pop();
+        this._undoStack.push({ val: textarea.value, selStart: textarea.selectionStart, selEnd: textarea.selectionEnd });
+        this._lastUndoVal = next.val;
+        textarea.value = next.val;
+        if (typeof textarea.setSelectionRange === 'function') {
+            textarea.setSelectionRange(next.selStart, next.selEnd);
+        }
+        this.autoResize(textarea);
+    },
     autoResize(el) {
         if (!el || !el.style) return;
-        if (typeof requestAnimationFrame === 'undefined') return;
-        if (el._resizeAF && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(el._resizeAF);
-        el._resizeAF = requestAnimationFrame(() => {
-            if (!el || !el.style) return;
-            el.style.height = 'auto';
-            const scrollH = el.scrollHeight || 0;
-            const maxHeight = (typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800) * 0.5;
-            el.style.height = Math.min(scrollH, maxHeight) + 'px';
-            el.style.overflowY = scrollH > maxHeight ? 'auto' : 'hidden';
-            el._resizeAF = null;
-        });
+        if (el._resizeTimer) clearTimeout(el._resizeTimer);
+        el._resizeTimer = setTimeout(() => {
+            if (typeof requestAnimationFrame === 'undefined') {
+                this._doResize(el);
+            } else {
+                if (el._resizeAF && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(el._resizeAF);
+                el._resizeAF = requestAnimationFrame(() => {
+                    this._doResize(el);
+                    el._resizeAF = null;
+                });
+            }
+        }, 80);
+    },
+    _doResize(el) {
+        if (!el || !el.style) return;
+        const prevLen = el._lastLen || 0;
+        const curLen = el.value ? el.value.length : 0;
+        el._lastLen = curLen;
+
+        if (curLen >= prevLen && el.clientHeight >= el.scrollHeight && el.clientHeight > 45) {
+            return;
+        }
+
+        const prevScrollTop = (typeof window !== 'undefined' ? window.scrollY : 0) || (typeof document !== 'undefined' && document.documentElement ? document.documentElement.scrollTop : 0);
+        el.style.height = 'auto';
+        const scrollH = el.scrollHeight || 0;
+        const maxHeight = (typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800) * 0.5;
+        const newH = Math.max(50, Math.min(scrollH, maxHeight));
+        el.style.height = newH + 'px';
+        el.style.overflowY = scrollH > maxHeight ? 'auto' : 'hidden';
+        if (typeof window !== 'undefined' && typeof window.scrollTo === 'function' && window.scrollY !== prevScrollTop) {
+            window.scrollTo(window.scrollX, prevScrollTop);
+        }
     },
     initPollCreator() {
         const btn = document.getElementById('toggle-poll-creator');
@@ -8290,14 +8366,47 @@ const FormManager = {
             if (typeof CaptchaManager !== 'undefined') {
                 CaptchaManager.moveTo(form);
             }
+            this.pushUndoSnapshot(textarea, true);
         });
+
+        let replyCheckDebounce = null;
         textarea.addEventListener('input', () => {
-            const replyInput = form.querySelector('input[name="reply_to"]');
-            if (replyInput && replyInput.value && !textarea.value.includes('>>' + replyInput.value)) {
-                this.setReplyTo(null);
-            }
+            if (replyCheckDebounce) clearTimeout(replyCheckDebounce);
+            replyCheckDebounce = setTimeout(() => {
+                const replyInput = form.querySelector('input[name="reply_to"]');
+                if (replyInput && replyInput.value && !textarea.value.includes('>>' + replyInput.value)) {
+                    this.setReplyTo(null);
+                }
+            }, 150);
             this.autoResize(textarea);
+            this.pushUndoSnapshot(textarea);
+        }, { passive: true });
+
+        // Robust native-compatible Undo / Redo handling (Ctrl+Z / Ctrl+Y)
+        textarea.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+                if (e.key === 'z' || e.code === 'KeyZ') {
+                    if (e.shiftKey) {
+                        e.preventDefault();
+                        this.redoText(textarea);
+                    } else {
+                        const beforeVal = textarea.value;
+                        let nativeSuccess = false;
+                        try {
+                            nativeSuccess = document.execCommand('undo');
+                        } catch (err) {}
+                        if (!nativeSuccess || textarea.value === beforeVal) {
+                            e.preventDefault();
+                            this.undoText(textarea);
+                        }
+                    }
+                } else if (e.key === 'y' || e.code === 'KeyY') {
+                    e.preventDefault();
+                    this.redoText(textarea);
+                }
+            }
         });
+
         form.addEventListener('submit', (e) => this.handleSubmit(e, form));
     },
     initFileHandling(form) {
@@ -12470,10 +12579,17 @@ document.body.addEventListener('click', (e) => {
         const textarea = form ? form.querySelector('textarea') : null;
         if (textarea) {
             if (fmtBtn.dataset.tag === 'quote') {
-                const start = textarea.selectionStart;
-                textarea.setRangeText('> ', start, start, 'end');
                 textarea.focus();
-                textarea.dispatchEvent(new Event('input'));
+                try {
+                    if (!document.execCommand('insertText', false, '> ')) {
+                        const start = textarea.selectionStart;
+                        textarea.setRangeText('> ', start, start, 'end');
+                    }
+                } catch (e) {
+                    const start = textarea.selectionStart;
+                    textarea.setRangeText('> ', start, start, 'end');
+                }
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
             } else {
                 wrapText(textarea, fmtBtn.dataset.tag);
             }
