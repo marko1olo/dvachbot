@@ -233,6 +233,8 @@ def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float
     for pat in currency_patterns:
         txt = re.sub(pat, "", txt)
 
+    # Сжимаем тысячи с запятой: "100,000" -> "100000", сохраняя десятичные "150,50" -> "150.50"
+    txt = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', txt)
     # Убираем внутренние пробелы между цифрами (например: "50 000" -> "50000") и приводим запятую к точке
     txt = re.sub(r'(?<=\d)\s+(?=\d)', '', txt).replace(" ", "").replace(",", ".")
 
@@ -264,7 +266,7 @@ def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float
         except (ValueError, OverflowError):
             return None
 
-    # k / m суффиксы
+    # k / m суффиксы и числа со знаками (+100, +50к)
     try:
         if txt.endswith("k") or txt.endswith("к"):
             val = float(txt[:-1]) * 1000.0
@@ -301,12 +303,17 @@ def parse_amount_and_tier(raw_text: str, default_tier: str = "sych") -> Optional
     text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)
 
     tokens = text.split()
-    if len(tokens) > 4:
+    if len(tokens) > 5:
         return None  # Обычные длинные посты борды игнорируются
 
     detected_tier = default_tier
     remaining_tokens = []
-    ignore_words = {"в", "на", "во", "to", "in", "into"}
+    ignore_words = {
+        "в", "на", "во", "to", "in", "into",
+        "вклад", "депозит", "деп", "dep", "deposit",
+        "положить", "внести", "закинуть", "кинуть", "вложить", "сохранить", "спрятать",
+        "банк", "bank", "шекелей", "рублей", "руб", "шек"
+    }
 
     for tok in tokens:
         clean_tok = tok.lower().strip(".,!?:;()[]{}")
@@ -1261,7 +1268,7 @@ async def cmd_bank(message: types.Message, board_id: str | None = None, stream: 
     await _render_bank_view(message, text, kb, category="bank", original_user_id=user_id)
 
 
-@bank_router.message(Command("deposit", "вклад", "депозит", ignore_case=True, ignore_mention=True))
+@bank_router.message(Command("deposit", "вклад", "депозит", "деп", "dep", ignore_case=True, ignore_mention=True))
 async def cmd_deposit(message: types.Message, board_id: str | None = None, stream: str = 'ru') -> None:
     """Команда открытия депозита или вызов визарда тарифов."""
     b_id = board_id or "b"
@@ -1297,8 +1304,14 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
         wallet_balance = await get_user_global_balance(db, user_id)
 
         if raw_amt in ("all", "все", "всё", "макс", "max", "весь", "всю"):
+            if wallet_balance <= 0:
+                await message.answer("❌ <b>В твоем кошельке 0 ₪!</b> Нельзя открыть вклад с нулевым балансом. Сначала заработай шекели на бирже (<code>/work</code>).", parse_mode="HTML")
+                return
             amount = math.floor(wallet_balance * 100.0) / 100.0
         elif raw_amt in ("half", "пол", "половина"):
+            if wallet_balance <= 0:
+                await message.answer("❌ <b>В твоем кошельке 0 ₪!</b> Нельзя открыть вклад с нулевым балансом. Сначала заработай шекели на бирже (<code>/work</code>).", parse_mode="HTML")
+                return
             amount = math.floor(wallet_balance * 0.5 * 100.0) / 100.0
         else:
             try:
@@ -1310,15 +1323,16 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
                     amount = float(raw_amt[:-1]) * 1000000
                 else:
                     amount = float(raw_amt)
-                if math.isnan(amount) or math.isinf(amount) or amount <= 0:
-                    await message.answer("❌ Укажи положительную сумму от 10 до 1 000 000 000 ₪, например: <code>/deposit 500 skuf</code>", parse_mode="HTML")
-                    return
-                if amount > 1_000_000_000:
-                    await message.answer("❌ Максимальная сумма разового вклада — 1 000 000 000 ₪, например: <code>/deposit 50000 sych</code>", parse_mode="HTML")
-                    return
             except (ValueError, OverflowError):
                 await message.answer("❌ Неверный формат суммы. Укажи число, например: <code>/deposit 500 skuf</code>", parse_mode="HTML")
                 return
+
+        if math.isnan(amount) or math.isinf(amount) or amount <= 0:
+            await message.answer("❌ Укажи положительную сумму от 10 до 1 000 000 000 ₪, например: <code>/deposit 500 skuf</code>", parse_mode="HTML")
+            return
+        if amount > 1_000_000_000:
+            await message.answer("❌ Максимальная сумма разового вклада — 1 000 000 000 ₪, например: <code>/deposit 50000 sych</code>", parse_mode="HTML")
+            return
 
         canon_tier = normalize_tier_id(raw_tier) or "sych"
         ok, dep, err = await create_bank_deposit(db, user_id, b_id, canon_tier, amount)
@@ -1725,7 +1739,10 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
                     return
 
         if math.isnan(amount) or math.isinf(amount) or amount <= 0:
-            await callback.answer("❌ Сумма депозита должна быть положительным числом.", show_alert=True)
+            if amount <= 0:
+                await callback.answer("❌ В кошельке 0 ₪! Нельзя открыть вклад с нулевым балансом.", show_alert=True)
+            else:
+                await callback.answer("❌ Сумма депозита должна быть положительным числом.", show_alert=True)
             answered = True
             return
         if amount > 1_000_000_000:
@@ -1737,8 +1754,8 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
         ok, dep, err = await create_bank_deposit(db, user_id, b_id, tier_id, amount)
 
         if not ok:
-            err_msg = html.escape(str(err or "Ошибка создания вклада"))
-            await callback.answer(f"❌ {err_msg}"[:199], show_alert=True)
+            clean_err = re.sub(r'<[^>]+>', '', str(err or "Ошибка создания вклада"))
+            await callback.answer(f"❌ {clean_err}"[:199], show_alert=True)
             answered = True
             return
 
@@ -2057,10 +2074,19 @@ async def handle_chat_deposit_amount(
     canon_tier = normalize_tier_id(detected_tier) or pending_deposit.get("tier_id") or "sych"
     tier_info = BANK_TIERS.get(canon_tier, BANK_TIERS["sych"])
 
+    raw_lower = (amount_str or "").strip().lower()
+    if raw_lower in ("all", "все", "всё", "макс", "max", "весь", "всю") and wallet_balance <= 0:
+        await message.answer(
+            "❌ <b>В твоем кошельке 0 ₪!</b>\n"
+            "Нельзя открыть вклад с нулевым балансом. Сначала заработай шекели на бирже (<code>/work</code>) или выиграй в казино!",
+            parse_mode="HTML"
+        )
+        return
+
     if amount is None or amount <= 0:
         await message.answer(
             "❌ <b>Неверный формат суммы вклада.</b>\n"
-            "Напиши число (например: <code>50000</code> или <code>25k</code>) или выбери готовую кнопку с процентом.",
+            "Укажи положительное число от 10 до 1 000 000 000 ₪ (например: <code>50000</code>, <code>25k</code>, <code>все</code>) или выбери готовую кнопку.",
             parse_mode="HTML"
         )
         return
@@ -2090,8 +2116,8 @@ async def handle_chat_deposit_amount(
     ok, dep, err = await create_bank_deposit(db, user_id, b_id, canon_tier, amount)
 
     if not ok:
-        err_msg = html.escape(str(err or "Ошибка оформления вклада"))
-        await message.answer(f"❌ <b>Ошибка оформления вклада:</b> {err_msg}", parse_mode="HTML")
+        clean_err = err if ("<b>" in str(err) or "<code>" in str(err)) else html.escape(str(err or "Ошибка оформления вклада"))
+        await message.answer(f"❌ <b>Ошибка оформления вклада:</b>\n{clean_err}", parse_mode="HTML")
         return
 
     clear_user_pending_deposit(user_id)

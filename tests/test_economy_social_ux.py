@@ -472,3 +472,174 @@ async def test_market_cancel_listing_ux(isolated_test_db):
     ok2, _, err2 = await cancel_market_listing(db, lot_id, seller_id, "b")
     assert not ok2
     assert "уже не активен" in err2
+
+
+# =============================================================================
+# PART 4: COMPREHENSIVE BANK CHAT PARSING & WORK PENALTY UX TESTS
+# =============================================================================
+
+def test_bank_chat_deposit_parsing_and_action_words():
+    """Verify chat message deposit parsing supports action words, slangs, comma thousands, and tiers."""
+    from bank_engine import parse_amount_and_tier, parse_deposit_amount
+
+    # Action words prefixing or suffixing amounts
+    res1 = parse_amount_and_tier("вклад 1000")
+    assert res1 is not None
+    amt_str1, tier1 = res1
+    assert parse_deposit_amount(amt_str1, 5000.0) == 1000.0
+    assert tier1 == "sych"
+
+    res2 = parse_amount_and_tier("деп 50к")
+    assert res2 is not None
+    amt_str2, tier2 = res2
+    assert parse_deposit_amount(amt_str2, 100_000.0) == 50000.0
+    assert tier2 == "sych"
+
+    res3 = parse_amount_and_tier("положить все")
+    assert res3 is not None
+    amt_str3, tier3 = res3
+    assert parse_deposit_amount(amt_str3, 25000.0) == 25000.0
+    assert tier3 == "sych"
+
+    res4 = parse_amount_and_tier("закинуть 5000 в скуф")
+    assert res4 is not None
+    amt_str4, tier4 = res4
+    assert parse_deposit_amount(amt_str4, 10000.0) == 5000.0
+    assert tier4 == "skuf"
+
+    res5 = parse_amount_and_tier("депозит 100к в ммм")
+    assert res5 is not None
+    amt_str5, tier5 = res5
+    assert parse_deposit_amount(amt_str5, 200_000.0) == 100000.0
+    assert tier5 == "mmm_abu"
+
+    res6 = parse_amount_and_tier("в банк 1000")
+    assert res6 is not None
+    amt_str6, tier6 = res6
+    assert parse_deposit_amount(amt_str6, 5000.0) == 1000.0
+
+    # Thousands with comma ("100,000" -> 100000) vs decimal with comma ("150,50" -> 150.50)
+    assert parse_deposit_amount("100,000", 500_000.0) == 100000.0
+    assert parse_deposit_amount("1,000,000", 2_000_000.0) == 1000000.0
+    assert parse_deposit_amount("150,50", 1000.0) == 150.50
+
+    # Numbers with leading '+'
+    assert parse_deposit_amount("+100", 1000.0) == 100.0
+    assert parse_deposit_amount("+50к", 100_000.0) == 50000.0
+
+    # Rejection of ordinary chat messages or poisoned input
+    assert parse_amount_and_tier("привет как дела на борде") is None
+    assert parse_amount_and_tier("лол кек чебурек") is None
+    assert parse_amount_and_tier("-500") is None
+    assert parse_amount_and_tier("nan") is None
+    assert parse_amount_and_tier("inf") is None
+    assert parse_amount_and_tier("/deposit 1000") is None  # Commands are skipped by filter
+
+
+@pytest.mark.asyncio
+async def test_bank_zero_balance_deposit_ux(isolated_test_db):
+    """Verify friendly handling when user attempts to deposit with 0 balance or invalid amount."""
+    db = isolated_test_db
+    user_id = 40001
+
+    # User has 0 balance
+    bal = await get_user_global_balance(db, user_id)
+    assert bal == 0.0
+
+    # parse_deposit_amount with 'все' returns 0.0 on 0 wallet
+    assert parse_deposit_amount("все", bal) == 0.0
+
+    # create_bank_deposit fails cleanly with explanatory message
+    ok, dep, err = await create_bank_deposit(db, user_id, "b", "sych", 0.0)
+    assert not ok
+    assert dep is None
+    assert "положительным числом больше 0" in err
+
+    # User attempts to deposit 100 ₪ but has 0 ₪ in wallet
+    ok2, dep2, err2 = await create_bank_deposit(db, user_id, "b", "sych", 100.0)
+    assert not ok2
+    assert dep2 is None
+    assert "Недостаточно шекелей в кошельке" in err2
+    assert "баланс: 0 ₪" in err2
+
+
+@pytest.mark.asyncio
+async def test_work_cooldown_and_zero_balance_penalty_ux(isolated_test_db):
+    """Verify job cooldown timers and soft overdraft protection on penalties."""
+    db = isolated_test_db
+    user_id = 50001
+    now = int(time.time())
+
+    items = {
+        "work_shifts": 10,
+        "work_cooldowns": {"bottles": now - 30},  # Ran 30s ago, 150s remaining of 180s cd
+        "recent_shifts": {}
+    }
+
+    # Shift is on cooldown -> returns friendly timer message
+    res = execute_job_action("bottles", items, user_id=user_id)
+    is_success, amt, msg, dropped = res
+    assert not is_success
+    assert amt == 0
+    assert "⏳ Кулдаун!" in msg
+    assert "мин" in msg or "сек" in msg
+
+    # Soft overdraft simulation: user balance is 0, penalty is incurred
+    user_bal = await get_user_global_balance(db, user_id)
+    assert user_bal == 0.0
+
+    # Deducting penalty with soft overdraft:
+    from common.database import deduct_user_global_balance
+    ok, rem_bal = await deduct_user_global_balance(db, user_id, "b", 50.0)
+    assert not ok
+    assert rem_bal == 0.0
+    # Balance remains strictly >= 0 (no negative balance trap)
+    final_bal = await get_user_global_balance(db, user_id)
+    assert final_bal == 0.0
+
+
+@pytest.mark.asyncio
+async def test_bank_continuous_accrual_and_early_break_penalty(isolated_test_db):
+    """Verify continuous interest accrual per second and early withdrawal penalty calculation."""
+    db = isolated_test_db
+    user_id = 60001
+    now = time.time()
+
+    await add_user_global_balance(db, user_id, "b", 1000.0)
+
+    # Open Skuf 3-day term deposit (min 50 ₪)
+    ok, dep, err = await create_bank_deposit(db, user_id, "b", "skuf", 500.0)
+    assert ok
+    dep_id = dep["id"]
+
+    # Check interest accrued after 1 day (86400s)
+    state = calculate_deposit_state(dep, current_ts=now + 86400)
+    assert state["is_locked"] is True
+    # 2.5% daily rate on 500 principal = 12.5 ₪
+    assert round(state["accrued_interest"], 1) == 12.5
+    assert round(state["total_value"], 1) == 512.5
+
+    # Attempt standard withdrawal while locked -> rejected with remaining time warning
+    ok_w, payout, principal, interest, fee, is_def, err_w = await withdraw_bank_deposit(
+        db, dep_id, user_id, "b", force_early=False
+    )
+    assert not ok_w
+    assert "заблокирован" in err_w
+    assert "При досрочном снятии" in err_w
+    assert "штраф 3%" in err_w
+
+    # Execute early withdrawal with force_early=True -> penalty applied, interest lost
+    ok_early, p_out, p_princ, p_int, p_fee, p_def, p_err = await withdraw_bank_deposit(
+        db, dep_id, user_id, "b", force_early=True
+    )
+    assert ok_early
+    assert p_int == 0.0  # All interest burnt
+    assert p_fee == 15.0  # 3% of 500 = 15.0 ₪ penalty
+    assert p_out == 485.0  # 500 - 15 = 485 ₪ payout
+    assert not p_def
+
+    # Ensure payout credited to wallet
+    wallet_after = await get_user_global_balance(db, user_id)
+    # Started with 1000, deposited 500 (balance was 500), received 485 payout = 985
+    assert wallet_after == 985.0
+
