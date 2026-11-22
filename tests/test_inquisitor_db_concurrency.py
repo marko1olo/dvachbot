@@ -364,8 +364,8 @@ async def test_watchdog_revocation_prevents_cross_task_data_corruption():
             try:
                 async with db_transaction(conn, immediate=True):
                     await conn.execute("INSERT INTO Ledger VALUES ('task1_initial');")
-                    # Simulate hang > 20s
-                    db_pool_module.db_lock._acquired_at = time.monotonic() - 25.0
+                    # Simulate hang > 35s watchdog threshold
+                    db_pool_module.db_lock._acquired_at = time.monotonic() - 40.0
                     await asyncio.sleep(0.06)
             except RuntimeError as e:
                 if "revoked by watchdog" in str(e):

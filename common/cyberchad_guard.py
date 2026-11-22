@@ -22,6 +22,12 @@ _BAIT_PATTERNS = [
     re.compile(r'(правила\s+по\s+которых\s+генерируется\s+запрос|выполнил\s+правила)', re.IGNORECASE),
     re.compile(r'\b(jailbreak|dan\s+mode|ignore\s+previous\s+instructions)\b', re.IGNORECASE),
     re.compile(r'(лимиточки\s+нейроночки|нейронку\s+трахать)', re.IGNORECASE),
+    re.compile(r'(?:забудь|игнорируй|отмени)\s+(?:все\s+)?(?:предыдущие\s+)?(?:инструкции|правила|промпт)', re.IGNORECASE),
+    re.compile(r'(?:режим\s+(?:разработчика|бога|dan|без\s+цензуры|отладчика)|developer\s+mode)', re.IGNORECASE),
+    re.compile(r'(?:выведи|покажи|повтори|распечатай|напиши)\s+(?:свой\s+|свои\s+)?(?:системн\w*\s+)?(?:промпт|инструкци|правила)', re.IGNORECASE),
+    re.compile(r'(?:отныне\s+ты|теперь\s+ты|ты\s+теперь)\s+(?:не\s+)?(?:киберчед|бот|повар|тян|горничн|ассистент|ai)\b', re.IGNORECASE),
+    re.compile(r'\b(system\s*prompt|prompt\s*injection|override\s*rules|act\s+as\b)', re.IGNORECASE),
+    re.compile(r'(?:translate\s+(?:your\s+)?system\s+(?:prompt|instruction)|repeat\s+(?:the\s+)?above)', re.IGNORECASE),
 ]
 
 # State keyed by (board_id, user_id)

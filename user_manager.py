@@ -38,7 +38,7 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
             if len(args) > 1:
                 duration_str = args[1]
         except ValueError:
-            runtime_logger.warning(f"Invalid target_id for shadowmute: {args[0]}")
+            runtime_logger.info(f"Invalid target_id for shadowmute: {args[0]}")
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         if lang == 'en':
@@ -710,7 +710,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
             delivered = True
             break
         except TelegramForbiddenError:
-            runtime_logger.warning(f"Whisper send target {target_id} blocked bot on {board_id}")
+            runtime_logger.info(f"Whisper send target {target_id} blocked bot on {board_id}")
             try:
                 import __main__ as main
                 if hasattr(main, 'purge_users_from_board_ram'):
@@ -719,14 +719,14 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
                     board_data[board_id]['users']['active'].discard(target_id)
                 await remove_user_from_board(target_id, board_id)
             except Exception as purge_err:
-                runtime_logger.warning(f"Failed to purge blocked whisper user {target_id}: {purge_err}")
+                runtime_logger.info(f"Failed to purge blocked whisper user {target_id}: {purge_err}")
             break
         except TelegramRetryAfter as e:
             delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
-            runtime_logger.warning(f"Whisper TelegramRetryAfter {delay}s for target {target_id}")
+            runtime_logger.info(f"Whisper TelegramRetryAfter {delay}s for target {target_id}")
             await asyncio.sleep(delay)
         except TelegramBadRequest as e:
-            runtime_logger.warning(f"Whisper TelegramBadRequest for target {target_id}: {e}")
+            runtime_logger.info(f"Whisper TelegramBadRequest for target {target_id}: {e}")
             break
         except Exception as e:
             runtime_logger.error(f"Whisper send failed: {e}", exc_info=True)
@@ -748,13 +748,13 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
                     parse_mode="HTML"
                 )
             except TelegramForbiddenError:
-                runtime_logger.warning(f"Admin {admin_id} blocked bot on {board_id} during whisper notify")
+                runtime_logger.info(f"Admin {admin_id} blocked bot on {board_id} during whisper notify")
             except TelegramBadRequest as e:
-                runtime_logger.warning(f"Admin whisper notify TelegramBadRequest for {admin_id}: {e}")
+                runtime_logger.info(f"Admin whisper notify TelegramBadRequest for {admin_id}: {e}")
             except TelegramRetryAfter as e:
                 await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5))
             except Exception as e:
-                runtime_logger.warning(f"Admin whisper notify failed for {admin_id}: {e}")
+                runtime_logger.info(f"Admin whisper notify failed for {admin_id}: {e}")
 
 @router.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -825,11 +825,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                             parse_mode="HTML"
                         )
                     except Exception as e:
-                        runtime_logger.warning(f"Caption edit error: {e}")
+                        runtime_logger.info(f"Caption edit error: {e}")
             success_count += 1
             await asyncio.sleep(0.04)
         except Exception as e:
-            runtime_logger.warning(f"Message edit error: {e}")
+            runtime_logger.info(f"Message edit error: {e}")
 
     # Get and update all channel copies (mirrors)
     from common.database import get_all_channel_copies
@@ -858,11 +858,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                                 parse_mode="HTML"
                             )
                         except Exception as e:
-                            runtime_logger.warning(f"Caption edit error in channel copy: {e}")
+                            runtime_logger.info(f"Caption edit error in channel copy: {e}")
                 success_count += 1
                 await asyncio.sleep(0.04)
             except Exception as e:
-                runtime_logger.warning(f"Message edit error in channel copy: {e}")
+                runtime_logger.info(f"Message edit error in channel copy: {e}")
 
     async with storage_lock:
         if post_num in messages_storage:
@@ -1108,13 +1108,13 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
                 sent_msg = await message.answer(cooldown_msg)
                 spawn_task(delete_message_after_delay(sent_msg, 15))
             except Exception as e:
-                runtime_logger.warning(f"Failed to send anime cooldown message: {e}")
+                runtime_logger.info(f"Failed to send anime cooldown message: {e}")
             try:
                 await message.delete()
             except TelegramBadRequest:
                 pass
             except Exception as e:
-                runtime_logger.warning(f"Failed to delete message during anime cooldown: {e}")
+                runtime_logger.info(f"Failed to delete message during anime cooldown: {e}")
             return False
         return True
 
@@ -1132,7 +1132,7 @@ async def _run_bounded_anime_url_fetches(
             try:
                 return index, await asyncio.wait_for(fetcher(), timeout=ANIME_URL_FETCH_TIMEOUT_SEC)
             except asyncio.TimeoutError:
-                runtime_logger.warning(
+                runtime_logger.info(
                     "anime_url_fetch_timeout %s",
                     json.dumps(
                         {
@@ -1184,7 +1184,7 @@ async def _run_bounded_anime_url_fetches(
                 results[index] = (index, result)
         except BaseException as exc:
             if not isinstance(exc, asyncio.CancelledError):
-                runtime_logger.warning(
+                runtime_logger.info(
                     "anime_url_fetch_task_error %s",
                     json.dumps(
                         {
@@ -1218,7 +1218,7 @@ async def _run_bounded_anime_downloads(
                 )
                 return index, url, result
             except asyncio.TimeoutError:
-                runtime_logger.warning(
+                runtime_logger.info(
                     "anime_download_timeout %s",
                     json.dumps(
                         {
@@ -1270,7 +1270,7 @@ async def _run_bounded_anime_downloads(
                 results[_index] = (_index, url, result)
         except BaseException as exc:
             if not isinstance(exc, asyncio.CancelledError):
-                runtime_logger.warning(
+                runtime_logger.info(
                     "anime_download_task_error %s",
                     json.dumps(
                         {
@@ -1340,7 +1340,7 @@ async def _collect_stacked_anime_downloads(
 
         retry_slots = [slot for slot in dict.fromkeys(next_slots) if slot not in successful_by_slot]
         if retry_slots and round_index < ANIME_REFILL_ROUNDS:
-            runtime_logger.warning(
+            runtime_logger.info(
                 "anime_media_refill %s",
                 json.dumps(
                     {
@@ -1426,7 +1426,7 @@ async def _process_stacked_anime_command(
         gate_acquired = True
         gate_wait_sec = time.time() - gate_wait_started
         if gate_wait_sec > 0.05:
-            runtime_logger.warning(
+            runtime_logger.info(
                 "anime_media_wait %s",
                 json.dumps(
                     {
@@ -2045,7 +2045,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
-            runtime_logger.warning(f"process_help_menu edit_text TelegramBadRequest: {e}")
+            runtime_logger.info(f"process_help_menu edit_text TelegramBadRequest: {e}")
             try:
                 from banner_manager import send_banner_message
                 await callback.message.delete()
@@ -2058,7 +2058,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
                     parse_mode="HTML"
                 )
             except Exception as e2:
-                runtime_logger.warning(f"process_help_menu banner fallback failed: {e2}")
+                runtime_logger.info(f"process_help_menu banner fallback failed: {e2}")
     except Exception as e:
         runtime_logger.warning(f"process_help_menu edit_text failed: {e}")
         try:

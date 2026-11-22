@@ -11,8 +11,8 @@ async def test_lazylock_watchdog_hung_break():
     await lock.acquire()
     assert lock.locked()
     
-    # 2. Simulate hung acquisition (> 20s ago)
-    lock._acquired_at = time.monotonic() - 25.0
+    # 2. Simulate hung acquisition (> 35s watchdog threshold)
+    lock._acquired_at = time.monotonic() - 40.0
     
     # 3. Another task tries to acquire: it should detect hung lock and break it
     async def second_task():

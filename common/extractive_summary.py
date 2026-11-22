@@ -164,10 +164,10 @@ def generate_extractive_summary(
             return "📝 <b>スレ要約:</b> この期間に目立った投稿はありませんでした。"
         return "☕️ <b>Сводка палаты:</b> За последнее время активных обсуждений зафиксировано не было."
 
-    # Style detection from prompt
+    # Style detection from prompt with strict word boundaries to avoid substring collisions (e.g. 'ордо' in 'бордовый')
     prompt_lower = (prompt or "").lower()
-    is_warhammer = any(k in prompt_lower for k in ("вархаммер", "ордо", "инквизиц", "омнисси", "адептус", "маллеус", "еретик"))
-    is_blat = any(k in prompt_lower for k in ("воровск", "поняти", "хат", "смотрящ", "маляв", "прогон", "босот"))
+    is_warhammer = bool(re.search(r'\b(вархаммер|wh40k|ордо\s+(?:маллеус|еретикус)|инквизиц\w*|омнисси\w*|адептус|маллеус|еретик\w*)\b', prompt_lower))
+    is_blat = bool(re.search(r'\b(воровск\w*|поняти\w*|хат\w*|смотрящ\w*|маляв\w*|прогон\w*|босот\w*|ауе)\b', prompt_lower))
 
     author_counts = Counter(p["author"] for p in posts)
     top_authors = [auth for auth, _ in author_counts.most_common(5)]

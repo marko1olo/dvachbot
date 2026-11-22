@@ -202,7 +202,10 @@ def clean_html_for_tg(text: str) -> str:
                 # else: non-allowed, skip
             # else: malformed tag, skip
         else:
-            out.append(part)
+            # Escape bare & and < and > in text nodes so Telegram HTML parser never errors
+            safe_part = re.sub(r'&(?!(?:amp|lt|gt|quot);)', '&amp;', part)
+            safe_part = safe_part.replace('<', '&lt;').replace('>', '&gt;')
+            out.append(safe_part)
     while stack:
         out.append(f'</{stack.pop()}>')
 
@@ -264,7 +267,7 @@ def _strip_raw_thinking_tags(text: str) -> str:
     text = re.sub(r'(?is)^\s*(?:Thinking Process|Reasoning|Thoughts?):\s*\n.*?\n\n', '', text)
 
     # 5. Standard conversational preambles
-    text = re.sub(r'(?i)^\s*(?:Here(?:\'s| is) (?:a |the )?(?:thinking process|reasoning|summary):?|Thinking Process:?|Thought:?|Reasoning:?|Assistant:)\s*', '', text)
+    text = re.sub(r'(?i)^\s*(?:Here(?:\'s| is) (?:a |the )?(?:thinking process|reasoning|summary):?|Assistant:)\s*', '', text)
 
     return text.strip()
 
@@ -447,8 +450,26 @@ def strip_cot_and_drafts(text: str) -> str:
     return result
 
 
-clean_ai_thinking = strip_cot_and_drafts
-strip_thinking_tags = strip_cot_and_drafts
+def filter_gemini_refusals(text: str) -> str:
+    if not text:
+        return ""
+    # List of refusal markers from system requirements
+    refusal_patterns = [
+        "the request asks for",
+        "i cannot fulfill this request",
+        "i am unable to transcribe",
+    ]
+    t_lower = text.strip().lower()
+    for pattern in refusal_patterns:
+        if pattern in t_lower:
+            return ""
+    return text
+
+def clean_ai_thinking(text: str) -> str:
+    text = strip_cot_and_drafts(text)
+    return filter_gemini_refusals(text)
+
+strip_thinking_tags = clean_ai_thinking
 
 
 def safe_tg_caption(text: str, max_len: int = 1024) -> str:

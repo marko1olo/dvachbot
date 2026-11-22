@@ -115,12 +115,15 @@ def _sync_wal_checkpoint_truncate():
 atexit.register(_sync_wal_checkpoint_truncate)
 
 class LazyLock:
+    WATCHDOG_TIMEOUT_SEC: float = 35.0
+
     def __init__(self):
         self._lock = None
         self._loop = None
         self._owner = None
         self._depth = 0
         self._acquired_at = 0.0
+        self._watchdog_timeout = self.WATCHDOG_TIMEOUT_SEC
         self._high_waiters = []  # list of (asyncio.Future, asyncio.Task)
         self._low_waiters = []   # list of (asyncio.Future, asyncio.Task)
 
@@ -173,7 +176,8 @@ class LazyLock:
         if self._owner is None:
             return
         now = time.monotonic()
-        is_hung = self._acquired_at > 0.0 and (now - self._acquired_at > 20.0)
+        watchdog_threshold = getattr(self, "_watchdog_timeout", self.WATCHDOG_TIMEOUT_SEC)
+        is_hung = self._acquired_at > 0.0 and (now - self._acquired_at > watchdog_threshold)
         is_dead = getattr(self._owner, "done", lambda: False)()
         if is_dead or is_hung:
             duration = f"{now - self._acquired_at:.1f}s" if self._acquired_at > 0 else "unknown"
@@ -187,7 +191,7 @@ class LazyLock:
                         stack_info = "\n" + "".join(traceback.format_stack(frames[-1]))
                 except Exception:
                     pass
-            reason = "завершился (done)" if is_dead else f"удерживает замок > 20с ({duration})"
+            reason = "завершился (done)" if is_dead else f"удерживает замок > {watchdog_threshold:.0f}с ({duration})"
             logger.critical(
                 f"🚨 [LAZY_LOCK] Принудительный сброс замка! Владелец {reason}: {owner_desc}{stack_info}"
             )
@@ -234,7 +238,9 @@ class LazyLock:
         self._check_watchdog()
 
         if self._owner is None:
-            if priority or not self.has_pending_high_priority():
+            if self.has_pending_high_priority() and not priority:
+                self._wake_next()
+            else:
                 self._owner = current
                 self._depth = 1
                 self._acquired_at = time.monotonic()
@@ -388,7 +394,7 @@ async def get_pool():
                 # и возможность использовать BEGIN IMMEDIATE для предотвращения дедлоков.
                 conn = await aiosqlite.connect(DB_NAME, timeout=30.0, isolation_level=None)
 
-                await conn.execute("PRAGMA busy_timeout = 25000;")
+                await conn.execute("PRAGMA busy_timeout = 15000;")
                 await conn.execute("PRAGMA journal_mode=WAL;")
                 await conn.execute("PRAGMA synchronous = NORMAL;")
                 await conn.execute("PRAGMA temp_store = MEMORY;")
@@ -776,54 +782,77 @@ async def execute_with_retry(func_or_coro, *args, max_retries: int = 5, base_del
                 raise
 
 
-async def safe_begin_immediate(db, priority: bool = False) -> bool:
+async def safe_begin_immediate(db, priority: bool = False, max_retries: int = 5, base_delay: float = 0.1) -> bool:
     """
     Безопасно начинает транзакцию BEGIN IMMEDIATE, если транзакция еще не активна.
     Возвращает True, если транзакция была начата этим вызовом, иначе False.
     Гарантирует владение db_lock текущей задачей и отслеживает глубину через _task_tx_depth.
+    Защищен от утечек замка при ошибках/отменах и поддерживает retry при database is locked / busy.
     """
     if db is None:
         db = await get_pool()
 
     is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
-    if not (callable(is_owned_fn) and is_owned_fn()):
+    is_owned = is_owned_fn() if callable(is_owned_fn) else False
+    lock_acquired = False
+    if not is_owned:
         await db_lock.acquire(priority=priority)
-
-    depth = _task_tx_depth.get()
-    if depth > 0:
-        return False
-
-    in_tx = getattr(db, "in_transaction", False)
-    if not in_tx:
-        conn = getattr(db, "_conn", None)
-        if conn:
-            in_tx = getattr(conn, "in_transaction", False)
-    if in_tx:
-        logger.warning("⚠️ [DB_POOL] safe_begin_immediate: обнаружена осиротевшая транзакция, сбрасываем...")
-        await reset_orphaned_transaction(db)
+        lock_acquired = True
 
     try:
-        await db.execute("BEGIN IMMEDIATE")
-        _task_tx_depth.set(depth + 1)
-        return True
-    except Exception as e:
-        err_str = str(e).lower()
-        if "cannot start a transaction within a transaction" in err_str:
-            logger.warning("⚠️ [DB_POOL] safe_begin_immediate: незакрытая транзакция, выполняем ROLLBACK и повторяем BEGIN IMMEDIATE...")
+        depth = _task_tx_depth.get()
+        if depth > 0:
+            if lock_acquired:
+                db_lock.release()
+            return False
+
+        in_tx = getattr(db, "in_transaction", False)
+        if not in_tx:
+            conn = getattr(db, "_conn", None)
+            if conn:
+                in_tx = getattr(conn, "in_transaction", False)
+        if in_tx:
+            logger.warning("⚠️ [DB_POOL] safe_begin_immediate: обнаружена осиротевшая транзакция, сбрасываем...")
+            await reset_orphaned_transaction(db)
+
+        for attempt in range(max_retries):
             try:
-                await db.execute("ROLLBACK")
-            except Exception:
-                pass
-            await db.execute("BEGIN IMMEDIATE")
-            _task_tx_depth.set(depth + 1)
-            return True
+                await db.execute("BEGIN IMMEDIATE")
+                _task_tx_depth.set(depth + 1)
+                return True
+            except Exception as e:
+                err_str = str(e).lower()
+                if "cannot start a transaction within a transaction" in err_str:
+                    logger.warning("⚠️ [DB_POOL] safe_begin_immediate: незакрытая транзакция, выполняем ROLLBACK и повторяем BEGIN IMMEDIATE...")
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    await db.execute("BEGIN IMMEDIATE")
+                    _task_tx_depth.set(depth + 1)
+                    return True
+                if ("locked" in err_str or "busy" in err_str) and attempt < max_retries - 1:
+                    if lock_acquired:
+                        db_lock.release()
+                        lock_acquired = False
+                    await asyncio.sleep(base_delay * (2 ** attempt))
+                    if not is_owned:
+                        await db_lock.acquire(priority=priority)
+                        lock_acquired = True
+                else:
+                    raise
+    except BaseException:
+        if lock_acquired:
+            is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+            if callable(is_owned_fn) and is_owned_fn():
+                db_lock.release()
         raise
 
 
 async def safe_commit(db, started_by_caller: bool = True):
     """
     Безопасно фиксирует транзакцию, если она активна и была начата данным контекстом.
-    Корректно обновляет _task_tx_depth.
+    Корректно обновляет _task_tx_depth под защитой asyncio.shield.
     """
     if not started_by_caller or db is None:
         return
@@ -839,14 +868,23 @@ async def safe_commit(db, started_by_caller: bool = True):
         _task_tx_depth.set(0)
         return
 
+    async def _do_commit():
+        try:
+            await db.execute("COMMIT")
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "no transaction is active" in err_msg or "cannot commit" in err_msg:
+                logger.warning(f"[DB_POOL] safe_commit: skipped, no active transaction: {e}")
+            else:
+                logger.error(f"[DB_POOL] safe_commit failed, rolling back: {e}")
+                try:
+                    await db.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+
     try:
-        await db.execute("COMMIT")
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "no transaction is active" in err_msg or "cannot commit" in err_msg:
-            logger.warning(f"[DB_POOL] safe_commit: skipped, no active transaction: {e}")
-        else:
-            raise
+        await asyncio.shield(_do_commit())
     finally:
         _task_tx_depth.set(max(0, depth - 1))
         if depth <= 1:
@@ -857,7 +895,7 @@ async def safe_commit(db, started_by_caller: bool = True):
 async def safe_rollback(db, started_by_caller: bool = True):
     """
     Безопасно откатывает транзакцию, если она активна и была начата данным контекстом.
-    Корректно обновляет _task_tx_depth.
+    Корректно обновляет _task_tx_depth под защитой asyncio.shield.
     """
     if not started_by_caller or db is None:
         return
@@ -873,10 +911,14 @@ async def safe_rollback(db, started_by_caller: bool = True):
         _task_tx_depth.set(0)
         return
 
+    async def _do_rollback():
+        try:
+            await db.execute("ROLLBACK")
+        except Exception:
+            pass
+
     try:
-        await db.execute("ROLLBACK")
-    except Exception:
-        pass
+        await asyncio.shield(_do_rollback())
     finally:
         _task_tx_depth.set(max(0, depth - 1))
         if depth <= 1:

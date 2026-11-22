@@ -1241,20 +1241,29 @@ async def _create_indices(db):
             pass
 
         # Market & Bank Indices
-        try:
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_status_created ON MarketListings(status, created_at DESC);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_category_status ON MarketListings(item_type, status, price ASC);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_seller_status ON MarketListings(seller_id, status);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_deposits_user_status ON BankDeposits(user_id, status);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_deposits_status ON BankDeposits(status);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_auction_bids_user ON AuctionBids(user_id);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_auctions_board ON Auctions(board_id, status);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_buyer ON MarketListings(buyer_id);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_moneydrops_donor ON MoneyDrops(donor_id);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_moneydropmessages_chat ON MoneyDropMessages(chat_id);")
-            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bottles_sender ON Bottles(sender_id);")
-        except aiosqlite.OperationalError:
-            pass
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_market_status_created ON MarketListings(status, created_at DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_market_category_status ON MarketListings(item_type, status, price ASC);",
+            "CREATE INDEX IF NOT EXISTS idx_market_seller_status ON MarketListings(seller_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_market_seller_status_created ON MarketListings(seller_id, status, created_at DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_market_buyer_status ON MarketListings(buyer_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_bank_deposits_user_status ON BankDeposits(user_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_bank_deposits_user_status_created ON BankDeposits(user_id, status, created_at DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_bank_deposits_status ON BankDeposits(status);",
+            "CREATE INDEX IF NOT EXISTS idx_bank_deposits_status_principal ON BankDeposits(status, principal);",
+            "CREATE INDEX IF NOT EXISTS idx_auction_bids_user ON AuctionBids(user_id);",
+            "CREATE INDEX IF NOT EXISTS idx_auctions_board ON Auctions(board_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_market_buyer ON MarketListings(buyer_id);",
+            "CREATE INDEX IF NOT EXISTS idx_moneydrops_donor ON MoneyDrops(donor_id);",
+            "CREATE INDEX IF NOT EXISTS idx_moneydropmessages_chat ON MoneyDropMessages(chat_id);",
+            "CREATE INDEX IF NOT EXISTS idx_bottles_sender ON Bottles(sender_id);",
+            "CREATE INDEX IF NOT EXISTS idx_usertransactions_user_cat ON UserTransactions(user_id, category, timestamp DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_users_user_board_bal ON Users(user_id, board_id, balance);",
+        ):
+            try:
+                await cursor.execute(idx_sql)
+            except aiosqlite.OperationalError:
+                pass
 
 async def _create_triggers(db):
     async with db.cursor() as cursor:
@@ -9517,17 +9526,17 @@ import math
 
 async def get_user_global_balance(db, user_id: int) -> float:
     """
-    Возвращает единый глобальный баланс пользователя со всех досок.
+    Возвращает единый глобальный баланс пользователя со всех досок (округленный до 2 знаков).
     """
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
             row = await c.fetchone()
-            return float(row[0] or 0.0) if row and row[0] is not None else 0.0
+            return round(float(row[0] or 0.0), 2) if row and row[0] is not None else 0.0
     else:
         async with db_lock:
             async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
                 row = await c.fetchone()
-                return float(row[0] or 0.0) if row and row[0] is not None else 0.0
+                return round(float(row[0] or 0.0), 2) if row and row[0] is not None else 0.0
 
 
 async def add_user_global_balance(db, user_id: int, board_id: str | None, amount: float) -> float:
@@ -9710,29 +9719,68 @@ async def transfer_user_balance(
     except Exception:
         pass
 
-    async with db_transaction(db):
-        sender_bal = await get_user_global_balance(db, sender_id)
-        if sender_bal < total_deduct:
-            return False, "insufficient_funds", sender_bal, await get_user_global_balance(db, receiver_id)
+    try:
+        async with db_transaction(db):
+            sender_bal = await get_user_global_balance(db, sender_id)
+            if sender_bal < total_deduct:
+                return False, "insufficient_funds", sender_bal, await get_user_global_balance(db, receiver_id)
 
-        ok, new_sender_bal = await deduct_user_global_balance(db, sender_id, b_id, total_deduct)
-        if not ok:
-            raise RuntimeError(f"Transfer deduction failed for sender {sender_id}")
+            ok, new_sender_bal = await deduct_user_global_balance(db, sender_id, b_id, total_deduct)
+            if not ok:
+                return False, "insufficient_funds", sender_bal, await get_user_global_balance(db, receiver_id)
 
-        new_receiver_bal = await add_user_global_balance(db, receiver_id, b_id, clean_amount)
+            new_receiver_bal = await add_user_global_balance(db, receiver_id, b_id, clean_amount)
 
-        if clean_fee > 0:
-            await add_to_abu_fund(db, clean_fee, sender_id, f"Налог за перевод от {sender_id} к {receiver_id}")
+            if clean_fee > 0:
+                await add_to_abu_fund(db, clean_fee, sender_id, f"Налог за перевод от {sender_id} к {receiver_id}")
 
-        desc_sender = description or f"Перевод анону {receiver_id}"
-        if clean_fee > 0:
-            desc_sender += f" (Налог Абу: {clean_fee} ₪)"
-        desc_receiver = description or f"Перевод от анона {sender_id}"
+            desc_sender = description or f"Перевод анону {receiver_id}"
+            if clean_fee > 0:
+                desc_sender += f" (Налог Абу: {clean_fee} ₪)"
+            desc_receiver = description or f"Перевод от анона {sender_id}"
 
-        await record_user_transaction(db, sender_id, -total_deduct, category, desc_sender)
-        await record_user_transaction(db, receiver_id, clean_amount, category, desc_receiver)
+            await record_user_transaction(db, sender_id, -total_deduct, category, desc_sender)
+            await record_user_transaction(db, receiver_id, clean_amount, category, desc_receiver)
 
-        return True, "success", new_sender_bal, new_receiver_bal
+            return True, "success", new_sender_bal, new_receiver_bal
+    except Exception as e:
+        logger.error(f"❌ [TRANSFER_BALANCE] Ошибка перевода {sender_id} -> {receiver_id}: {e}")
+        return False, "transfer_failed", await get_user_global_balance(db, sender_id), await get_user_global_balance(db, receiver_id)
+
+
+safe_transfer_balance = transfer_user_balance
+
+
+async def update_user_balance(db, user_id: int, amount: float, board_id: str | None = None) -> tuple[bool, float]:
+    """
+    Универсальный атомарный модификатор баланса пользователя:
+    - Если amount > 0: начисляет средства через add_user_global_balance.
+    - Если amount < 0: безопасно списывает средства через deduct_user_global_balance.
+    - Если amount == 0: возвращает текущий баланс.
+    Гарантирует выполнение в атомарной транзакции BEGIN IMMEDIATE под db_lock.
+    Возвращает (success: bool, new_balance: float).
+    """
+    if not isinstance(user_id, int) or user_id <= 0:
+        return False, 0.0
+    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount):
+        return False, await get_user_global_balance(db, user_id)
+    if amount == 0:
+        return True, await get_user_global_balance(db, user_id)
+    if amount > 0:
+        new_bal = await add_user_global_balance(db, user_id, board_id, amount)
+        return True, new_bal
+    else:
+        return await deduct_user_global_balance(db, user_id, board_id, abs(amount))
+
+
+async def get_user_bank_summary(db, user_id: int):
+    """
+    Возвращает сводку по активным банковским депозитам пользователя:
+    (total_principal: float, total_accrued: float, deposits: List[Dict[str, Any]]).
+    Делегирует в каноническую реализацию bank_engine.get_user_bank_summary.
+    """
+    import bank_engine
+    return await bank_engine.get_user_bank_summary(db, user_id)
 
 
 async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:
@@ -9953,16 +10001,24 @@ async def apply_daily_wealth_tax(db, current_ts: Optional[float] = None) -> tupl
                 affected += 1
                 total_confiscated += total_actual_deducted
                 # Запись в транзакционный леджер
-                desc = f"Суточный налог на богатство ({total_actual_deducted:,.0f} ₪ в Казну Абу, капитал: {total_wealth:,.0f} ₪)"
+                if wallet_deducted > 0:
+                    desc = f"Суточный налог на богатство ({wallet_deducted:,.0f} ₪ в Казну Абу, капитал: {total_wealth:,.0f} ₪)"
+                    await record_user_transaction(
+                        db,
+                        user_id=uid,
+                        amount=-round(wallet_deducted, 2),
+                        category="tax",
+                        description=desc
+                    )
                 if bank_deducted > 0:
-                    desc += f" [из банка: {bank_deducted:,.0f} ₪]"
-                await record_user_transaction(
-                    db,
-                    user_id=uid,
-                    amount=-total_actual_deducted,
-                    category="tax",
-                    description=desc
-                )
+                    b_amt_str = f"{int(bank_deducted):,}" if bank_deducted == int(bank_deducted) else f"{bank_deducted:,.2f}"
+                    await record_user_transaction(
+                        db,
+                        user_id=uid,
+                        amount=0,
+                        category="bank_wealth_tax",
+                        description=f"Налог со вклада (-{b_amt_str} ₪)"
+                    )
                 details.append({
                     "user_id": uid,
                     "tax_amount": total_actual_deducted,
@@ -10029,6 +10085,7 @@ CATEGORY_EMOJIS = {
     'work': '🔨',
     'casino': '🎰',
     'tax': '🏛️',
+    'bank_wealth_tax': '🏦',
     'drop': '🎁',
     'rob': '🔪',
     'pay': '💳',
@@ -10042,6 +10099,7 @@ CATEGORY_NAMES_RU = {
     'work': 'Работа',
     'casino': 'Казино',
     'tax': 'Налог / Казна Абу',
+    'bank_wealth_tax': 'Налог со вклада',
     'drop': 'Дроп шекелей',
     'rob': 'Ограбление',
     'pay': 'Перевод',
@@ -10063,12 +10121,15 @@ async def record_user_transaction(
     Записывает операцию изменения баланса пользователя в транзакционный леджер.
     """
     import math
-    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount == 0:
+    category_clean = (category.lower().strip() if isinstance(category, str) else 'other')
+    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount):
+        return None
+    if amount == 0 and category_clean != 'bank_wealth_tax':
         return None
 
     if not category or not isinstance(category, str):
         category = 'other'
-    category = category.lower().strip()
+    category = category_clean
     clean_desc = (description or '').strip()[:255]
     ts = timestamp if timestamp is not None else int(time.time())
 
@@ -10181,8 +10242,6 @@ async def add_to_abu_fund(db, amount: float, donor_id: int = 0, reason: str = ""
                 """,
                 (str(amount), amount)
             )
-            if hasattr(db, "commit"):
-                await db.commit()
         except Exception as e:
             logger.error(f"[ABU_FUND] Error adding {amount} to fund: {e}")
     if getattr(db_lock, "is_owned_by_current_task", lambda: False)():

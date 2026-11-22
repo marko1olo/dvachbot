@@ -145,7 +145,7 @@ def is_audio_media(file_type: str = None, mime_type: str = None, filename: str =
         if "/music/" in fn_lower or "/voice/" in fn_lower:
             return True
 
-    if data and len(data) >= 12:
+    if data and len(data) >= 4:
         # ID3 (mp3)
         if data.startswith(b"ID3"):
             return True
@@ -159,10 +159,10 @@ def is_audio_media(file_type: str = None, mime_type: str = None, filename: str =
         if data.startswith(b"OggS"):
             return True
         # RIFF WAVE
-        if data.startswith(b"RIFF") and data[8:12] == b"WAVE":
+        if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WAVE":
             return True
         # M4A / AAC
-        if data[4:8] == b"ftyp" and data[8:12] in (b"M4A ", b"mp42", b"isom") and not (b"avc1" in data[:64] or b"mp41" in data[:64]):
+        if len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in (b"M4A ", b"mp42", b"isom") and not (b"avc1" in data[:64] or b"mp41" in data[:64]):
             return True
         if data[:2] in (b"\xff\xf1", b"\xff\xf9"):
             return True
@@ -481,7 +481,7 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
     # 1. Из реестра (все необработанные файлы без ограничения по времени)
     # Исключаем записи с терминальными статусами (download_failed, format_unsupported и т.д.):
     # они могут иметь phash IS NULL, но повторная обработка бессмысленна и создаёт лог-спам.
-    _terminal_excl = f"AND tags NOT IN {_TERMINAL_TAGS_SQL}"
+    _terminal_excl = f"AND (tags IS NULL OR tags NOT IN {_TERMINAL_TAGS_SQL})"
     if exclude_list:
         ex_slice = exclude_list[:100]
         placeholders = ",".join(["?"] * len(ex_slice))
@@ -875,7 +875,7 @@ async def count_tagging_backlog(db) -> int:
     никогда не будут переобработаны, даже при phash IS NULL."""
     async with db.execute(
         f"SELECT COUNT(*) FROM FileRegistry WHERE (tags IS NULL OR tags = '' OR phash IS NULL)"
-        f" AND tags NOT IN {_TERMINAL_TAGS_SQL}"
+        f" AND (tags IS NULL OR tags NOT IN {_TERMINAL_TAGS_SQL})"
     ) as cursor:
         return (await cursor.fetchone())[0]
 
@@ -1260,28 +1260,65 @@ async def tagging_loop():
                 if tags is None and ai_response in (None, "error_api_exhausted"):
                     entry = TEMP_FAILED_FILES.get(file_id)
                     fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
-                    if fail_cnt >= 3:
-                        logger.warning(f"⚠️ [TAGGER] AI tagging failed {fail_cnt} times for {file_id[:15]}. Saving visual hashes and marking as 'no_tags'.")
-                        tags = "no_tags"
+                    if fail_cnt >= 2:
+                        default_style = "media, photo" if file_type in ("photo", "image") else (f"media, {file_type}" if file_type else "media, image")
+                        tags = default_style
+                        description = "Медиафайл (автоматическое тегирование временно недоступно из-за лимитов API)"
+                        logger.warning(f"⚠️ [TAGGER] AI tagging exhausted after {fail_cnt} attempts for {file_id[:15]}. Applying fallback tags ('{tags}') with visual hashes.")
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     elif ai_response == "error_api_exhausted":
-                        cooldown_secs = 600  # 10min — 45s was causing constant retry loops when all API keys hit limits
-                        logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt} for {file_id[:15]}). Pausing tagger for {cooldown_secs//60}m to let rate limits recover.")
+                        cooldown_secs = 30
+                        logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt}/2 for {file_id[:15]}). Temporary cooldown {cooldown_secs}s before retry.")
                         TEMP_FAILED_FILES[file_id] = {
-                            "until": time.time() + cooldown_secs + 120,
+                            "until": time.time() + 180,
                             "cnt": fail_cnt,
                         }
-                        tags = None
+                        # Save partial hashes right away so they are never lost
+                        async def _save_partial_hashes():
+                            async with db_transaction(db):
+                                await db.execute(
+                                    """
+                                    INSERT INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                                    ON CONFLICT(sha256) DO UPDATE SET
+                                        phash = COALESCE(excluded.phash, FileRegistry.phash),
+                                        blurhash = COALESCE(excluded.blurhash, FileRegistry.blurhash)
+                                    """,
+                                    (sha, phash, file_id, thumb_id, file_type, time.time(), b_hash),
+                                )
+                        try:
+                            await execute_with_retry(_save_partial_hashes, max_retries=3, base_delay=0.1)
+                        except Exception as p_err:
+                            logger.debug(f"Partial hashes save note: {p_err}")
+
                         await asyncio.sleep(cooldown_secs)
                         continue
                     else:
                         cooldown_secs = 10
-                        logger.warning(f"⏸️ [TAGGER] Internal error (attempt {fail_cnt}/3 for {file_id[:15]}). Pausing tagger for {cooldown_secs}s cooldown before next file. Skipping DB update to retry later.")
+                        logger.warning(f"⏸️ [TAGGER] Internal error (attempt {fail_cnt}/2 for {file_id[:15]}). Pausing tagger for {cooldown_secs}s cooldown before next file.")
                         TEMP_FAILED_FILES[file_id] = {
-                            "until": time.time() + 300,
+                            "until": time.time() + 180,
                             "cnt": fail_cnt,
                         }
+                        # Save partial hashes right away
+                        async def _save_partial_hashes_err():
+                            async with db_transaction(db):
+                                await db.execute(
+                                    """
+                                    INSERT INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                                    ON CONFLICT(sha256) DO UPDATE SET
+                                        phash = COALESCE(excluded.phash, FileRegistry.phash),
+                                        blurhash = COALESCE(excluded.blurhash, FileRegistry.blurhash)
+                                    """,
+                                    (sha, phash, file_id, thumb_id, file_type, time.time(), b_hash),
+                                )
+                        try:
+                            await execute_with_retry(_save_partial_hashes_err, max_retries=3, base_delay=0.1)
+                        except Exception as p_err:
+                            logger.debug(f"Partial hashes save note: {p_err}")
+
                         await asyncio.sleep(cooldown_secs)
                         continue
 

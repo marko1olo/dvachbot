@@ -55,10 +55,10 @@ BOT_RESTART_PATH = ROOT / "bot.restart"
 SOFT_RESTART_RSS_GB = float(os.environ.get("BOT_WATCHDOG_MAX_RSS_GB", "2.6"))
 SOFT_RESTART_RSS_BYTES = SOFT_RESTART_RSS_GB * 1024 * 1024 * 1024
 SCHEDULED_RESTART_HOUR_UTC = int(os.environ.get("BOT_WATCHDOG_SCHEDULED_RESTART_HOUR_UTC", "5"))
-SOFT_RESTART_GRACE_SEC = float(os.environ.get("BOT_WATCHDOG_SOFT_RESTART_GRACE_SEC", "90"))
+SOFT_RESTART_GRACE_SEC = float(os.environ.get("BOT_WATCHDOG_SOFT_RESTART_GRACE_SEC", "140"))
 HEALTH_URL = os.environ.get("BOT_HEALTH_URL", "http://127.0.0.1:8080")
-HEALTH_TIMEOUT_SEC = float(os.environ.get("BOT_WATCHDOG_HEALTH_TIMEOUT_SEC", "5"))
-HEALTH_FAIL_LIMIT = int(os.environ.get("BOT_WATCHDOG_HEALTH_FAIL_LIMIT", "3"))
+HEALTH_TIMEOUT_SEC = float(os.environ.get("BOT_WATCHDOG_HEALTH_TIMEOUT_SEC", "8"))
+HEALTH_FAIL_LIMIT = int(os.environ.get("BOT_WATCHDOG_HEALTH_FAIL_LIMIT", "4"))
 FORCE_FAIL_LIMIT = int(os.environ.get("BOT_WATCHDOG_FORCE_FAIL_LIMIT", "12"))
 SAFE_RESTART_QUEUE_LIMIT = int(
     os.environ.get("BOT_WATCHDOG_SAFE_RESTART_QUEUE_LIMIT", "0")
@@ -304,26 +304,35 @@ def _extract_latest_queue_total() -> int | None:
 
 
 def _health_probe() -> tuple[bool, str]:
-    try:
-        with urllib.request.urlopen(HEALTH_URL, timeout=HEALTH_TIMEOUT_SEC) as response:
-            body = response.read(4096).decode("utf-8", errors="replace")
-            status_code = getattr(response, "status", 200)
-            if status_code != 200:
-                return False, f"http_{status_code} {body[:300]}"
-            try:
-                payload = json.loads(body)
-            except json.JSONDecodeError:
-                return False, f"bad_json {body[:300]}"
-            status = payload.get("status")
-            if status != "ok":
-                return False, f"status={status} body={body[:300]}"
-            return True, body[:300]
-    except urllib.error.HTTPError as exc:
-        body = exc.read(4096).decode("utf-8", errors="replace")
-        return False, f"http_error={exc.code} {body[:300]}"
-    except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
+    urls_to_try = [HEALTH_URL]
+    if not HEALTH_URL.endswith("/healthz"):
+        urls_to_try.append(f"{HEALTH_URL.rstrip('/')}/healthz")
 
+    last_err = ""
+    for url in urls_to_try:
+        try:
+            with urllib.request.urlopen(url, timeout=HEALTH_TIMEOUT_SEC) as response:
+                body = response.read(4096).decode("utf-8", errors="replace")
+                status_code = getattr(response, "status", 200)
+                if status_code != 200:
+                    last_err = f"http_{status_code} {body[:300]}"
+                    continue
+                try:
+                    payload = json.loads(body)
+                    status = payload.get("status")
+                    if status != "ok":
+                        return False, f"status={status} body={body[:300]}"
+                    return True, body[:300]
+                except json.JSONDecodeError:
+                    if "bot is alive" in body.lower() or "ok" in body.lower():
+                        return True, body[:300]
+                    return False, f"bad_json {body[:300]}"
+        except urllib.error.HTTPError as exc:
+            body = exc.read(4096).decode("utf-8", errors="replace")
+            last_err = f"http_error={exc.code} {body[:300]}"
+        except Exception as exc:
+            last_err = f"{type(exc).__name__}: {exc}"
+    return False, last_err
 
 def _kill_pid_tree(pid: int, reason: str) -> None:
     if pid <= 0:
@@ -373,15 +382,37 @@ def _kill_tree(process: subprocess.Popen, reason: str) -> None:
 
 def _clear_restart_request(context: str = "") -> None:
     try:
-        BOT_RESTART_PATH.unlink(missing_ok=True)
-        if context:
-            log(f"Cleared {BOT_RESTART_PATH.name} {context}".strip())
+        if BOT_RESTART_PATH.is_file() or BOT_RESTART_PATH.is_symlink():
+            BOT_RESTART_PATH.unlink(missing_ok=True)
+            if context:
+                log(f"Cleared {BOT_RESTART_PATH.name} {context}".strip())
     except OSError as exc:
         log(f"Could not remove {BOT_RESTART_PATH.name}: {exc}")
-        try:
-            BOT_RESTART_PATH.write_text("", encoding="utf-8")
-        except OSError:
-            pass
+        # DO NOT write an empty file upon error! Writing "" creates a phantom 0-byte file that triggers false restarts.
+
+
+def _is_restart_requested(child_start_time: float | None = None) -> bool:
+    try:
+        if not BOT_RESTART_PATH.is_file():
+            return False
+        st = BOT_RESTART_PATH.stat()
+        if st.st_size == 0:
+            # 0-byte file: remove cleanly, never treat as restart request
+            try:
+                BOT_RESTART_PATH.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        if child_start_time is not None and st.st_mtime < child_start_time:
+            # Stale restart request predating current child launch; ignore and clean up
+            try:
+                BOT_RESTART_PATH.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        return True
+    except OSError:
+        return False
 
 
 def _clear_stale_heartbeat(context: str = "") -> None:
@@ -635,12 +666,15 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                 is_child_draining = bool(
                     heartbeat
                     and heartbeat.get("pid") == child.pid
+                    and float(heartbeat.get("ts", 0)) >= start_time
                     and (heartbeat.get("drain_shutdown_requested") or heartbeat.get("is_shutting_down"))
                 )
-                if BOT_RESTART_PATH.exists() or is_child_draining:
+                restart_requested = _is_restart_requested(child_start_time=start_time)
+                if restart_requested or is_child_draining:
                     soft_restart_requested_at = time.time()
+                    reason = "child drain heartbeat" if is_child_draining else "bot.restart file"
                     log(
-                        f"Detected graceful shutdown/restart for pid={child.pid}; "
+                        f"Detected graceful shutdown/restart ({reason}) for pid={child.pid}; "
                         f"armed soft restart grace period ({SOFT_RESTART_GRACE_SEC:.0f}s)"
                     )
 
@@ -759,26 +793,38 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                         queue_total is None
                         or queue_total <= SAFE_RESTART_QUEUE_LIMIT
                     )
-                    deadlock_detected = not heartbeat_fresh
                     deadlock_log_age = _file_age_sec(LOG_DIR / "bot_deadlock_watchdog.log")
                     recent_deadlock_dump = deadlock_log_age is not None and deadlock_log_age <= 90.0
 
-                    # Force restart unconditionally if health fails for FORCE_FAIL_LIMIT cycles
+                    # A true deadlock requires: heartbeat stale AND logs completely stale
+                    deadlock_detected = (not heartbeat_fresh and logs_stale)
+
+                    # Force restart unconditionally if health fails for FORCE_FAIL_LIMIT cycles (>= 12 cycles = 3 min)
                     force_restart = health_failures >= FORCE_FAIL_LIMIT
 
-                    if health_failures >= HEALTH_FAIL_LIMIT and (
-                        deadlock_detected or recent_deadlock_dump or logs_stale or stale_status or force_restart
-                    ):
-                        restart_reason = (
-                            f"event_loop_deadlock (heartbeat_age={heartbeat_age}s, failures={health_failures})"
-                            if deadlock_detected
-                            else (f"deadlock_dump_detected (failures={health_failures})"
-                            if recent_deadlock_dump
-                            else details)
-                        )
-                        _kill_tree(child, restart_reason)
-                        _close_child_log(child)
-                        return False
+                    # If the bot is actively writing logs during a load spike (stdout_age < LOG_STALE_SEC),
+                    # do NOT kill it prematurely unless force_restart is reached
+                    if health_failures >= HEALTH_FAIL_LIMIT:
+                        should_restart = force_restart or recent_deadlock_dump or deadlock_detected or (stale_status and logs_stale)
+                        if should_restart:
+                            restart_reason = (
+                                f"event_loop_deadlock (heartbeat_age={heartbeat_age}s, logs_stale=True, failures={health_failures})"
+                                if deadlock_detected
+                                else (f"deadlock_dump_detected (failures={health_failures})"
+                                if recent_deadlock_dump
+                                else (f"force_restart_limit_reached (failures={health_failures})"
+                                if force_restart
+                                else details))
+                            )
+                            _kill_tree(child, restart_reason)
+                            _close_child_log(child)
+                            return False
+                        else:
+                            log(
+                                f"Health probe failed ({health_failures}/{HEALTH_FAIL_LIMIT}: {details}), "
+                                f"but child is actively working (stdout_age={stdout_age:.1f}s, runtime_age={runtime_age:.1f}s, queue_total={queue_total}). "
+                                "Deferring restart to prevent killing active broadcast."
+                            )
 
             try:
                 child.wait(timeout=POLL_SEC)

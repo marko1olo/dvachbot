@@ -321,7 +321,7 @@ async def test_giant_dump_pre_truncation_prevents_413():
     giant_text = "Анон: пост в треде длинный текст. " * 3000  # ~100k chars
     captured_dumps = []
 
-    async def mock_gemini_call(http_client, model_name, api_key, system_instruction, user_text, temperature, timeout):
+    async def mock_gemini_call(http_client, model_name, api_key, system_instruction, user_text, temperature, timeout, *args, **kwargs):
         captured_dumps.append(user_text)
         return "Summary of giant thread", "stop"
 

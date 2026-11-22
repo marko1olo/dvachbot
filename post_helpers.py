@@ -5,6 +5,13 @@ import time
 import re
 from functools import lru_cache
 from aiogram import Bot
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from typing import Any
 from shared_state import *
 try:
@@ -29,6 +36,332 @@ def safe_truncate_post(text: str, max_chars: int = 4096) -> str:
     safe_limit = max(10, max_chars - headroom)
     re_truncated = safe_html_truncate(text, max_units=safe_limit)
     return balance_html_tags(re_truncated)
+
+
+def _is_harmless_edit_error(err_msg: str) -> bool:
+    return (
+        "message is not modified" in err_msg
+        or "specified new message content and reply markup are exactly the same" in err_msg
+        or "message to edit not found" in err_msg
+        or "message can't be edited" in err_msg
+        or "chat not found" in err_msg
+        or "user not found" in err_msg
+        or "bot was blocked by the user" in err_msg
+    )
+
+
+def _is_harmless_delete_error(err_msg: str) -> bool:
+    return (
+        "message to delete not found" in err_msg
+        or "message to be deleted not found" in err_msg
+        or "message can't be deleted" in err_msg
+        or "there is no text in the message to edit" in err_msg
+        or "chat not found" in err_msg
+        or "user not found" in err_msg
+        or "bot was blocked by the user" in err_msg
+    )
+
+
+def _is_telegram_parse_error(err_msg: str) -> bool:
+    return (
+        "can't parse entities" in err_msg
+        or "can't find end tag" in err_msg
+        or "unsupported start tag" in err_msg
+        or "unmatched end tag" in err_msg
+        or "can't parse message text" in err_msg
+    )
+
+
+async def safe_edit_message_text(
+    bot: Bot,
+    chat_id: int | str,
+    message_id: int,
+    text: str,
+    parse_mode: str | None = "HTML",
+    reply_markup: Any = None,
+    request_timeout: float | int | None = 10,
+    fallback_to_caption: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """
+    Safely edits the text of a message.
+    - Truncates to max 4096 characters respecting HTML tags.
+    - Silently handles MessageNotModified and MessageCantBeEdited.
+    - If Telegram returns 'there is no text in the message to edit',
+      transparently falls back to editing the caption (clamping to 1024 chars).
+    - If HTML entity parsing fails, falls back to plain text.
+    """
+    if not text:
+        text = "."
+    truncated_text = safe_truncate_post(text, 4096)
+    try:
+        return await bot.edit_message_text(
+            text=truncated_text,
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            request_timeout=request_timeout,
+            **kwargs,
+        )
+    except TelegramBadRequest as e:
+        err_msg = (getattr(e, "message", None) or str(e)).lower()
+        if "message is not modified" in err_msg or "exactly the same" in err_msg:
+            return True
+        if fallback_to_caption and "there is no text in the message to edit" in err_msg:
+            caption_text = safe_truncate_post(text, 1024)
+            try:
+                return await bot.edit_message_caption(
+                    caption=caption_text,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    request_timeout=request_timeout,
+                    **kwargs,
+                )
+            except TelegramBadRequest as cap_err:
+                cap_err_msg = (getattr(cap_err, "message", None) or str(cap_err)).lower()
+                if "message is not modified" in cap_err_msg or "exactly the same" in cap_err_msg:
+                    return True
+                if _is_telegram_parse_error(cap_err_msg):
+                    plain_cap = re.sub(r"<[^>]+>", "", caption_text)
+                    try:
+                        return await bot.edit_message_caption(
+                            caption=plain_cap[:1024],
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode=None,
+                            reply_markup=reply_markup,
+                            request_timeout=request_timeout,
+                            **kwargs,
+                        )
+                    except Exception:
+                        return None
+                if _is_harmless_edit_error(cap_err_msg):
+                    return None
+                return None
+            except Exception:
+                return None
+        if _is_telegram_parse_error(err_msg):
+            plain_text = re.sub(r"<[^>]+>", "", truncated_text)
+            try:
+                return await bot.edit_message_text(
+                    text=plain_text[:4096],
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode=None,
+                    reply_markup=reply_markup,
+                    request_timeout=request_timeout,
+                    **kwargs,
+                )
+            except Exception:
+                return None
+        if _is_harmless_edit_error(err_msg):
+            return None
+        return None
+    except TelegramForbiddenError:
+        return None
+    except TelegramRetryAfter as e:
+        wait_s = float(getattr(e, "retry_after", 1) or 1)
+        if wait_s <= 3.0:
+            await asyncio.sleep(wait_s + 0.1)
+            try:
+                return await bot.edit_message_text(
+                    text=truncated_text,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    request_timeout=request_timeout,
+                    **kwargs,
+                )
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
+
+async def safe_edit_message_caption(
+    bot: Bot,
+    chat_id: int | str,
+    message_id: int,
+    caption: str,
+    parse_mode: str | None = "HTML",
+    reply_markup: Any = None,
+    request_timeout: float | int | None = 10,
+    fallback_to_text: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """
+    Safely edits the caption of a media message.
+    - Truncates to max 1024 characters respecting HTML tags.
+    - Silently handles MessageNotModified and MessageCantBeEdited.
+    - If Telegram returns 'there is no caption in the message to edit',
+      transparently falls back to editing the text (up to 4096 chars).
+    - If HTML entity parsing fails, falls back to plain text.
+    """
+    truncated_caption = safe_truncate_post(caption or "", 1024)
+    try:
+        return await bot.edit_message_caption(
+            caption=truncated_caption,
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            request_timeout=request_timeout,
+            **kwargs,
+        )
+    except TelegramBadRequest as e:
+        err_msg = (getattr(e, "message", None) or str(e)).lower()
+        if "message is not modified" in err_msg or "exactly the same" in err_msg:
+            return True
+        if fallback_to_text and ("there is no caption" in err_msg or "message to edit not found" in err_msg):
+            text_val = safe_truncate_post(caption or "", 4096)
+            try:
+                return await bot.edit_message_text(
+                    text=text_val,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    request_timeout=request_timeout,
+                    **kwargs,
+                )
+            except TelegramBadRequest as txt_err:
+                txt_err_msg = (getattr(txt_err, "message", None) or str(txt_err)).lower()
+                if "message is not modified" in txt_err_msg or "exactly the same" in txt_err_msg:
+                    return True
+                if _is_telegram_parse_error(txt_err_msg):
+                    plain_txt = re.sub(r"<[^>]+>", "", text_val)
+                    try:
+                        return await bot.edit_message_text(
+                            text=plain_txt[:4096],
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode=None,
+                            reply_markup=reply_markup,
+                            request_timeout=request_timeout,
+                            **kwargs,
+                        )
+                    except Exception:
+                        return None
+                if _is_harmless_edit_error(txt_err_msg):
+                    return None
+                return None
+            except Exception:
+                return None
+        if _is_telegram_parse_error(err_msg):
+            plain_cap = re.sub(r"<[^>]+>", "", truncated_caption)
+            try:
+                return await bot.edit_message_caption(
+                    caption=plain_cap[:1024],
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode=None,
+                    reply_markup=reply_markup,
+                    request_timeout=request_timeout,
+                    **kwargs,
+                )
+            except Exception:
+                return None
+        if _is_harmless_edit_error(err_msg):
+            return None
+        return None
+    except TelegramForbiddenError:
+        return None
+    except TelegramRetryAfter as e:
+        wait_s = float(getattr(e, "retry_after", 1) or 1)
+        if wait_s <= 3.0:
+            await asyncio.sleep(wait_s + 0.1)
+            try:
+                return await bot.edit_message_caption(
+                    caption=truncated_caption,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    request_timeout=request_timeout,
+                    **kwargs,
+                )
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
+
+async def safe_edit_message_media(
+    bot: Bot,
+    chat_id: int | str,
+    message_id: int,
+    media: Any,
+    reply_markup: Any = None,
+    request_timeout: float | int | None = 10,
+    **kwargs: Any,
+) -> Any:
+    """
+    Safely edits message media, silencing harmless Telegram errors.
+    """
+    try:
+        return await bot.edit_message_media(
+            media=media,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+            request_timeout=request_timeout,
+            **kwargs,
+        )
+    except TelegramBadRequest as e:
+        err_msg = (getattr(e, "message", None) or str(e)).lower()
+        if "message is not modified" in err_msg or "exactly the same" in err_msg:
+            return True
+        if _is_harmless_edit_error(err_msg):
+            return None
+        return None
+    except TelegramForbiddenError:
+        return None
+    except Exception:
+        return None
+
+
+async def safe_delete_message(
+    bot: Bot,
+    chat_id: int | str,
+    message_id: int,
+    request_timeout: float | int | None = 10,
+    **kwargs: Any,
+) -> bool:
+    """
+    Safely deletes a message without raising or logging spurious errors.
+    Returns True if deletion succeeded or if message was already gone.
+    Returns False on non-recoverable error (e.g. forbidden/permission denied).
+    """
+    if not bot or not chat_id or not message_id:
+        return False
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
+        return True
+    except TelegramBadRequest as e:
+        err_msg = (getattr(e, "message", None) or str(e)).lower()
+        if _is_harmless_delete_error(err_msg):
+            return True
+        return False
+    except TelegramForbiddenError:
+        return False
+    except TelegramRetryAfter as e:
+        wait_s = float(getattr(e, "retry_after", 1) or 1)
+        if wait_s <= 3.0:
+            await asyncio.sleep(wait_s + 0.1)
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
+                return True
+            except Exception:
+                return False
+        return False
+    except Exception:
+        return False
 
 from summarize import summarize_text_with_hf
 from common.database import create_post, update_post_content, get_all_channel_copies, get_post_copies, delete_post_by_num
@@ -258,57 +591,11 @@ async def _get_author_prefix(author_id: int, board_id: str = "") -> str:
                         badge_parts.append("🇷🇺")
 
                     # 3. Wardrobe equipment perks & badges
-                    from wardrobe_engine import get_equipped_gear, get_wardrobe_total_stats
-                    equipped = get_equipped_gear(items, current_time=now_ts)
-                    w_stats = get_wardrobe_total_stats(items, current_time=now_ts)
+                    # Removed per user requirement & anonymity policy: wardrobe emojis
+                    # (helmets, crowns, monocles, alien, etc.) must NEVER leak into post headers.
+                    pass
 
-                    # Crown item gives 👑 or 👑👑
-                    has_golden_crown = (
-                        (equipped.get("head") and equipped["head"]["id"] == "hat_golden_crown")
-                        or items.get("equipped_head") == "hat_golden_crown"
-                    )
-                    has_crown = (
-                        (equipped.get("head") and equipped["head"]["id"] == "hat_crown")
-                        or items.get("equipped_head") == "hat_crown"
-                        or items.get("crown")
-                    )
-                    if has_golden_crown:
-                        badge_parts.append("👑👑")
-                    elif has_crown:
-                        badge_parts.append("👑")
 
-                    # Monocle item (face_monocle) gives [⚜️ Олигарх] badge
-                    has_monocle = (
-                        (equipped.get("face") and equipped["face"]["id"] == "face_monocle")
-                        or items.get("equipped_face") == "face_monocle"
-                        or items.get("monocle")
-                    )
-                    if has_monocle:
-                        badge_parts.append("[⚜️ Олигарх]")
-
-                    # Cyber visor gives 🥽
-                    has_visor = (
-                        (equipped.get("face") and equipped["face"]["id"] == "face_cyber_visor")
-                        or items.get("equipped_face") == "face_cyber_visor"
-                    )
-                    if has_visor:
-                        badge_parts.append("🥽")
-
-                    # Luxury watch gives ⌚
-                    has_watch = (
-                        items.get("equipped_wrist") in ("luxury_watch", "rolex", "watch_gold", "watch")
-                        or items.get("luxury_watch")
-                        or items.get("rolex")
-                        or items.get("watch")
-                        or (equipped.get("accessory") and "watch" in str(equipped["accessory"].get("id", "")).lower())
-                    )
-                    if has_watch:
-                        badge_parts.append("⌚")
-
-                    # Other wardrobe set / head compact icons
-                    compact = w_stats.get("compact_post_icon", "").strip()
-                    if compact and compact not in badge_parts and compact not in ("👑", "👑👑", "⚜️", "🥽"):
-                        badge_parts.append(compact)
 
                 except Exception:
                     pass
@@ -1037,39 +1324,13 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
                 continue
 
 async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
-    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
-    import aiohttp
     deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
     if not deleter:
         return False
-    try:
-        await deleter.delete_message(uid, mid)
-        return True
-    except (TelegramBadRequest, TelegramForbiddenError):
-        if deleter != bot_instance and bot_instance:
-            try:
-                await bot_instance.delete_message(uid, mid)
-                return True
-            except Exception:
-                pass
-        return False
-    except TelegramRetryAfter as e:
-        wait_s = float(getattr(e, "retry_after", 1) or 1)
-        await asyncio.sleep(min(wait_s + 0.2, 5.0))
-        try:
-            await deleter.delete_message(uid, mid)
-            return True
-        except Exception:
-            return False
-    except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
-        await asyncio.sleep(0.5)
-        try:
-            await deleter.delete_message(uid, mid)
-            return True
-        except Exception:
-            return False
-    except Exception:
-        return False
+    res = await safe_delete_message(deleter, uid, mid)
+    if not res and deleter != bot_instance and bot_instance:
+        res = await safe_delete_message(bot_instance, uid, mid)
+    return res
 
 async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
     CHUNK_SIZE = 47

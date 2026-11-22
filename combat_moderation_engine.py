@@ -15,6 +15,9 @@ import time
 import asyncio
 import random
 import logging
+import json
+import os
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
@@ -24,6 +27,34 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from common.db_pool import get_pool
 from common.anon_identity import get_anon_id
+
+COOLDOWN_STORAGE = "combat_cooldowns.json"
+
+def save_combat_cooldowns():
+    """Saves combat cooldowns to a file."""
+    try:
+        data = {f"{k[0]}:{k[1]}": v for k, v in list(_TARGET_PAIR_LAST_ATTACK.items())}
+        with open(COOLDOWN_STORAGE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Failed to save combat cooldowns: {e}")
+
+def load_combat_cooldowns():
+    """Loads combat cooldowns from a file."""
+    if not os.path.exists(COOLDOWN_STORAGE):
+        return
+    try:
+        with open(COOLDOWN_STORAGE, "r") as f:
+            data = json.load(f)
+            now = time.time()
+            cutoff_pair = now - 1800.0
+            for k, v in data.items():
+                attacker_id, target_id = map(int, k.split(":"))
+                val = float(v)
+                if cutoff_pair < val <= now + 1800.0:
+                    _TARGET_PAIR_LAST_ATTACK[(attacker_id, target_id)] = val
+    except Exception as e:
+        logger.error(f"Failed to load combat cooldowns: {e}")
 
 logger = logging.getLogger("runtime")
 
@@ -38,12 +69,18 @@ def calculate_attacker_false_report_fine(attacker_balance: Optional[Union[float,
     """
     Масштабирует штраф за ложный донос / сорванную атаку от капитала атакующего:
     max(500, int(attacker_balance * 0.05)) с жестким потолком (cap) 200,000 ₪.
+    Защищен от NaN, Infinity и отрицательных балансов.
     """
-    if attacker_balance is None or attacker_balance <= 0:
+    if attacker_balance is None or not isinstance(attacker_balance, (int, float)):
         return float(ATTACKER_FALSE_REPORT_FINE)
-    b = float(attacker_balance)
-    fine = max(float(ATTACKER_FALSE_REPORT_FINE), float(int(b * 0.05)))
-    return float(min(fine, 200000.0))
+    try:
+        b = float(attacker_balance)
+        if math.isnan(b) or math.isinf(b) or b <= 0.0:
+            return float(ATTACKER_FALSE_REPORT_FINE)
+        fine = max(float(ATTACKER_FALSE_REPORT_FINE), float(int(b * 0.05)))
+        return float(min(fine, 200000.0))
+    except (ValueError, TypeError, OverflowError):
+        return float(ATTACKER_FALSE_REPORT_FINE)
 
 
 calculate_bail_cost = calculate_attacker_false_report_fine
@@ -54,6 +91,8 @@ _COMBAT_ENGINE_LOCK = asyncio.Lock()
 
 # Target attack records: (attacker_id, target_id) -> last_attack_ts
 _TARGET_PAIR_LAST_ATTACK: Dict[Tuple[int, int], float] = {}
+
+load_combat_cooldowns()
 
 @dataclass
 class CombatAppealSession:
@@ -115,6 +154,7 @@ def record_combat_attack(attacker_id: int, target_id: int, weapon_type: str):
     now = time.time()
     _ATTACKER_COMBAT_HISTORY[attacker_id].append((now, target_id, weapon_type))
     _TARGET_PAIR_LAST_ATTACK[(attacker_id, target_id)] = now
+    save_combat_cooldowns()
 
 
 def check_pair_attack_cooldown(attacker_id: int, target_id: int, cooldown_seconds: float = 900.0) -> Tuple[bool, int]:
@@ -122,10 +162,18 @@ def check_pair_attack_cooldown(attacker_id: int, target_id: int, cooldown_second
     Prevents an attacker from griefing the EXACT SAME target repeatedly within the cooldown window.
     Returns (is_blocked, remaining_seconds). Default 900s, configurable for live dynamic combat (e.g. 180s).
     """
+    if cooldown_seconds <= 0.0:
+        return False, 0
     now = time.time()
     last_ts = _TARGET_PAIR_LAST_ATTACK.get((attacker_id, target_id), 0.0)
-    if now - last_ts < cooldown_seconds:
-        return True, int(cooldown_seconds - (now - last_ts))
+    if last_ts <= 0.0:
+        return False, 0
+    elapsed = now - last_ts
+    if elapsed < 0:
+        return True, int(round(cooldown_seconds))
+    if elapsed < cooldown_seconds:
+        rem = max(1, int(round(cooldown_seconds - elapsed)))
+        return True, rem
     return False, 0
 
 
@@ -182,13 +230,14 @@ async def check_target_grief_protection(message: Any, target_id: int, user_id: i
         rem_min = rem // 60
         rem_sec = rem % 60
         time_str = f"{rem_min}м {rem_sec}с" if rem_min > 0 else f"{rem_sec}с"
-        await message.answer(
-            f"🔰 <b>ИММУНИТЕТ ЦЕЛИ ОТ ГРИФЕРСТВА!</b>\n\n"
-            f"Анон еще отходит от предыдущей разборки и находится под защитой борды.\n"
-            f"Повторное нападение на этого анона возможно через <b>{time_str}</b>.\n"
-            f"<i>(Оружие сохранено в твоем инвентаре)</i>",
-            parse_mode="HTML"
-        )
+        if message and hasattr(message, "answer"):
+            await message.answer(
+                f"🔰 <b>ИММУНИТЕТ ЦЕЛИ ОТ ГРИФЕРСТВА!</b>\n\n"
+                f"Анон еще отходит от предыдущей разборки и находится под защитой борды.\n"
+                f"Повторное нападение на этого анона возможно через <b>{time_str}</b>.\n"
+                f"<i>(Оружие сохранено в твоем инвентаре)</i>",
+                parse_mode="HTML"
+            )
         return True
     return False
 
@@ -480,6 +529,12 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
     try:
         from main import deduct_user_global_balance
         await deduct_user_global_balance(db, sess.attacker_id, sess.board_id, fine_amount)
+        from common.database import record_user_transaction, add_to_abu_fund
+        await record_user_transaction(
+            db, sess.attacker_id, -fine_amount, 'fine',
+            f'Штраф за сорванный донос на анона [ID:{sess.target_id}]'
+        )
+        await add_to_abu_fund(db, int(fine_amount))
     except Exception as e:
         logger.error(f"Error fining attacker {sess.attacker_id}: {e}")
 

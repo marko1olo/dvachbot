@@ -62,6 +62,17 @@ def test_generate_extractive_summary_blat_persona():
     res = generate_extractive_summary(sample, prompt="Ты Кибер-Смотрящий, раскидай по понятиям")
     assert "Кибер-Смотрящ" in res or "хат" in res or "поняти" in res
 
+def test_generate_extractive_summary_blat_bordovye_no_waha_collision():
+    sample = "\n".join([
+        f"Бродяга_{i}: В хате передел масти. Кто-то крысит пайку у смотрящего в камере номер {i}."
+        for i in range(10)
+    ])
+    # Prompt contains 'бордовый' and 'на борде' which previously triggered 'ордо' waha false positive
+    res = generate_extractive_summary(sample, prompt="Ты Кибер-Смотрящий, раскидай по понятиям маляву на борде, называй анонов по их бордовым именам")
+    assert "ВОКС-ДОСЬЕ" not in res
+    assert "Император" not in res
+    assert "Кибер-Смотрящ" in res or "хат" in res or "поняти" in res
+
 def test_generate_extractive_summary_chat_mode():
     sample = "\n".join([
         f"User_{i}: Важное объявление для чата номер {i}: встречаемся в субботу."

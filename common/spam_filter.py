@@ -398,17 +398,20 @@ def get_cached_user_posts(user_id: int) -> int:
     try:
         import os
         from common.config import DB_NAME
-        if DB_NAME and isinstance(DB_NAME, str) and os.path.exists(DB_NAME):
-            import sqlite3
-            conn = sqlite3.connect(f"file:{DB_NAME}?mode=ro", uri=True, timeout=0.2)
-            try:
-                cur = conn.execute("SELECT COALESCE(MAX(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,))
-                row = cur.fetchone()
-                count = int(row[0]) if row and row[0] is not None else 0
-                _user_posts_count_cache[user_id] = (now, count)
-                return count
-            finally:
-                conn.close()
+        if DB_NAME:
+            db_path = str(DB_NAME)
+            if os.path.exists(db_path):
+                import sqlite3
+                clean_path = db_path.replace("\\", "/")
+                conn = sqlite3.connect(f"file:{clean_path}?mode=ro", uri=True, timeout=0.2)
+                try:
+                    cur = conn.execute("SELECT COALESCE(MAX(posts_count), 0) FROM Users WHERE user_id = ?", (user_id,))
+                    row = cur.fetchone()
+                    count = int(row[0]) if row and row[0] is not None else 0
+                    _user_posts_count_cache[user_id] = (now, count)
+                    return count
+                finally:
+                    conn.close()
     except Exception:
         pass
     return 0
@@ -434,18 +437,95 @@ async def get_user_total_posts(user_id: int) -> int:
         return get_cached_user_posts(user_id)
 
 
+# Fast cache for user account age: {user_id: (cached_at_ts, age_days)}
+_user_account_age_cache: Dict[int, Tuple[float, float]] = {}
+USER_ACCOUNT_AGE_CACHE_TTL = 300.0
+
+def get_cached_user_account_age_days(user_id: int) -> float:
+    """Returns user's account age in days based on Users.created_at or Posts.timestamp."""
+    now = time.time()
+    cached = _user_account_age_cache.get(user_id)
+    if cached and (now - cached[0] < USER_ACCOUNT_AGE_CACHE_TTL):
+        return cached[1]
+
+    try:
+        import os
+        from common.config import DB_NAME
+        if DB_NAME:
+            db_path = str(DB_NAME)
+            if os.path.exists(db_path):
+                import sqlite3
+                clean_path = db_path.replace("\\", "/")
+                conn = sqlite3.connect(f"file:{clean_path}?mode=ro", uri=True, timeout=0.2)
+                try:
+                    cur = conn.execute("SELECT MIN(created_at) FROM Users WHERE user_id = ? AND created_at > 0", (user_id,))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        created_at = float(row[0])
+                        age_days = max(0.0, (now - created_at) / 86400.0)
+                        _user_account_age_cache[user_id] = (now, age_days)
+                        return age_days
+
+                    cur = conn.execute("SELECT MIN(timestamp) FROM Posts WHERE author_id = ? AND timestamp > 0", (user_id,))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        first_post_ts = float(row[0])
+                        age_days = max(0.0, (now - first_post_ts) / 86400.0)
+                        _user_account_age_cache[user_id] = (now, age_days)
+                        return age_days
+                finally:
+                    conn.close()
+    except Exception:
+        pass
+    return 0.0
+
+
 # Cross-board limit
 CROSS_BOARD_WINDOW = 60.0       # 60 seconds
 
 # Link & Ad Regex Patterns
 RE_TG_INVITE = re.compile(r'(?:t\.me|telegram\.me)/(?:\+|joinchat/)[a-zA-Z0-9_\-]+', re.IGNORECASE)
-RE_TG_PROMO = re.compile(r'(?:t\.me|telegram\.me)/(?!(?:tgchan_archive|tgach_archive|c/\d+))[a-zA-Z0-9_]{5,}', re.IGNORECASE)
-RE_AD_SCAM = re.compile(
+RE_TG_PROMO = re.compile(r'(?<![a-zA-Z0-9])(?:t\.me|telegram\.me)/(?!(?:tgchan_archive|tgach_archive|c/\d+))[a-zA-Z0-9_]{5,}', re.IGNORECASE)
+
+# Explicit scam brands (forbidden unconditionally, with strict word boundaries)
+# Casino keywords (казино, casino, вулкан, вавада, 1win и т.д.) are strictly excluded
+# per owner directive since the bot has its own integrated casino and games.
+RE_EXPLICIT_SCAM_BRANDS = re.compile(
+    r'(?<![a-zA-Zа-яА-ЯёЁ0-9\-_])(?:'
+    r'1xbet'
+    r')(?![a-zA-Zа-яА-ЯёЁ0-9\-_])',
+    re.IGNORECASE | re.UNICODE
+)
+
+# Contextual ad/scam phrases that require promo hooks or untrusted account status to prevent false positives
+# Casino mentions are allowed as regular conversation / bot gameplay.
+RE_CONTEXTUAL_AD_PHRASES = re.compile(
     r'(?:'
-    r'1win|1xbet|vavada|вавад[аы]|up-?x|dragon\s*money|драгон\s*мани|pin-?up|пин-?ап|казино\s*вулкан|клуб\s*вулкан|онлайн[\s\-]казино|зеркал[оа][\s\-]+казино|'
-    r'crypto\s*airdrop|раздача\s*крипт|слив\s*онлифанс|вип\s*канал|подпишись\s*на\s*канал|ставки\s*на\s*спорт|'
-    r'легкий\s*заработок|интим\s*знакомства|промокод\s+на\s+(?:депозит|фриспин)'
+    r'ставки\s*на\s*спорт|crypto\s*airdrop|раздача\s*крипт|'
+    r'слив\s*онлифанс|вип\s*канал|подпишись\s*на\s*канал|легкий\s*заработок|интим\s*знакомства'
     r')',
+    re.IGNORECASE | re.UNICODE
+)
+
+# Promo call-to-action hooks (links, channels, promo codes, referral terms)
+RE_PROMO_HOOK = re.compile(
+    r'(?:'
+    r'https?://|t\.me/|@\w{4,}|промокод|бонус|фрибет|вывод|'
+    r'переходи|подпишись|в\s+шапке|в\s+закрепе|по\s+ссылке|ссылка\s+в|реф(?:ка|ералка)?'
+    r')',
+    re.IGNORECASE | re.UNICODE
+)
+
+# Reply and quote header prefix cleaner (to prevent cascade mute infection on replies)
+RE_REPLY_QUOTE_PREFIX = re.compile(
+    r'(?:[\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]*Пост\s*№?\d+[\s\S]*?\n\n|'
+    r'^\s*(?:>|&gt;|>>\d+).*$\n?)',
+    re.UNICODE | re.MULTILINE
+)
+
+# Backward compatibility alias
+RE_AD_SCAM = re.compile(
+    rf'(?:{RE_EXPLICIT_SCAM_BRANDS.pattern}|{RE_CONTEXTUAL_AD_PHRASES.pattern})',
     re.IGNORECASE | re.UNICODE
 )
 RE_URL = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.IGNORECASE)
@@ -1056,7 +1136,7 @@ def get_top_active_monthly_users(ttl: float = 3600.0) -> set[int]:
     return _top_active_users_cache
 
 
-def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None, posts_count: int | None = None) -> Tuple[bool, str]:
+def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None, posts_count: int | None = None, account_age_days: float | None = None) -> Tuple[bool, str]:
     """
     Checks for link spam or doxing phone number leaks (Anti-Dox).
     Casino keywords are not flagged per owner directive (regular chat mentions must not cause bans).
@@ -1084,25 +1164,60 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
         phones = extract_phone_numbers(clean_text)
         return True, f"Слив телефонного номера (Anti-Dox): {phones[0]}"
 
-    # Permanent invite, promo, and ad/scam filter for new/untrusted users (posts_count < 50)
+    # Permanent invite, promo, and ad/scam filter
     # URL_WHITELIST (tgchan_archive, tgach_archive, 2ch.hk, tgach.top, etc.) is strictly preserved
     p_count = posts_count if posts_count is not None else get_cached_user_posts(user_id)
-    if p_count < 50:
-        norm_text = canonicalize_spam_text(clean_text)
-        cyr_homo = str.maketrans('тасеорхі', 'taceopxi')
-        trans_text = norm_text.translate(cyr_homo)
+    norm_text = canonicalize_spam_text(clean_text)
+    cyr_homo = str.maketrans('тасеорхі', 'taceopxi')
+    trans_text = norm_text.translate(cyr_homo)
 
-        # 1. Telegram invite links (t.me/+..., joinchat, etc.)
-        if RE_TG_INVITE.search(clean_text) or RE_TG_INVITE.search(norm_text) or RE_TG_INVITE.search(trans_text):
-            return True, "Запрещенная инвайт-ссылка Telegram (posts < 50)"
+    # Strip quote lines and Telegram reply headers for ad evaluations to prevent false-positives on replying to posts
+    non_quote_text = RE_REPLY_QUOTE_PREFIX.sub('', clean_text).strip()
+    non_quote_norm = canonicalize_spam_text(non_quote_text) if non_quote_text else ""
+    non_quote_trans = non_quote_norm.translate(cyr_homo) if non_quote_norm else ""
 
-        # 2. Telegram public/promo links (excluding whitelisted archives)
-        if RE_TG_PROMO.search(clean_text) or RE_TG_PROMO.search(norm_text) or RE_TG_PROMO.search(trans_text):
-            return True, "Реклама/промо Telegram-канала (posts < 50)"
+    # 1. Telegram invite links (t.me/+..., joinchat, etc.) - forbidden for all users (no posts >= 50 immunity)
+    target_texts = (clean_text, norm_text, trans_text)
+    target_texts_inv = (non_quote_text, non_quote_norm, non_quote_trans) if non_quote_text else target_texts
+    if any(RE_TG_INVITE.search(t) for t in target_texts_inv):
+        return True, "Запрещенная инвайт-ссылка Telegram"
 
-        # 3. Ad / Casino / Crypto / Scam keywords
-        if RE_AD_SCAM.search(clean_text) or RE_AD_SCAM.search(norm_text) or RE_AD_SCAM.search(trans_text):
-            return True, "Рекламный или скам-текст (posts < 50)"
+    # 2. Ad / Casino / Crypto / Scam keywords
+    # 2a. Explicit casino / gambling / scam brands: unconditionally forbidden
+    target_texts = (clean_text, norm_text, trans_text)
+    if non_quote_text:
+        target_texts_scam = (non_quote_text, non_quote_norm, non_quote_trans)
+    else:
+        target_texts_scam = target_texts
+
+    if any(RE_EXPLICIT_SCAM_BRANDS.search(t) for t in target_texts_scam):
+        return True, "Рекламный или скам-текст"
+
+    # 2b. Contextual ad/scam phrases: require promo hook (link, @channel, promo code)
+    # or untrusted brand new account status to prevent false positives in conversation/critique
+    if any(RE_CONTEXTUAL_AD_PHRASES.search(t) for t in target_texts_scam):
+        has_promo_hook = any(RE_PROMO_HOOK.search(t) for t in target_texts)
+        if has_promo_hook:
+            return True, "Рекламный или скам-текст"
+
+        user_age = account_age_days if account_age_days is not None else get_cached_user_account_age_days(user_id)
+        if p_count < 10 and user_age < 3.0 and len(clean_text.strip()) < 80:
+            return True, "Рекламный или скам-текст"
+
+    # 3. Telegram public/promo links (excluding whitelisted archives)
+    # Requires confirmed veteran status (posts_count >= 50 or account older than 30 days)
+    if RE_TG_PROMO.search(clean_text) or RE_TG_PROMO.search(norm_text) or RE_TG_PROMO.search(trans_text):
+        is_veteran = (p_count >= 50)
+        if not is_veteran:
+            if account_age_days is not None:
+                is_veteran = (account_age_days >= 30.0)
+            else:
+                db_age = get_cached_user_account_age_days(user_id)
+                if db_age > 0.0:
+                    is_veteran = (db_age >= 30.0)
+
+        if not is_veteran:
+            return True, "Реклама/промо Telegram-канала (требуется ветеранский статус)"
 
     return False, ""
 
@@ -1870,8 +1985,8 @@ def check_beggar_phishing_spam(text: str) -> Tuple[bool, str]:
 
 def check_text_copro_flood(text: str) -> Tuple[bool, str]:
     """
-    Детектор текстового копро-вайпа (3+ фекальных корней капсом/повторами в одном посте).
-    Обычное бытовое ругательство (1-2 слова) не блокирует.
+    Детектор текстового копро-вайпа (5+ фекальных корней, либо 3+ корней капсом/повторами в одном посте).
+    Обычное бытовое ругательство и обсуждение плохих игр/фильмов (1-3 разных слова в обычном регистре) не блокирует.
     """
     if not text or len(text.strip()) < 10:
         return False, ""
@@ -1888,8 +2003,24 @@ def check_text_copro_flood(text: str) -> Tuple[bool, str]:
     pattern = r'\b(?:' + '|'.join(fecal_roots) + r')[а-яё]*\b'
     raw_matches = re.findall(pattern, norm)
     matches = [m for m in raw_matches if not any(m.startswith(safe) for safe in SAFE_NON_FECAL_PREFIXES)]
-    if len(matches) >= 3:
+
+    # 1. 5+ фекальных корней в посте = безусловный копро-вайп
+    if len(matches) >= 5:
         return True, f"Текстовый копро-вайп ({len(matches)} фекальных корней в посте)"
+
+    # 2. 5+ корней требуют подтверждения агрессивного вайпа: повторы одного корня или КАПС
+    if len(matches) >= 5:
+        unique_matches = set(matches)
+        if len(unique_matches) <= 1:
+            return True, f"Текстовый копро-вайп (повторы фекальных корней: {len(matches)})"
+
+        upper_matches = [
+            m.group(0) for m in re.finditer(pattern, text, re.IGNORECASE)
+            if m.group(0).isupper() and not any(m.group(0).lower().startswith(safe) for safe in SAFE_NON_FECAL_PREFIXES)
+        ]
+        if len(upper_matches) >= 5:
+            return True, f"Текстовый копро-вайп (капс-вайп фекальными корнями: {len(upper_matches)})"
+
     return False, ""
 
 
@@ -2461,7 +2592,7 @@ async def evaluate_message_for_autoshadowmute(
 
     # 2. Link / Ad / Scam spam check
     if text_content:
-        is_link_spam, link_reason = check_link_or_ad_spam(user_id, board_id, text_content, now_ts=now)
+        is_link_spam, link_reason = check_link_or_ad_spam(user_id, board_id, text_content, now_ts=now, posts_count=posts_count)
         if is_link_spam:
             from common.database import apply_shadow_mute
             logger.warning(

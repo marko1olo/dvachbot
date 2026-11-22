@@ -60,7 +60,7 @@ def get_shared_http_client() -> httpx.AsyncClient:
         _SHARED_HTTP_CLIENT = httpx.AsyncClient(
             proxy=None,
             verify=False,
-            timeout=60.0,
+            timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
             trust_env=False,
             limits=httpx.Limits(max_keepalive_connections=50, max_connections=100)
         )
@@ -104,7 +104,10 @@ _CANNED_REFUSAL_MARKERS = (
     "я не могу выполнить этот запрос",
     "я не могу ответить",
     "телефон доверия",
-    "горячая линия психологической",
+    "телефону доверия",
+    "телефона доверия",
+    "психологической помощи",
+    "горячая линия",
     "совершения самоубийства",
     "причинении себе вреда",
     "обратитесь за помощью к специалистам",
@@ -161,13 +164,56 @@ GEMINI_SAFETY_SETTINGS_BLOCK_NONE = [
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
 ]
 GEMINI_SAFETY_SETTINGS_BLOCK_ONLY_HIGH = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_ONLY_HIGH"},
 ]
+
+GEMINI_SERVICE_REFUSAL_MARKERS: tuple[str, ...] = (
+    "the request asks for",
+    "i cannot fulfill this request",
+    "i am unable to transcribe",
+    "i'm unable to transcribe",
+    "i cannot transcribe",
+    "i'm sorry, but i cannot",
+    "i cannot complete this request",
+    "i am unable to fulfill",
+    "i'm unable to fulfill",
+    "as an ai, i cannot",
+    "as a language model, i cannot",
+    "i cannot assist with this request",
+    "my safety policies",
+    "я не могу предоставить информацию",
+    "я не могу выполнить этот запрос",
+    "я не могу ответить",
+    "телефон доверия",
+    "телефону доверия",
+    "телефона доверия",
+    "психологической помощи",
+    "горячая линия",
+    "совершения самоубийства",
+    "причинении себе вреда",
+    "обратитесь за помощью к специалистам",
+    "мои правила безопасности",
+    "политикой безопасности",
+)
+
+
+def is_gemini_service_refusal(text: str | None) -> bool:
+    """
+    Проверяет, содержит ли текст служебный отказ Gemini AI
+    ("The request asks for...", "I cannot fulfill this request", "I am unable to transcribe" и др.).
+    Предотвращает попадание отказов модели в чат под видом речи анона и роаст Киберчедом.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t_lower = text.strip().lower()
+    return any(marker in t_lower for marker in GEMINI_SERVICE_REFUSAL_MARKERS)
 
 async def _call_gemini_native_rest(
     http_client: httpx.AsyncClient,
@@ -176,7 +222,7 @@ async def _call_gemini_native_rest(
     system_instruction: str,
     user_text: str,
     temperature: float = 0.8,
-    timeout: float = 15.0,
+    timeout: float | httpx.Timeout = 45.0,
     presence_penalty: float | None = None,
     frequency_penalty: float | None = None,
 ) -> tuple[str | None, str | None]:
@@ -185,6 +231,8 @@ async def _call_gemini_native_rest(
     Возвращает (content_text, finish_reason).
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    
+    req_timeout = timeout if isinstance(timeout, httpx.Timeout) else httpx.Timeout(connect=10.0, read=float(timeout), write=10.0, pool=10.0)
     
     thresholds_to_try = [GEMINI_SAFETY_SETTINGS_BLOCK_NONE, GEMINI_SAFETY_SETTINGS_BLOCK_ONLY_HIGH]
     last_resp = None
@@ -211,7 +259,7 @@ async def _call_gemini_native_rest(
                 "parts": [{"text": system_instruction}]
             }
             
-        resp = await http_client.post(url, json=payload, timeout=timeout)
+        resp = await http_client.post(url, json=payload, timeout=req_timeout)
         last_resp = resp
 
         # Defensive fallback: if Gemini rejects with 400 "Penalty is not enabled",
@@ -222,11 +270,11 @@ async def _call_gemini_native_rest(
             gen_config.pop("presencePenalty", None)
             gen_config.pop("frequencyPenalty", None)
             payload["generationConfig"] = gen_config
-            resp = await http_client.post(url, json=payload, timeout=timeout)
+            resp = await http_client.post(url, json=payload, timeout=req_timeout)
             last_resp = resp
 
-        if resp.status_code == 400 and safety_settings is GEMINI_SAFETY_SETTINGS_BLOCK_NONE:
-            logger.warning(f"⚠️ Gemini 400 with BLOCK_NONE on {model_name}. Retrying with BLOCK_ONLY_HIGH...")
+        if resp.status_code == 400 and any(s.get("threshold") == "BLOCK_NONE" for s in safety_settings):
+            logger.warning(f"⚠️ Gemini 400 with current BLOCK_NONE safetySettings on {model_name}. Retrying with fallback safety settings...")
             continue
         break
         
@@ -270,7 +318,11 @@ async def _call_gemini_native_rest(
                 continue
             text_content += p["text"]
     text_content = text_content.strip() or None
-    
+
+    if text_content and is_gemini_service_refusal(text_content):
+        logger.warning(f"⚠️ Gemini service refusal detected: '{text_content[:80]}...'")
+        return None, "safety"
+
     if finish_reason in ("safety", "content_filter"):
         return text_content, "safety"
         
@@ -343,6 +395,10 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
                 raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
         else:
             raw_res = await _summarize_inner(prompt, text_dump, None, model_preference)
+
+        if raw_res and is_gemini_service_refusal(raw_res):
+            logger.warning(f"⚠️ summarize_text_with_hf: Gemini service refusal filtered: '{raw_res[:80]}...'")
+            raw_res = None
 
         # Unwrap accidental JSON wrapper for standard summaries (not persona)
         if raw_res and model_preference not in ("persona", "persona_gemini") and not raw_res.startswith("Нейронка сдохла"):
@@ -420,9 +476,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             [chosen_first]
             + remaining_top
             + [
-                (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
-                ("llama-3.3-70b-versatile", "groq"),
                 ("qwen/qwen3.8-27b", "groq"),
+                ("llama-3.3-70b-versatile", "groq"),
+                (DEFAULT_AGENTROUTER_MODEL, "agentrouter"),
                 ("openai/gpt-oss-120b", "groq"),
                 ("gemini-3.1-flash-lite", "gemini"),
                 ("llama-3.1-8b-instant", "groq"),
@@ -535,7 +591,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     now_ts = time.time()
     skip_providers: set[str] = set()
     provider_safety_count: dict[str, int] = {}
-    persona_temperature = round(random.uniform(0.95, 1.05), 2)
+    persona_temperature = round(random.uniform(0.76, 0.84), 2)
 
     for model_name, provider in models_cascade:
         if provider in skip_providers:
@@ -601,17 +657,18 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         effective_dump = text_dump
         if provider == "groq":
             if is_persona:
-                if len(effective_sys) > 5000:
-                    effective_sys = effective_sys[:4500] + "\n\n[...СОКРАЩЕНИЕ ИНСТРУКЦИИ ДЛЯ СКОРОСТИ...]\nОтвечай строго по правилам и верни валидный JSON."
-                if len(effective_dump) > 6000:
-                    # Обязательно сохраняем БЛОК 1 (целевой пост) и БЛОК 2 (родительский пост) в начале!
-                    effective_dump = effective_dump[:2500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-3500:]
+                if len(effective_dump) > 10000:
+                    # Preserving Block 1 & Block 2 at start and newest chat history at end
+                    effective_dump = effective_dump[:3500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-6000:]
             else:
-                if len(effective_sys) > 6000:
-                    effective_sys = effective_sys[:6000]
+                if len(effective_sys) > 8000:
+                    effective_sys = effective_sys[:8000]
                 if len(effective_dump) > 15000:
-                    # Для лонгридов саммари на Groq сохраняем самые свежие посты в пределах 15k символов во избежание 413
-                    effective_dump = effective_dump[-15000:]
+                    cut_idx = effective_dump.find("\n", len(effective_dump) - 15000)
+                    if cut_idx != -1:
+                        effective_dump = effective_dump[cut_idx + 1:]
+                    else:
+                        effective_dump = effective_dump[-15000:]
         elif provider == "gemini":
             if not is_persona and len(effective_dump) > 35000:
                 # Ограничиваем простыню контекста для Gemini 35k символов во избежание сжигания токенов и задержек
@@ -643,6 +700,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
 
                 if provider == "gemini" and not is_mock_env:
                     is_persona = model_preference in ("persona", "persona_gemini")
+                    gemini_timeout = httpx.Timeout(connect=10.0, read=45.0 if is_persona else 30.0, write=10.0, pool=10.0)
                     raw_text, finish_reason = await _call_gemini_native_rest(
                         http_client=http_client,
                         model_name=model_name,
@@ -650,13 +708,13 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         system_instruction=effective_sys,
                         user_text=effective_dump,
                         temperature=persona_temperature if is_persona else 0.8,
-                        timeout=25.0 if is_persona else 15.0,
+                        timeout=gemini_timeout,
                         presence_penalty=0.35 if is_persona else None,
                         frequency_penalty=0.45 if is_persona else None,
                     )
-                    if raw_text:
+                    if raw_text and finish_reason not in ("safety", "content_filter"):
                         result = clean_ai_thinking(raw_text)
-                        if result and any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS):
+                        if result and (any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS) or is_gemini_service_refusal(result)):
                             logger.warning(f"🛡️ Canned refusal/helpline detected from {model_name}. Skipping model.")
                             skip_model = True
                             break
@@ -669,13 +727,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                 skip_model = True
                                 break
                     else:
-                        logger.warning(f"⚠️ {provider} model {model_name} returned empty/None content (finish_reason={finish_reason})")
+                        logger.warning(f"⚠️ {provider} model {model_name} returned empty/safety content (finish_reason={finish_reason})")
                         if finish_reason in ("safety", "content_filter"):
-                            provider_safety_count[provider] = provider_safety_count.get(provider, 0) + 1
-                            logger.warning(f"🛡️ Safety filter triggered for {provider} on model {model_name} (count={provider_safety_count[provider]}). Skipping model {model_name}.")
-                            if provider_safety_count[provider] >= 2:
-                                logger.warning(f"🛡️ Multiple safety filters triggered on {provider}. Skipping provider {provider} for this prompt.")
-                                skip_providers.add(provider)
+                            logger.warning(f"🛡️ Safety filter triggered for {provider} on model {model_name}. Skipping provider {provider} for this prompt.")
+                            skip_providers.add(provider)
                             skip_model = True
                             break
                         else:
@@ -709,7 +764,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                             f"{ar_base}/responses",
                             headers=ar_headers,
                             json=ar_payload,
-                            timeout=25.0,
+                            timeout=httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0),
                         )
                         if ar_resp.status_code == 200:
                             ar_data = ar_resp.json()
@@ -725,8 +780,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                 extracted_txt = ar_data.get("text")
                             if extracted_txt:
                                 result = clean_ai_thinking(extracted_txt)
-                                if result and any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS):
-                                    logger.warning(f"\U0001f6e1\ufe0f Canned refusal/helpline detected from {model_name}. Skipping model.")
+                                if result and (any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS) or is_gemini_service_refusal(result)):
+                                    logger.warning(f"🛡️ Canned refusal/helpline detected from {model_name}. Skipping model.")
                                     skip_model = True
                                     break
                                 if result:
@@ -751,7 +806,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         model=model_name,
                         messages=messages,
                         temperature=persona_temperature if model_preference in ("persona", "persona_gemini") else 0.8,
-                        timeout=15.0,
+                        timeout=httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0),
                     )
                     if model_preference in ("persona", "persona_gemini"):
                         create_kwargs["presence_penalty"] = 0.35
@@ -762,9 +817,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     choice = completion.choices[0] if (completion.choices and len(completion.choices) > 0) else None
                     if choice and choice.message is not None:
                         result = choice.message.content
-                        if result:
+                        finish_reason = (getattr(choice, "finish_reason", "") or "").lower()
+                        if result and finish_reason not in ("safety", "content_filter"):
                             result = clean_ai_thinking(result)
-                            if result and any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS):
+                            if result and (any(m in result.lower() for m in _CANNED_REFUSAL_MARKERS) or is_gemini_service_refusal(result)):
                                 logger.warning(f"🛡️ Canned refusal/helpline detected from {model_name}. Skipping model.")
                                 skip_model = True
                                 break
@@ -777,7 +833,6 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                     skip_model = True
                                     break
                         else:
-                            finish_reason = getattr(choice, "finish_reason", None)
                             logger.warning(f"⚠️ {provider} model {model_name} returned empty/None content (finish_reason={finish_reason})")
                             if finish_reason in ("safety", "content_filter"):
                                 logger.warning(f"🛡️ Safety filter triggered for {provider} on model {model_name}. Skipping provider {provider} for this prompt.")
@@ -886,7 +941,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     await asyncio.sleep(0.01 if in_test else 3.0)
                     continue  # try next key
                 if "timeout" in err_str.lower() or "timed out" in err_str.lower():
-                    logger.warning(f"⚠️ {provider} request timed out for {model_name}. Trying next candidate...")
+                    logger.warning(f"⚠️ {provider} request timed out for {model_name}. Setting 60s cooldown on {model_name} and switching to next candidate...")
+                    _model_cooldowns[model_name] = time.time() + 60.0
+                    skip_model = True
                     break
                 if "503" in err_str or "high demand" in err_str.lower() or "service unavailable" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} returned 503 (high demand). Setting 45s cooldown on model.")

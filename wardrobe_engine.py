@@ -11,7 +11,9 @@ Includes dynamic duration stacking, set bonuses, stats and dressing room UI.
 
 import time
 import json
+import math
 from typing import Dict, Any, List, Optional, Tuple, Union
+from common.bot_helpers import check_menu_owner, record_menu_owner, get_menu_owner
 
 # -----------------------------------------------------------------------------
 # Apparel & Wardrobe Catalog
@@ -546,6 +548,29 @@ def _safe_dict_payload(payload: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def is_wardrobe_item_broken(active_items: Any, item_id: str) -> bool:
+    """
+    Checks whether an equipped wardrobe item is broken (durability <= 0.0 or broken flag set).
+    """
+    items_dict = _safe_dict_payload(active_items)
+    if not items_dict or not item_id:
+        return False
+    dur = items_dict.get(f"{item_id}_durability")
+    if isinstance(items_dict.get(item_id), dict):
+        dur = items_dict[item_id].get("durability", dur)
+    if dur is not None:
+        try:
+            if float(dur) <= 0.0:
+                return True
+        except (ValueError, TypeError):
+            pass
+    if bool(items_dict.get(f"{item_id}_broken", False)):
+        return True
+    if isinstance(items_dict.get(item_id), dict) and bool(items_dict[item_id].get("broken", False)):
+        return True
+    return False
+
+
 def get_equipped_gear(active_items: Any, current_time: Optional[int] = None) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Extracts currently equipped wardrobe items from active_items dictionary across all slots.
@@ -628,8 +653,13 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
                 items_dict.pop(f"equipped_{slot}", None)
 
 
-    # 2. Identify active sets
-    equipped_ids = {item["id"] for item in equipped.values()}
+    # 2. Identify functional items (not broken) and active sets
+    functional_equipped: Dict[str, Dict[str, Any]] = {}
+    for slot, item in equipped.items():
+        if not is_wardrobe_item_broken(items_dict, item["id"]):
+            functional_equipped[slot] = item
+
+    equipped_ids = {item["id"] for item in functional_equipped.values()}
     active_sets = []
     for set_id, set_info in SET_BONUSES.items():
         if set_id == "set_neo":
@@ -642,30 +672,18 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     primary_set = active_sets[0] if active_sets else None
     active_set_ids = {s.get("id") for s in active_sets}
 
-    # 3. Sum RPG Stats
-    tot_def = 0
-    for item in equipped.values():
-        item_id = item.get("id")
-        dur = items_dict.get(f"{item_id}_durability")
-        if isinstance(items_dict.get(item_id), dict):
-            dur = items_dict[item_id].get("durability", dur)
-        is_broken = (
-            items_dict.get(f"{item_id}_broken", False)
-            or (dur is not None and float(dur) <= 0.0)
-            or (isinstance(items_dict.get(item_id), dict) and items_dict[item_id].get("broken", False))
-        )
-        if not is_broken:
-            tot_def += item.get("defense", 0)
-    tot_tox = sum(item.get("toxicity", 0) for item in equipped.values())
-    tot_san = sum(item.get("sanity", 0) for item in equipped.values())
+    # 3. Sum RPG Stats (functional items and active sets only)
+    tot_def = sum(item.get("defense", 0) for item in functional_equipped.values())
+    tot_tox = sum(item.get("toxicity", 0) for item in functional_equipped.values())
+    tot_san = sum(item.get("sanity", 0) for item in functional_equipped.values())
     for s in active_sets:
         tot_def += s.get("bonus_defense", s.get("defense", 0))
         tot_tox += s.get("bonus_toxicity", s.get("toxicity", 0))
         tot_san += s.get("bonus_sanity", s.get("sanity", 0))
 
     # 4. Robbery formulas
-    has_padishah = bool(equipped.get("torso") and equipped["torso"]["id"] in ("body_padishah_mantle", "body_sheikh_mantle"))
-    has_golden_foil = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_foil")
+    has_padishah = bool(functional_equipped.get("torso") and functional_equipped["torso"]["id"] in ("body_padishah_mantle", "body_sheikh_mantle"))
+    has_golden_foil = bool(functional_equipped.get("head") and functional_equipped["head"]["id"] == "hat_golden_foil")
 
     # Scaled deflection formula
     # Deflection scaling: rob_deflect = min(0.75, max(0.0, round(tot_def * 0.005, 4)))
@@ -684,33 +702,32 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     rob_stolen_red = min(0.60, max(0.0, round(tot_def / 200.0, 4)))
     # fear chance: 40% for set_gop_skuf, 25% for body_tracksuit
     has_skuf_set = bool("set_gop_skuf" in active_set_ids or "set_skuf" in active_set_ids)
-    has_tracksuit = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_tracksuit")
+    has_tracksuit = bool(functional_equipped.get("torso") and functional_equipped["torso"]["id"] == "body_tracksuit")
     rob_fear = 0.40 if has_skuf_set else (0.25 if has_tracksuit else 0.0)
 
     # 5. Combat evasion & mute reduction
-    has_golden_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_golden_sneakers")
-    has_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] in ("feet_sneakers", "feet_golden_sneakers"))
+    has_golden_sneakers = bool(functional_equipped.get("feet") and functional_equipped["feet"]["id"] == "feet_golden_sneakers")
+    has_sneakers = bool(functional_equipped.get("feet") and functional_equipped["feet"]["id"] in ("feet_sneakers", "feet_golden_sneakers"))
     evasion = 0.40 if has_golden_sneakers else (0.30 if has_sneakers else 0.0)
     for s in active_sets:
         if s.get("evasion_chance"):
             evasion = max(evasion, s["evasion_chance"])
 
     has_riot_set = bool("set_riot_police" in active_set_ids or "set_omon" in active_set_ids)
-    has_helmet = bool(equipped.get("head") and equipped["head"]["id"] == "hat_helmet")
+    has_helmet = bool(functional_equipped.get("head") and functional_equipped["head"]["id"] == "hat_helmet")
     mute_red = 70 if has_riot_set else (50 if has_helmet else 0)
 
     # 6. Debuff reduction & Immunities
     # debuff_reduction_pct = min(0.60, max(0, Sanity) * 0.006)
     debuff_red = min(0.60, round(max(0, tot_san) * 0.006, 4))
-    has_boots = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_boots")
-    has_golden_foil = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_foil")
+    has_boots = bool(functional_equipped.get("feet") and functional_equipped["feet"]["id"] == "feet_boots")
     shit_imm = bool(has_boots or has_riot_set or has_golden_foil)
 
     has_ward6 = bool("set_ward6" in active_set_ids)
     has_wasserman = bool("set_wasserman" in active_set_ids or "set_onotole" in active_set_ids)
     lax_imm = bool(has_ward6)
     schizo_imm = bool(has_ward6 or has_wasserman or has_golden_foil)
-    has_cyber_suit = bool(equipped.get("torso") and equipped["torso"]["id"] == "body_cyber_suit")
+    has_cyber_suit = bool(functional_equipped.get("torso") and functional_equipped["torso"]["id"] == "body_cyber_suit")
     work_fine_imm = bool(has_helmet or has_riot_set or has_cyber_suit)
 
     # 7. Work bonuses
@@ -719,9 +736,9 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
         sal_mult = 1.40
     else:
         bonus = 0.0
-        if equipped.get("torso") and equipped["torso"]["id"] == "body_wasserman":
+        if functional_equipped.get("torso") and functional_equipped["torso"]["id"] == "body_wasserman":
             bonus += 0.25
-        if equipped.get("face") and equipped["face"]["id"] == "face_wasserman_glasses":
+        if functional_equipped.get("face") and functional_equipped["face"]["id"] == "face_wasserman_glasses":
             bonus += 0.15
         sal_mult = round(1.0 + bonus, 2)
 
@@ -731,28 +748,28 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
         if s.get("salary_mult") and s.get("id") not in ("set_wasserman", "set_neo"):
             sal_mult = round(sal_mult + (s["salary_mult"] - 1.0), 2)
 
-    has_golden_crown = bool(equipped.get("head") and equipped["head"]["id"] == "hat_golden_crown")
+    has_golden_crown = bool(functional_equipped.get("head") and functional_equipped["head"]["id"] == "hat_golden_crown")
     if has_skuf_set:
         tips_mult = 1.35
     elif has_golden_crown:
         tips_mult = 1.30
-    elif equipped.get("head") and equipped["head"]["id"] == "hat_crown":
+    elif functional_equipped.get("head") and functional_equipped["head"]["id"] == "hat_crown":
         tips_mult = 1.20
     else:
         tips_mult = 1.0
 
-    has_golden_sneakers = bool(equipped.get("feet") and equipped["feet"]["id"] == "feet_golden_sneakers")
-    has_slippers = bool(equipped.get("feet") and equipped["feet"]["id"] in ("feet_slippers", "feet_golden_sneakers"))
+    has_golden_sneakers = bool(functional_equipped.get("feet") and functional_equipped["feet"]["id"] == "feet_golden_sneakers")
+    has_slippers = bool(functional_equipped.get("feet") and functional_equipped["feet"]["id"] in ("feet_slippers", "feet_golden_sneakers"))
     cool_mult = 0.70 if has_golden_sneakers else (0.80 if has_slippers else 1.0)
 
-    has_bag = bool(equipped.get("head") and equipped["head"]["id"] == "hat_bag")
+    has_bag = bool(functional_equipped.get("head") and functional_equipped["head"]["id"] == "hat_bag")
     loot_flat = 0.08 if has_bag else 0.0
 
     has_hikka = bool("set_anime_hikka" in active_set_ids or "set_anime" in active_set_ids)
     loot_mult = 2.0 if has_hikka else 1.0
 
-    has_thug = bool(equipped.get("face") and equipped["face"]["id"] == "face_thug_glasses")
-    has_visor = bool(equipped.get("face") and equipped["face"]["id"] == "face_cyber_visor")
+    has_thug = bool(functional_equipped.get("face") and functional_equipped["face"]["id"] == "face_thug_glasses")
+    has_visor = bool(functional_equipped.get("face") and functional_equipped["face"]["id"] == "face_cyber_visor")
     casino_bonus = 20 if has_neo else (15 if has_visor else (5 if has_thug else 0))
     for s in active_sets:
         if s.get("casino_bonus_pct"):
@@ -788,16 +805,21 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
     compact_icon = ""
     if primary_set and primary_set.get("id") in set_icons:
         compact_icon = set_icons[primary_set["id"]]
-    elif equipped.get("head") and equipped["head"]["id"] in head_icons:
-        compact_icon = head_icons[equipped["head"]["id"]]
-    elif equipped.get("face") and equipped["face"]["id"] in head_icons:
-        compact_icon = head_icons[equipped["face"]["id"]]
+    elif functional_equipped.get("head") and functional_equipped["head"]["id"] in head_icons:
+        compact_icon = head_icons[functional_equipped["head"]["id"]]
+    elif functional_equipped.get("face") and functional_equipped["face"]["id"] in head_icons:
+        compact_icon = head_icons[functional_equipped["face"]["id"]]
 
-    has_anon_mask = bool(equipped.get("face") and equipped["face"]["id"] == "face_anon_mask")
-    has_mantle = bool(equipped.get("torso") and equipped["torso"]["id"] in ("body_dva_ch_mantle", "body_padishah_mantle", "body_sheikh_mantle", "body_cyber_suit"))
+    has_anon_mask = bool(functional_equipped.get("face") and functional_equipped["face"]["id"] == "face_anon_mask")
+    has_mantle = bool(functional_equipped.get("torso") and functional_equipped["torso"]["id"] in ("body_dva_ch_mantle", "body_padishah_mantle", "body_sheikh_mantle", "body_cyber_suit"))
     stealth = bool(has_anon_mask or has_neo or has_mantle or any(s.get("stealth") for s in active_sets))
 
-    eq_summary_parts = [item["name"] for item in equipped.values()]
+    eq_summary_parts = []
+    for item in equipped.values():
+        if is_wardrobe_item_broken(items_dict, item["id"]):
+            eq_summary_parts.append(f"{item['name']} (СЛОМАНО)")
+        else:
+            eq_summary_parts.append(item["name"])
     eq_summary = ", ".join(eq_summary_parts) if eq_summary_parts else "(Ничего не надето)"
 
     return {
@@ -831,9 +853,14 @@ def get_wardrobe_total_stats(active_items: Optional[Any], current_time: Optional
 def get_active_set_bonuses(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Checks if equipped gear forms any complete sets and returns active bonuses.
+    Broken items (durability <= 0.0 or broken=True) do not contribute to set bonuses.
     """
     equipped = get_equipped_gear(active_items)
-    equipped_ids = {item["id"] for item in equipped.values() if item}
+    items_dict = _safe_dict_payload(active_items) or {}
+    equipped_ids = {
+        item["id"] for item in equipped.values()
+        if item and not is_wardrobe_item_broken(items_dict, item["id"])
+    }
 
     active_sets = []
     for set_id, set_info in SET_BONUSES.items():
@@ -1127,11 +1154,17 @@ def apply_armor_durability_hit(
             active_items[item_id]["broken"] = True
         return False, f"Предмет {item_name} уже сломан и требует ремонта!"
 
-    if damage_pct <= 0.0:
+    if (
+        damage_pct is None
+        or not isinstance(damage_pct, (int, float))
+        or math.isnan(damage_pct)
+        or math.isinf(damage_pct)
+        or damage_pct <= 0.0
+    ):
         return True, f"Урон по прочности предмета {item_name} не нанесен."
 
     dmg_points = round(damage_pct * 100.0, 2) if damage_pct <= 1.0 else round(damage_pct, 2)
-    new_dur = max(0.0, round(curr_dur - dmg_points, 2))
+    new_dur = max(0.0, min(100.0, round(curr_dur - dmg_points, 2)))
     active_items[dur_key] = new_dur
     if isinstance(active_items.get(item_id), dict):
         active_items[item_id]["durability"] = new_dur
@@ -1140,6 +1173,7 @@ def apply_armor_durability_hit(
         active_items[dur_key] = 0.0
         active_items[broken_key] = True
         if isinstance(active_items.get(item_id), dict):
+            active_items[item_id]["durability"] = 0.0
             active_items[item_id]["broken"] = True
         return True, f"Предмет {item_name} сломался! Защита отключена до ремонта."
 

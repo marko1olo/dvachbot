@@ -7,6 +7,8 @@ from site_tgach.vision import (
     describe_image,
     prepare_image_for_groq,
     _call_gemini_native,
+    _detect_image_mime,
+    is_nsfw_text,
 )
 
 
@@ -424,4 +426,107 @@ class TestVisionCascade:
 
         res = await describe_image("/dummy/path.jpg", source="TEST")
         assert res == "safety_rejected"
+
+    def test_detect_image_mime_types(self):
+        """Verify accurate image MIME type detection based on magic bytes."""
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF"
+        png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        gif_bytes = b"GIF89a\x01\x00\x01\x00"
+        webp_bytes = b"RIFF\x1a\x00\x00\x00WEBPVP8 "
+        unknown_bytes = b"\x00\x01\x02\x03"
+
+        assert _detect_image_mime(jpeg_bytes) == "image/jpeg"
+        assert _detect_image_mime(png_bytes) == "image/png"
+        assert _detect_image_mime(gif_bytes) == "image/gif"
+        assert _detect_image_mime(webp_bytes) == "image/webp"
+        assert _detect_image_mime(unknown_bytes) == "image/jpeg"
+        assert _detect_image_mime(b"") == "image/jpeg"
+
+    def test_is_nsfw_text_keywords_detection(self):
+        """Verify explicit NSFW text keywords detection in caption and file paths."""
+        assert is_nsfw_text(caption="Check out this hentai drawing", file_paths=None) is True
+        assert is_nsfw_text(caption=None, file_paths="/uploads/porno_pic.jpg") is True
+        assert is_nsfw_text(caption="A cute cat on a chair", file_paths="/uploads/cat.jpg") is False
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
+    @patch("site_tgach.vision.groq_pool")
+    async def test_groq_tpd_instant_fallback_to_gemini_tagger(
+        self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """When source='TAGGER' and Groq hits TPD, cascade immediately falls back to Gemini without delay."""
+        import site_tgach.vision as v
+        key1 = "groq-key-1"
+        mock_groq_pool.get_all_active_tokens.return_value = [key1]
+        mock_groq_pool._cooldown_until = {}
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.side_effect = Exception("429 rate limit: tokens per day (TPD) exceeded, try again in 10m39s")
+        mock_openai_cls.return_value = mock_client
+
+        mock_gemini_call.return_value = (
+            json.dumps({"tags": "anime, art, solo", "description": "Аниме арт."}),
+            "stop"
+        )
+
+        res = await describe_image("/dummy/path.jpg", source="TAGGER")
+        assert res is not None
+        parsed = json.loads(res)
+        assert "anime" in parsed["tags"]
+
+        # Gemini must have been called as fallback
+        assert mock_gemini_call.call_count == 1
+        # Groq key must be penalized
+        mock_groq_pool.penalize_token.assert_called_once()
+        # Provider global Groq cooldown must be set to prevent repeat hammering
+        assert v._GLOBAL_GROQ_LAST_CALL > 0.0
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
+    @patch("site_tgach.vision.groq_pool")
+    async def test_all_groq_keys_in_cooldown_skips_groq_immediately(
+        self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """When all Groq keys are on cooldown, Groq is skipped instantly and Gemini is called without sleep."""
+        import time
+        key1 = "groq-key-1"
+        key2 = "groq-key-2"
+        mock_groq_pool.get_all_active_tokens.return_value = [key1, key2]
+        # Both keys are in cooldown 600s in the future
+        mock_groq_pool._cooldown_until = {key1: time.time() + 600.0, key2: time.time() + 600.0}
+
+        mock_gemini_call.return_value = (
+            json.dumps({"tags": "landscape, photo", "description": "Пейзаж."}),
+            "stop"
+        )
+
+        res = await describe_image("/dummy/path.jpg", source="TAGGER")
+        assert res is not None
+        parsed = json.loads(res)
+        assert "landscape" in parsed["tags"]
+
+        # Groq client was never invoked because pre-check skipped it immediately
+        assert mock_openai_cls.call_count == 0
+        assert mock_gemini_call.call_count == 1
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=["test-gemini-key"])
+    @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=[])
+    async def test_explicit_nsfw_text_returns_safety_rejected_when_groq_exhausted(
+        self, mock_groq_pool, mock_google_pool, mock_gemini_call, mock_prep
+    ):
+        """When caption has explicit NSFW keywords and Groq is exhausted, returns 'safety_rejected' without crashing."""
+        res = await describe_image("/dummy/path.jpg", caption="some explicit hentai porn scene", source="TAGGER")
+        assert res == "safety_rejected"
+        # Gemini was NOT called to protect against account bans
+        assert mock_gemini_call.call_count == 0
+
 

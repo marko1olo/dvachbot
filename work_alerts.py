@@ -369,14 +369,31 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
         current_time = int(now_ts)
         work_timers = items.get("work_cooldowns", {})
 
+        slippers = items.get("equipped_feet") == "feet_slippers"
+        cd_mult = 0.8 if slippers else 1.0
+
+        def _is_job_on_cooldown(jid: str, cd_val) -> bool:
+            if not isinstance(cd_val, (int, float)):
+                return False
+            if cd_val > current_time:
+                return True
+            from common.work_engine import WORK_VACANCIES
+            if jid in WORK_VACANCIES and cd_val > 0:
+                base_cd = int(WORK_VACANCIES[jid].get("cooldown_sec", 0) * cd_mult)
+                if (current_time - cd_val) < base_cd:
+                    return True
+            return False
+
+        has_active_cooldowns = any(_is_job_on_cooldown(jid, cd) for jid, cd in work_timers.items())
+
         if tier == 100:
             # 100% tier: ALL cooldowns must be finished!
-            if any(cd > current_time for cd in work_timers.values()):
+            if has_active_cooldowns:
                 return
             phrases = WORK_ALERT_100_PHRASES if "WORK_ALERT_100_PHRASES" in globals() else WORK_ALERT_PHRASES
         else:
             # 50% tier: Skip if user has already had all cooldowns cleared
-            if not any(cd > current_time for cd in work_timers.values()):
+            if not has_active_cooldowns:
                 return
             phrases = WORK_ALERT_50_PHRASES if "WORK_ALERT_50_PHRASES" in globals() else WORK_ALERT_PHRASES
 
@@ -412,7 +429,8 @@ async def _work_cooldown_alert_task(bot: Bot, user_id: int, board_id: str, finis
         logger.warning(f"⚠️ [WorkAlert] Failed to send {tier}% alert to user {user_id}: {e}")
     finally:
         if tier == 100:
-            _scheduled_work_alerts.pop(user_id, None)
+            if _scheduled_work_alerts.get(user_id, 0) <= finish_ts + 1.0:
+                _scheduled_work_alerts.pop(user_id, None)
 
 
 def schedule_work_cooldown_alert(bot: Bot, user_id: int, board_id: str, cd_sec: int):
@@ -422,7 +440,8 @@ def schedule_work_cooldown_alert(bot: Bot, user_id: int, board_id: str, cd_sec: 
     """
     from common.task_manager import spawn_task
     now = time.time()
-    finish_ts_100 = now + cd_sec
+    curr_target = _scheduled_work_alerts.get(user_id, 0)
+    finish_ts_100 = max(curr_target, now + cd_sec)
     _scheduled_work_alerts[user_id] = finish_ts_100
 
     # Schedule 100% notification (only when job actually becomes ready)

@@ -149,6 +149,93 @@ def prepare_image_for_groq(file_path_or_bytes, max_size: int = 640):
                 pass
 
 
+NSFW_KEYWORDS = {
+    # English
+    "porn", "porno", "nsfw", "hentai", "ecchi", "r18", "r-18", "xxx", "nude", "nudity", "naked",
+    "erotic", "erotica", "sex", "sexual", "explicit", "boobs", "breast", "breasts", "tits",
+    "pussy", "dick", "penis", "vagina", "fap", "blowjob", "handjob", "dildo",
+    "masturbat", "orgasm", "anal", "bdsm", "upskirt", "lingerie", "topless", "bottomless", "lewd",
+    # Russian
+    "порно", "порнуха", "хентай", "хентайчик", "эротика", "секс", "сиськи", "грудь", "член",
+    "хуй", "пизда", "вагина", "обнаженка", "обнаженный", "голая", "голый", "нюдс", "нюдсы",
+    "трах", "дрочка", "дрочить", "минет", "куни", "анал", "эрекция", "оргазм", "шлюх",
+}
+
+
+def detect_high_skin_ratio(img_bytes: bytes, threshold: float = 0.35) -> bool:
+    """
+    Быстрая микросекундная эвристика доли телесных пикселей в цветовом пространстве YCbCr.
+    Используется для защиты Gemini API ключей от сжигания ошибкой PROHIBITED_CONTENT.
+    """
+    if not img_bytes:
+        return False
+    try:
+        with Image.open(io.BytesIO(img_bytes)) as img:
+            img = img.convert("YCbCr")
+            img = img.resize((64, 64), Image.Resampling.BOX)
+            pixels = img.getdata()
+            skin_count = 0
+            total = len(pixels)
+            for _, cb, cr in pixels:
+                if 80 <= cb <= 125 and 133 <= cr <= 173:
+                    skin_count += 1
+            return (skin_count / total) >= threshold
+    except Exception:
+        return False
+
+
+def _detect_image_mime(data: bytes) -> str:
+    """Определяет точный MIME-тип изображения по сигнатуре первых байт."""
+    if not data or len(data) < 4:
+        return "image/jpeg"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
+def is_nsfw_text(caption: str | None = None, file_paths: list | str | None = None) -> bool:
+    """Проверяет наличие явных NSFW/порно ключевых слов в тексте описания или именах файлов."""
+    if caption:
+        cap_low = caption.lower()
+        for kw in NSFW_KEYWORDS:
+            if re.search(r'\b' + re.escape(kw) + r'\b', cap_low) or kw in cap_low:
+                return True
+
+    if file_paths:
+        fps = [file_paths] if isinstance(file_paths, (str, Path)) else file_paths
+        for fp in fps:
+            fp_str = str(fp).lower()
+            for kw in NSFW_KEYWORDS:
+                if kw in fp_str:
+                    return True
+    return False
+
+
+def is_nsfw_content(
+    caption: str | None = None,
+    file_paths: list | str | None = None,
+    images_data: list[bytes] | None = None,
+) -> bool:
+    """
+    Определяет, содержит ли запрос порно/NSFW элементы (по описанию, имени файла или изображению).
+    """
+    if is_nsfw_text(caption=caption, file_paths=file_paths):
+        return True
+
+    if images_data:
+        for b in images_data:
+            if detect_high_skin_ratio(b, threshold=0.45):
+                return True
+
+    return False
+
+
 GEMINI_SAFETY_CATEGORIES = [
     "HARM_CATEGORY_HARASSMENT",
     "HARM_CATEGORY_HATE_SPEECH",
@@ -180,9 +267,10 @@ async def _call_gemini_native(
     parts = [{"text": prompt_text}]
     for img_bytes in images_data:
         b64 = base64.b64encode(img_bytes).decode("utf-8")
+        mime = _detect_image_mime(img_bytes)
         parts.append({
             "inlineData": {
-                "mimeType": "image/jpeg",
+                "mimeType": mime,
                 "data": b64
             }
         })
@@ -209,15 +297,22 @@ async def _call_gemini_native(
 
         resp = await http_client.post(url, json=payload, headers=headers, timeout=timeout)
         last_resp = resp
-        if resp.status_code == 400 and threshold == "BLOCK_NONE":
-            logger.warning(f"⚠️ [VISION] [{source}] Gemini 400 with BLOCK_NONE ({resp.text[:120]}). Retrying with BLOCK_ONLY_HIGH...")
-            continue
+        if resp.status_code == 400:
+            if "prohibited" in resp.text.lower() or "safety" in resp.text.lower():
+                logger.warning(f"🚫 [VISION] [{source}] Gemini 400 PROHIBITED_CONTENT: {resp.text[:120]}")
+                return None, "safety"
+            if threshold == "BLOCK_NONE":
+                logger.warning(f"⚠️ [VISION] [{source}] Gemini 400 with BLOCK_NONE ({resp.text[:120]}). Retrying with BLOCK_ONLY_HIGH...")
+                continue
         break
 
     if last_resp is None:
         raise RuntimeError("No response received from Gemini REST API")
 
     if last_resp.status_code != 200:
+        if last_resp.status_code == 400 and ("prohibited" in last_resp.text.lower() or "safety" in last_resp.text.lower()):
+            logger.warning(f"🚫 [VISION] [{source}] Gemini 400 PROHIBITED_CONTENT: {last_resp.text[:120]}")
+            return None, "safety"
         last_resp.raise_for_status()
 
     data = last_resp.json()
@@ -281,7 +376,7 @@ def _extract_retry_after_seconds(err_str: str, default_sec: float = 30.0) -> flo
 
 async def describe_image(file_paths, caption: str = None, is_passive: bool = False, source: str = "SITE") -> str:
     """Анализирует изображение(я) через каскад Vision (Gemini 3.1 -> Gemini 2.5 -> Gemini 3.5 -> Qwen 3.8 -> Qwen 3.6)."""
-
+    global _GLOBAL_GEMINI_LAST_CALL, _GLOBAL_GROQ_LAST_CALL, GROQ_COOLDOWN_UNTIL
 
     if isinstance(file_paths, str):
         file_paths = [file_paths]
@@ -344,6 +439,13 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             skip_gemini_models = False
             skip_groq_models = False
 
+            explicit_nsfw_text = is_nsfw_text(caption=caption, file_paths=file_paths)
+            has_nsfw_content = explicit_nsfw_text or is_nsfw_content(caption=caption, file_paths=file_paths, images_data=images_data)
+
+            if explicit_nsfw_text:
+                skip_gemini_models = True
+                logger.info(f"🔞 [VISION] [{source}] Explicit NSFW text keywords detected. Skipping Gemini models to prevent PROHIBITED_CONTENT key bans.")
+
             permanent_model_failures = 0
             had_safety_block = False
 
@@ -382,8 +484,33 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                     pool = google_pool if provider == "gemini" else groq_pool
 
+                    # Check global provider cooldown before acquiring keys
+                    now = time.time()
+                    provider_last = _GLOBAL_GEMINI_LAST_CALL if provider == "gemini" else _GLOBAL_GROQ_LAST_CALL
+                    if provider_last > now + 35.0:
+                        logger.debug(f"ℹ️ [VISION] [{source}] {provider} globally cooling down ({(provider_last - now):.1f}s left). Skipping.")
+                        if provider == "gemini":
+                            skip_gemini_models = True
+                        else:
+                            skip_groq_models = True
+                        continue
+
                     keys = pool.get_all_active_tokens()
                     if not keys:
+                        continue
+
+                    # Fast pre-check: if ALL keys for provider have cooldown > now + 15.0,
+                    # skip provider immediately to allow seamless fallback without delays.
+                    all_penalized = all(
+                        max(_LAST_VISION_CALL_TIME.get(k, 0.0), getattr(pool, "_cooldown_until", {}).get(k, 0.0)) > now + 15.0
+                        for k in keys
+                    )
+                    if all_penalized:
+                        logger.info(f"ℹ️ [VISION] [{source}] All keys for {provider} ({model_name}) are in cooldown. Skipping {provider} models.")
+                        if provider == "groq":
+                            skip_groq_models = True
+                        else:
+                            skip_gemini_models = True
                         continue
 
                     available_keys = list(keys)
@@ -395,7 +522,6 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         sleep_time = 0.0
 
                         async with _get_key_rate_lock():
-                            global _GLOBAL_GEMINI_LAST_CALL, _GLOBAL_GROQ_LAST_CALL
                             now = time.time()
                             provider_last = _GLOBAL_GEMINI_LAST_CALL if provider == "gemini" else _GLOBAL_GROQ_LAST_CALL
                             global_wait = max(0.0, provider_last - now)
@@ -449,7 +575,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                         if not selected_key:
                             logger.warning(f"⚠️ [VISION] [{source}] All keys for {model_name} are penalized. Skipping model.")
-                            await asyncio.sleep(2.0)
+                            if provider == "groq":
+                                skip_groq_models = True
+                            else:
+                                skip_gemini_models = True
                             break
 
                         if sleep_time > 0:
@@ -584,8 +713,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 break
                         except Exception as e:
                             err_str = str(e).lower()
-                            if provider == "gemini" and any(k in err_str for k in ("safety", "content_filter", "prompt blocked", "content blocked")):
-                                logger.warning(f"⚠️ [VISION] [{source}] Gemini safety error ({err_str[:120]}). Skipping all remaining Gemini models.")
+                            if provider == "gemini" and any(k in err_str for k in ("safety", "content_filter", "prompt blocked", "content blocked", "prohibited_content", "prohibited")):
+                                logger.warning(f"⚠️ [VISION] [{source}] Gemini safety/prohibited error ({err_str[:120]}). Skipping all remaining Gemini models.")
                                 skip_gemini_models = True
                                 permanent_model_failures += 1
                                 had_safety_block = True
@@ -615,16 +744,16 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 _MODEL_503_COOLDOWN[model_name] = time.time() + 60.0
                                 break
                             if "tokens per day" in err_str or "tpd" in err_str:
-                                cd_duration = _extract_retry_after_seconds(err_str, default_sec=300.0)
+                                cd_duration = _extract_retry_after_seconds(err_str, default_sec=600.0)
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} daily token limit (TPD) reached. Penalizing key for {cd_duration:.0f}s.")
                                 pool.penalize_token(selected_key, cd_duration)
                                 async with _get_key_rate_lock():
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
                                 available_keys.remove(selected_key)
                                 consecutive_429 += 1
-                                if consecutive_429 >= 2 and len(available_keys) == 0:
+                                if len(available_keys) == 0:
                                     halt_sec = min(cd_duration, 1800.0)
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} multiple TPD hits ({consecutive_429} keys). Halting {provider} for {int(halt_sec//60)}m.")
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} all keys exhausted (TPD). Halting {provider} for {int(halt_sec//60)}m.")
                                     async with _get_key_rate_lock():
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
@@ -636,7 +765,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 continue
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
-                                cd_duration = _extract_retry_after_seconds(err_str, default_sec=(30.0 if provider == "groq" else 45.0))
+                                if provider == "groq":
+                                    # Exponential backoff for Groq 429: 2s, 4s, 8s, 16s, 32s, max 60s
+                                    groq_backoff = min(60.0, 2.0 * (2 ** (consecutive_429 - 1)))
+                                    cd_duration = _extract_retry_after_seconds(
+                                        err_str,
+                                        default_sec=min(300.0, 30.0 * (2 ** (consecutive_429 - 1)))
+                                    )
+                                else:
+                                    groq_backoff = 3.0
+                                    cd_duration = _extract_retry_after_seconds(err_str, default_sec=45.0)
+
                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} rate limited (429). Penalizing for {cd_duration:.0f}s.")
                                 pool.penalize_token(selected_key, cd_duration)
                                 async with _get_key_rate_lock():
@@ -644,14 +783,14 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     if provider == "gemini":
                                         _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0)
                                     else:
-                                        _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + 2.5)
+                                        _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + groq_backoff)
+                                        GROQ_COOLDOWN_UNTIL = max(GROQ_COOLDOWN_UNTIL, time.time() + groq_backoff)
                                 available_keys.remove(selected_key)
 
-                                if consecutive_429 >= 2 and len(available_keys) == 0:
-                                    # All keys exhausted on rate limits — back off for 30 min, not 60 sec.
-                                    # 60s was causing ~15 retry storms per hour, burning all keys each time.
+                                if len(available_keys) == 0:
+                                    # All keys exhausted on rate limits — back off for 30 min (Groq) or 5 min (Gemini)
                                     halt_sec = 1800.0 if provider == "groq" else 300.0
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}) and no keys remain. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit rate limits and no keys remain. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
                                     async with _get_key_rate_lock():
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
@@ -661,7 +800,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                             skip_groq_models = True
                                     break
 
-                                await asyncio.sleep(3.0)
+                                sleep_sec = groq_backoff if provider == "groq" else 3.0
+                                await asyncio.sleep(sleep_sec)
                                 continue
                             if "timeout" in err_str or "timed out" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} timed out for key ...{selected_key[-6:]}. Trying next model candidate...")
@@ -683,6 +823,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
             if had_safety_block:
                 logger.warning(f"🚫 [VISION] [{source}] Image rejected by safety filter. Returning 'safety_rejected'.")
+                return "safety_rejected"
+
+            if has_nsfw_content and skip_gemini_models:
+                logger.warning(f"🚫 [VISION] [{source}] NSFW content detected and Groq models exhausted. Returning 'safety_rejected'.")
                 return "safety_rejected"
 
             if permanent_model_failures >= len(models_cascade):
