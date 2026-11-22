@@ -420,10 +420,16 @@ RAID_LOCKDOWN_THRESHOLD = 12
 RAID_LOCKDOWN_WINDOW = 60
 RAID_LOCKDOWN_DURATION = 300
 
+_CALLBACK_DEBOUNCE_TRACKER: Dict[Tuple[int, str], float] = {}
+_CALLBACK_DEBOUNCE_THRESHOLD = 0.35  # 350 ms window for rapid duplicate clicks
+
+
 class CallbackAnswerGuardMiddleware(BaseMiddleware):
     """
     Гарантирует вызов safe_callback_answer() для каждого входящего CallbackQuery.
     Защищает от бесконечного вращения спиннера/часиков при падении хэндлера или досрочном return.
+    Включает защиту от повторного быстрого дабл-клика (Debounce): мгновенно отвечает на callback,
+    не допуская зацикливания или повторного выполнения тяжелого действия.
     """
     async def __call__(
         self,
@@ -431,6 +437,23 @@ class CallbackAnswerGuardMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
+        global _CALLBACK_DEBOUNCE_TRACKER
+        if isinstance(event, types.CallbackQuery):
+            user_id = event.from_user.id if event.from_user else 0
+            cb_data = str(event.data or "")
+            if user_id > 0 and cb_data:
+                now = time.time()
+                key = (user_id, cb_data)
+                last_time = _CALLBACK_DEBOUNCE_TRACKER.get(key, 0.0)
+                if (now - last_time) < _CALLBACK_DEBOUNCE_THRESHOLD:
+                    # Rapid double-click detected: immediately answer to stop client spinner
+                    await safe_callback_answer(event, "⏳ Запрос обрабатывается...", show_alert=False)
+                    return None
+                _CALLBACK_DEBOUNCE_TRACKER[key] = now
+                if len(_CALLBACK_DEBOUNCE_TRACKER) > 2000:
+                    cutoff = now - 15.0
+                    _CALLBACK_DEBOUNCE_TRACKER = {k: v for k, v in _CALLBACK_DEBOUNCE_TRACKER.items() if v > cutoff}
+
         try:
             return await handler(event, data)
         finally:
@@ -3651,11 +3674,11 @@ def _format_reactions_block(post_data: dict) -> str | None:
         }
         for group_name, group_emojis in display_groups.items():
             if group_emojis:
-                reaction_lines.append("".join(group_emojis))
+                reaction_lines.append(escape_html("".join(group_emojis)))
     elif 'positive' in reactions_data or 'negative' in reactions_data:
-        if reactions_data.get('positive'): reaction_lines.append("".join(reactions_data['positive']))
-        if reactions_data.get('neutral'): reaction_lines.append("".join(reactions_data['neutral']))
-        if reactions_data.get('negative'): reaction_lines.append("".join(reactions_data['negative']))
+        if reactions_data.get('positive'): reaction_lines.append(escape_html("".join(reactions_data['positive'])))
+        if reactions_data.get('neutral'): reaction_lines.append(escape_html("".join(reactions_data['neutral'])))
+        if reactions_data.get('negative'): reaction_lines.append(escape_html("".join(reactions_data['negative'])))
     if reaction_lines:
         return "\n".join(reaction_lines)
     return None
@@ -27617,11 +27640,26 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
     elif lang == 'jp': header = f"<b>投稿 #{post_num} へのリアクション:</b>\n\n"
     else: header = f"<b>Реакции на пост #{post_num}:</b>\n\n"
     lines = []
-    sorted_reactors = sorted(reactions_data.items())
+    sorted_reactors = sorted(reactions_data.items(), key=lambda x: str(x[0]))
     MAX_USERS_TO_SHOW = 50
     for user_id, emoji_list in sorted_reactors[:MAX_USERS_TO_SHOW]:
-        emojis_str = "".join(emoji_list)
-        lines.append(f"• ID <code>{user_id}</code>: {emojis_str}")
+        safe_emojis_str = escape_html("".join(emoji_list))
+        try:
+            uid_int = int(user_id)
+        except (ValueError, TypeError):
+            uid_int = 0
+
+        if 770100001 <= uid_int <= 770199999:
+            anon_idx = uid_int - 770100000
+            if lang == 'en':
+                lines.append(f"• 🕶 Anon #{anon_idx}: {safe_emojis_str}")
+            elif lang == 'jp':
+                lines.append(f"• 🕶 名無し #{anon_idx}: {safe_emojis_str}")
+            else:
+                lines.append(f"• 🕶 Аноним #{anon_idx}: {safe_emojis_str}")
+        else:
+            safe_user_id = escape_html(str(user_id))
+            lines.append(f"• ID <code>{safe_user_id}</code>: {safe_emojis_str}")
     response_text = header + "\n".join(lines)
     if len(sorted_reactors) > MAX_USERS_TO_SHOW:
         diff = len(sorted_reactors) - MAX_USERS_TO_SHOW
@@ -27632,7 +27670,15 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
     try:
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError):
+    except TelegramBadRequest as e:
+        if "parse" in str(e).lower() or "tag" in str(e).lower() or "entities" in str(e).lower():
+            try:
+                plain_text = re.sub(r'<[^>]+>', '', response_text)
+                await message.answer(plain_text)
+                await message.delete()
+            except Exception:
+                pass
+    except TelegramForbiddenError:
         pass
 @dp.message(Command("filter"))
 async def cmd_filter(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -30820,6 +30866,9 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "solo_casino_watchdog": lambda: start_solo_casino_watchdog_loop(bots.get('ru') or active_bots_list[0]),
         "reaction_motivation_broadcast": lambda: __import__('reaction_broadcast_engine').reaction_motivation_broadcast_loop(
             lambda: bots.get('ru') or bots.get('b') or (next(iter(bots.values())) if bots else None)
+        ),
+        "reaction_mimicry_worker": lambda: __import__('handlers.message_router', fromlist=['reaction_mimicry_worker_loop']).reaction_mimicry_worker_loop(
+            lambda: bots
         ),
     }
     if ENABLE_REPLY_NOTIFICATIONS:

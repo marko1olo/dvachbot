@@ -10,7 +10,7 @@ import logging
 import random
 import re
 import time
-from typing import Optional
+from typing import Optional, Any, List, Dict, Set, Tuple
 from aiogram import Bot, F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
@@ -810,7 +810,11 @@ async def notify_service_timeout(
 
 
 
-# Reactions
+# Reactions & Mimicry Anti-Exploit
+_daily_mimic_author_rewards: dict[int, list[float]] = {}
+_daily_mimic_reward_lock = asyncio.Lock()
+MAX_MIMIC_PAID_REACTIONS_PER_DAY = 3
+MAX_MIMIC_SHEKELS_PER_DAY = 750
 
 
 @message_router.message_reaction()
@@ -989,8 +993,22 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                         action = new_type
 
             if action is not None:
-                async with db_lock:
-                    db = await get_pool()
+                # Anti-Exploit Guard: check if reaction originates from Virtual Anon Mimic (770100001..770199999)
+                is_virtual_mimic = (770100001 <= user_id <= 770199999)
+                if is_virtual_mimic:
+                    now_ts = time.time()
+                    async with _daily_mimic_reward_lock:
+                        past_rewards = _daily_mimic_author_rewards.get(author_id, [])
+                        _daily_mimic_author_rewards[author_id] = [t for t in past_rewards if (now_ts - t) < 86400.0]
+                        if action == 'like':
+                            if len(_daily_mimic_author_rewards[author_id]) >= MAX_MIMIC_PAID_REACTIONS_PER_DAY:
+                                action = None  # Cap reached: visual reaction is saved, but shekels emission is suppressed
+                            else:
+                                _daily_mimic_author_rewards[author_id].append(now_ts)
+
+                if action is not None:
+                    async with db_lock:
+                        db = await get_pool()
 
                     if action == 'like':
                         # Награда за качественный пост (сопоставимо со сменами работы 150-450 ₪):
@@ -1050,7 +1068,18 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                         else:
                             penalty_amount = random.randint(200, 320)
 
-                        await deduct_user_global_balance(db, author_id, board_id, penalty_amount)
+                        if is_virtual_mimic:
+                            # Soft overdraft protection: do not deduct penalty if user has zero or negative balance
+                            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (author_id, board_id)) as cur_bal:
+                                bal_row = await cur_bal.fetchone()
+                                current_bal = bal_row[0] if bal_row and bal_row[0] else 0
+                            if current_bal <= 0:
+                                penalty_amount = 0
+                            else:
+                                penalty_amount = min(penalty_amount, current_bal)
+
+                        if penalty_amount > 0:
+                            await deduct_user_global_balance(db, author_id, board_id, penalty_amount)
                         await db.execute(
                             """
                             INSERT INTO Users (user_id, board_id, balance, reaction_penalty_counter) 
@@ -1151,6 +1180,389 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                 pending_edit_tasks[post_num] = new_task
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_message_reaction: {e}")
+
+
+async def apply_mimic_reaction_to_post(
+    post_num: int,
+    virtual_user_id: int,
+    emojis: Any,
+    bot_instance: Optional[Bot] = None,
+    board_id: Optional[str] = None
+) -> bool:
+    """
+    Applies a system mimic reaction to a post, saving to DB and dispatching edit:
+      1. Adds virtual_user_id reaction to post_data['reactions']['users'].
+      2. Syncs post_data['content']['reactions'] and updates database via update_post_content.
+      3. Smoothly debounces and edits post copies across Telegram chats via spawn_task(execute_delayed_edit(...)).
+      4. Publishes to 'Лучшее' channel if positive reaction threshold is reached.
+    """
+    if post_num <= 0:
+        return False
+
+    if isinstance(emojis, str):
+        clean_emojis = [emojis.strip()]
+    elif isinstance(emojis, (list, tuple, set)):
+        clean_emojis = [str(e).strip() for e in emojis if str(e).strip()]
+    else:
+        return False
+
+    if not clean_emojis:
+        return False
+
+    clean_emojis = clean_emojis[:2]
+    content_to_save = None
+    effective_board_id = board_id or 'b'
+    current_positive_count = 0
+    is_already_best = False
+
+    async with storage_lock:
+        post_data = messages_storage.get(post_num)
+        if not post_data:
+            try:
+                db_post = await get_post_by_num(post_num)
+                if db_post:
+                    content_dict = db_post.get('content') if isinstance(db_post.get('content'), dict) else {}
+                    reactions_dict = content_dict.get('reactions', {'users': {}})
+                    post_data = {
+                        'author_id': db_post.get('author_id'),
+                        'timestamp': db_post.get('timestamp'),
+                        'content': content_dict,
+                        'reactions': reactions_dict,
+                        'board_id': db_post.get('board_id', 'b'),
+                        'thread_id': db_post.get('thread_id')
+                    }
+                    messages_storage[post_num] = post_data
+            except Exception as db_err:
+                logger.debug(f"[apply_mimic_reaction] Could not load post #{post_num} from DB: {db_err}")
+                post_data = None
+
+        if not post_data:
+            return False
+
+        effective_board_id = board_id or post_data.get('board_id') or 'b'
+
+        if 'reactions' not in post_data or not isinstance(post_data.get('reactions'), dict):
+            if isinstance(post_data.get('content'), dict) and 'reactions' in post_data['content']:
+                post_data['reactions'] = post_data['content']['reactions']
+            else:
+                post_data['reactions'] = {'users': {}}
+
+        if 'users' not in post_data['reactions'] or not isinstance(post_data['reactions']['users'], dict):
+            post_data['reactions']['users'] = {}
+
+        reactions_storage = post_data['reactions']['users']
+        reactions_storage[virtual_user_id] = clean_emojis
+        reactions_storage.pop(str(virtual_user_id), None)
+
+        if isinstance(post_data.get('content'), dict):
+            post_data['content']['reactions'] = post_data['reactions']
+
+        for u_emojis in reactions_storage.values():
+            if isinstance(u_emojis, (list, tuple, set)):
+                for em in u_emojis:
+                    if em in POSITIVE_REACTIONS or em in LAUGHING_REACTIONS:
+                        current_positive_count += 1
+
+        is_already_best = bool(post_data.get('forwarded_to_best', False))
+        if isinstance(post_data.get('content'), dict):
+            content_to_save = post_data['content'].copy()
+
+    # 1. Save updated content to DB
+    if content_to_save:
+        try:
+            await update_post_content(post_num, content_to_save)
+        except Exception as upd_err:
+            logger.warning(f"[apply_mimic_reaction] Failed to update post content for #{post_num}: {upd_err}")
+
+    # 2. Economy reward / penalty with daily anti-inflation cap (max 3 rewards / 24h per author)
+    author_id = post_data.get('author_id')
+    if author_id and author_id > 0:
+        is_pos = any(em in POSITIVE_REACTIONS or em in LAUGHING_REACTIONS for em in clean_emojis)
+        is_neg = any(em in NEGATIVE_REACTIONS or em in CLOWN_REACTION or em in INSULT_REACTIONS for em in clean_emojis)
+        now_ts = time.time()
+        async with _daily_mimic_reward_lock:
+            past_rewards = _daily_mimic_author_rewards.get(author_id, [])
+            _daily_mimic_author_rewards[author_id] = [t for t in past_rewards if (now_ts - t) < 86400.0]
+            if is_pos and len(_daily_mimic_author_rewards[author_id]) < MAX_MIMIC_PAID_REACTIONS_PER_DAY:
+                _daily_mimic_author_rewards[author_id].append(now_ts)
+                reward_amt = random.randint(150, 300)
+                try:
+                    async with db_lock:
+                        db = await get_pool()
+                        await db.execute(
+                            """
+                            INSERT INTO Users (user_id, board_id, balance, reaction_reward_counter)
+                            VALUES (?, ?, ?, 1)
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET
+                            balance = balance + ?,
+                            reaction_reward_counter = COALESCE(reaction_reward_counter, 0) + 1
+                            """,
+                            (author_id, effective_board_id, reward_amt, reward_amt)
+                        )
+                except Exception as econ_err:
+                    logger.debug(f"[apply_mimic_reaction] Reward DB error: {econ_err}")
+            elif is_neg:
+                penalty_amt = random.randint(50, 100)
+                try:
+                    async with db_lock:
+                        db = await get_pool()
+                        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (author_id, effective_board_id)) as cur_bal:
+                            b_row = await cur_bal.fetchone()
+                            cur_b = b_row[0] if b_row and b_row[0] else 0
+                        if cur_b > 0:
+                            actual_penalty = min(penalty_amt, cur_b)
+                            await deduct_user_global_balance(db, author_id, effective_board_id, actual_penalty)
+                except Exception as econ_err:
+                    logger.debug(f"[apply_mimic_reaction] Penalty DB error: {econ_err}")
+
+    # 3. Publish to 'Лучшее' channel if threshold met (4+ for /b/, 3+ for other boards)
+    from shared_state import LIKES_THRESHOLD
+    best_threshold = 3 if effective_board_id and effective_board_id not in ('b',) else LIKES_THRESHOLD
+    if current_positive_count >= best_threshold and not is_already_best:
+        resolved_bot = bot_instance
+        if not resolved_bot:
+            try:
+                from common.bot_pool import global_bot_pool
+                resolved_bot = global_bot_pool.get_bot(effective_board_id) if hasattr(global_bot_pool, 'get_bot') else None
+            except Exception:
+                pass
+        if resolved_bot:
+            try:
+                from news_channel_publisher import publish_to_best_channel
+                spawn_task(publish_to_best_channel(resolved_bot, effective_board_id, post_num, post_data, current_positive_count))
+            except Exception as e:
+                logger.warning(f"Error triggering publish_to_best_channel for #{post_num}: {e}")
+
+    # 3. Trigger delayed edit to update reaction keyboard / message display across Telegram
+    resolved_bot = bot_instance
+    if not resolved_bot:
+        try:
+            from common.bot_pool import global_bot_pool
+            resolved_bot = global_bot_pool.get_bot(effective_board_id) if hasattr(global_bot_pool, 'get_bot') else None
+        except Exception:
+            pass
+    if resolved_bot:
+        async with pending_edit_lock:
+            if post_num in pending_edit_tasks:
+                pending_edit_tasks[post_num].cancel()
+            new_task = spawn_task(execute_delayed_edit(post_num, resolved_bot, None, None, delay=3.0))
+            pending_edit_tasks[post_num] = new_task
+
+    return True
+
+
+async def run_reaction_mimicry_cycle(
+    candidate_posts: Optional[List[Dict[str, Any]]] = None,
+    bot_instance: Optional[Bot] = None
+) -> List[Dict[str, Any]]:
+    """
+    Executes a single reaction mimicry cycle:
+      - Reads candidate posts (last 25-40).
+      - Filters out system posts (except Cyberchad), posts < 45s old, and already processed posts.
+      - Randomly samples 15%-35% of eligible posts.
+      - Classifies with reaction_mimicry_engine, assigns virtual anon ID, and applies reactions.
+    """
+    try:
+        from reaction_mimicry_engine import (
+            decide_post_reactions,
+            get_or_assign_virtual_reactor,
+            load_mimicry_state,
+            save_mimicry_state,
+            MAX_PROCESSED_POSTS_HISTORY
+        )
+    except ImportError:
+        logger.warning("[reaction_mimicry] reaction_mimicry_engine not found, skipping cycle.")
+        return []
+
+    state = load_mimicry_state()
+    now = time.time()
+
+    # 1. Gather candidate posts
+    raw_candidates = []
+    if candidate_posts is not None:
+        raw_candidates = list(candidate_posts)
+    else:
+        async with storage_lock:
+            sorted_items = sorted(messages_storage.items(), key=lambda x: x[0], reverse=True)
+            for p_num, p_data in sorted_items[:40]:
+                if isinstance(p_data, dict):
+                    c = dict(p_data)
+                    c['post_num'] = p_num
+                    raw_candidates.append(c)
+
+        if len(raw_candidates) < 25:
+            try:
+                db = await get_pool()
+                async with db.execute(
+                    "SELECT post_num, board_id, author_id, content, timestamp FROM Posts ORDER BY post_num DESC LIMIT 40"
+                ) as cur:
+                    rows = await cur.fetchall()
+                    existing_nums = {p.get('post_num') for p in raw_candidates}
+                    for row in rows:
+                        p_num = row[0]
+                        if p_num not in existing_nums:
+                            cnt = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+                            rx = cnt.get('reactions', {'users': {}})
+                            raw_candidates.append({
+                                'post_num': p_num,
+                                'board_id': row[1] or 'b',
+                                'author_id': row[2],
+                                'content': cnt,
+                                'reactions': rx,
+                                'timestamp': row[4]
+                            })
+            except Exception as db_err:
+                logger.debug(f"[reaction_mimicry] DB fetch fallback error: {db_err}")
+
+    # 2. Filter posts
+    processed_set = set(state.get("processed_post_nums", []))
+    eligible = []
+
+    for post in raw_candidates:
+        p_num = post.get("post_num") or post.get("num")
+        if not p_num or p_num <= 0:
+            continue
+
+        if p_num in processed_set:
+            continue
+
+        # Check if virtual anon already reacted
+        rx_users = {}
+        if isinstance(post.get('reactions'), dict):
+            rx_users = post['reactions'].get('users', {})
+        elif isinstance(post.get('content'), dict) and isinstance(post['content'].get('reactions'), dict):
+            rx_users = post['content']['reactions'].get('users', {})
+
+        already_reacted_by_anon = False
+        if isinstance(rx_users, dict):
+            for uid in rx_users.keys():
+                try:
+                    if 770100001 <= int(uid) <= 770199999:
+                        already_reacted_by_anon = True
+                        break
+                except (ValueError, TypeError):
+                    pass
+        if already_reacted_by_anon:
+            continue
+
+        # Check age (exclude posts < 45 seconds old)
+        p_ts = post.get("timestamp")
+        if isinstance(p_ts, datetime):
+            p_time = p_ts.timestamp()
+        elif isinstance(p_ts, (int, float)):
+            p_time = float(p_ts)
+        else:
+            p_time = now
+
+        if (now - p_time) < 45.0:
+            continue
+
+        # Check system post (exclude system posts unless it is Cyberchad)
+        author_id = post.get("author_id")
+        content_obj = post.get("content") if isinstance(post.get("content"), dict) else {}
+        is_system = (
+            author_id in (0, None)
+            or (isinstance(author_id, (int, float)) and author_id < 0)
+            or post.get("is_system")
+            or content_obj.get("is_system")
+            or content_obj.get("type") == "system"
+        )
+        if is_system:
+            is_cyberchad = (
+                post.get("is_cyberchad")
+                or author_id == 777
+                or post.get("persona") == "cyberchad"
+                or "киберчед" in str(content_obj.get("author", "")).lower()
+                or "cyberchad" in str(content_obj.get("author", "")).lower()
+                or "киберчед" in str(content_obj.get("text", "")).lower()
+                or "киберчед" in str(post.get("text", "")).lower()
+            )
+            if not is_cyberchad:
+                continue
+
+        eligible.append(post)
+
+    if not eligible:
+        return []
+
+    # 3. Random coverage 15% - 35%
+    ratio = random.uniform(0.15, 0.35)
+    target_count = max(1, min(len(eligible), int(round(len(eligible) * ratio))))
+    selected_posts = random.sample(eligible, target_count)
+
+    applied_results = []
+    for post in selected_posts:
+        p_num = post.get("post_num") or post.get("num")
+        b_id = post.get("board_id", "b")
+
+        persona, emojis = await decide_post_reactions(post, use_llm=False)
+        virtual_user_id = get_or_assign_virtual_reactor(p_num, persona)
+
+        ok = await apply_mimic_reaction_to_post(
+            post_num=p_num,
+            virtual_user_id=virtual_user_id,
+            emojis=emojis,
+            bot_instance=bot_instance,
+            board_id=b_id
+        )
+
+        if ok:
+            proc_list = state.setdefault("processed_post_nums", [])
+            proc_list.append(p_num)
+            if len(proc_list) > MAX_PROCESSED_POSTS_HISTORY:
+                state["processed_post_nums"] = proc_list[-MAX_PROCESSED_POSTS_HISTORY:]
+
+            stats = state.setdefault("persona_stats", {})
+            stats[persona] = stats.get(persona, 0) + len(emojis)
+            state["total_reactions_placed"] = state.get("total_reactions_placed", 0) + len(emojis)
+
+            applied_results.append({
+                "post_num": p_num,
+                "board_id": b_id,
+                "persona": persona,
+                "virtual_user_id": virtual_user_id,
+                "emojis": emojis
+            })
+
+    state["last_run_timestamp"] = now
+    save_mimicry_state(state)
+    logger.info(f"🎭 [reaction_mimicry] Applied reactions to {len(applied_results)} posts.")
+    return applied_results
+
+
+async def reaction_mimicry_worker_loop(bots_provider: Any = None):
+    """
+    Background worker periodically running reaction mimicry on candidate posts.
+    Interval: 25-45 minutes with +/- 5 minutes jitter.
+    """
+    logger.info("🤖 [reaction_mimicry] Starting background reaction mimicry worker...")
+    await asyncio.sleep(45.0)
+
+    while True:
+        try:
+            bot_instance = None
+            if callable(bots_provider):
+                bots = bots_provider()
+                if isinstance(bots, dict):
+                    bot_instance = bots.get('b') or bots.get('ru') or (next(iter(bots.values())) if bots else None)
+                elif hasattr(bots, 'send_message'):
+                    bot_instance = bots
+
+            await run_reaction_mimicry_cycle(bot_instance=bot_instance)
+        except asyncio.CancelledError:
+            logger.info("🛑 [reaction_mimicry] Worker loop cancelled.")
+            raise
+        except Exception as e:
+            logger.error(f"❌ [reaction_mimicry] Error in worker loop: {e}")
+
+        # Sleep with jitter: 25-45 min +/- 5 min
+        delay = random.randint(25 * 60, 45 * 60) + random.randint(-300, 300)
+        delay = max(60, delay)
+        logger.info(f"⏳ [reaction_mimicry] Next cycle in {delay // 60}m {delay % 60}s...")
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            break
 
 _last_shadow_echo_ts: dict[int, float] = {}
 

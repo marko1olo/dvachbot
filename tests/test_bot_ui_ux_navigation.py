@@ -133,7 +133,7 @@ async def test_guard_middleware_answers_on_normal_completion():
 async def test_guard_middleware_answers_on_early_return():
     """Middleware ensures safe_callback_answer is called when handler returns early without answer."""
     mw = CallbackAnswerGuardMiddleware()
-    cb = make_mock_callback()
+    cb = make_mock_callback(data="test_action_early")
 
     async def early_return_handler(event, data):
         # Handler exits early without calling answer()
@@ -148,7 +148,7 @@ async def test_guard_middleware_answers_on_early_return():
 async def test_guard_middleware_answers_on_unhandled_exception():
     """Middleware ensures safe_callback_answer is called even if handler raises an exception."""
     mw = CallbackAnswerGuardMiddleware()
-    cb = make_mock_callback()
+    cb = make_mock_callback(data="test_action_crash")
 
     async def crashing_handler(event, data):
         raise RuntimeError("Simulated unhandled exception in handler!")

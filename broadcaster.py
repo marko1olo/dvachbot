@@ -145,11 +145,11 @@ def _format_reactions_block(post_data: dict) -> str | None:
         }
         for group_name, group_emojis in display_groups.items():
             if group_emojis:
-                reaction_lines.append("".join(group_emojis))
+                reaction_lines.append(escape_html("".join(group_emojis)))
     elif 'positive' in reactions_data or 'negative' in reactions_data:
-        if reactions_data.get('positive'): reaction_lines.append("".join(reactions_data['positive']))
-        if reactions_data.get('neutral'): reaction_lines.append("".join(reactions_data['neutral']))
-        if reactions_data.get('negative'): reaction_lines.append("".join(reactions_data['negative']))
+        if reactions_data.get('positive'): reaction_lines.append(escape_html("".join(reactions_data['positive'])))
+        if reactions_data.get('neutral'): reaction_lines.append(escape_html("".join(reactions_data['neutral'])))
+        if reactions_data.get('negative'): reaction_lines.append(escape_html("".join(reactions_data['negative'])))
     if reaction_lines:
         return "\n".join(reaction_lines)
     return None

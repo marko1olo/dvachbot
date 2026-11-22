@@ -354,11 +354,25 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
     elif lang == 'jp': header = f"<b>投稿 #{post_num} へのリアクション:</b>\n\n"
     else: header = f"<b>Реакции на пост #{post_num}:</b>\n\n"
     lines = []
-    sorted_reactors = sorted(reactions_data.items())
+    sorted_reactors = sorted(reactions_data.items(), key=lambda x: str(x[0]))
     MAX_USERS_TO_SHOW = 50
     for user_id, emoji_list in sorted_reactors[:MAX_USERS_TO_SHOW]:
         emojis_str = "".join(emoji_list)
-        lines.append(f"• ID <code>{user_id}</code>: {emojis_str}")
+        try:
+            uid_int = int(user_id)
+        except (ValueError, TypeError):
+            uid_int = 0
+
+        if 770100001 <= uid_int <= 770199999:
+            anon_idx = uid_int - 770100000
+            if lang == 'en':
+                lines.append(f"• 🕶 Anon #{anon_idx}: {emojis_str}")
+            elif lang == 'jp':
+                lines.append(f"• 🕶 名無し #{anon_idx}: {emojis_str}")
+            else:
+                lines.append(f"• 🕶 Аноним #{anon_idx}: {emojis_str}")
+        else:
+            lines.append(f"• ID <code>{user_id}</code>: {emojis_str}")
     response_text = header + "\n".join(lines)
     if len(sorted_reactors) > MAX_USERS_TO_SHOW:
         diff = len(sorted_reactors) - MAX_USERS_TO_SHOW

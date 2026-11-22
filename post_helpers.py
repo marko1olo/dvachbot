@@ -614,7 +614,7 @@ async def _get_author_prefix(author_id: int, board_id: str = "") -> str:
     return ""
 
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru', global_post_num: int | None = None) -> str:
-
+    thread_info = thread_info or {}
     b_data = board_data.get(board_id, {})
     is_isolated = False
     if author_id > 0:
