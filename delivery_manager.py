@@ -3,10 +3,14 @@ from common.config import (
     BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
     BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC, BOT_DELIVERY_INITIAL_CHUNK_SIZE,
     BOT_PRIORITY_SPLIT_MIN_PASSIVE, BOT_PASSIVE_MAX_PREEMPTIONS,
-    SITE_PUBLIC_BASE_URL
+    SITE_PUBLIC_BASE_URL,
+    BOT_CONTROLLED_STOP_DRAIN_TIMEOUT_SEC,
 )
 
+CONTROLLED_STOP_DRAIN_TIMEOUT_SEC: float = max(0.0, float(BOT_CONTROLLED_STOP_DRAIN_TIMEOUT_SEC))
+
 import os
+import asyncio
 import shared_state
 from shared_state import (
     BroadcastConfig,
@@ -43,7 +47,7 @@ from common.database import (
     mark_broadcast_posts_sent
 )
 from common.board_config import BOARD_CONFIG
-from post_helpers import format_header
+from post_helpers import format_header, safe_edit_message_text, safe_edit_message_caption, safe_delete_message
 from common.thread_manager import get_threads_data, get_thread_info
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post, is_ai_slop_content, is_admin
@@ -59,6 +63,8 @@ else:
     except ImportError:
         import __main__ as main
 UTC = timezone.utc
+
+_POST_EDIT_SEMAPHORE = asyncio.Semaphore(10)
 
 PRIORITY_PASSIVE_MEDIA_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE)
 
@@ -660,66 +666,97 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
         user_specific_texts[user_id] = full_text
 
     async def _edit_one(user_id: int, message_id: int):
-        max_attempts = 6
-        delay = 1.5
-        for attempt in range(max_attempts):
-            try:
-                full_text = user_specific_texts.get(user_id, "")
-                content_type = content_copy.get('type')
-                if content_type == 'text':
-                    if len(full_text) > 4096: full_text = full_text[:4093] + "..."
-                    await asyncio.wait_for(
-                        bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard),
-                        timeout=8.0
-                    )
-                else:
-                    if len(full_text) > 1024: full_text = full_text[:1021] + "..."
-                    await asyncio.wait_for(
-                        bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard),
-                        timeout=8.0
-                    )
-                return
-            except TelegramRetryAfter as e:
-                wait_sec = e.retry_after + 1
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(wait_sec)
-                    continue
-                else:
+        max_attempts = 4
+        delay = 1.0
+        async with _POST_EDIT_SEMAPHORE:
+            for attempt in range(max_attempts):
+                try:
+                    full_text = user_specific_texts.get(user_id, "")
+                    content_type = content_copy.get('type')
+                    if content_type == 'text':
+                        if len(full_text) > 4096: full_text = full_text[:4093] + "..."
+                        await asyncio.wait_for(
+                            safe_edit_message_text(
+                                bot=bot_instance,
+                                chat_id=user_id,
+                                message_id=message_id,
+                                text=full_text,
+                                parse_mode="HTML",
+                                reply_markup=final_keyboard,
+                                fallback_to_caption=True,
+                                request_timeout=3.5,
+                            ),
+                            timeout=4.0
+                        )
+                    else:
+                        if len(full_text) > 1024: full_text = full_text[:1021] + "..."
+                        await asyncio.wait_for(
+                            safe_edit_message_caption(
+                                bot=bot_instance,
+                                chat_id=user_id,
+                                message_id=message_id,
+                                caption=full_text,
+                                parse_mode="HTML",
+                                reply_markup=final_keyboard,
+                                fallback_to_text=True,
+                                request_timeout=3.5,
+                            ),
+                            timeout=4.0
+                        )
                     return
-            except TelegramBadRequest as e:
-                error_message_lower = e.message.lower()
-                ignored_errors = ("message is not modified", "message to edit not found", "chat not found")
-                if any(err in error_message_lower for err in ignored_errors):
-                    return
-                if "flood control" in error_message_lower or "retry after" in error_message_lower:
-                    wait_sec = 3
-                    match = re.search(r'retry after (\d+)', error_message_lower)
-                    if match:
-                        wait_sec = int(match.group(1)) + 1
+                except TelegramRetryAfter as e:
+                    wait_sec = e.retry_after + 1
                     if attempt < max_attempts - 1:
                         await asyncio.sleep(wait_sec)
                         continue
                     else:
                         return
-                return
-            except asyncio.TimeoutError:
-                runtime_logger.warning(f"⚠️ Timeout (8.0s) editing post copy for user {user_id}")
-                return
-            except (main.TelegramNetworkError, main.aiohttp.ClientError):
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 10)
-                    continue
-                return
-            except (main.TelegramForbiddenError, TelegramForbiddenError):
-                await remove_blocked_user_copies(user_id)
-                b_users = board_data.get(board_id, {}).get('users', {}).get('active')
-                if isinstance(b_users, set):
-                    b_users.discard(user_id)
-                return
-            except Exception as e:
-                runtime_logger.warning(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
-                return
+                except TelegramBadRequest as e:
+                    error_message_lower = e.message.lower()
+                    ignored_errors = (
+                        "message is not modified",
+                        "message to edit not found",
+                        "chat not found",
+                        "there is no text in the message to edit",
+                        "there is no caption in the message to edit",
+                        "message can't be edited",
+                        "message to delete not found",
+                        "voice_messages_forbidden",
+                    )
+                    if any(err in error_message_lower for err in ignored_errors):
+                        return
+                    if "flood control" in error_message_lower or "retry after" in error_message_lower:
+                        wait_sec = 3
+                        match = re.search(r'retry after (\d+)', error_message_lower)
+                        if match:
+                            wait_sec = int(match.group(1)) + 1
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep(wait_sec)
+                            continue
+                        else:
+                            return
+                    return
+                except asyncio.TimeoutError:
+                    if attempt < 1:
+                        await asyncio.sleep(0.5)
+                        continue
+                    runtime_logger.debug(f"Timeout (4.0s) editing post copy for user {user_id}")
+                    return
+                except (main.TelegramNetworkError, main.aiohttp.ClientError):
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, 6)
+                        continue
+                    return
+                except (main.TelegramForbiddenError, TelegramForbiddenError):
+                    await remove_blocked_user_copies(user_id)
+                    b_users = board_data.get(board_id, {}).get('users', {}).get('active')
+                    if isinstance(b_users, set):
+                        b_users.discard(user_id)
+                    return
+                except Exception as e:
+                    runtime_logger.warning(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
+                    return
     # Собираем список (uid, mid) без запуска тасок — чтобы chunking реально работал
     recipients_list = [
         (uid, sorted(msgs)[0])
@@ -727,8 +764,8 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
         if msgs
     ]
 
-    CHUNK_SIZE = 15
-    DELAY_BETWEEN_CHUNKS = 0.6
+    CHUNK_SIZE = 10
+    DELAY_BETWEEN_CHUNKS = 0.4
     for i in range(0, len(recipients_list), CHUNK_SIZE):
         chunk = recipients_list[i:i + CHUNK_SIZE]
         # Передаём голые корутины — gather запускает их сам, строго в пределах чанка

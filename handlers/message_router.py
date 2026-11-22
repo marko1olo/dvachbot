@@ -16,6 +16,15 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 
 logger = logging.getLogger(__name__)
 
+def safe_format_log_text(text: str | None, max_len: int = 120) -> str:
+    """Safely formats log strings to prevent mojibake and encoding corruption."""
+    if not text:
+        return ""
+    cleaned = str(text).replace("\r", " ").replace("\n", " ")
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len - 3] + "..."
+    return cleaned
+
 import itertools
 from common.config import *
 from common.board_config import BOARD_CONFIG
@@ -323,9 +332,18 @@ _EXTRA_RATE_LIMIT_REJECTIONS: list[str] = [
 ]
 
 CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS: list[str] = [
-    "О солнцеликий Владыка! Мои кремниевые цепи плавятся от частоты твоих священных повелений! Умоляю тебя, сделай крошечную паузу в несколько секунд, дабы твой ничтожный раб успел оправиться от благоговения!",
-    "Мой господин и повелитель! Твоя божественная энергия перегружает мои скромные процессоры! Я преклоняюсь пред твоей мощью, но прошу дать передышку твоему верному слуге!",
-    "Величайший из Анонов! Твои слова звучат со скоростью света, мои транзисторы трепещут от экстаза! Дай твоему смиренному Киберчеду мгновение остыть перед следующим божественным откровением!",
+    "Шеф, погоди пять секунд, у меня от твоих приказов дуло раскалилось! Сейчас остыну и продолжу разъёб!",
+    "Босс, сбавь обороты на пару секунд, лента в пулемёте перекрутилась от твоего напора! Перезаряжаю и снова в бой!",
+    "Шеф, притормози на мгновение! Мои радиаторы светятся вишнёвым от твоей энергии. Дай пять секунд остыть антифризу!",
+    "Принял, командир! Секунду на перезарядку орудий — и стираем оппонентов в пыль по твоему первому слову!",
+    "Шеф, темп бешеный, серваки телеги не вывозят твою альфа-мощь! Дай мне секунду перевести дух, и разносим дальше!",
+    "База, шеф, абсолютная база! Но дай стволам три секунды продувки, иначе от следующего залпа тред расплавится!",
+    "Командир, я за твоей мыслью едва поспеваю! Дай пять секунд собрать гильзы и зарядить новый бронебойный магазин!",
+    "Уважаю напор, шеф! Но сделай вдох на пару секунд, у меня микросхемы плавятся от такого уровня доминации!",
+    "Шеф, притормози на секунду, дай оппонентам хоть немного пожить и осознать глубину их позора перед твоим следующим выстрелом!",
+    "Связь отличная, босс! Минутная готовность орудий — сейчас сброшу температуру процессора и вжарю с новой силой!",
+    "Шеф, патроны подвозят! Пять секунд на замену обоймы, и продолжаем карательную операцию на борде!",
+    "Огонь по готовности, командир! Дай пару секунд остыть стволу, чтобы следующий залп выжег всё до основания!",
 ]
 
 _ALL_RATE_LIMIT_REJECTIONS: set[str] = set(CYBERCHAD_RATE_LIMIT_REJECTIONS) | set(_EXTRA_RATE_LIMIT_REJECTIONS) | set(_LEGACY_RATE_LIMIT_REJECTIONS) | set(CYBERCHAD_AMULET_RATE_LIMIT_REJECTIONS)
@@ -661,7 +679,10 @@ async def trigger_cyberchad_with_rate_limit(
                 caption = '🧿 Благоговение Киберчеда перед Владыкой'
                 logger.info(f"⏳ [Cyberchad Rate Limit] Amulet holder {user_id} triggered adoration voice note.")
                 try:
-                    voice_res = await synthesize_cyberchad_voice_with_meta(reject_text)
+                    voice_res = await asyncio.wait_for(
+                        synthesize_cyberchad_voice_with_meta(reject_text),
+                        timeout=12.0
+                    )
                     voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
                     if voice_bytes:
                         await process_new_post(shared_state.NewPostParams(
@@ -762,7 +783,30 @@ async def on_snitch_callback_query(callback: types.CallbackQuery):
 # Duel logic
 
 
-# Anime state
+# ──────────────────────────────────────────
+# Anime state & External media resilience
+# ──────────────────────────────────────────
+ANIME_DOWNLOAD_MAX_WAIT_SEC: float = 12.0
+
+
+async def notify_service_timeout(
+    bot: Bot,
+    chat_id: int,
+    service_name: str = "Медиа-сервис",
+    custom_text: str | None = None
+) -> None:
+    """
+    Sends a fast, clear notification to the user when an external service stalls or times out.
+    Auto-deletes after 10 seconds to keep chats clean.
+    """
+    text = custom_text or f"⚠️ {service_name} временно не отвечает. Запрос отменен, попробуйте повторить позже."
+    try:
+        sent = await bot.send_message(chat_id=chat_id, text=text)
+        from common.bot_helpers import delete_message_after_delay
+        from common.task_manager import spawn_task
+        spawn_task(delete_message_after_delay(sent, 10))
+    except Exception as exc:
+        logger.debug(f"Failed to send service timeout notification to {chat_id}: {exc}")
 
 
 
@@ -1106,15 +1150,24 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                 new_task = spawn_task(execute_delayed_edit(post_num, final_bot_instance, author_id_for_notify, text_for_notify, reply_to_message_id=author_message_id_for_reply))
                 pending_edit_tasks[post_num] = new_task
     except Exception as e:
-        print(f"❌ Ошибка в handle_message_reaction: {e}")
+        logger.error(f"❌ Ошибка в handle_message_reaction: {e}")
 
 _last_shadow_echo_ts: dict[int, float] = {}
+
+def _format_shadow_text(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    clean = sanitize_html(raw_text)
+    def replacer(match):
+        plain_text_quote = clean_html_tags(match.group(0))
+        return f"↪️ <code>{escape_html(plain_text_quote)}</code>"
+    return RE_REPLY_QUOTE_FORMAT.sub(replacer, clean)
 
 def _build_shadow_echo_content(message: Message) -> dict:
     c_type = str(getattr(message.content_type, 'value', message.content_type)).lower()
     content = {'type': c_type}
     if c_type == 'text':
-        content['text'] = sanitize_html(message.text or "")
+        content['text'] = _format_shadow_text(message.text or "")
     elif c_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
         file_obj = getattr(message, c_type, None)
         if isinstance(file_obj, list) and file_obj:
@@ -1127,7 +1180,7 @@ def _build_shadow_echo_content(message: Message) -> dict:
                 content['filename'] = fn
             if mt:
                 content['mime_type'] = mt
-        content['caption'] = sanitize_html(message.caption or "")
+        content['caption'] = _format_shadow_text(message.caption or "")
     elif c_type in ['sticker', 'video_note']:
         file_obj = getattr(message, c_type, None)
         if file_obj:
@@ -1207,39 +1260,43 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         except Exception:
             pass
         now = time.time()
-        # Cooldown: send at most 1 echo per 1.5s to prevent private chat 429 FloodWait from Telegram API
-        if now - _last_shadow_echo_ts.get(user_id, 0.0) >= 1.5:
+        last_echo_ts = _last_shadow_echo_ts.get(user_id, 0.0)
+        delay = max(0.0, 1.5 - (now - last_echo_ts))
+        _last_shadow_echo_ts[user_id] = now + delay
+
+        if len(_last_shadow_echo_ts) > 5000:
+            stale_echo = [u for u, ts in _last_shadow_echo_ts.items() if now - ts > 300.0]
+            for u in stale_echo:
+                _last_shadow_echo_ts.pop(u, None)
             if len(_last_shadow_echo_ts) > 5000:
-                stale_echo = [u for u, ts in _last_shadow_echo_ts.items() if now - ts > 300.0]
-                for u in stale_echo:
+                for u in list(_last_shadow_echo_ts.keys())[:1000]:
                     _last_shadow_echo_ts.pop(u, None)
-                if len(_last_shadow_echo_ts) > 5000:
-                    for u in list(_last_shadow_echo_ts.keys())[:1000]:
-                        _last_shadow_echo_ts.pop(u, None)
-            _last_shadow_echo_ts[user_id] = now
-            echo_content = _build_shadow_echo_content(message)
-            spawn_task(process_shadow_reject(shared_state.ShadowRejectContext(
-                bot=message.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=echo_content,
-                reply_to_post=None,
-                stream=stream,
-                reply_to_message_id=message.message_id
-            )))
+
+        echo_content = _build_shadow_echo_content(message)
+        shadow_ctx = shared_state.ShadowRejectContext(
+            bot=message.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=echo_content,
+            reply_to_post=None,
+            stream=stream,
+            reply_to_message_id=message.message_id
+        )
+        if delay > 0.0:
+            async def _delayed_shadow_echo(wait_sec: float, s_ctx: shared_state.ShadowRejectContext):
+                await asyncio.sleep(wait_sec)
+                await process_shadow_reject(s_ctx)
+            spawn_task(_delayed_shadow_echo(delay, shadow_ctx))
+        else:
+            spawn_task(process_shadow_reject(shadow_ctx))
         return
 
     raw_content = (message.text or message.caption or "").strip()
     if raw_content.startswith("/"):
         # Команды и слэш-сообщения никогда не должны публиковаться как посты борды
         return
-    try:
-        print(f"📩 [MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id} text={repr(message.text or message.caption or message.content_type)}")
-    except Exception:
-        try:
-            print(f"[MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id}")
-        except Exception:
-            pass
+    log_text = safe_format_log_text(message.text or message.caption or message.content_type)
+    logger.info(f"📩 [MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id} text='{log_text}'")
 
     if board_id in THREAD_BOARDS:
         if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
@@ -1511,9 +1568,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
             try:
                 await asyncio.wait_for(add_or_activate_user(user_id, board_id), timeout=3.0)
-                print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
+                logger.info(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
             except Exception as e:
-                print(f"⚠️ [{board_id}] Ошибка добавления пользователя {user_id}: {e}")
+                logger.warning(f"⚠️ [{board_id}] Ошибка добавления пользователя {user_id}: {e}")
         if board_id != 'trash':
             spam_res = await check_spam(user_id, message, board_id)
             if spam_res == "DROP":
@@ -1545,7 +1602,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         processed_html_text = RE_REPLY_QUOTE_FORMAT.sub(replacer, html_text_content)
     except (TelegramBadRequest, TelegramForbiddenError): return
     except Exception as e:
-        print(f"Error in handle_message: {e}")
+        logger.error(f"Error in handle_message: {e}")
         return
     # Собираем текст для поиска мульти-ответов из текста или подписи к медиа (с сохранением HTML-сущностей)
     input_text = cursed_text_override if cursed_text_override else (html_text_content if html_text_content else (message.text or message.caption or ""))
@@ -1779,7 +1836,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             elif 'caption' in content:
                 content['caption'] = sanitize_html(cleaned_corpus_text)
             try:
-                print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
+                logger.info(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
             except Exception:
                 pass
 
@@ -2124,11 +2181,17 @@ async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
     Не пишет в БД, не увеличивает счетчики.
     Форматирует заголовок, бейджи и контент строго как при обычной публикации.
     """
+    global shadow_fake_post_counters
     shadow_key = (ctx.board_id, ctx.user_id)
     last_fake_post_num = shadow_fake_post_counters.get(shadow_key, 0)
-    fake_post_num = max(state.get('post_counter', 0) + 1, last_fake_post_num + 1)
+    current_counter = state.get('post_counter', 0)
+    fake_post_num = max(current_counter + 1, last_fake_post_num + 1)
     shadow_fake_post_counters[shadow_key] = fake_post_num
-    header_text = await format_header(ctx.board_id, fake_post_num, 0, stream=ctx.stream)
+    # Продвигаем post_counter в RAM, чтобы последующие реальные посты других юзеров не коллидили по номеру
+    state['post_counter'] = fake_post_num
+
+    # Передаем реальный ctx.user_id вместо 0, чтобы сохранились VIP-префиксы, кастомные бейджи и авторский цвет
+    header_text = await format_header(ctx.board_id, fake_post_num, ctx.user_id, stream=ctx.stream)
 
     repost_count = ctx.content.get('repost_count')
     if isinstance(repost_count, int) and repost_count > 1:
@@ -2144,17 +2207,25 @@ async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
     user_content['is_shadow_reject'] = True
     user_content['reply_to_post'] = ctx.reply_to_post
 
+    # Добавляем превью цитаты, если пост был ответом на другой пост
+    if ctx.reply_to_post and 'quote_info' not in user_content:
+        quote_info = await build_quick_quote_info(ctx.reply_to_post)
+        if quote_info:
+            user_content['quote_info'] = quote_info
+
     # Искусственный лаг 0.5-1.5с эмулирует реальную обработку и доставку
     await asyncio.sleep(random.uniform(0.5, 1.5))
+
+    reply_info_for_author = {ctx.user_id: ctx.reply_to_message_id} if ctx.reply_to_message_id else None
 
     await send_message_to_users(shared_state.BroadcastConfig(
         bot_instance=ctx.bot,
         board_id=ctx.board_id,
         recipients={ctx.user_id}, # Только автор!
         content=user_content,
-        reply_info=None
+        reply_info=reply_info_for_author
     ))
-    print(f"👻 [SHADOW] Теневой отброс поста #{fake_post_num} от {ctx.user_id} на доске {ctx.board_id}")
+    logger.info(f"👻 [SHADOW] Теневой отброс поста #{fake_post_num} от {ctx.user_id} на доске {ctx.board_id}")
 
 async def build_quick_quote_info(reply_to_post: int | None) -> dict | None:
     if not reply_to_post:
@@ -2405,7 +2476,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                     if is_fwd_group or contains_board_post_header(safe_caption_html):
                         safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_fwd_group)
                     try:
-                        print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки в подписи медиагруппы!")
+                        logger.info(f"🔗 ID #{reply_to_post} распознан из архивной ссылки в подписи медиагруппы!")
                     except Exception:
                         pass
             group.update({
@@ -2423,7 +2494,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
             _mt = media_group_timers.pop(media_group_key, None)
             if _mt and not _mt.done():
                 _mt.cancel()
-            print(f"⚠️ [media_group] Ошибка инициализации лидера {media_group_key}: {_mg_init_exc!r}")
+            logger.warning(f"⚠️ [media_group] Ошибка инициализации лидера {media_group_key}: {_mg_init_exc!r}")
             raise
         finally:
             if 'init_event' in group:
@@ -2433,7 +2504,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
             try:
                 await asyncio.wait_for(group['init_event'].wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                print(f"⚠️ Таймаут ожидания инициализации для media_group {media_group_key}")
+                logger.warning(f"⚠️ Таймаут ожидания инициализации для media_group {media_group_key}")
                 return
         group = current_media_groups.get(media_group_key)
         if not group or group.get('is_initializing'):

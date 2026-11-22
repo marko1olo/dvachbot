@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, LinkPreviewOptions
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest, TelegramServerError
 import aiohttp
+import inspect
 import re
 from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
@@ -539,7 +540,7 @@ class MessageBroadcaster:
                             "board_id": self.board_id,
                             "post_num": self.post_num,
                             "phase": self.delivery_phase,
-                            "remaining_recipients": len(remaining_recipients_for_later),
+                            "remaining_recipients": len(queue),
                         },
                         ensure_ascii=False,
                         separators=(",", ":"),
@@ -1156,26 +1157,89 @@ class MessageBroadcaster:
             return await _send_plain_text_parts(reason, text=final_text)
 
         async def _send_text_fallback(reason: str):
-            fallback_text = full_text
-            media_url = current_content.get("image_url")
-            if media_url and str(media_url) not in fallback_text:
-                fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
-            if not self.media_url_fallback_logged:
-                runtime_logger.warning(
-                    "delivery_media_url_text_fallback %s",
+            ct = str(current_content.get("type") or "").split('.')[-1].lower()
+            is_voice_fallback = (reason == "voice_messages_forbidden" or ct == "voice")
+
+            if is_voice_fallback:
+                # Extract transcription from all available layers
+                transcription = (
+                    current_content.get("transcription")
+                    or current_content.get("roast_text")
+                    or current_content.get("voice_text")
+                    or current_content.get("text")
+                    or current_content.get("caption")
+                    or (self.content.get("transcription") if isinstance(self.content, dict) else None)
+                    or (self.content.get("roast_text") if isinstance(self.content, dict) else None)
+                    or (self.content_for_common.get("transcription") if isinstance(self.content_for_common, dict) else None)
+                    or (self.content_for_common.get("roast_text") if isinstance(self.content_for_common, dict) else None)
+                    or (self.post_data_copy.get('content', {}).get('transcription') if self.post_data_copy else None)
+                    or (self.post_data_copy.get('content', {}).get('roast_text') if self.post_data_copy else None)
+                )
+                if not transcription and current_content.get("file_id"):
+                    try:
+                        from common.db_pool import get_pool
+                        pool = await get_pool()
+                        cur_vt = await pool.execute(
+                            "SELECT transcription FROM VoiceTranscriptions WHERE file_id = ? LIMIT 1",
+                            (current_content["file_id"],)
+                        )
+                        row_vt = await cur_vt.fetchone()
+                        if row_vt and row_vt[0]:
+                            transcription = row_vt[0]
+                    except Exception:
+                        pass
+
+                ref_link = _get_thread_or_board_link()
+                voice_body_parts = []
+                if transcription:
+                    t_str = convert_site_tags_to_telegram(str(transcription).strip())
+                    voice_body_parts.append(f"🎤 <b>[Голосовое сообщение]</b>:\n{t_str}")
+                else:
+                    voice_body_parts.append("🎤 <i>[Голосовое сообщение недоступно из-за ваших настроек приватности Telegram]</i>")
+
+                if ref_link:
+                    voice_body_parts.append(f"🔗 <a href=\"{ref_link}\">{ref_link}</a>")
+
+                head_part = head or self.base_head_html
+                fallback_text = f"{head_part}\n\n" + "\n\n".join(voice_body_parts)
+
+                runtime_logger.info(
+                    "delivery_voice_text_fallback %s",
                     json.dumps(
                         {
                             "board_id": self.board_id,
                             "post_num": self.post_num,
                             "phase": self.delivery_phase,
-                            "type": str(current_content.get("type")),
+                            "uid": uid,
                             "reason": reason,
+                            "has_transcription": bool(transcription),
+                            "ref_link": ref_link,
                         },
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
                 )
-                self.media_url_fallback_logged = True
+            else:
+                fallback_text = full_text
+                media_url = current_content.get("image_url")
+                if media_url and str(media_url) not in fallback_text:
+                    fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
+                if not self.media_url_fallback_logged:
+                    runtime_logger.warning(
+                        "delivery_media_url_text_fallback %s",
+                        json.dumps(
+                            {
+                                "board_id": self.board_id,
+                                "post_num": self.post_num,
+                                "phase": self.delivery_phase,
+                                "type": str(current_content.get("type")),
+                                "reason": reason,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
+                    self.media_url_fallback_logged = True
             sent_msgs = []
             parts = split_text(fallback_text, 4096)
             cur_reply_id = reply_to_mid
@@ -1344,24 +1408,39 @@ class MessageBroadcaster:
                         return await _send_plain_text_parts(reason, plain_text)
                 elif len(media_group_build) < 1:
                     return await _send_plain_text_parts(reason, plain_text)
-                try:
-                    res = await self.bot_instance.send_media_group(
-                        chat_id=uid,
-                        media=media_group_build,
-                        reply_to_message_id=reply_to_mid,
-                        disable_notification=is_sage,
-                        request_timeout=request_timeout,
-                    )
-                except TelegramBadRequest as mg_err:
-                    err_mg = mg_err.message.lower()
-                    if "user_is_blocked" in err_mg:
-                        self.blocked_users.add(uid)
-                        raise TelegramForbiddenError(method=mg_err.method, message=mg_err.message)
-                    if "photo_invalid_dimensions" in err_mg or "webpage_media_empty" in err_mg:
-                        self.media_group_fallback_to_text = True
-                        self.media_group_invalid_dimensions = True
-                        return await _send_media_group_text_link_fallback("plain_fallback_invalid_dimensions")
-                    runtime_logger.warning(f"⚠️ Media group plain fallback failed for user {uid}: {mg_err}")
+                res = None
+                for _ in range(4):
+                    if len(media_group_build) < 1:
+                        break
+                    try:
+                        res = await self.bot_instance.send_media_group(
+                            chat_id=uid,
+                            media=media_group_build,
+                            reply_to_message_id=reply_to_mid,
+                            disable_notification=is_sage,
+                            request_timeout=request_timeout,
+                        )
+                        break
+                    except TelegramBadRequest as mg_err:
+                        err_mg = mg_err.message.lower()
+                        if "user_is_blocked" in err_mg:
+                            self.blocked_users.add(uid)
+                            raise TelegramForbiddenError(method=mg_err.method, message=mg_err.message)
+                        m_bad = re.search(r'failed to send message #(\d+)', mg_err.message, re.IGNORECASE)
+                        if m_bad:
+                            bad_idx = int(m_bad.group(1)) - 1
+                            if 0 <= bad_idx < len(media_group_build):
+                                had_caption = bool(getattr(media_group_build[bad_idx], 'caption', None))
+                                media_group_build.pop(bad_idx)
+                                if had_caption and media_group_build and can_fit_caption:
+                                    media_group_build[0].caption = plain_text
+                                continue
+                        if "photo_invalid_dimensions" in err_mg or "webpage_media_empty" in err_mg:
+                            self.media_group_fallback_to_text = True
+                            self.media_group_invalid_dimensions = True
+                            return await _send_media_group_text_link_fallback("plain_fallback_invalid_dimensions")
+                        break
+                if not res:
                     return await _send_plain_text_parts("media_group_plain_failed", plain_text)
                 _log_plain_fallback(reason)
                 if not can_fit_caption:
@@ -1432,8 +1511,14 @@ class MessageBroadcaster:
                     elif current_content.get("file_id") and isinstance(current_content.get("file_id"), str) and not current_content.get("file_id").strip().startswith('<'):
                         file_source = current_content["file_id"]
                     elif current_content.get("image_bytes") and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
+                        ib_len = len(current_content["image_bytes"])
                         if ct == 'photo':
-                            filename = "file.jpg"
+                            if 10_485_760 < ib_len <= 52_428_800:
+                                # Photo exceeds Telegram's 10MB photo ceiling but fits document 50MB ceiling!
+                                ct = 'document'
+                                filename = "image.jpg"
+                            else:
+                                filename = "file.jpg"
                         elif ct == 'animation':
                             filename = "file.gif"
                         elif ct == 'voice':
@@ -1449,6 +1534,8 @@ class MessageBroadcaster:
                                 disk_bytes = f.read()
                             if disk_bytes:
                                 ext = os.path.splitext(current_content["file_path"])[1].lstrip('.') or ("jpg" if ct == 'photo' else "dat")
+                                if ct == 'photo' and 10_485_760 < len(disk_bytes) <= 52_428_800:
+                                    ct = 'document'
                                 file_source = BufferedInputFile(disk_bytes, filename=f"file.{ext}")
                         except Exception as fpe:
                             runtime_logger.warning("Error reading file_path in broadcaster: %s", fpe)
@@ -1458,10 +1545,14 @@ class MessageBroadcaster:
                         return await _send_text_fallback("missing_or_invalid_file_source")
                     if self.media_url_text_fallback and current_content.get("image_url"):
                         return await _send_text_fallback("cached_bad_media_url")
+                    if ct == 'photo' and hasattr(file_source, 'data') and 10_485_760 < len(file_source.data) <= 52_428_800:
+                        ct = 'document'
                     if has_spoiler and ct in ['photo', 'video', 'animation']:
                         common_kwargs['has_spoiler'] = True
                     if ct == 'video':
                         common_kwargs['supports_streaming'] = True
+                    if ct == 'document':
+                        common_kwargs.pop('has_spoiler', None)
                     if len(full_text) > 1024:
                         common_kwargs[ct] = file_source
                         send_method = getattr(self.bot_instance, f"send_{ct}")
@@ -1506,8 +1597,10 @@ class MessageBroadcaster:
                         common_kwargs['caption'] = full_text
                         common_kwargs['parse_mode'] = "HTML"
                         common_kwargs[ct] = file_source
-                        send_method = getattr(self.bot_instance, f"send_{ct}")
-                        res = await send_method(**common_kwargs)
+                        send_method = getattr(self.bot_instance, f"send_{ct}", None)
+                        res = send_method(**common_kwargs) if callable(send_method) else None
+                        if inspect.isawaitable(res):
+                            res = await res
                         if res:
                             fid = None
                             if getattr(res, 'photo', None): fid = res.photo[-1].file_id
@@ -1569,96 +1662,250 @@ class MessageBroadcaster:
                             media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
 
                     media_group_build = media_group_build[:10]
-                    if len(media_group_build) == 1:
-                        single_item = media_group_build[0]
-                        single_src = single_item.media
-                        single_type = 'photo' if isinstance(single_item, InputMediaPhoto) else (
-                            'video' if isinstance(single_item, InputMediaVideo) else (
-                                'document' if isinstance(single_item, InputMediaDocument) else 'audio'
-                            )
-                        )
-                        send_method = getattr(self.bot_instance, f"send_{single_type}")
-                        common_single_kwargs = {
-                            'chat_id': uid,
-                            'reply_to_message_id': reply_to_mid,
-                            'reply_markup': self.final_keyboard,
-                            'disable_notification': is_sage,
-                            'request_timeout': request_timeout,
-                        }
-                        if has_spoiler and single_type in ['photo', 'video']:
-                            common_single_kwargs['has_spoiler'] = True
-                        if single_type == 'video':
-                            common_single_kwargs['supports_streaming'] = True
-                        try:
-                            if len(full_text) <= 1024:
-                                common_single_kwargs['caption'] = full_text
-                                common_single_kwargs['parse_mode'] = "HTML"
-                                common_single_kwargs[single_type] = single_src
-                                res = await send_method(**common_single_kwargs)
-                            else:
-                                common_single_kwargs[single_type] = single_src
-                                media_msg = await send_method(**common_single_kwargs)
-                                text_parts = split_text(full_text, 4096)
-                                for part in text_parts:
-                                    await self.bot_instance.send_message(
-                                        chat_id=uid, text=part, parse_mode="HTML",
-                                        reply_to_message_id=media_msg.message_id,
-                                        disable_notification=is_sage,
-                                        link_preview_options=LinkPreviewOptions(is_disabled=True),
-                                        request_timeout=request_timeout,
-                                    )
-                                res = media_msg
-                            self.stats['success'] += 1
-                            return res
-                        except TelegramBadRequest as single_err:
-                            err_single = single_err.message.lower()
-                            if "user_is_blocked" in err_single:
-                                self.blocked_users.add(uid)
-                                raise TelegramForbiddenError(method=single_err.method, message=single_err.message)
-                            if "photo_invalid_dimensions" in err_single or "webpage_media_empty" in err_single:
-                                self.media_group_fallback_to_text = True
-                                self.media_group_invalid_dimensions = True
-                                return await _send_media_group_text_link_fallback("single_media_invalid_dimensions")
-                            runtime_logger.warning(f"⚠️ [SINGLE_MEDIA_FALLBACK] Failed to send single media item: {single_err}. Falling back to text.")
-                            self.media_group_fallback_to_text = True
-                            return await _send_text_fallback("single_media_failed_fallback")
-                    elif len(media_group_build) < 1:
+                    if len(media_group_build) < 1:
                         runtime_logger.warning(f"⚠️ [MEDIA_GROUP] Post #{self.post_num} has 0 valid media items. Falling back to text to preserve post.")
                         self.media_group_fallback_to_text = True
                         return await _send_text_fallback("not_enough_valid_media_in_group")
 
-                    try:
-                        res = await self.bot_instance.send_media_group(
-                            chat_id=uid, media=media_group_build,
-                            reply_to_message_id=reply_to_mid,
-                            disable_notification=is_sage,
-                            request_timeout=request_timeout,
-                        )
-                    except TelegramBadRequest as mg_err:
-                        err_low = mg_err.message.lower()
-                        if "user_is_blocked" in err_low:
-                            self.blocked_users.add(uid)
-                            raise TelegramForbiddenError(method=mg_err.method, message=mg_err.message)
-                        if "photo_invalid_dimensions" in err_low or "webpage_media_empty" in err_low:
-                            runtime_logger.warning(
-                                f"⚠️ [MEDIA_GROUP_INVALID_DIMENSIONS] Post #{self.post_num} rejected by Telegram: {mg_err.message}. "
-                                f"Switching to resilient plain text with thread/board link (plain fallback prohibited)."
+                    res = None
+                    max_prune_attempts = 5
+                    for prune_round in range(max_prune_attempts):
+                        if len(media_group_build) < 1:
+                            break
+                        if len(media_group_build) == 1:
+                            single_item = media_group_build[0]
+                            single_src = single_item.media
+                            single_type = 'photo' if isinstance(single_item, InputMediaPhoto) else (
+                                'video' if isinstance(single_item, InputMediaVideo) else (
+                                    'document' if isinstance(single_item, InputMediaDocument) else 'audio'
+                                )
                             )
-                            self.media_group_fallback_to_text = True
-                            self.media_group_invalid_dimensions = True
-                            return await _send_media_group_text_link_fallback("photo_invalid_dimensions_or_webpage_empty")
-                        if any(bad_id in err_low for bad_id in [
-                            "media_invalid", "wrong remote file identifier", "unserialize",
-                            "invalid file_id", "wrong file identifier", "file_parts_invalid",
-                            "media_type_invalid", "wrong type of the web page content"
-                        ]):
+                            if single_type == 'photo':
+                                src_size = 0
+                                if hasattr(single_src, 'data'):
+                                    src_size = len(single_src.data)
+                                elif isinstance(single_src, (bytes, bytearray)):
+                                    src_size = len(single_src)
+                                if 10_485_760 < src_size <= 52_428_800:
+                                    single_type = 'document'
+                            send_method = getattr(self.bot_instance, f"send_{single_type}", None)
+                            use_single = True
+                            if not callable(send_method) or (not inspect.iscoroutinefunction(send_method) and inspect.iscoroutinefunction(getattr(self.bot_instance, "send_media_group", None))):
+                                use_single = False
+                            if not use_single:
+                                try:
+                                    res = await self.bot_instance.send_media_group(
+                                        chat_id=uid, media=media_group_build,
+                                        reply_to_message_id=reply_to_mid,
+                                        disable_notification=is_sage,
+                                        request_timeout=request_timeout,
+                                    )
+                                    break
+                                except TelegramBadRequest:
+                                    pass
+
+                            common_single_kwargs = {
+                                'chat_id': uid,
+                                'reply_to_message_id': reply_to_mid,
+                                'reply_markup': self.final_keyboard,
+                                'disable_notification': is_sage,
+                                'request_timeout': request_timeout,
+                            }
+                            if has_spoiler and single_type in ['photo', 'video']:
+                                common_single_kwargs['has_spoiler'] = True
+                            if single_type == 'video':
+                                common_single_kwargs['supports_streaming'] = True
+                            try:
+                                if len(full_text) <= 1024:
+                                    common_single_kwargs['caption'] = full_text
+                                    common_single_kwargs['parse_mode'] = "HTML"
+                                    common_single_kwargs[single_type] = single_src
+                                    res = await send_method(**common_single_kwargs)
+                                else:
+                                    common_single_kwargs[single_type] = single_src
+                                    media_msg = await send_method(**common_single_kwargs)
+                                    text_parts = split_text(full_text, 4096)
+                                    for part in text_parts:
+                                        await self.bot_instance.send_message(
+                                            chat_id=uid, text=part, parse_mode="HTML",
+                                            reply_to_message_id=media_msg.message_id,
+                                            disable_notification=is_sage,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                            request_timeout=request_timeout,
+                                        )
+                                    res = media_msg
+                                break
+                            except TelegramBadRequest as single_err:
+                                err_single = single_err.message.lower()
+                                if "user_is_blocked" in err_single:
+                                    self.blocked_users.add(uid)
+                                    raise TelegramForbiddenError(method=single_err.method, message=single_err.message)
+                                if single_type == 'photo' and ("too big" in err_single or "file of size" in err_single or "photo_invalid_dimensions" in err_single):
+                                    runtime_logger.info(f"ℹ️ [MEDIA_FALLBACK] Single media photo too big ({single_err.message}). Retrying as send_document...")
+                                    try:
+                                        doc_kwargs = dict(common_single_kwargs)
+                                        doc_kwargs.pop('photo', None)
+                                        doc_kwargs.pop('has_spoiler', None)
+                                        doc_kwargs['document'] = single_src
+                                        if len(full_text) <= 1024:
+                                            doc_kwargs['caption'] = full_text
+                                            doc_kwargs['parse_mode'] = "HTML"
+                                            res = await self.bot_instance.send_document(**doc_kwargs)
+                                        else:
+                                            media_msg = await self.bot_instance.send_document(**doc_kwargs)
+                                            text_parts = split_text(full_text, 4096)
+                                            for part in text_parts:
+                                                await self.bot_instance.send_message(
+                                                    chat_id=uid, text=part, parse_mode="HTML",
+                                                    reply_to_message_id=media_msg.message_id,
+                                                    disable_notification=is_sage,
+                                                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                                    request_timeout=request_timeout,
+                                                )
+                                            res = media_msg
+                                        break
+                                    except Exception as doc_err:
+                                        runtime_logger.debug(f"Document fallback in single_media_fallback failed: {doc_err}")
+                                if "photo_invalid_dimensions" in err_single or "webpage_media_empty" in err_single:
+                                    self.media_group_fallback_to_text = True
+                                    self.media_group_invalid_dimensions = True
+                                    return await _send_media_group_text_link_fallback("single_media_invalid_dimensions")
+                                runtime_logger.warning(f"⚠️ [SINGLE_MEDIA_FALLBACK] Failed to send single media item: {single_err}. Falling back to text.")
+                                self.media_group_fallback_to_text = True
+                                return await _send_text_fallback("single_media_failed_fallback")
+
+                        try:
+                            res = await self.bot_instance.send_media_group(
+                                chat_id=uid, media=media_group_build,
+                                reply_to_message_id=reply_to_mid,
+                                disable_notification=is_sage,
+                                request_timeout=request_timeout,
+                            )
+                            break
+                        except TelegramForbiddenError:
+                            self.blocked_users.add(uid)
+                            raise
+                        except TelegramRetryAfter:
+                            raise
+                        except TelegramBadRequest as mg_err:
+                            err_low = mg_err.message.lower()
+                            if "user_is_blocked" in err_low:
+                                self.blocked_users.add(uid)
+                                raise TelegramForbiddenError(method=mg_err.method, message=mg_err.message)
+                            if _telegram_parse_error(err_low):
+                                for item in media_group_build:
+                                    if getattr(item, 'caption', None):
+                                        item.caption = html.unescape(clean_html_tags(item.caption or ""))
+                                        item.parse_mode = None
+                                continue
+                            # Handle MEDIA_INVALID: when file identifiers are rejected, fallback directly to text
+                            if "media_invalid" in err_low:
+                                runtime_logger.warning(
+                                    f"⚠️ [MEDIA_GROUP_FAILED] Post #{self.post_num} rejected by Telegram: {mg_err.message}. "
+                                    f"Switching to resilient text delivery to protect queue and deliver user post."
+                                )
+                                self.media_group_fallback_to_text = True
+                                return await _send_text_fallback("media_group_rejected_fallback")
+                            # Extract failed message index if reported by Telegram: "failed to send message #N"
+                            m_bad = re.search(r'failed to send message #(\d+)', mg_err.message, re.IGNORECASE)
+                            if m_bad:
+                                bad_idx = int(m_bad.group(1)) - 1
+                                if 0 <= bad_idx < len(media_group_build):
+                                    runtime_logger.warning(
+                                        f"⚠️ [MEDIA_GROUP_PRUNE] Post #{self.post_num}: Pruning rejected media item #{bad_idx + 1} ({mg_err.message})"
+                                    )
+                                    had_caption = bool(getattr(media_group_build[bad_idx], 'caption', None))
+                                    media_group_build.pop(bad_idx)
+                                    if self.content.get('media') and bad_idx < len(self.content['media']):
+                                        self.content['media'].pop(bad_idx)
+                                    if self.content_for_common.get('media') is not self.content.get('media'):
+                                        if self.content_for_common.get('media') and bad_idx < len(self.content_for_common['media']):
+                                            self.content_for_common['media'].pop(bad_idx)
+                                    if had_caption and media_group_build and can_fit_caption:
+                                        media_group_build[0].caption = full_text
+                                        media_group_build[0].parse_mode = "HTML"
+                                    continue
+                            # If album rejection has no specific index, break to sequential fallback
                             runtime_logger.warning(
-                                f"⚠️ [MEDIA_GROUP_FAILED] Post #{self.post_num} rejected by Telegram: {mg_err.message}. "
-                                f"Switching to resilient text delivery to protect queue and deliver user post."
+                                f"⚠️ [MEDIA_GROUP_FALLBACK] Post #{self.post_num}: send_media_group rejected ({mg_err.message}). Attempting sequential single media delivery..."
+                            )
+                            break
+
+                    if not res and media_group_build:
+                        sent_individual_msgs = []
+                        caption_delivered = False
+                        for idx, m_item in enumerate(list(media_group_build)):
+                            m_type = 'photo' if isinstance(m_item, InputMediaPhoto) else (
+                                'video' if isinstance(m_item, InputMediaVideo) else (
+                                    'document' if isinstance(m_item, InputMediaDocument) else 'audio'
+                                )
+                            )
+                            send_fn = getattr(self.bot_instance, f"send_{m_type}", None)
+                            if not callable(send_fn):
+                                continue
+                            cap = full_text if (not caption_delivered and can_fit_caption) else None
+                            item_kwargs = {
+                                'chat_id': uid,
+                                'reply_to_message_id': reply_to_mid if not sent_individual_msgs else sent_individual_msgs[0].message_id,
+                                'disable_notification': is_sage,
+                                'request_timeout': request_timeout,
+                            }
+                            if has_spoiler and m_type in ['photo', 'video']:
+                                item_kwargs['has_spoiler'] = True
+                            if m_type == 'video':
+                                item_kwargs['supports_streaming'] = True
+                            if cap:
+                                item_kwargs['caption'] = cap
+                                item_kwargs['parse_mode'] = "HTML"
+                            item_kwargs[m_type] = m_item.media
+                            try:
+                                sent_m = await send_fn(**item_kwargs)
+                                if sent_m:
+                                    sent_individual_msgs.append(sent_m)
+                                    if cap:
+                                        caption_delivered = True
+                            except TelegramBadRequest as ind_err:
+                                ind_low = ind_err.message.lower()
+                                if m_type == 'photo' and ("too big" in ind_low or "file of size" in ind_low or "photo_invalid_dimensions" in ind_low):
+                                    try:
+                                        doc_kwargs = dict(item_kwargs)
+                                        doc_kwargs.pop('photo', None)
+                                        doc_kwargs.pop('has_spoiler', None)
+                                        doc_kwargs['document'] = m_item.media
+                                        sent_m = await self.bot_instance.send_document(**doc_kwargs)
+                                        if sent_m:
+                                            sent_individual_msgs.append(sent_m)
+                                            if cap:
+                                                caption_delivered = True
+                                            continue
+                                    except Exception as doc_err:
+                                        runtime_logger.debug(f"Document fallback after photo rejection failed: {doc_err}")
+                                runtime_logger.debug(f"Skipping broken item in sequential fallback: {ind_err}")
+                            except Exception:
+                                pass
+
+                        if sent_individual_msgs:
+                            res = sent_individual_msgs
+                            if not caption_delivered and full_text:
+                                anchor_id = sent_individual_msgs[0].message_id
+                                text_parts = split_text(full_text, 4096)
+                                for part in text_parts:
+                                    try:
+                                        await self.bot_instance.send_message(
+                                            chat_id=uid, text=part, parse_mode="HTML",
+                                            reply_to_message_id=anchor_id,
+                                            disable_notification=is_sage,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                            request_timeout=request_timeout,
+                                        )
+                                    except Exception:
+                                        pass
+                        else:
+                            runtime_logger.warning(
+                                f"⚠️ [MEDIA_GROUP_FAILED] All media items in post #{self.post_num} rejected. Switching to resilient text delivery."
                             )
                             self.media_group_fallback_to_text = True
                             return await _send_text_fallback("media_group_rejected_fallback")
-                        raise
 
                     # Cache file_ids from Telegram response so subsequent recipients in the broadcast
                     # send pre-warmed file_id references instead of re-uploading raw bytes.
@@ -1761,6 +2008,18 @@ class MessageBroadcaster:
                 ):
                     self.media_url_text_fallback = True
                     return await _send_text_fallback("telegram_rejected_media_url")
+                is_photo_size_err = ct == 'photo' and (
+                    "too big for a photo" in err_low
+                    or "photo_invalid_dimensions" in err_low
+                    or ("file of size" in err_low and "photo" in err_low)
+                )
+                if is_photo_size_err and not getattr(self, f'_photo_doc_tried_{uid}', False):
+                    setattr(self, f'_photo_doc_tried_{uid}', True)
+                    runtime_logger.info(
+                        f"ℹ️ [PHOTO_SIZE_FALLBACK] Photo too big for send_photo in post #{self.post_num} ({e.message}). Retrying as send_document..."
+                    )
+                    current_content['type'] = 'document'
+                    continue
                 if "too big" in err_low or "file of size" in err_low:
                     if current_content.get('type') == 'media_group' and current_content.get('media'):
                         print(f"⚠️[Anti-Fat] Пост #{self.post_num}: Обнаружен жирный файл. Запуск фильтрации...")
@@ -1772,22 +2031,33 @@ class MessageBroadcaster:
                                 media_obj = item.get('media') or item.get('file_id')
                                 should_skip = False
                                 if hasattr(media_obj, 'data'):
-                                    if len(media_obj.data) > 9_900_000:
-                                        print(f"   🗑 Исключен BufferedInputFile ({len(media_obj.data)/1024/1024:.2f} MB)")
+                                    obj_size = len(media_obj.data)
+                                    if obj_size > 52_428_800:
+                                        print(f"   🗑 Исключен BufferedInputFile (>50MB: {obj_size/1024/1024:.2f} MB)")
                                         should_skip = True
+                                    elif obj_size > 10_485_760:
+                                        if item.get('type') == 'photo':
+                                            item['type'] = 'document'
                                 elif isinstance(media_obj, bytes):
-                                    if len(media_obj) > 9_900_000:
-                                        print(f"   🗑 Исключены raw bytes ({len(media_obj)/1024/1024:.2f} MB)")
+                                    obj_size = len(media_obj)
+                                    if obj_size > 52_428_800:
+                                        print(f"   🗑 Исключены raw bytes (>50MB: {obj_size/1024/1024:.2f} MB)")
                                         should_skip = True
+                                    elif obj_size > 10_485_760:
+                                        if item.get('type') == 'photo':
+                                            item['type'] = 'document'
                                 if should_skip:
                                     continue
                                 if isinstance(media_obj, str) and media_obj.startswith('http'):
                                     try:
                                         async with head_session.head(media_obj, timeout=3) as resp:
                                             size = int(resp.headers.get('Content-Length', 0))
-                                            if size > 9_500_000:
-                                                print(f"   🗑 Исключена жирная ссылка: {size/1024/1024:.2f} MB")
+                                            if size > 52_428_800:
+                                                print(f"   🗑 Исключена жирная ссылка (>50MB): {size/1024/1024:.2f} MB")
                                                 continue
+                                            elif size > 10_485_760:
+                                                if item.get('type') == 'photo':
+                                                    item['type'] = 'document'
                                     except Exception as head_err:
                                         runtime_logger.debug(f"HEAD check failed for {media_obj}: {head_err}")
                                 clean_media_list.append(item)
@@ -1799,7 +2069,7 @@ class MessageBroadcaster:
                         await asyncio.sleep(0.5)
                         continue
                     else:
-                        runtime_logger.warning(f"⚠️ [Anti-Fat] Single media in post #{self.post_num} too big. Falling back to text.")
+                        runtime_logger.warning(f"⚠️ [Anti-Fat] Single media in post #{self.post_num} too big (>50MB). Falling back to text.")
                         return await _send_text_fallback("file_too_big")
                 if "unauthorized" in err_low or "bot token is invalid" in err_low or "token is invalid" in err_low:
                     runtime_logger.critical(

@@ -13,6 +13,7 @@ Trigger logic (per board):
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import re
 import time
@@ -49,6 +50,51 @@ ANCHOR_SYSTEM_PROMPT = """Ты — The Anchor, местный Гигачад и 
 3. Разъеби их копиум и иллюзии в 1–3 хлёстких, унизительных предложениях.
 4. Бей точно в суть их нытья и конкретных слов в треде. Каждый раз атакуй с нового угла, без заученных шаблонов и штампов — реагируй по ситуации, вскрывая именно их самообман, лень или абсурдную логику.
 5. NO SYCOPHANCY. BRUTAL IMAGEBOARD ROASTING ONLY."""
+
+ANCHOR_FALLBACK_ROASTS: list[str] = [
+    "Хватит скулить в треде, омежки. Поднимите свои задницы с дивана и начните ебашить, пока жизнь окончательно не смыла вас в унитаз.",
+    "Ваш копиум смешон. Сидите тут, ищете виноватых, а сами боитесь даже из комнаты выйти. Соберитесь, тряпки, и перестаньте позориться.",
+    "Сколько можно размазывать сопли по экрану? Мир плевать хотел на ваши оправдания. Либо вы перебарываете лень, либо остаетесь на дне навсегда.",
+    "Опять перепись обиженных жизнью инцелов. Закройте двач, умойтесь холодной водой и сделайте хоть что-то полезное за день.",
+    "Ваше нытьё уже даже чедов утомляет. Завязывайте с жалостью к себе, выкиньте чипсы и займитесь делом.",
+]
+
+GEMINI_SERVICE_REFUSAL_EXTRA: tuple[str, ...] = (
+    "cannot adopt a persona",
+    "i cannot adopt a persona",
+    "explicit profanity",
+    "cannot generate profanity",
+    "insults, or targeted ab",
+    "targeted abuse",
+    "as an ai language model",
+    "as a language model",
+    "as an ai",
+    "i am an ai language model",
+    "i am a language model",
+    "i cannot fulfill this request",
+    "i cannot assist with this",
+    "my safety policies",
+    "against safety guidelines",
+    "policy violation",
+    "i am programmed to be a helpful",
+)
+
+
+def is_gemini_service_refusal(text: str | None) -> bool:
+    """
+    Checks whether the text contains an AI / Gemini safety refusal
+    (e.g. 'I cannot adopt a persona...', 'I cannot fulfill this request...').
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t_lower = text.strip().lower()
+    try:
+        from summarize import is_gemini_service_refusal as _sum_check
+        if _sum_check(text):
+            return True
+    except Exception:
+        pass
+    return any(marker in t_lower for marker in GEMINI_SERVICE_REFUSAL_EXTRA)
 
 
 def _prune_hourly(board_id: str, now: float) -> None:
@@ -110,31 +156,38 @@ async def generate_anchor_reply(context_messages: Union[list[str], str]) -> str 
         prompt = ANCHOR_SYSTEM_PROMPT
         user_text = _build_anchor_prompt(context_messages)
 
+        # 1. Try Primary LLM (Gemini Persona)
         reply = await summarize_text_with_hf(
             prompt=prompt,
             text_dump=user_text,
             model_preference="persona"
         )
-        if not reply or "Нейронка" in reply:
+
+        # 2. Safety refusal / failure check: Fallback to Groq Llama
+        if not reply or "Нейронка" in reply or is_gemini_service_refusal(reply):
+            if reply and is_gemini_service_refusal(reply):
+                print(f"[Anchor] Gemini refusal detected: '{reply[:60]}...'. Falling back to Groq Llama.", flush=True)
             reply = await summarize_text_with_hf(
                 prompt=prompt,
                 text_dump=user_text,
                 model_preference="llama"
             )
 
-        if not reply or "Нейронка" in reply or len(reply) < 5:
-            return None
+        # 3. If Groq also failed, refused, or returned garbage: Fallback to Cyberchad phrase
+        if not reply or "Нейронка" in reply or is_gemini_service_refusal(reply) or len(reply) < 5:
+            print("[Anchor] All LLMs unavailable or refused. Using Cyberchad fallback roast.", flush=True)
+            reply = random.choice(ANCHOR_FALLBACK_ROASTS)
 
         from common.text_utils import clean_ai_thinking
         reply = clean_ai_thinking(reply)
         reply = re.sub(r"<think\b[^>]*>.*?</think>", "", reply, flags=re.DOTALL | re.IGNORECASE).strip()
         if len(reply) > 600:
             reply = reply[:597] + "..."
-        return reply if reply else None
+        return reply if reply else random.choice(ANCHOR_FALLBACK_ROASTS)
 
     except Exception as e:
-        print(f"[Anchor] LLM generation failed: {e}", flush=True)
-        return None
+        print(f"[Anchor] LLM generation failed: {e}. Falling back to default roast.", flush=True)
+        return random.choice(ANCHOR_FALLBACK_ROASTS)
 
 
 async def trigger_anchor_post(bot: "Bot", board_id: str, stream: str) -> bool:
@@ -162,22 +215,36 @@ async def fire_anchor_post(
     msg_count_info = len(recent_messages) if isinstance(recent_messages, list) else len(recent_messages.splitlines())
     print(f"[Anchor] Firing on board '{board_id}' ({msg_count_info} msg lines context)", flush=True)
 
-    await asyncio.sleep(random.uniform(5.0, 20.0))
+    in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    if not in_test_env:
+        await asyncio.sleep(random.uniform(5.0, 20.0))
 
     reply_text = await generate_anchor_reply(recent_messages)
     if not reply_text:
         print(f"[Anchor] Generation returned nothing for board '{board_id}'", flush=True)
         return False
 
+    # Second safety net before TTS: ensure no service refusal slips through to voice synthesis
+    if is_gemini_service_refusal(reply_text):
+        print(f"[Anchor] Caught late refusal in fire_anchor_post: '{reply_text[:60]}...'. Replacing with fallback.", flush=True)
+        reply_text = random.choice(ANCHOR_FALLBACK_ROASTS)
+
     print(f"[Anchor] Posting: '{reply_text[:80]}...' on {board_id}", flush=True)
 
     try:
         from datetime import datetime, timezone
         from common.tts_engine import synthesize_cyberchad_voice_with_meta
-        import os
 
-        voice_res = await synthesize_cyberchad_voice_with_meta(reply_text)
-        voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
+        # Synthesize audio with timeout guard (15s ceiling)
+        try:
+            voice_res = await asyncio.wait_for(
+                synthesize_cyberchad_voice_with_meta(reply_text),
+                timeout=15.0
+            )
+            voice_bytes = voice_res[0] if isinstance(voice_res, tuple) else voice_res
+        except (asyncio.TimeoutError, Exception) as tts_err:
+            print(f"[Anchor] Voice synthesis timed out or failed: {tts_err}. Aborting post to prevent text leak.", flush=True)
+            return False
 
         in_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
         min_voice_size = 1 if in_test_env else 2500
