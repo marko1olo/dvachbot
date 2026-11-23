@@ -890,7 +890,7 @@ async def tagging_loop():
     logger.info("🚀 Tagging Worker Started (Single-Threaded + Resizer)")
     await asyncio.sleep(5)
 
-    global TEMP_FAILED_FILES
+    global TEMP_FAILED_FILES, _GLOBAL_API_EXHAUSTED_UNTIL, _GLOBAL_API_EXHAUSTED_STREAK
     if TEMP_FAILED_FILES is None:
         TEMP_FAILED_FILES = {}
 

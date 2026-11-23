@@ -629,4 +629,13 @@ class TestVisionCascade:
         now_ts = time.time()
         assert now_ts < tw._GLOBAL_API_EXHAUSTED_UNTIL
 
+    def test_tagging_loop_scope_has_no_unbound_locals(self):
+        """Ensure _GLOBAL_API_EXHAUSTED_UNTIL and _GLOBAL_API_EXHAUSTED_STREAK are global in tagging_loop."""
+        import site_tgach.tagging_worker as tw
+        code = tw.tagging_loop.__code__
+        assert "_GLOBAL_API_EXHAUSTED_UNTIL" not in code.co_varnames
+        assert "_GLOBAL_API_EXHAUSTED_STREAK" not in code.co_varnames
+        assert "_GLOBAL_API_EXHAUSTED_UNTIL" in code.co_names
+        assert "_GLOBAL_API_EXHAUSTED_STREAK" in code.co_names
+
 

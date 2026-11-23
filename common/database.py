@@ -9139,7 +9139,6 @@ async def get_failed_files_batch(file_ids: list[str]) -> set[str]:
                     if row[1]:
                         failed_set.add(row[1])
     except Exception as e:
-        logger = logging.getLogger("database")
         logger.error(f"Error fetching failed files batch: {e}")
     return failed_set
 
