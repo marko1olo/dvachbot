@@ -29,7 +29,7 @@
     <link rel="icon" href="/static/favicon.ico">
     <meta name="theme-color" content="#212121">
 </head>
-<body class="page-hub" {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
+<body class="page-hub" {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
     <!-- Скрипт инициализации темы -->
     <script>
         (function() {

@@ -227,17 +227,17 @@
         <div class="chat-list">
             {% if posts %}
                 {% for post in posts %}
-                <div class="post {% if post.content.sage %}is-sage{% endif %} {% if post.author_id == session.user.id %}is-yours{% endif %}" id="post-{{ post.id }}">
+                <div class="post {% if post.content.sage %}is-sage{% endif %} {% if post.is_yours or (request.state.user_hash and post.author_id == request.state.user_hash) or (session.user and post.author_id == session.user.id) %}is-yours{% endif %}" id="post-{{ post.id }}">
                     <div class="post-header">
-                        <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
-                        <span>{{ request.state.t('anon_name') }} </span>
+                        <canvas class="identicon" data-userid="{{ post.author_id | user_hash }}" width="20" height="20"></canvas>
+                        <span class="post-author">{{ post.author_id | nick_from_hash }}</span>
                         <span>
                             {% if post.thread_id %}
                                 <a href="/{{ board_id }}/res/{{ post.thread_id }}.html#post-{{ post.id }}" class="post-num-link" data-post-num="{{ post.id }}">#{{ post.id }}</a>
                             {% else %}
                                 <a href="#post-{{ post.id }}" class="post-num-link" data-post-num="{{ post.id }}">#{{ post.id }}</a>
                             {% endif %}
-                            {% if post.author_id == session.user.id %}<span class="you-marker">(You)</span>{% endif %}
+                            {% if post.is_yours or (request.state.user_hash and post.author_id == request.state.user_hash) or (session.user and post.author_id == session.user.id) %}<span class="you-marker">(You)</span>{% endif %}
                         </span>
                         <span class="ts-recalc" data-ts="{{ post.timestamp }}">{{ post.timestamp | format_timestamp }}</span>
                         {% if post.content.sage %}<span class="sage-indicator">SAGE</span>{% endif %}
@@ -246,7 +246,7 @@
                                 data-post-num="{{ post.id }}" 
                                 data-board-id="{{ board_id }}" 
                                 data-thread-id="{{ post.thread_id or '' }}" 
-                                data-author-id="{{ post.author_id }}">
+                                data-author-id="{{ post.author_id | user_hash }}">
                                 ▶
                             </button>
                         </div>

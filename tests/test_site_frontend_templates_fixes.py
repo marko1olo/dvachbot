@@ -122,6 +122,8 @@ def jinja_env():
     env.filters["bayan_label"] = lambda count, lang="ru": f"Баян x{count}"
     env.filters["clean_title"] = lambda text: text
     env.filters["nick_from_hash"] = lambda h: "Аноним"
+    env.filters["user_hash"] = lambda uid: f"h_{uid}"
+    env.filters["get_user_hash"] = lambda uid: f"h_{uid}"
     env.globals["static_version"] = "10.3"
     return env
 

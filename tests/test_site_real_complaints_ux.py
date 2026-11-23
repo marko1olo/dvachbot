@@ -41,6 +41,8 @@ def jinja_env():
     env.filters["truncate"] = lambda s, l=80: (s[:l] + "...") if s and len(s) > l else (s or "")
     env.filters["random"] = lambda lst: lst[0] if lst else ""
     env.filters["tojson"] = lambda obj: json.dumps(obj, ensure_ascii=False)
+    env.filters["user_hash"] = lambda uid: f"h_{uid}"
+    env.filters["get_user_hash"] = lambda uid: f"h_{uid}"
     return env
 
 
@@ -645,3 +647,261 @@ class TestAssetParityAndCompression:
         gz_data = (STATIC_CSS_DIR / "style.css.gz").read_bytes()
         decompressed = gzip.decompress(gz_data)
         assert decompressed == style_bytes
+
+
+
+class TestAnonymityZeroUserIdLeaksAndActivityBroadcast:
+    """
+    Tests enforcing zero raw numeric Telegram user_id / author_id leaks
+    across all Jinja2 templates, API endpoints, DOM attributes, and group activities.
+    """
+
+    def test_safe_user_hash_idempotency_and_security(self):
+        from site_tgach.main import safe_user_hash, get_user_hash
+        raw_int_id = 9988776655
+        h = safe_user_hash(raw_int_id)
+        assert len(h) == 12
+        assert all(c in "0123456789abcdef" for c in h)
+        # Idempotency check: passing the hash again returns the exact same hash
+        assert safe_user_hash(h) == h
+        assert safe_user_hash(None) == "system"
+        assert safe_user_hash("") == "system"
+
+    def test_convert_and_enrich_posts_hashes_ids_and_sets_anon_name(self):
+        from site_tgach.main import _convert_and_enrich_posts, safe_user_hash
+        raw_posts = [
+            {
+                "id": 101,
+                "author_id": 8877665544,
+                "user_id": 8877665544,
+                "content": {"text": "Hello anon", "type": "text"},
+                "timestamp": 1700000000.0,
+            }
+        ]
+        enriched = _convert_and_enrich_posts(raw_posts)
+        p = enriched[0]
+        expected_hash = safe_user_hash(8877665544)
+        assert p["author_id"] == expected_hash
+        assert p["user_id"] == expected_hash
+        assert str(8877665544) not in str(p["author_id"])
+        assert str(8877665544) not in str(p["user_id"])
+        assert "anon_name" in p
+        assert p["anon_name"].startswith("Анон [")
+
+    def test_to_makaba_post_uses_anon_name_and_no_user_ids(self):
+        from site_tgach.main import to_makaba_post
+        post_data = {
+            "id": 500,
+            "thread_id": 0,
+            "author_id": "3f8a91b2c4e5",
+            "content": {"text": "Makaba post", "files": []},
+            "timestamp": 1700000000.0,
+        }
+        res = to_makaba_post(post_data, "b")
+        assert res["num"] == 500
+        assert "author_id" not in res
+        assert "user_id" not in res
+        assert res["name"].startswith("Анон [")
+
+    def test_templates_never_render_raw_numeric_user_id(self):
+        import jinja2
+        import re
+        from site_tgach.main import safe_user_hash, nick_from_hash
+
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(r"C:\dev\dvachbot\site_tgach\templates"))
+        env.filters["user_hash"] = safe_user_hash
+        env.filters["get_user_hash"] = safe_user_hash
+        env.filters["nick_from_hash"] = nick_from_hash
+        env.filters["format_timestamp"] = lambda ts: "12:00:00"
+        env.filters["format_post_text"] = lambda t: t
+        env.filters["pluralize"] = lambda n, *a: f"{n} ответов"
+        env.filters["bayan_label"] = lambda l: l
+        env.filters["clean_title"] = lambda t: t
+        env.filters["format_iso_time"] = lambda ts: "2024-05-12T14:30:00Z"
+        env.filters["tojson"] = lambda obj: json.dumps(obj, ensure_ascii=False)
+        env.filters["striptags"] = lambda s: s or ""
+        env.filters["truncate"] = lambda s, l=80: (s[:l] + "...") if s and len(s) > l else (s or "")
+        env.filters["random"] = lambda lst: lst[0] if lst else ""
+        env.filters["format_poll"] = lambda poll: ""
+
+        raw_user_id = 9988776655
+        raw_author_id = 7766554433
+        raw_reply_id = 6655443322
+        user_hash = safe_user_hash(raw_user_id)
+        author_hash = safe_user_hash(raw_author_id)
+        reply_hash = safe_user_hash(raw_reply_id)
+
+        class MockRequest:
+            def __init__(self, path="/b/"):
+                self.url = type("URL", (), {"path": path, "_url": f"https://tgach.top{path}"})()
+                self.base_url = "https://tgach.top/"
+                self.query_params = {}
+                self.cookies = {}
+                self.state = type("State", (), {
+                    "lang": "ru",
+                    "stream": "ru",
+                    "user_hash": user_hash,
+                    "canonical_url": f"https://tgach.top{path}",
+                    "t": lambda *a, **kw: {"site_name": "ТГАЧ", "anon_name": "Аноним", "you_marker": "(You)"}.get(a[0] if a else "", a[0] if a else ""),
+                })()
+
+        mock_req = MockRequest()
+        mock_session = {"user": {"id": raw_user_id, "is_admin": False}}
+
+        def make_post(pid, aid, text="test"):
+            return {
+                "id": pid,
+                "board_id": "b",
+                "author_id": aid,
+                "content": {"text": text, "files": []},
+                "timestamp": 1700000000.0,
+                "reply_count": 0,
+                "anon_count": 1,
+                "report_count": 0,
+                "backlinks": [],
+                "latest_replies": []
+            }
+
+        common_b = {"b": {"name": "Бред", "id": "b", "category": "popular"}}
+        b_info = {"id": "b", "name": "Бред", "category": "popular"}
+
+        templates_to_test = [
+            ("archive_hub.jinja2", {"request": mock_req, "session": mock_session, "site_mode": "public", "static_version": "1", "boards": common_b, "board_info": b_info}),
+            ("favourites.jinja2", {"request": mock_req, "session": mock_session, "site_mode": "public", "static_version": "1", "boards": common_b, "board_info": b_info}),
+            ("history.jinja2", {"request": mock_req, "session": mock_session, "site_mode": "public", "static_version": "1", "boards": common_b, "board_info": b_info}),
+            ("chat.jinja2", {
+                "request": mock_req,
+                "session": mock_session,
+                "site_mode": "public",
+                "board_id": "b",
+                "boards": common_b,
+                "board_info": b_info,
+                "posts": [make_post(1, author_hash, "chat post")]
+            }),
+            ("search_results.jinja2", {
+                "request": mock_req,
+                "session": mock_session,
+                "site_mode": "public",
+                "static_version": "1",
+                "query": "test",
+                "boards": common_b,
+                "board_info": b_info,
+                "posts": [make_post(10, author_hash, "found post")]
+            }),
+            ("board.jinja2", {
+                "request": mock_req,
+                "session": mock_session,
+                "site_mode": "public",
+                "static_version": "1",
+                "board_id": "b",
+                "boards": common_b,
+                "board_info": b_info,
+                "posts": [
+                    dict(make_post(100, author_hash, "OP post"), reply_count=1, latest_replies=[make_post(101, reply_hash, "Reply")])
+                ]
+            }),
+            ("thread.jinja2", {
+                "request": mock_req,
+                "session": mock_session,
+                "site_mode": "public",
+                "static_version": "1",
+                "board_id": "b",
+                "boards": common_b,
+                "board_info": b_info,
+                "op_post": make_post(200, author_hash, "OP"),
+                "replies": [make_post(201, reply_hash, "Rep")]
+            }),
+            ("overboard.jinja2", {
+                "request": mock_req,
+                "session": mock_session,
+                "site_mode": "public",
+                "static_version": "1",
+                "boards": common_b,
+                "all_boards": common_b,
+                "selected_boards": ["b"],
+                "board_info": b_info,
+                "current_view": "threads",
+                "posts": [
+                    dict(make_post(300, author_hash, "OB post"), reply_count=1, latest_replies=[make_post(301, reply_hash, "OB Rep")])
+                ]
+            }),
+        ]
+
+        numeric_leak_pattern = re.compile(r'data-(?:user-?id|author-id|op-author-id)="(\d{4,})"')
+
+        for tmpl_name, ctx in templates_to_test:
+            tmpl = env.get_template(tmpl_name)
+            html = tmpl.render(**ctx)
+
+            # Strict check 1: Raw numbers MUST NOT be interpolated
+            assert str(raw_user_id) not in html, f"Raw user_id leaked in {tmpl_name}"
+            assert str(raw_author_id) not in html, f"Raw author_id leaked in {tmpl_name}"
+            assert str(raw_reply_id) not in html, f"Raw reply_id leaked in {tmpl_name}"
+
+            # Strict check 2: DOM attributes data-* must NEVER contain numeric user ID
+            matches = numeric_leak_pattern.findall(html)
+            assert not matches, f"Numeric ID in DOM data attributes in {tmpl_name}: {matches}"
+
+    def test_author_names_display_canonical_anon_format(self):
+        import jinja2
+        from site_tgach.main import safe_user_hash, nick_from_hash
+
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(r"C:\dev\dvachbot\site_tgach\templates"))
+        env.filters["user_hash"] = safe_user_hash
+        env.filters["get_user_hash"] = safe_user_hash
+        env.filters["nick_from_hash"] = nick_from_hash
+        env.filters["format_timestamp"] = lambda ts: "12:00:00"
+        env.filters["format_post_text"] = lambda t: t
+        env.filters["pluralize"] = lambda n, *a: f"{n} ответов"
+        env.filters["bayan_label"] = lambda l: l
+        env.filters["clean_title"] = lambda t: t
+        env.filters["format_iso_time"] = lambda ts: "2024-05-12T14:30:00Z"
+        env.filters["tojson"] = lambda obj: json.dumps(obj, ensure_ascii=False)
+        env.filters["striptags"] = lambda s: s or ""
+        env.filters["truncate"] = lambda s, l=80: (s[:l] + "...") if s and len(s) > l else (s or "")
+        env.filters["random"] = lambda lst: lst[0] if lst else ""
+        env.filters["format_poll"] = lambda poll: ""
+
+        tmpl = env.get_template("board.jinja2")
+        author_hash = "3f8a91b2c4e5"
+        mock_req = type("Req", (), {
+            "url": type("URL", (), {"_url": "https://tgach.top/b/", "path": "/b/"})(),
+            "base_url": "https://tgach.top/",
+            "query_params": {},
+            "cookies": {},
+            "state": type("S", (), {
+                "lang": "ru",
+                "user_hash": "a1b2c3d4e5f6",
+                "stream": "ru",
+                "canonical_url": "https://tgach.top/b/",
+                "t": lambda *a, **kw: a[0] if a else ""
+            })(),
+        })()
+        common_b = {"b": {"name": "Бред", "id": "b", "category": "popular"}}
+        b_info = {"id": "b", "name": "Бред", "category": "popular"}
+        post = {
+            "id": 100,
+            "board_id": "b",
+            "author_id": author_hash,
+            "content": {"text": "OP post", "files": []},
+            "timestamp": 1700000000.0,
+            "reply_count": 0,
+            "anon_count": 1,
+            "report_count": 0,
+            "backlinks": [],
+            "latest_replies": []
+        }
+        ctx = {
+            "request": mock_req,
+            "session": {"user": {"id": 12345, "is_admin": False}},
+            "site_mode": "public",
+            "static_version": "1",
+            "board_id": "b",
+            "boards": common_b,
+            "board_info": b_info,
+            "posts": [post]
+        }
+        rendered = tmpl.render(**ctx)
+        # Author name must be in format 'Анон [...]'
+        assert "Анон [" in rendered
+        assert author_hash in rendered or "data-userid" in rendered

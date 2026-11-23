@@ -182,10 +182,10 @@
                 </div>
             {% elif posts %}
                 {% for post in posts %}
-                    <div class="post {% if post.author_id == session.user.id %}is-yours{% endif %}" id="post-{{ post.id }}" data-reports="{{ post.report_count }}">
+                    <div class="post {% if post.is_yours or (request.state.user_hash and post.author_id == request.state.user_hash) or (session.user and post.author_id == session.user.id) %}is-yours{% endif %}" id="post-{{ post.id }}" data-reports="{{ post.report_count }}">
                         <div class="post-header">
-                            <span>/{{ post.board_id }}/ - Анон </span>
-                            <span><a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.id }}" class="post-num-link" target="_blank" rel="noopener noreferrer">#{{ post.id }}</a> {% if post.author_id == session.user.id %}<span class="you-marker">(You)</span>{% endif %}</span>
+                            <span>/{{ post.board_id }}/ - <span class="post-author">{{ post.author_id | nick_from_hash }}</span> </span>
+                            <span><a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.id }}" class="post-num-link" target="_blank" rel="noopener noreferrer">#{{ post.id }}</a> {% if post.is_yours or (request.state.user_hash and post.author_id == request.state.user_hash) or (session.user and post.author_id == session.user.id) %}<span class="you-marker">(You)</span>{% endif %}</span>
                             <span class="ts-recalc" data-ts="{{ post.timestamp }}">{{ post.timestamp | format_timestamp }}</span>
                         </div>
                         <div class="post-content">

@@ -184,21 +184,19 @@
                         <a id="p{{ post.id }}" class="post-anchor"></a>
                         <div class="post-header">
                             <a href="/{{ post.board_id }}/" class="is-op-badge" style="background:var(--text-secondary); margin-right:5px; text-decoration:none;">/{{ post.board_id }}/</a>
-                            <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
-                            <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ post.author_id | nick_from_hash }}"{% endif %}>
-                                {% if session.user and session.user.is_admin %}
-                                    {{ post.author_id | nick_from_hash }}
-                                {% elif post.board_id == 'wh40k' %}
+                            <canvas class="identicon" data-userid="{{ post.author_id | user_hash }}" width="20" height="20"></canvas>
+                            <span class="post-author" data-nick="{{ post.author_id | nick_from_hash }}">
+                                {% if post.board_id == 'wh40k' %}
                                     {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                                 {% else %}
-                                    {{ request.state.t('anon_name') }}
+                                    {{ post.author_id | nick_from_hash }}
                                 {% endif %}
                             </span>
                             <span>
                                 <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.id }}" class="post-num-link" target="_blank">#{{ post.id }}</a>
                                     {% if post.is_pinned %} <span title="Pinned">📌</span> {% endif %}
                                     {% if post.is_endless %} <span title="Endless">🔄</span> {% endif %}
-                                    {% if session.user and post.author_id == session.user.id %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
+                                    {% if post.is_yours or (request.state.user_hash and post.author_id == request.state.user_hash) or (session.user and post.author_id == session.user.id) %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
                                     {% if post.thread_type == 'image' %}<span class="thread-type-badge tt-image" title="Images Only">🖼️</span>{% endif %}
                                     {% if post.thread_type == 'video' %}<span class="thread-type-badge tt-video" title="Video Only">🎬</span>{% endif %}
                                     {% if post.thread_type == 'audio' %}<span class="thread-type-badge tt-audio" title="Audio Only">🎵</span>{% endif %}
@@ -225,7 +223,7 @@
                                     data-post-num="{{ post.id }}" 
                                     data-board-id="{{ post.board_id }}" 
                                     data-thread-id="{{ post.id }}"
-                                    data-author-id="{{ post.author_id }}">
+                                    data-author-id="{{ post.author_id | user_hash }}">
                                     ▶
                                 </button>
                             </div>
@@ -350,8 +348,8 @@
                                 </div>
                         </div>
                     </div>
-                    {% if current_view == 'threads' or post.reply_count > 0 or post.latest_replies %}
-                        {% if post.reply_count > 0 or post.latest_replies or post.files_count %}
+                    {% if current_view == 'threads' or (post.reply_count | default(0)) > 0 or post.latest_replies %}
+                        {% if (post.reply_count | default(0)) > 0 or post.latest_replies or post.files_count %}
                             <div class="thread-stats-container" style="margin: 6px 0 6px 15px; font-size: 0.85em; color: var(--text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                                 <span class="thread-replies-badge" style="background: var(--bg-secondary); border: 1px solid var(--border-primary); padding: 2px 8px; border-radius: 4px; font-weight: bold; color: var(--accent-primary);">
                                     💬 {{ request.state.t('stat_replies', 'Ответов') }}: {{ post.reply_count or (post.latest_replies|length) }}

@@ -321,21 +321,19 @@
                     <div class="post {% if post.content.sage %}is-sage{% endif %}" id="post-{{ post.id }}" data-reports="{{ post.report_count }}">
                         <a id="p{{ post.id }}" class="post-anchor"></a>
                             <div class="post-header">
-                                <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
-                                <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ post.author_id | nick_from_hash }}"{% endif %}>
-                                    {% if session.user and session.user.is_admin %}
-                                        {{ post.author_id | nick_from_hash }}
-                                    {% elif board_id == 'wh40k' %}
+                                <canvas class="identicon" data-userid="{{ post.author_id | user_hash }}" width="20" height="20"></canvas>
+                                <span class="post-author" data-nick="{{ post.author_id | nick_from_hash }}">
+                                    {% if board_id == 'wh40k' %}
                                         {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                                     {% else %}
-                                        {{ request.state.t('anon_name') }}
+                                        {{ post.author_id | nick_from_hash }}
                                     {% endif %}
                                 </span>
                                 <span>
                                     <a href="/{{ board_id }}/res/{{ post.id }}.html" class="post-num-link" target="_blank" rel="noopener noreferrer">#{{ post.id }}</a>
                                     {% if post.is_pinned %} <span title="Закреплен" style="color:var(--accent-primary); margin-left:5px;">📌</span> {% endif %}
                                     {% if post.is_endless %} <span title="Бесконечный тред" style="color:var(--accent-link); margin-left:5px;">🔄</span> {% endif %}
-                                    {% if post.is_op_yours or (session.user and post.author_id == session.user.id) %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
+                                    {% if post.is_yours or post.is_op_yours or (request.state.user_hash and post.author_id == request.state.user_hash) or (session.user and post.author_id == session.user.id) %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
                                     {% if post.thread_type == 'image' %}<span class="thread-type-badge tt-image" style="font-size:0.7em;">🖼️ IMG</span>{% endif %}
                                     {% if post.thread_type == 'video' %}<span class="thread-type-badge tt-video" style="font-size:0.7em;">🎬 VID</span>{% endif %}
                                     {% if post.thread_type == 'audio' %}<span class="thread-type-badge tt-audio" style="font-size:0.7em;">🎵 AUD</span>{% endif %}
@@ -351,7 +349,7 @@
                                         data-post-num="{{ post.id }}" 
                                         data-board-id="{{ board_id }}" 
                                         data-thread-id="{{ post.id }}"
-                                        data-author-id="{{ post.author_id }}"
+                                        data-author-id="{{ post.author_id | user_hash }}"
                                         {% if post.is_op %}data-is-op="true"{% endif %}>
                                         ▶
                                     </button>
@@ -488,7 +486,7 @@
                             </div>
                         </div>
                         </div>
-                    {% if post.reply_count > 0 or post.latest_replies %}
+                    {% if (post.reply_count | default(0)) > 0 or post.latest_replies %}
                         <div class="thread-stats-container" style="margin: 2px 0 2px 20px; font-size: 0.85em; color: var(--text-muted);">
                             {{ request.state.t('stat_thread_details', replies=post.reply_count, anons=post.anon_count) }}
                             <a href="/{{ board_id }}/res/{{ post.id }}.html" style="color: inherit; text-decoration: underline;">{{ request.state.t('btn_open_thread') }}</a>
@@ -498,14 +496,12 @@
                             <div class="post reply-preview" id="post-{{ reply.id }}" data-reports="{{ reply.report_count }}">
                                         <a id="p{{ reply.id }}" class="post-anchor"></a>
                                 <div class="post-header">
-                                    <canvas class="identicon" data-userid="{{ reply.author_id }}" width="20" height="20"></canvas>
-                                    <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ reply.author_id | nick_from_hash }}"{% endif %}>
-                                        {% if session.user and session.user.is_admin %}
-                                            {{ reply.author_id | nick_from_hash }}
-                                        {% elif board_id == 'wh40k' %}
+                                    <canvas class="identicon" data-userid="{{ reply.author_id | user_hash }}" width="20" height="20"></canvas>
+                                    <span class="post-author" data-nick="{{ reply.author_id | nick_from_hash }}">
+                                        {% if board_id == 'wh40k' %}
                                             {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                                         {% else %}
-                                            {{ request.state.t('anon_name') }}
+                                            {{ reply.author_id | nick_from_hash }}
                                         {% endif %}
                                     </span>
                                     <span>
@@ -517,7 +513,7 @@
                                             data-post-num="{{ reply.id }}" 
                                             data-board-id="{{ board_id }}" 
                                             data-thread-id="{{ post.id }}"
-                                            data-author-id="{{ reply.author_id }}">
+                                            data-author-id="{{ reply.author_id | user_hash }}">
                                             ▶
                                         </button>
                                     </div>

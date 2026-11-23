@@ -284,19 +284,17 @@
             <a href="/{{ board_id }}/res/{{ op_post.id }}/export" download target="_blank">[Скачать HTML]</a>
         </nav>
     </header>
-    <main data-op-author-id="{{ op_post.author_id }}">
+    <main data-op-author-id="{{ op_post.author_id | user_hash }}">
         <div class="op-post">
             <div class="post {% if op_post.content.sage %}is-sage{% endif %}" id="post-{{ op_post.id }}" data-reports="{{ op_post.report_count }}">
                 <a id="p{{ op_post.id }}" class="post-anchor"></a>
                 <div class="post-header">
-                    <canvas class="identicon" data-userid="{{ op_post.author_id }}" width="20" height="20"></canvas>
-                    <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ op_post.author_id | nick_from_hash }}"{% endif %}>
-                        {% if session.user and session.user.is_admin %}
-                            {{ op_post.author_id | nick_from_hash }}
-                        {% elif board_id == 'wh40k' %}
+                    <canvas class="identicon" data-userid="{{ op_post.author_id | user_hash }}" width="20" height="20"></canvas>
+                    <span class="post-author" data-nick="{{ op_post.author_id | nick_from_hash }}">
+                        {% if board_id == 'wh40k' %}
                             {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                         {% else %}
-                            {{ request.state.t('anon_name') }}
+                            {{ op_post.author_id | nick_from_hash }}
                         {% endif %}
                     </span>
                     <span>
@@ -323,7 +321,7 @@
                             data-post-num="{{ op_post.id }}" 
                             data-board-id="{{ board_id }}" 
                             data-thread-id="{{ op_post.id }}"
-                            data-author-id="{{ op_post.author_id }}"
+                            data-author-id="{{ op_post.author_id | user_hash }}"
                             {% if op_post.is_op_yours %}data-is-op="true"{% endif %}
                             {% if op_post.is_op_hidden %}data-is-hidden="true"{% endif %}>
                             ▶
@@ -559,17 +557,15 @@
         <div class="replies-list">
             {% if replies %}
                 {% for reply in replies %}
-                    <div class="post {% if reply.content.sage %}is-sage{% endif %} {% if reply.author_id == session.user.id %}is-yours{% endif %} {% if reply.is_reply_to_you %}reply-to-you{% endif %} {% if reply.author_id == op_post.author_id %}is-by-op{% endif %}" id="post-{{ reply.id }}" data-reports="{{ reply.report_count }}">
+                    <div class="post {% if reply.content.sage %}is-sage{% endif %} {% if reply.is_yours or (request.state.user_hash and reply.author_id == request.state.user_hash) or (session.user and reply.author_id == session.user.id) %}is-yours{% endif %} {% if reply.is_reply_to_you %}reply-to-you{% endif %} {% if reply.author_id == op_post.author_id %}is-by-op{% endif %}" id="post-{{ reply.id }}" data-reports="{{ reply.report_count }}">
                         <a id="p{{ reply.id }}" class="post-anchor"></a>
                         <div class="post-header">
-                            <canvas class="identicon" data-userid="{{ reply.author_id }}" width="20" height="20"></canvas>
-                            <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ reply.author_id | nick_from_hash }}"{% endif %}>
-                                {% if session.user and session.user.is_admin %}
-                                    {{ reply.author_id | nick_from_hash }}
-                                {% elif board_id == 'wh40k' %}
+                            <canvas class="identicon" data-userid="{{ reply.author_id | user_hash }}" width="20" height="20"></canvas>
+                            <span class="post-author" data-nick="{{ reply.author_id | nick_from_hash }}">
+                                {% if board_id == 'wh40k' %}
                                     {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                                 {% else %}
-                                    {{ request.state.t('anon_name') }}
+                                    {{ reply.author_id | nick_from_hash }}
                                 {% endif %}
                             </span>
                             <span>
@@ -584,7 +580,7 @@
                                     data-post-num="{{ reply.id }}" 
                                     data-board-id="{{ board_id }}" 
                                     data-thread-id="{{ op_post.id }}"
-                                    data-author-id="{{ reply.author_id }}"
+                                    data-author-id="{{ reply.author_id | user_hash }}"
                                     {% if op_post.is_op_yours %}data-is-op="true"{% endif %}
                                     {% if reply.is_op_hidden %}data-is-hidden="true"{% endif %}>
                                     ▶

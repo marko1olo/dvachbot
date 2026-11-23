@@ -11577,7 +11577,7 @@ const PostRenderer = {
         const icon = `<canvas class="identicon" data-userid="${data.author_id}" width="20" height="20"></canvas>`;
         const youMarker = isMine ? '<span class="you-marker">(You)</span>' : '';
         const opMarker = data.is_by_op ? '<span class="is-op-badge" style="margin-left:5px;">OP</span>' : '';
-        let displayName = t('anon_name');
+        let displayName = data.anon_name || t('anon_name');
         if (data.board_id === 'wh40k') {
             const whNames = ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'];
             displayName = whNames[Math.floor(Math.random() * whNames.length)];

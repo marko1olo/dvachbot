@@ -84,7 +84,7 @@
                 {% for post in posts %}
                 <div class="post" id="post-{{ post.id }}">
                     <div class="post-header">
-                        <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
+                        <canvas class="identicon" data-userid="{{ post.author_id | user_hash }}" width="20" height="20"></canvas>
                         <span style="font-weight:bold; color:var(--accent-link);">/{{ post.board_id }}/</span>
                         <span>
                             {% if post.thread_id %}

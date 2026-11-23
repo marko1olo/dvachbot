@@ -122,6 +122,7 @@ from bs4 import BeautifulSoup
 from site_tgach.rss import generate_rss
 from slowapi.util import get_remote_address
 from common.config import ENABLE_MULTILANG
+from common.anon_identity import generate_anon_name, get_anon_id
 from common.database import (
     create_report,
     get_active_reports,
@@ -873,6 +874,16 @@ def get_user_hash(user_id: Union[int, str]) -> str:
     return hashlib.sha256((str(user_id) + SECRET_KEY).encode()).hexdigest()[:12]
 
 
+def safe_user_hash(val: Union[int, str, None]) -> str:
+    """Безопасное получение 12-символьного хеша. Идемпотентно: если уже 12-символьный hex-хеш — не перехеширует."""
+    if not val:
+        return "system"
+    s = str(val).strip()
+    if len(s) == 12 and re.fullmatch(r"[0-9a-f]{12}", s):
+        return s
+    return get_user_hash(val)
+
+
 # --- Детерминированные ники из хеша автора ---
 _SITE_NICK_PREFIXES = [
     "Базированный",
@@ -964,19 +975,11 @@ _SITE_NICK_SUFFIXES = [
 ]
 
 
-def nick_from_hash(author_id: str) -> str:
-    """Детерминированный ник из 12-символьного хеша автора. Без раскрытия identity."""
+def nick_from_hash(author_id: str, stream: str = "ru") -> str:
+    """Детерминированный канонический ник автора: 'Анон [Шолтер5]' (RU) / 'Anon [Sholter5]' (EN). Без раскрытия identity."""
     if not author_id or author_id == "system":
-        return "Аноним"
-    # Берём первые 8 hex-символов как seed
-    try:
-        seed = int(author_id[:8], 16)
-    except (ValueError, TypeError):
-        return "Аноним"
-    rng = random.Random(seed)
-    prefix = rng.choice(_SITE_NICK_PREFIXES)
-    suffix = rng.choice(_SITE_NICK_SUFFIXES)
-    return f"{prefix} {suffix}"
+        return "Аноним" if stream not in ["en", "int"] else "Anonymous"
+    return generate_anon_name(author_id, stream=stream)
 
 
 class NoParsingFilter(logging.Filter):
@@ -3451,7 +3454,11 @@ def to_makaba_post(post_data: dict, board_id: str) -> dict:
         "lasthit": int(post_data["timestamp"]),
         "comment": comment,
         "files": files_makaba,
-        "name": "Аноним",
+        "name": (
+            generate_anon_name(post_data.get("author_id"))
+            if post_data.get("author_id")
+            else "Аноним"
+        ),
         "email": "sage" if post_data.get("sage") else "",
         "op": 1 if post_data.get("is_op_post") else 0,
         "trip": "",
@@ -4149,7 +4156,10 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 content["type"] = "text"
         post["report_count"] = post.get("report_count", 0)
         if "author_id" in post:
-            post["author_id"] = get_user_hash(post["author_id"])
+            post["author_id"] = safe_user_hash(post["author_id"])
+            post["anon_name"] = generate_anon_name(post["author_id"], stream="ru")
+        if "user_id" in post:
+            post["user_id"] = safe_user_hash(post["user_id"])
     return posts
 
 
@@ -4172,6 +4182,10 @@ templates.env.filters.update(
         "bayan_label": format_bayan_label,
         "clean_title": clean_title_text,
         "nick_from_hash": nick_from_hash,
+        "anon_name": generate_anon_name,
+        "anon_id": get_anon_id,
+        "user_hash": safe_user_hash,
+        "get_user_hash": safe_user_hash,
     }
 )
 

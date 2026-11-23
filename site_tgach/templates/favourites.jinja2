@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="/static/css/style.min.css?v={{ static_version }}">
     <link rel="icon" href="/static/favicon.ico">
 </head>
-<body {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
+<body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
     <script>
         (function() {
             try {
