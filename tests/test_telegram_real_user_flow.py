@@ -131,6 +131,7 @@ class MockCursor:
 class MockDB:
     def __init__(self, fetchone_val=None, fetchall_val=None):
         self.cursor = MockCursor(fetchone_val=fetchone_val, fetchall_val=fetchall_val)
+        self.commit = AsyncMock()
 
     def execute(self, *args, **kwargs):
         return self.cursor
@@ -198,8 +199,11 @@ async def test_cmd_reactions_virtual_anon_masking():
     assert "• 🕶 Аноним #1: ❤️🔥" in response_text
     assert "• 🕶 Аноним #42: 👍" in response_text
 
-    # Real user must be displayed with ID
-    assert "• ID <code>123456789</code>: 🤡" in response_text
+    # Real user must be masked with anonymous hash ID (ZERO raw numeric user_id leaks!)
+    from common.anon_identity import get_anon_id
+    real_user_anon = get_anon_id(123456789, stream="ru")
+    assert f"• 🕶 Анон [{real_user_anon}]: 🤡" in response_text
+    assert "123456789" not in response_text
 
     # Internal system IDs must NEVER leak in output text
     assert "770100001" not in response_text
@@ -1160,3 +1164,252 @@ async def test_cmd_wallet_dm_graceful():
         assert "КОШЕЛЕК И БАЛАНС" in caption
         assert "5,000 ₪" in caption
         assert reply_kb is not None
+
+
+@pytest.mark.asyncio
+async def test_cmd_whois_anon_id_masking():
+    """cmd_whois masks raw Telegram ID and displays cryptographic Anon-ID."""
+    from main import cmd_whois
+    from common.anon_identity import get_anon_id
+
+    target_user_id = 987654321
+    msg = make_mock_message(user_id=1, text=f"/whois {target_user_id}")
+
+    mock_db = MockDB(fetchone_val=(1000.0,))
+
+    with patch("main.is_admin", return_value=True), \
+         patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.db_lock", AsyncMock()):
+
+        await cmd_whois(msg, board_id="b", stream="ru")
+
+        assert msg.answer.called
+        report_text = msg.answer.call_args[0][0]
+
+        expected_anon = get_anon_id(target_user_id, stream="ru")
+        assert f"🆔 <b>Анон-ID:</b> <code>[{expected_anon}]</code>" in report_text
+        # Ensure raw numeric ID does NOT appear as an ID: value
+        assert f"<code>{target_user_id}</code>" not in report_text
+
+
+@pytest.mark.asyncio
+async def test_cmd_warn_and_unwarn_anon_masking():
+    """cmd_warn and cmd_unwarn never leak target's raw numeric ID."""
+    from main import cmd_warn, cmd_unwarn
+    from common.anon_identity import generate_anon_name
+
+    target_user_id = 555666777
+    msg_warn = make_mock_message(user_id=1, text=f"/warn {target_user_id} Спам в треде")
+    msg_unwarn = make_mock_message(user_id=1, text=f"/unwarn {target_user_id}")
+
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.is_admin", return_value=True), \
+         patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.db_lock", AsyncMock()), \
+         patch("main.db_transaction", side_effect=_mock_db_tx), \
+         patch("main._get_user_active_items", new_callable=AsyncMock, return_value={"warn_count": 0}), \
+         patch("main.log_global_event", new_callable=AsyncMock):
+
+        await cmd_warn(msg_warn, board_id="b", stream="ru")
+
+        assert msg_warn.answer.called
+        warn_text = msg_warn.answer.call_args[0][0]
+        expected_anon = generate_anon_name(target_user_id)
+        assert expected_anon in warn_text
+        assert str(target_user_id) not in warn_text
+
+        await cmd_unwarn(msg_unwarn, board_id="b", stream="ru")
+
+        assert msg_unwarn.answer.called
+        unwarn_text = msg_unwarn.answer.call_args[0][0]
+        assert expected_anon in unwarn_text
+        assert str(target_user_id) not in unwarn_text
+
+
+@pytest.mark.asyncio
+async def test_cmd_mute_and_shadowmute_anon_masking():
+    """cmd_mute and cmd_shadowmute output masked Anon-ID rather than raw numeric ID."""
+    from main import cmd_mute, cmd_shadowmute
+    from common.anon_identity import get_anon_id
+
+    target_user_id = 777888999
+    msg_mute = make_mock_message(user_id=1, text=f"/mute {target_user_id} 30m")
+    msg_smute = make_mock_message(user_id=1, text=f"/shadowmute {target_user_id} 30m b")
+
+    mock_board_data = {
+        'b': {'mutes': {}, 'shadow_mutes': {}},
+        'ALL': {'shadow_mutes': {}}
+    }
+    mock_board_config = {
+        'b': {'name': 'Бред'}
+    }
+
+    with patch("main.is_admin", return_value=True), \
+         patch.dict("main.board_data", mock_board_data, clear=False), \
+         patch.dict("main.BOARD_CONFIG", mock_board_config, clear=False), \
+         patch("main.delete_user_posts", new_callable=AsyncMock, return_value=0), \
+         patch("main.apply_regular_mute", new_callable=AsyncMock), \
+         patch("main.update_shadow_mute", new_callable=AsyncMock), \
+         patch("main.send_moderation_notice", new_callable=AsyncMock), \
+         patch("main.log_global_event", new_callable=AsyncMock):
+
+        await cmd_mute(msg_mute, board_id="b", stream="ru")
+        assert msg_mute.answer.called
+        mute_text = msg_mute.answer.call_args[0][0]
+        anon_hash = get_anon_id(target_user_id, stream="ru")
+        assert f"[{anon_hash}]" in mute_text
+        assert str(target_user_id) not in mute_text
+
+        await cmd_shadowmute(msg_smute, board_id="b", stream="ru")
+        assert msg_smute.answer.called
+        smute_text = msg_smute.answer.call_args[0][0]
+        assert f"[{anon_hash}]" in smute_text
+        assert str(target_user_id) not in smute_text
+
+
+@pytest.mark.asyncio
+async def test_dice_duel_lobby_target_anon_masking():
+    """cmd_dice_lobby masks target user ID as anonymous hash."""
+    from dice_duel_engine import cmd_dice_duel_entry
+    from common.anon_identity import get_anon_id
+
+    target_user_id = 1122334455
+    reply_msg = MagicMock(spec=types.Message)
+    reply_msg.message_id = 555
+    msg = make_mock_message(user_id=999, text="/dice", reply_to_message=reply_msg)
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("common.bot_helpers.get_author_id_by_reply", new_callable=AsyncMock, return_value=target_user_id), \
+         patch("dice_duel_engine.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("common.database.is_shadow_muted", new_callable=AsyncMock, return_value=False), \
+         patch("common.bot_helpers.check_user_is_muted", new_callable=AsyncMock, return_value=False), \
+         patch("dice_duel_engine.get_user_global_balance", new_callable=AsyncMock, return_value=1000):
+
+        await cmd_dice_duel_entry(msg, board_id="b", stream="ru")
+
+        assert msg.answer.called
+        ans_text = msg.answer.call_args[0][0]
+        expected_target_anon = get_anon_id(target_user_id)
+        assert f"🎯 <b>Цель:</b> Анон <code>[{expected_target_anon}]</code>" in ans_text
+        assert str(target_user_id) not in ans_text
+
+
+@pytest.mark.asyncio
+async def test_admin_manager_reactions_anon_masking():
+    """admin_manager.py cmd_reactions safely escapes emojis and masks real user IDs."""
+    from admin_manager import cmd_reactions
+    from common.anon_identity import get_anon_id
+
+    reply_msg = MagicMock(spec=types.Message)
+    reply_msg.message_id = 111
+    msg = make_mock_message(reply_to_message=reply_msg)
+
+    post_num = 54321
+    mock_post_data = {
+        "reactions": {
+            "users": {
+                770100005: ["🔥"],
+                999888777: ["<script>alert(1)</script>", "❤️"]
+            }
+        }
+    }
+
+    with patch("admin_manager.is_admin", return_value=True), \
+         patch("admin_manager.get_post_info_by_copy", new_callable=AsyncMock, return_value=(post_num, 0)), \
+         patch("admin_manager.messages_storage", {post_num: mock_post_data}):
+
+        await cmd_reactions(msg, board_id="b", stream="ru")
+
+        assert msg.answer.called
+        res_text = msg.answer.call_args[0][0]
+
+        # Virtual anon #5
+        assert "• 🕶 Аноним #5: 🔥" in res_text
+        # Real user masked with Anon ID and escaped tags
+        anon_hash = get_anon_id(999888777, stream="ru")
+        assert f"• 🕶 Анон [{anon_hash}]: &lt;script&gt;alert(1)&lt;/script&gt;❤️" in res_text
+        assert "999888777" not in res_text
+        assert "<script>" not in res_text
+
+
+@pytest.mark.asyncio
+async def test_cmd_troll_and_media_anon_masking_in_main():
+    """Verify that toggle commands in main.py use Anon tags."""
+    from main import cmd_troll_toggle, cmd_toggle_media
+    from common.anon_identity import get_anon_id
+
+    target_id = 987654321
+    msg = make_mock_message(user_id=123, text=f"/troll {target_id}")
+
+    mock_board_data = {
+        'b': {
+            'troll_targets': set(),
+            'user_settings': {}
+        }
+    }
+
+    with patch("main.is_admin", return_value=True), \
+         patch.dict("main.board_data", mock_board_data), \
+         patch("main.log_global_event", new_callable=AsyncMock):
+
+        await cmd_troll_toggle(msg, board_id="b", stream="ru")
+
+        assert msg.answer.called
+        res = msg.answer.call_args[0][0]
+        expected_anon = get_anon_id(target_id)
+        assert f"Shadow-Troll ON for Anon [{expected_anon}]" in res
+        assert str(target_id) not in res
+
+
+@pytest.mark.asyncio
+async def test_cmd_get_id_group_privacy():
+    """Verify cmd_get_id in group chat directs full info to admin PM without leaking raw ID to group."""
+    from main import cmd_get_id
+    from common.anon_identity import get_anon_id
+
+    target_id = 555666777
+    admin_id = 111222333
+
+    reply_msg = MagicMock(spec=types.Message)
+    reply_msg.message_id = 99
+
+    msg = make_mock_message(user_id=admin_id, text="/id", reply_to_message=reply_msg)
+    msg.chat.type = "supergroup"
+
+    mock_chat_info = MagicMock()
+    mock_chat_info.first_name = "Secret"
+    mock_chat_info.last_name = "User"
+    mock_chat_info.username = "secretuser"
+    msg.bot.get_chat = AsyncMock(return_value=mock_chat_info)
+    msg.bot.send_message = AsyncMock()
+
+    mock_board_data = {
+        'b': {
+            'users': {'banned': set(), 'active': {target_id}}
+        }
+    }
+    mock_board_cfg = {
+        'b': {'name': 'Бред'}
+    }
+
+    with patch("main.is_admin", return_value=True), \
+         patch("main.get_author_id_by_reply", new_callable=AsyncMock, return_value=target_id), \
+         patch.dict("main.board_data", mock_board_data), \
+         patch.dict("main.BOARD_CONFIG", mock_board_cfg):
+
+        await cmd_get_id(msg, board_id="b", stream="ru")
+
+        # Full info sent to admin PM
+        msg.bot.send_message.assert_called_once()
+        pm_call = msg.bot.send_message.call_args
+        assert pm_call[0][0] == admin_id
+        assert str(target_id) in pm_call[0][1]
+
+        # Public answer in group chat does NOT leak raw numeric ID
+        assert msg.answer.called
+        group_answer = msg.answer.call_args[0][0]
+        assert str(target_id) not in group_answer
+        expected_anon = get_anon_id(target_id)
+        assert f"[{expected_anon}]" in group_answer
+

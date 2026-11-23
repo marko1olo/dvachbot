@@ -12,6 +12,7 @@ from aiogram import Router, F, types
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
 from html import escape as escape_html
+from common.anon_identity import get_anon_id, generate_anon_name
 from post_helpers import delete_user_posts
 from thread_texts import thread_messages
 from common.db_pool import db_lock
@@ -122,12 +123,13 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
     if 'troll_targets' not in b_data:
         b_data['troll_targets'] = set()
 
+    target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
     if target_id in b_data['troll_targets']:
         b_data['troll_targets'].remove(target_id)
-        await message.answer(f"Shadow-Troll OFF for {target_id}")
+        await message.answer(f"Shadow-Troll OFF for Anon {target_anon}")
     else:
         b_data['troll_targets'].add(target_id)
-        await message.answer(f"Shadow-Troll ON for {target_id}")
+        await message.answer(f"Shadow-Troll ON for Anon {target_anon}")
 
     # Also log global event
     await log_global_event('bot', f"🤡 TROLL: Admin {message.from_user.id} toggled troll for {target_id} on {board_id}")
@@ -273,21 +275,23 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
     if now_allowed:
         await remove_reaction_ban(target_id, board_id)
         await log_global_event('bot', f"🎭 REAC_OK: Админ {message.from_user.id} РАЗРЕШИЛ реакции для {target_id} на /{board_id}/")
+        target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
         if lang == 'en':
-            response_text = f"✅ User <code>{target_id}</code> can now use reactions again."
+            response_text = f"✅ Anon <code>{target_anon}</code> can now use reactions again."
         elif lang == 'jp':
-            response_text = f"✅ ユーザー <code>{target_id}</code> のリアクション禁止を解除しました。"
+            response_text = f"✅ アノン <code>{target_anon}</code> のリアクション禁止を解除しました。"
         else:
-            response_text = f"✅ Пользователь <code>{target_id}</code> теперь снова может ставить реакции."
+            response_text = f"✅ Анон <code>{target_anon}</code> теперь снова может ставить реакции."
     else:
         await add_reaction_ban(target_id, board_id)
         await log_global_event('bot', f"🎭 REAC_BAN: Админ {message.from_user.id} ЗАПРЕТИЛ реакции для {target_id} на /{board_id}/")
+        target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
         if lang == 'en':
-            response_text = f"🚫 User <code>{target_id}</code> is now banned from using reactions."
+            response_text = f"🚫 Anon <code>{target_anon}</code> is now banned from using reactions."
         elif lang == 'jp':
-            response_text = f"🚫 ユーザー <code>{target_id}</code> のリアクションを禁止しました。"
+            response_text = f"🚫 アノン <code>{target_anon}</code> のリアクションを禁止しました。"
         else:
-            response_text = f"🚫 Пользователю <code>{target_id}</code> теперь запрещено ставить реакции."
+            response_text = f"🚫 Анону <code>{target_anon}</code> теперь запрещено ставить реакции."
     try:
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
@@ -357,7 +361,7 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
     sorted_reactors = sorted(reactions_data.items(), key=lambda x: str(x[0]))
     MAX_USERS_TO_SHOW = 50
     for user_id, emoji_list in sorted_reactors[:MAX_USERS_TO_SHOW]:
-        emojis_str = "".join(emoji_list)
+        safe_emojis_str = escape_html("".join(emoji_list))
         try:
             uid_int = int(user_id)
         except (ValueError, TypeError):
@@ -366,13 +370,19 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
         if 770100001 <= uid_int <= 770199999:
             anon_idx = uid_int - 770100000
             if lang == 'en':
-                lines.append(f"• 🕶 Anon #{anon_idx}: {emojis_str}")
+                lines.append(f"• 🕶 Anon #{anon_idx}: {safe_emojis_str}")
             elif lang == 'jp':
-                lines.append(f"• 🕶 名無し #{anon_idx}: {emojis_str}")
+                lines.append(f"• 🕶 名無し #{anon_idx}: {safe_emojis_str}")
             else:
-                lines.append(f"• 🕶 Аноним #{anon_idx}: {emojis_str}")
+                lines.append(f"• 🕶 Аноним #{anon_idx}: {safe_emojis_str}")
         else:
-            lines.append(f"• ID <code>{user_id}</code>: {emojis_str}")
+            anon_tag = escape_html(get_anon_id(uid_int, stream=lang)) if uid_int else escape_html(str(user_id))
+            if lang == 'en':
+                lines.append(f"• 🕶 Anon [{anon_tag}]: {safe_emojis_str}")
+            elif lang == 'jp':
+                lines.append(f"• 🕶 アノン [{anon_tag}]: {safe_emojis_str}")
+            else:
+                lines.append(f"• 🕶 Анон [{anon_tag}]: {safe_emojis_str}")
     response_text = header + "\n".join(lines)
     if len(sorted_reactors) > MAX_USERS_TO_SHOW:
         diff = len(sorted_reactors) - MAX_USERS_TO_SHOW
@@ -586,7 +596,7 @@ async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str 
     text_parts = [f"<b>Список ограничений на доске {BOARD_CONFIG[board_id]['name']}:</b>"]
     banned_users = b_data['users']['banned']
     if banned_users:
-        banned_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(list(banned_users))])
+        banned_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>)" for uid in sorted(list(banned_users))])
         if lang == 'en': header = "\n<u>🚫 Banned forever:</u>"
         elif lang == 'jp': header = "\n<u>🚫 永久BAN:</u>"
         else: header = "\n<u>🚫 Забанены навсегда:</u>"
@@ -599,7 +609,7 @@ async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str 
             hours, remainder = divmod(remaining.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
             time_left_str = f"{int(hours)}ч {int(minutes)}м"
-            mute_lines.append(f"  • ID <code>{uid}</code> (осталось: {time_left_str})")
+            mute_lines.append(f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>, осталось: {time_left_str})")
         mutes_list = "\n".join(mute_lines)
         if lang == 'en': header = "\n<u>🔇 Muted:</u>"
         elif lang == 'jp': header = "\n<u>🔇 ミュート中:</u>"
@@ -613,7 +623,7 @@ async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str 
             hours, remainder = divmod(remaining.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
             time_left_str = f"{int(hours)}ч {int(minutes)}м"
-            shadow_mute_lines.append(f"  • ID <code>{uid}</code> (осталось: {time_left_str})")
+            shadow_mute_lines.append(f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>, осталось: {time_left_str})")
         shadow_mutes_list = "\n".join(shadow_mute_lines)
         text_parts.append(f"\n<u>👻 Полный теневой мут:</u>\n{shadow_mutes_list}")
     gif_banned_users = []
@@ -622,28 +632,28 @@ async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str 
         if settings.get('shadow_gif'):
             gif_banned_users.append(uid)
     if gif_banned_users:
-        gif_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(gif_banned_users)])
+        gif_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>)" for uid in sorted(gif_banned_users)])
         text_parts.append(f"\n<u>👾 Теневой бан GIF:</u>\n{gif_list}")
     sticker_banned_users = []
     for uid, settings in user_settings.items():
         if settings.get('shadow_sticker'):
             sticker_banned_users.append(uid)
     if sticker_banned_users:
-        sticker_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(sticker_banned_users)])
+        sticker_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>)" for uid in sorted(sticker_banned_users)])
         text_parts.append(f"\n<u>🃏 Теневой бан Стикеров:</u>\n{sticker_list}")
     media_banned_users = []
     for uid, settings in user_settings.items():
         if settings.get('shadow_media'):
             media_banned_users.append(uid)
     if media_banned_users:
-        media_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(media_banned_users)])
+        media_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>)" for uid in sorted(media_banned_users)])
         text_parts.append(f"\n<u>🔇 Теневой бан Медиа (только текст):</u>\n{media_list}")
     lie_media_users = []
     for uid, settings in user_settings.items():
         if settings.get('lie_media'):
             lie_media_users.append(uid)
     if lie_media_users:
-        lie_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(lie_media_users)])
+        lie_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>)" for uid in sorted(lie_media_users)])
         text_parts.append(f"\n<u>🎭 Archive media substitution:</u>\n{lie_list}")
     if len(text_parts) == 1:
         final_text = f"На доске {BOARD_CONFIG[board_id]['name']} нет активных ограничений."
@@ -732,7 +742,7 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
             response_text = f"На доске {board_name} нет пользователей с запретом на реакции."
     else:
         sorted_banned = sorted(list(banned_users))
-        user_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted_banned])
+        user_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code>" for uid in sorted_banned])
         if lang == 'en':
             response_text = f"<b>🚫 Users banned from reacting on {board_name}:</b>\n\n{user_list}"
         elif lang == 'jp':
@@ -909,12 +919,23 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
             info += f"\n✅ {status_lbl}: Active"
         else:
             info += f"\nℹ️ {status_lbl}: Inactive"
-        await message.answer(info, parse_mode="HTML")
+        if message.chat.type != "private":
+            try:
+                await message.bot.send_message(message.from_user.id, info, parse_mode="HTML")
+                await message.answer(f"🔒 Информация об аноне <b>[{get_anon_id(target_id)}]</b> отправлена админу в ЛС.", parse_mode="HTML")
+            except Exception:
+                group_safe_info = info_header + f"Anon ID: <b>[{get_anon_id(target_id)}]</b>\n"
+                group_safe_info += f"\nℹ️ {status_lbl}: " + ("BANNED" if target_id in b_data['users']['banned'] else ("Active" if target_id in b_data['users']['active'] else "Inactive"))
+                await message.answer(group_safe_info, parse_mode="HTML")
+        else:
+            await message.answer(info, parse_mode="HTML")
     except (TelegramBadRequest, TelegramForbiddenError):
-        msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
+        target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
+        msg = f"Anon ID: <code>{target_anon}</code>"
         await message.answer(msg, parse_mode="HTML")
     except Exception:
-        msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
+        target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
+        msg = f"Anon ID: <code>{target_anon}</code>"
         await message.answer(msg, parse_mode="HTML")
     try:
         await message.delete()
@@ -942,7 +963,7 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (ID: <code>{target_id}</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (Анон-ID: <code>[{get_anon_id(target_id)}]</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
@@ -1057,7 +1078,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?\n<i>(Автору уже выдан теневой мут на 1ч)</i>", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (Анон-ID: <code>[{get_anon_id(target_id)}]</code>) на /{board_id}/ {time_label}?\n<i>(Автору уже выдан теневой мут на 1ч)</i>", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
@@ -1267,7 +1288,7 @@ async def handle_snitch_callback(callback: types.CallbackQuery):
         return
 
     admin_username = callback.from_user.username
-    admin_ref = f"@{admin_username}" if admin_username else f"ID:<code>{admin_id}</code>"
+    admin_ref = f"@{admin_username}" if admin_username else f"Модератор [{get_anon_id(admin_id)}]"
 
     msg = callback.message
     if isinstance(msg, types.Message):
@@ -1312,21 +1333,23 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
         if target_id in b_data['anime_strict_limits']:
             b_data['anime_strict_limits'].remove(target_id)
             action_log = "REMOVED FROM STRICT LIMITS"
+            target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
             if lang == 'en':
-                res = f"✅ User <code>{target_id}</code> removed from strict anime limits."
+                res = f"✅ Anon <code>{target_anon}</code> removed from strict anime limits."
             elif lang == 'jp':
-                res = f"✅ ユーザー <code>{target_id}</code> のアニメリミットを解除しました。"
+                res = f"✅ アノン <code>{target_anon}</code> のアニメリミットを解除しました。"
             else:
-                res = f"✅ С пользователя <code>{target_id}</code> снято жесткое ограничение на аниме."
+                res = f"✅ С анона <code>{target_anon}</code> снято жесткое ограничение на аниме."
         else:
             b_data['anime_strict_limits'].add(target_id)
             action_log = "ADDED TO STRICT LIMITS (10/day)"
+            target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
             if lang == 'en':
-                res = f"🚫 User <code>{target_id}</code> now restricted to 10 anime images per 24h."
+                res = f"🚫 Anon <code>{target_anon}</code> now restricted to 10 anime images per 24h."
             elif lang == 'jp':
-                res = f"🚫 ユーザー <code>{target_id}</code> に1日10枚の制限をかけました。"
+                res = f"🚫 アノン <code>{target_anon}</code> に1日10枚の制限をかけました。"
             else:
-                res = f"🚫 Пользователю <code>{target_id}</code> установлено ограничение: 10 картинок в сутки."
+                res = f"🚫 Анону <code>{target_anon}</code> установлено ограничение: 10 картинок в сутки."
 
     await log_global_event('bot', f"🛡️ ANIME_LIMIT: Админ {message.from_user.id} {action_log} для {target_id} на /{board_id}/")
     await message.answer(res, parse_mode="HTML")
@@ -1379,7 +1402,7 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
         thread_info.setdefault('local_shadow_mutes', {})[target_id] = expires_ts
     phrases = thread_messages.get(lang, {}).get('shadowmute_threads_success', ["Shadowmuted in threads."])
     response_text = random.choice(phrases).format(
-        user_id=target_id,
+        user_id=f"[{get_anon_id(target_id)}]",
         duration=str(int(total_seconds / 60))
     )
     await message.answer(response_text)
@@ -1561,16 +1584,17 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
             unbanned = True
 
     board_name = BOARD_CONFIG[board_id]['name']
+    target_anon = f"[{get_anon_id(target_id)}] (ID: <code>{target_id}</code>)"
     if unbanned:
         await add_or_activate_user(target_id, board_id)
-        if lang == 'en': msg = f"User {target_id} unbanned on {board_name}."
-        elif lang == 'jp': msg = f"ユーザー {target_id} のBANを解除しました ({board_name})。"
-        else: msg = f"Пользователь {target_id} разбанен на доске {board_name}."
+        if lang == 'en': msg = f"User {target_anon} unbanned on {board_name}."
+        elif lang == 'jp': msg = f"ユーザー {target_anon} のBANを解除しました ({board_name})。"
+        else: msg = f"Пользователь {target_anon} разбанен на доске {board_name}."
         await message.answer(msg)
     else:
-        if lang == 'en': msg = f"User {target_id} was not banned."
-        elif lang == 'jp': msg = f"ユーザー {target_id} はBANされていません。"
-        else: msg = f"Пользователь {target_id} не был забанен на этой доске."
+        if lang == 'en': msg = f"User {target_anon} was not banned."
+        elif lang == 'jp': msg = f"ユーザー {target_anon} はBANされていません。"
+        else: msg = f"Пользователь {target_anon} не был забанен на этой доске."
         await message.answer(msg)
     try: await message.delete()
     except Exception: pass

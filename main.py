@@ -7709,7 +7709,7 @@ async def handle_attack_abuse_check(message: types.Message, db, board_id: str, u
         city_fake = random.choice(["Мухосранск", "Челябинск", "Саратов", "Омск", "Нижний Тагил", "Воронеж", "Кемерово", "Сызрань", "Курган"])
         doxx_msg = (
             f"🚨 <b>ОПЕРАЦИЯ «ПЕРЕХВАТ»: СПЕЦНАЗ ВЗЛОМАЛ ДВЕРЬ ВРЕДИТЕЛЯ!</b> 🚨\n\n"
-            f"🦹‍♂️ <b>Нарушитель:</b> Анон <code>[ID:{user_id}]</code> пытался парализовать общение и спамить мутами!\n\n"
+            f"🦹‍♂️ <b>Нарушитель:</b> Анон <b>[{get_anon_id(user_id)}]</b> пытался парализовать общение и спамить мутами!\n\n"
             f"📡 <b>РЕЗУЛЬТАТ ДЕАНОНИМИЗАЦИИ ФСБ:</b>\n"
             f"• <b>IP-адрес:</b> <code>{ip_fake}</code>\n"
             f"• <b>Провайдер:</b> {provider_fake}\n"
@@ -8080,7 +8080,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
+        board_data.setdefault(board_id, {}).setdefault('mutes', {})[target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
 
     await apply_regular_mute(target_id, board_id, duration_sec)
     register_attacker_effect("mute_gun", user_id, target_id, duration_sec)
@@ -8118,9 +8118,11 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         active_combat_appeals[session_id].announcement_msg_id = sent_msg.message_id
 
     try:
+        from common.anon_identity import generate_anon_name
+        shooter_name = generate_anon_name(user_id)
         await message.bot.send_message(
             target_id,
-            f"💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
+            f"💥 <b>В тебя выстрелил {shooter_name} из Мут-Гана!</b>\n"
             f"Тебя отправили в мут на <b>{dur_str}</b> — ты временно не можешь писать на этой доске.\n"
             f"💡 Аноны могут опротестовать этот мут кнопкой в треде, либо ты можешь внести залог.",
             parse_mode="HTML"
@@ -8477,6 +8479,17 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
                     (user_id, board_id, json.dumps(active_items))
                 )
                 await db.commit()
+            try:
+                from common.anon_identity import generate_anon_name
+                robber_name = generate_anon_name(user_id)
+                await message.bot.send_message(
+                    target_id,
+                    f"👮 <b>ЛИПОВАЯ КСИВА СРАБОТАЛА В /{board_id}/!</b>\n"
+                    f"Анон {robber_name} хотел ограбить тебя с заточкой, но испугался твоих красных корочек и убежал!",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
             await message.answer(fake_txt, parse_mode="HTML")
             return
 
@@ -8507,6 +8520,17 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
                 (target_id, board_id, json.dumps(t_items))
             )
             await db.commit()
+        try:
+            from common.anon_identity import generate_anon_name
+            robber_name = generate_anon_name(user_id)
+            await message.bot.send_message(
+                target_id,
+                f"🛡️ <b>БРОНЯ ОТБИЛА ОГРАБЛЕНИЕ В /{board_id}/!</b>\n"
+                f"Анон {robber_name} попытался пырнуть тебя заточкой, но твоя экипировка (Защита: {t_stats['total_defense']}) отразила удар! Заточка нападающего сломалась.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
         await message.answer(deflect_text, parse_mode="HTML")
         return
 
@@ -8516,13 +8540,16 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         t_items["shield_until"] = 0
         t_items["shield"] = False
         loss = min(int(u_balance * pct), 100000)
+        from common.anon_identity import generate_anon_name
+        user_anon = generate_anon_name(user_id)
+        target_anon = generate_anon_name(target_id)
         async with db_lock:
             if loss > 0:
                 ok_loss, _ = await deduct_user_global_balance(db, user_id, board_id, loss)
                 if ok_loss:
                     await add_user_global_balance(db, target_id, board_id, loss)
-                    await add_user_transaction(db, user_id, -loss, 'rob', f'Штраф за нападение на Зеркало заднего вида (жертва: {target_id})')
-                    await add_user_transaction(db, target_id, loss, 'rob', f'Компенсация от Зеркала за попытку грабежа (грабитель: {user_id})')
+                    await add_user_transaction(db, user_id, -loss, 'rob', f'Штраф за нападение на Зеркало заднего вида (жертва: {target_anon})')
+                    await add_user_transaction(db, target_id, loss, 'rob', f'Компенсация от Зеркала за попытку грабежа (грабитель: {user_anon})')
             await db.execute(
                 "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
@@ -8555,13 +8582,16 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         # Перцовый баллончик срабатывает!
         t_items["pepperspray_gun"] = False
         penalty = min(int(u_balance * 0.3), 500) if u_balance > 0 else 0
+        from common.anon_identity import generate_anon_name
+        user_anon = generate_anon_name(user_id)
+        target_anon = generate_anon_name(target_id)
         async with db_lock:
             if penalty > 0:
                 ok_pen, _ = await deduct_user_global_balance(db, user_id, board_id, penalty)
                 if ok_pen:
                     await add_user_global_balance(db, target_id, board_id, penalty)
-                    await add_user_transaction(db, user_id, -penalty, 'rob', f'Штраф за самооборону жертвы перцовкой (жертва: {target_id})')
-                    await add_user_transaction(db, target_id, penalty, 'rob', f'Компенсация за самооборону перцовкой (грабитель: {user_id})')
+                    await add_user_transaction(db, user_id, -penalty, 'rob', f'Штраф за самооборону жертвы перцовкой (жертва: {target_anon})')
+                    await add_user_transaction(db, target_id, penalty, 'rob', f'Компенсация за самооборону перцовкой (грабитель: {user_anon})')
             await db.execute(
                 "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
@@ -8594,11 +8624,13 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         # Фольга защищает
         destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=4.0, burn_chance=0.15)
         loss = min(int(u_balance * pct), 100000)
+        from common.anon_identity import generate_anon_name
+        target_anon = generate_anon_name(target_id)
         async with db_lock:
             if loss > 0:
                 ok_tin, _ = await deduct_user_global_balance(db, user_id, board_id, loss)
                 if ok_tin:
-                    await add_user_transaction(db, user_id, -loss, 'rob', f'Порез об Шапочку из фольги при попытке грабежа (жертва: {target_id})')
+                    await add_user_transaction(db, user_id, -loss, 'rob', f'Порез об Шапочку из фольги при попытке грабежа (жертва: {target_anon})')
             await db.execute(
                 "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
@@ -8659,9 +8691,12 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         async with db_transaction(db):
             ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
             if ok:
+                from common.anon_identity import generate_anon_name
+                robber_anon = generate_anon_name(user_id)
+                victim_anon = generate_anon_name(target_id)
                 await add_user_global_balance(db, user_id, board_id, stolen)
-                await add_user_transaction(db, target_id, -stolen, 'rob', f'Тебя ограбил анон с заточкой (грабитель: {user_id})')
-                await add_user_transaction(db, user_id, stolen, 'rob', f'Успешное ограбление анона (жертва: {target_id})')
+                await add_user_transaction(db, target_id, -stolen, 'rob', f'Тебя ограбил {robber_anon} с заточкой')
+                await add_user_transaction(db, user_id, stolen, 'rob', f'Успешное ограбление анона {victim_anon}')
                 set_victim_rob_cooldown(target_id)
                 try:
                     from criminal_syndicate_engine import add_wanted_stars
@@ -8709,10 +8744,12 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             [InlineKeyboardButton(text="👽 Купить Шапочку из фольги (800 ₪)", callback_data="fast_rescue:buy_tinfoil")],
             [InlineKeyboardButton(text="🔪 Купить Заточку для мести (400 ₪)", callback_data="fast_rescue:buy_knife")]
         ])
+        from common.anon_identity import generate_anon_name
+        robber_name = generate_anon_name(user_id)
         await message.bot.send_message(
             target_id,
-            f"🔪 <b>ТЕБЯ ОГРАБИЛИ В /{board_id}/!</b>\n"
-            f"Какой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей.\n\n"
+            f"🔪 <b>ТЕБЯ ОГРАБИЛ {robber_name.upper()} В /{board_id}/!</b>\n"
+            f"Анон {robber_name} с заточкой украл у тебя <code>{stolen}</code> шекелей.\n\n"
             f"⚡ <b>Самооборона:</b> нажми кнопку ниже, чтобы защитить кошелек или отомстить:",
             reply_markup=kb_rescue,
             parse_mode="HTML"
@@ -8899,10 +8936,12 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             [InlineKeyboardButton(text=f"💊 Смыть говно Аминазином ({pills_price} ₪)", callback_data="fast_rescue:clean_pills")],
             [InlineKeyboardButton(text=f"👽 Надеть Шапочку из фольги ({foil_price} ₪)", callback_data="fast_rescue:buy_tinfoil")]
         ])
+        from common.anon_identity import generate_anon_name
+        attacker_name = generate_anon_name(user_id)
         await message.bot.send_message(
             target_id,
-            f"🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\n"
-            f"Какой-то анон обмазал тебя. У тебя статус 💩 на {dur_str}.\n\n"
+            f"🐒 <b>В ТЕБЯ КИНУЛ ГОВНОМ {attacker_name}!</b>\n"
+            f"Анон {attacker_name} обмазал тебя. У тебя статус 💩 на {dur_str}.\n\n"
             f"⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно отмыться:",
             reply_markup=kb_rescue,
             parse_mode="HTML"
@@ -9800,6 +9839,19 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     register_attacker_effect("laxative_gun", user_id, target_id, curse_duration)
     from common.debuff_phrases import get_curse_hit_text
     await message.answer(get_curse_hit_text(), parse_mode="HTML")
+    try:
+        from common.anon_identity import generate_anon_name
+        attacker_name = generate_anon_name(user_id)
+        await message.bot.send_message(
+            target_id,
+            f"🚽 <b>ТЕБЕ ПОДСЫПАЛИ СЛАБИТЕЛЬНОЕ В /{board_id}/!</b>\n"
+            f"Анон {attacker_name} подлил тебе едкое слабительное.\n"
+            f"Твои посты будут страдать словесным поносом следующие <b>{curse_duration // 60} мин</b>.\n\n"
+            f"💡 <i>От дебаффов спасают Аминазин (/cure) и Сет «Палата №6»!</i>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 @dp.message(Command("schizopill", "schizo_pill", "schizo", "шиза", "таблетка", "шизотаблетка", "шизопил", "pill", ignore_case=True, ignore_mention=True))
 async def cmd_schizopill(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -9953,10 +10005,13 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
     from common.debuff_phrases import get_schizo_hit_text
     await message.answer(get_schizo_hit_text(), parse_mode="HTML")
     try:
+        from common.anon_identity import generate_anon_name
+        attacker_name = generate_anon_name(user_id)
         await message.bot.send_message(
             target_id,
-            "💊 <b>ТЕБЯ НАКАЧАЛИ ШИЗО-ТАБЛЕТКАМИ!</b>\n"
-            "Какой-то анон подмешал тебе мощный психоделик. В течение 1 часа нейросеть будет переписывать все твои посты в бред шизофреника!",
+            f"💊 <b>ТЕБЯ НАКАЧАЛ ШИЗО-ТАБЛЕТКАМИ {attacker_name}!</b>\n"
+            f"Анон {attacker_name} подмешал тебе мощный психоделик. В течение 1 часа нейросеть будет переписывать все твои посты в бред шизофреника!\n\n"
+            f"💡 <i>Снять шизу можно Аминазином в /shop или /cure!</i>",
             parse_mode="HTML"
         )
     except Exception:
@@ -10132,16 +10187,18 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             await db.commit()
 
         async with storage_lock:
-            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(hours=2)
+            board_data.setdefault(board_id, {}).setdefault('mutes', {})[user_id] = datetime.now(UTC) + timedelta(hours=2)
 
         await apply_regular_mute(user_id, board_id, 7200)
         await log_global_event('bot', f"🚨 PARTYVAN_BACKFIRE: Юзер {user_id} вызвал ОМОН на /{board_id}/, но сам сел в КПЗ на 2ч")
         set_partyvan_user_cooldown(user_id, current_time + 3600)
         record_combat_attack(user_id, user_id, "partyvan")
 
+        from common.anon_identity import generate_anon_name
+        caller_anon = generate_anon_name(user_id)
         backfire_msg = (
             f"🚨 <b>ОБЛАВА ПО ЛОЖНОМУ ДОНОСУ!</b> 🚨\n\n"
-            f"ОМОН установил, что анон <b>[ID:{user_id}]</b> злоупотребляет экстренной связью и строчит кляузы на невиновных!\n"
+            f"ОМОН установил, что анон <b>{caller_anon}</b> злоупотребляет экстренной связью и строчит кляузы на невиновных!\n"
             f"Спецназ развернул автозак и <b>упаковал самого доносчика в КПЗ на 2 часа</b> по статье о заведомо ложном вызове специализированных служб!\n"
             f"<i>(Риск ложного вызова составлял {int(backfire_chance * 100)}%)</i>"
         )
@@ -10192,7 +10249,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             await db.commit()
 
         async with storage_lock:
-            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
+            board_data.setdefault(board_id, {}).setdefault('mutes', {})[user_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
 
         await apply_regular_mute(user_id, board_id, duration_sec)
         await log_global_event('bot', f"🪞 PARTYVAN_MIRROR: ОМОН от {user_id} отражён зеркалом {target_id} на /{board_id}/ (доносчик сел на {format_duration_str(duration_sec)})")
@@ -10241,7 +10298,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await db.commit()
 
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
+        board_data.setdefault(board_id, {}).setdefault('mutes', {})[target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
     await apply_regular_mute(target_id, board_id, duration_sec)
     await log_global_event('bot', f"🚔 PARTYVAN: Юзер {user_id} упаковал {target_id} в автозак на /{board_id}/ на {format_duration_str(duration_sec)}")
     register_attacker_effect("partyvan_gun", user_id, target_id, duration_sec)
@@ -10269,6 +10326,23 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         f"<i>(Время сбалансировано с учетом активности цели и частоты вызовов)</i>"
     )
     try:
+        from common.anon_identity import generate_anon_name
+        caller_anon = generate_anon_name(user_id)
+        await message.bot.send_message(
+            target_id,
+            f"🚔 <b>НА ТЕБЯ ВЫЗВАЛИ ПАТИВЭН В /{board_id}/!</b>\n"
+            f"Анон {caller_anon} накатал донос, и спецназ упаковал тебя в КПЗ на <b>{dur_str}</b>.\n"
+            f"💡 Ты можешь дать взятку (<code>/bribe</code>) или дождаться, пока аноны опротестуют арест в треде!",
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except Exception:
+        pass
+
+    try:
         sent_msg = await message.bot.send_message(
             message.chat.id,
             announcement_text,
@@ -10285,6 +10359,10 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         )
     if session_id in active_combat_appeals and sent_msg:
         active_combat_appeals[session_id].announcement_msg_id = sent_msg.message_id
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 
@@ -12504,12 +12582,8 @@ async def _run_delayed_prank(params: DelayedPrankParams):
             (params.amount, params.user_id)
         )
 
-    uid_raw = str(params.user_id)
-    if len(uid_raw) >= 6:
-        masked_uid = f"{uid_raw[:3]}***{uid_raw[-3:]}"
-    else:
-        masked_uid = f"{uid_raw[:2]}***{uid_raw[-1:]}"
-    final_user_label = f"{escape_html(params.shame_name)} (ID: {masked_uid})"
+    from common.anon_identity import get_anon_id
+    final_user_label = f"{escape_html(params.shame_name)} [{get_anon_id(params.user_id)}]"
 
     raw_requisites = str(params.user_input).strip()
 
@@ -14276,7 +14350,7 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
                 try:
                     from post_processor import process_new_post
                     import shared_state
-                    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+                    anon_tag = f"<b>[{get_anon_id(user_id)}]</b>"
                     hype_text = (
                         f"🎰🔥 <b>МЕГА-ЗАНОС В СЛОТАХ 777!</b> 🔥🎰\n\n"
                         f">барабаны крутнулись, шекели полились рекой!\n"
@@ -14531,7 +14605,7 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
                 try:
                     from post_processor import process_new_post
                     import shared_state
-                    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+                    anon_tag = f"<b>[{get_anon_id(user_id)}]</b>"
                     chosen_label_txt = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл"] else "👑 РЕШКА"
                     hype_text = (
                         f"🪙🔥 <b>МЕГА-ЗАНОС В МОНЕТКЕ 50/50!</b> 🔥🪙\n\n"
@@ -15423,7 +15497,7 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
                 try:
                     from post_processor import process_new_post
                     import shared_state
-                    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+                    anon_tag = f"<b>[{get_anon_id(user_id)}]</b>"
                     hype_text = (
                         f"💀🔥 <b>БЕЗУМЕЦ ВЫЖИЛ В РУССКОЙ РУЛЕТКЕ!</b> 🔥💀\n\n"
                         f">анон смотрел в дуло револьвера и не моргнул!\n"
@@ -17002,9 +17076,10 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
         return
     try: await message.delete()
     except Exception: pass
-    if lang == 'en': msg = f"🕊️ Global Amnesty for <code>{target_id}</code>..."
-    elif lang == 'jp': msg = f"🕊️ <code>{target_id}</code> へのグローバル恩赦..."
-    else: msg = f"🕊️ Глобальная амнистия для <code>{target_id}</code>..."
+    target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
+    if lang == 'en': msg = f"🕊️ Global Amnesty for <code>{target_anon}</code>..."
+    elif lang == 'jp': msg = f"🕊️ <code>{target_anon}</code> へのグローバル恩赦..."
+    else: msg = f"🕊️ Глобальная амнистия для <code>{target_anon}</code>..."
     status_msg = await message.answer(msg, parse_mode="HTML")
     count = 0
     for b_id in BOARDS:
@@ -17028,9 +17103,9 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     from common.database import remove_global_mute
     await remove_global_mute(target_id)
     await log_global_event('bot', f"🕊️ GUNBAN: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗБАНИЛ {target_id} на {count} досках и снял ALL")
-    if lang == 'en': final = f"✅ User <code>{target_id}</code> unbanned/unmuted on {count} boards and ALL."
-    elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板およびALLでBAN/ミュート解除しました。"
-    else: final = f"✅ Пользователь <code>{target_id}</code> разбанен/размучен на {count} досках и ALL."
+    if lang == 'en': final = f"✅ Anon <code>{target_anon}</code> unbanned/unmuted on {count} boards and ALL."
+    elif lang == 'jp': final = f"✅ アノン <code>{target_anon}</code> を {count} 個の板およびALLでBAN/ミュート解除しました。"
+    else: final = f"✅ Анон <code>{target_anon}</code> разбанен/размучен на {count} досках и ALL."
     await status_msg.edit_text(final, parse_mode="HTML")
 
 @dp.message(Command("global_unmute", "gunmute"))
@@ -17060,7 +17135,8 @@ async def cmd_global_unmute(message: types.Message, board_id: str | None, stream
     from common.database import remove_global_mute
     await remove_global_mute(target_id)
     await log_global_event('bot', f"🔊 GUNMUTE: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗМУТИЛ {target_id} со всех досок и ALL")
-    msg = f"🔊 Пользователь <code>{target_id}</code> глобально размучен со всех досок и ALL." if lang == 'ru' else f"🔊 User <code>{target_id}</code> globally unmuted from all boards and ALL."
+    target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
+    msg = f"🔊 Анон <code>{target_anon}</code> глобально размучен со всех досок и ALL." if lang == 'ru' else f"🔊 Anon <code>{target_anon}</code> globally unmuted from all boards and ALL."
     await message.answer(msg, parse_mode="HTML")
 
 async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru') -> str:
@@ -17309,7 +17385,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     else: header = f"🗂 <b>Досье на {anon_name}:</b>\n<code>{'—'*20}</code>"
 
     report = [header]
-    report.append(f"🆔 <b>ID:</b> <code>{target_id}</code>")
+    report.append(f"🆔 <b>Анон-ID:</b> <code>[{get_anon_id(target_id, stream=lang)}]</code>")
     report.append(f"💸 <b>Баланс:</b> {int(balance)} RUB")
     report.append(f"💩 <b>Постов:</b> {post_count}")
     report.append(f"<code>{'—'*20}</code>")
@@ -19804,9 +19880,10 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
         return
     try: await message.delete()
     except Exception: pass
-    if lang == 'en': msg = f"🔨 GLOBAL BANNING <code>{target_id}</code>..."
-    elif lang == 'jp': msg = f"🔨 <code>{target_id}</code> をグローバルBAN中..."
-    else: msg = f"🔨 Выписываю ГЛОБАЛЬНЫЙ БАН для <code>{target_id}</code>..."
+    target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
+    if lang == 'en': msg = f"🔨 GLOBAL BANNING <code>{target_anon}</code>..."
+    elif lang == 'jp': msg = f"🔨 <code>{target_anon}</code> をグローバルBAN中..."
+    else: msg = f"🔨 Выписываю ГЛОБАЛЬНЫЙ БАН для <code>{target_anon}</code>..."
     status_msg = await message.answer(msg, parse_mode="HTML")
     banned_count = 0
     for b_id in BOARDS:
@@ -19825,9 +19902,9 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
             banned_count += 1
         except Exception: pass
     await log_global_event('bot', f"☢️ GBAN: Админ {message.from_user.id} выдал ГЛОБАЛЬНЫЙ БАН пользователю {target_id} на {banned_count} досках")
-    if lang == 'en': final = f"☠️ User <code>{target_id}</code> destroyed on {banned_count} boards."
-    elif lang == 'jp': final = f"☠️ ユーザー <code>{target_id}</code> を {banned_count} 個の板で抹殺しました。"
-    else: final = f"☠️ Пользователь <code>{target_id}</code> уничтожен на {banned_count} досках."
+    if lang == 'en': final = f"☠️ Anon <code>{target_anon}</code> destroyed on {banned_count} boards."
+    elif lang == 'jp': final = f"☠️ アノン <code>{target_anon}</code> を {banned_count} 個の板で抹殺しました。"
+    else: final = f"☠️ Анон <code>{target_anon}</code> уничтожен на {banned_count} досках."
     await status_msg.edit_text(final, parse_mode="HTML")
 @dp.message(Command("gshadowmute"))
 async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -19875,9 +19952,10 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
         return
     try: await message.delete()
     except Exception: pass
-    if lang == 'en': msg = f"👻 Applying GLOBAL SHADOW on <code>{target_id}</code> ({time_str})..."
-    elif lang == 'jp': msg = f"👻 <code>{target_id}</code> にグローバルシャドウを適用中 ({time_str})..."
-    else: msg = f"👻 Накладываю ГЛОБАЛЬНУЮ тень на <code>{target_id}</code> ({time_str})..."
+    target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
+    if lang == 'en': msg = f"👻 Applying GLOBAL SHADOW on <code>{target_anon}</code> ({time_str})..."
+    elif lang == 'jp': msg = f"👻 <code>{target_anon}</code> にグローバルシャドウを適用中 ({time_str})..."
+    else: msg = f"👻 Накладываю ГЛОБАЛЬНУЮ тень на <code>{target_anon}</code> ({time_str})..."
     status_msg = await message.answer(msg, parse_mode="HTML")
     mute_count = 0
     expires_dt = datetime.now(UTC) + timedelta(seconds=total_seconds)
@@ -19891,11 +19969,11 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
         except Exception: pass
     await log_global_event('bot', f"👻 G-SHADOW: Админ {message.from_user.id} выдал ГЛОБАЛЬНУЮ ТЕНЬ {target_id} на {mute_count} досках до {expires_dt.strftime('%H:%M')}")
     if lang == 'en':
-        final = f"👻 <b>Global Shadowban Active.</b>\nTarget: <code>{target_id}</code>\nBoards: {mute_count}\nDuration: {time_str}\n\n<i>Ignored everywhere.</i>"
+        final = f"👻 <b>Global Shadowban Active.</b>\nTarget: <code>{target_anon}</code>\nBoards: {mute_count}\nDuration: {time_str}\n\n<i>Ignored everywhere.</i>"
     elif lang == 'jp':
-        final = f"👻 <b>グローバルシャドウバン有効。</b>\n対象: <code>{target_id}</code>\n板数: {mute_count}\n期間: {time_str}\n\n<i>どこでも無視されます。</i>"
+        final = f"👻 <b>グローバルシャドウバン有効。</b>\n対象: <code>{target_anon}</code>\n板数: {mute_count}\n期間: {time_str}\n\n<i>どこでも無視されます。</i>"
     else:
-        final = f"👻 <b>Глобальный Shadowban активирован.</b>\nЦель: <code>{target_id}</code>\nДосок: {mute_count}\nДлительность: {time_str}\n\n<i>Его посты будут молча игнорироваться везде.</i>"
+        final = f"👻 <b>Глобальный Shadowban активирован.</b>\nЦель: <code>{target_anon}</code>\nДосок: {mute_count}\nДлительность: {time_str}\n\n<i>Его посты будут молча игнорироваться везде.</i>"
     await status_msg.edit_text(final, parse_mode="HTML")
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -22504,15 +22582,16 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
     spawn_task(update_user_settings_db(target_id, board_id, shadow_sticker=1 if new_val else 0))
     act = "ЗАПРЕТИЛ стикеры" if new_val else "РАЗРЕШИЛ стикеры"
     await log_global_event('bot', f"🃏 STICK_TOGGLE: Админ {message.from_user.id} {act} пользователю {target_id} на /{board_id}/")
+    target_anon = f"[{get_anon_id(target_id)}]"
     if lang == 'en':
         status = "BANNED 🚫 (Shadow)" if new_val else "ALLOWED ✅"
-        msg = f"Stickers for {target_id}: {status}"
+        msg = f"Stickers for Anon {target_anon}: {status}"
     elif lang == 'jp':
         status = "禁止 🚫 (シャドウ)" if new_val else "許可 ✅"
-        msg = f"{target_id} のステッカー: {status}"
+        msg = f"アノン {target_anon} のステッカー: {status}"
     else:
         status = "ЗАПРЕЩЕНЫ 🚫 (Теневой)" if new_val else "РАЗРЕШЕНЫ ✅"
-        msg = f"Стикеры для {target_id} теперь: {status}"
+        msg = f"Стикеры для Анона {target_anon} теперь: {status}"
     await message.answer(msg)
     try: await message.delete()
     except Exception: pass
@@ -22545,15 +22624,16 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
     spawn_task(update_user_settings_db(target_id, board_id, shadow_media=1 if new_val else 0))
     act = "ЗАПРЕТИЛ все медиа" if new_val else "РАЗРЕШИЛ медиа"
     await log_global_event('bot', f"🔇 MEDIA_TOGGLE: Админ {message.from_user.id} {act} пользователю {target_id} на /{board_id}/ (Text-only mode)")
+    target_anon = f"[{get_anon_id(target_id)}]"
     if lang == 'en':
         status = "BANNED 🚫 (Shadow)" if new_val else "ALLOWED ✅"
-        msg = f"All Media for {target_id}: {status} (Text only mode)"
+        msg = f"All Media for Anon {target_anon}: {status} (Text only mode)"
     elif lang == 'jp':
         status = "禁止 🚫 (シャドウ)" if new_val else "許可 ✅"
-        msg = f"{target_id} の全メディア: {status} (テキストのみ)"
+        msg = f"アノン {target_anon} の全メディア: {status} (テキストのみ)"
     else:
         status = "ЗАПРЕЩЕНЫ 🚫 (Теневой)" if new_val else "РАЗРЕШЕНЫ ✅"
-        msg = f"Любые медиа для {target_id} теперь: {status} (Разрешен только текст)"
+        msg = f"Любые медиа для Анона {target_anon} теперь: {status} (Разрешен только текст)"
     await message.answer(msg)
     try: await message.delete()
     except Exception: pass
@@ -22589,7 +22669,8 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
     spawn_task(update_user_settings_db(target_id, board_id, lie_media=1 if new_val else 0))
     status = "ENABLED" if new_val else "DISABLED"
     await log_global_event('bot', f"LIE_MEDIA_TOGGLE: admin {message.from_user.id} {status} archive media substitution for {target_id} on /{board_id}/")
-    await message.answer(f"Lie media for <code>{target_id}</code>: {status}", parse_mode="HTML")
+    target_anon = f"[{get_anon_id(target_id)}]"
+    await message.answer(f"Lie media for Anon <code>{target_anon}</code>: {status}", parse_mode="HTML")
     try: await message.delete()
     except Exception: pass
 @dp.callback_query(F.data == "create_thread_edit", ThreadCreateStates.waiting_for_confirmation)
@@ -24546,7 +24627,7 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
 
         resp_text = (
             f"🚨 <b>3/3 ПРЕДУПРЕЖДЕНИЙ! АВТО-МУТ 24 ЧАСА!</b>\n\n"
-            f"Нарушитель: <b>{anon_name}</b> (ID: <code>{target_id}</code>)\n"
+            f"Нарушитель: <b>{anon_name}</b>\n"
             f"Причина: <i>{reason}</i>\n"
             f"Лимит предупреждений исчерпан. Выдан мут на 24 часа."
         )
@@ -24556,7 +24637,7 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
         await log_global_event('bot', f"⚠️ WARN: Мод {user_id} вынес пред #{warns}/3 юзеру {target_id} на /{board_id}/: {reason}")
         resp_text = (
             f"⚠️ <b>ПРЕДУПРЕЖДЕНИЕ [{warns}/3]</b>\n\n"
-            f"Анон <b>{anon_name}</b> (ID: <code>{target_id}</code>) получил официальное предупреждение.\n"
+            f"Анон <b>{anon_name}</b> получил официальное предупреждение.\n"
             f"Причина: <i>{reason}</i>\n"
             f"<i>(При 3/3 нарушитель будет автоматически отправлен в мут на 24 часа)</i>"
         )
@@ -24603,7 +24684,7 @@ async def cmd_unwarn(message: types.Message, board_id: str | None, stream: str =
         await db.commit()
 
     await log_global_event('bot', f"✅ UNWARN: Мод {user_id} снял варн с {target_id} на /{board_id}/ (осталось {new_warns}/3)")
-    await message.answer(f"✅ Предупреждение снято с <b>{anon_name}</b> (ID: <code>{target_id}</code>). Текущий счет: <b>{new_warns}/3</b>.", parse_mode="HTML")
+    await message.answer(f"✅ Предупреждение снято с <b>{anon_name}</b>. Текущий счет: <b>{new_warns}/3</b>.", parse_mode="HTML")
     try: await message.delete()
     except Exception: pass
 
@@ -24676,15 +24757,16 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
         await message.answer("Error format." if lang != 'ru' else "Неверный формат времени."); return
     deleted = await delete_user_posts(message.bot, target_id, 5, board_id)
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=mute_seconds)
+        board_data.setdefault(board_id, {}).setdefault('mutes', {})[target_id] = datetime.now(UTC) + timedelta(seconds=mute_seconds)
     await apply_regular_mute(target_id, board_id, mute_seconds, reason=f"admin:{message.from_user.id}")
     await log_global_event('bot', f"🔇 MUTE: Мод {message.from_user.id} замутил {target_id} на /{board_id}/ на {duration_text}")
+    target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
     if lang == 'en':
-        msg = f"🔇 User <code>{target_id}</code> muted for {duration_text}. Deleted: {deleted}"
+        msg = f"🔇 Anon <code>{target_anon}</code> muted for {duration_text}. Deleted: {deleted}"
     elif lang == 'jp':
-        msg = f"🔇 ユーザー <code>{target_id}</code> を {duration_text} ミュートしました。削除: {deleted}"
+        msg = f"🔇 アノン <code>{target_anon}</code> を {duration_text} ミュートしました。削除: {deleted}"
     else:
-        msg = f"🔇 Юзер <code>{target_id}</code> замучен на {duration_text}. Удалено: {deleted}"
+        msg = f"🔇 Анон <code>{target_anon}</code> замучен на {duration_text}. Удалено: {deleted}"
     await message.answer(msg, parse_mode="HTML")
     await send_moderation_notice(target_id, "mute", board_id, duration=duration_text, deleted_posts=deleted, stream=stream)
     try: await message.delete()
@@ -24750,17 +24832,18 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
 
     unmuted = bool(folk_lifted)
     async with storage_lock:
-        if board_data[board_id]['mutes'].pop(target_id, None): unmuted = True
+        if board_data.setdefault(board_id, {}).setdefault('mutes', {}).pop(target_id, None): unmuted = True
     await remove_regular_mute(target_id, board_id)
+    target_anon = f"[{get_anon_id(target_id)}]"
     if unmuted:
-        if lang == 'en': txt = f"🔊 User {target_id} unmuted."
-        elif lang == 'jp': txt = f"🔊 ユーザー {target_id} のミュートを解除しました。"
-        else: txt = f"🔊 Пользователь {target_id} размучен."
+        if lang == 'en': txt = f"🔊 Anon {target_anon} unmuted."
+        elif lang == 'jp': txt = f"🔊 アノン {target_anon} のミュートを解除しました。"
+        else: txt = f"🔊 Анон {target_anon} размучен."
         await message.answer(txt)
     else:
-        if lang == 'en': txt = f"User {target_id} was not muted."
-        elif lang == 'jp': txt = f"ユーザー {target_id} はミュートされていません。"
-        else: txt = f"Пользователь {target_id} не был в муте."
+        if lang == 'en': txt = f"Anon {target_anon} was not muted."
+        elif lang == 'jp': txt = f"アノン {target_anon} はミュートされていません。"
+        else: txt = f"Анон {target_anon} не был в муте."
         await message.answer(txt)
     try: await message.delete()
     except Exception: pass
@@ -24831,12 +24914,13 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
             for b in BOARD_CONFIG.keys():
                 await update_shadow_mute(target_id, b, expires_dt.timestamp())
             await log_global_event('bot', f"👻 GSHADOWMUTE: Мод {message.from_user.id} скрыл {target_id} ГЛОБАЛЬНО на {time_str}")
+            target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
             if lang == 'en':
-                msg = f"👻 Globally shadowmuted user <code>{target_id}</code> for {time_str} (all boards)."
+                msg = f"👻 Globally shadowmuted anon <code>{target_anon}</code> for {time_str} (all boards)."
             elif lang == 'jp':
-                msg = f"👻 ユーザー <code>{target_id}</code> を全板で {time_str} グローバルシャドウミュートしました。"
+                msg = f"👻 アノン <code>{target_anon}</code> を全板で {time_str} グローバルシャドウミュートしました。"
             else:
-                msg = f"👻 Пользователь <code>{target_id}</code> тихо замучен <b>ГЛОБАЛЬНО (на всех досках)</b> на {time_str}."
+                msg = f"👻 Анон <code>{target_anon}</code> тихо замучен <b>ГЛОБАЛЬНО (на всех досках)</b> на {time_str}."
             await message.answer(msg, parse_mode="HTML")
         else:
             async with storage_lock:
@@ -24845,12 +24929,13 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
             await update_shadow_mute(target_id, target_board_id, expires_dt.timestamp())
             await log_global_event('bot', f"👻 SHADOWMUTE: Мод {message.from_user.id} скрыл {target_id} на /{target_board_id}/ до {expires_dt.strftime('%H:%M:%S')}")
             board_name = BOARD_CONFIG.get(target_board_id, {}).get('name', target_board_id)
+            target_anon = f"[{get_anon_id(target_id, stream=lang)}]"
             if lang == 'en':
-                msg = f"👻 Shadowmuted user <code>{target_id}</code> for {time_str} on {board_name}."
+                msg = f"👻 Shadowmuted anon <code>{target_anon}</code> for {time_str} on {board_name}."
             elif lang == 'jp':
-                msg = f"👻 ユーザー <code>{target_id}</code> を {board_name} で {time_str} シャドウミュートしました。"
+                msg = f"👻 アノン <code>{target_anon}</code> を {board_name} で {time_str} シャドウミュートしました。"
             else:
-                msg = f"👻 Тихо замучен пользователь <code>{target_id}</code> на {time_str} на доске {board_name}."
+                msg = f"👻 Тихо замучен анон <code>{target_anon}</code> на {time_str} на доске {board_name}."
             await message.answer(msg, parse_mode="HTML")
     except ValueError:
         err = "❌ Invalid format. Ex: <code>30m</code>, <code>2h</code>" if lang == 'en' else "❌ Неверный формат времени. Примеры: <code>30m</code>, <code>2h</code>, <code>1d</code>"
@@ -25105,21 +25190,22 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         tb = target_board_id or effective_board
         await update_shadow_mute(target_id, tb, 0)
         await update_shadow_mute(target_id, 'ALL', 0)
+    target_anon = f"[{get_anon_id(target_id)}]"
     if was_muted:
         if lang == 'en':
-            resp = f"👻 User <code>{target_id}</code> un-shadowmuted."
+            resp = f"👻 Anon <code>{target_anon}</code> un-shadowmuted."
         elif lang == 'jp':
-            resp = f"👻 ユーザー <code>{target_id}</code> のシャドウミュートを解除しました。"
+            resp = f"👻 アノン <code>{target_anon}</code> のシャドウミュートを解除しました。"
         else:
-            resp = f"👻 С пользователя <code>{target_id}</code> снят теневой мут."
+            resp = f"👻 С анона <code>{target_anon}</code> снят теневой мут."
         await message.answer(resp, parse_mode="HTML")
     else:
         if lang == 'en':
-            resp = f"User <code>{target_id}</code> was not shadowmuted."
+            resp = f"Anon <code>{target_anon}</code> was not shadowmuted."
         elif lang == 'jp':
-            resp = f"ユーザー <code>{target_id}</code> はシャドウミュートされていません。"
+            resp = f"アノン <code>{target_anon}</code> はシャドウミュートされていません。"
         else:
-            resp = f"Пользователь <code>{target_id}</code> не был в теневом муте."
+            resp = f"Анон <code>{target_anon}</code> не был в теневом муте."
         await message.answer(resp, parse_mode="HTML")
     try:
         await message.delete()
@@ -27570,12 +27656,13 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
     if 'troll_targets' not in b_data:
         b_data['troll_targets'] = set()
 
+    target_anon = f"[{get_anon_id(target_id)}]"
     if target_id in b_data['troll_targets']:
         b_data['troll_targets'].remove(target_id)
-        await message.answer(f"Shadow-Troll OFF for {target_id}")
+        await message.answer(f"Shadow-Troll OFF for Anon {target_anon}")
     else:
         b_data['troll_targets'].add(target_id)
-        await message.answer(f"Shadow-Troll ON for {target_id}")
+        await message.answer(f"Shadow-Troll ON for Anon {target_anon}")
 
     # Also log global event
     from common.database import log_global_event
@@ -27726,21 +27813,23 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
     if now_allowed:
         await remove_reaction_ban(target_id, board_id)
         await log_global_event('bot', f"🎭 REAC_OK: Админ {message.from_user.id} РАЗРЕШИЛ реакции для {target_id} на /{board_id}/")
+        target_anon = f"[{get_anon_id(target_id)}]"
         if lang == 'en':
-            response_text = f"✅ User <code>{target_id}</code> can now use reactions again."
+            response_text = f"✅ Anon <code>{target_anon}</code> can now use reactions again."
         elif lang == 'jp':
-            response_text = f"✅ ユーザー <code>{target_id}</code> のリアクション禁止を解除しました。"
+            response_text = f"✅ アノン <code>{target_anon}</code> のリアクション禁止を解除しました。"
         else:
-            response_text = f"✅ Пользователь <code>{target_id}</code> теперь снова может ставить реакции."
+            response_text = f"✅ Анон <code>{target_anon}</code> теперь снова может ставить реакции."
     else:
         await add_reaction_ban(target_id, board_id)
         await log_global_event('bot', f"🎭 REAC_BAN: Админ {message.from_user.id} ЗАПРЕТИЛ реакции для {target_id} на /{board_id}/")
+        target_anon = f"[{get_anon_id(target_id)}]"
         if lang == 'en':
-            response_text = f"🚫 User <code>{target_id}</code> is now banned from using reactions."
+            response_text = f"🚫 Anon <code>{target_anon}</code> is now banned from using reactions."
         elif lang == 'jp':
-            response_text = f"🚫 ユーザー <code>{target_id}</code> のリアクションを禁止しました。"
+            response_text = f"🚫 アノン <code>{target_anon}</code> のリアクションを禁止しました。"
         else:
-            response_text = f"🚫 Пользователю <code>{target_id}</code> теперь запрещено ставить реакции."
+            response_text = f"🚫 Анону <code>{target_anon}</code> теперь запрещено ставить реакции."
     try:
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
@@ -27826,8 +27915,13 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
             else:
                 lines.append(f"• 🕶 Аноним #{anon_idx}: {safe_emojis_str}")
         else:
-            safe_user_id = escape_html(str(user_id))
-            lines.append(f"• ID <code>{safe_user_id}</code>: {safe_emojis_str}")
+            anon_tag = escape_html(get_anon_id(uid_int, stream=lang)) if uid_int else escape_html(str(user_id))
+            if lang == 'en':
+                lines.append(f"• 🕶 Anon [{anon_tag}]: {safe_emojis_str}")
+            elif lang == 'jp':
+                lines.append(f"• 🕶 アノン [{anon_tag}]: {safe_emojis_str}")
+            else:
+                lines.append(f"• 🕶 Анон [{anon_tag}]: {safe_emojis_str}")
     response_text = header + "\n".join(lines)
     if len(sorted_reactors) > MAX_USERS_TO_SHOW:
         diff = len(sorted_reactors) - MAX_USERS_TO_SHOW
@@ -28041,9 +28135,19 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
             info += f"\n✅ {status_lbl}: Active"
         else:
             info += f"\nℹ️ {status_lbl}: Inactive"
-        await message.answer(info, parse_mode="HTML")
+        if message.chat.type != "private":
+            try:
+                await message.bot.send_message(message.from_user.id, info, parse_mode="HTML")
+                await message.answer(f"🔒 Информация об аноне <b>[{get_anon_id(target_id)}]</b> отправлена админу в ЛС.", parse_mode="HTML")
+            except Exception:
+                group_safe_info = info_header + f"Anon ID: <b>[{get_anon_id(target_id)}]</b>\n"
+                group_safe_info += f"\nℹ️ {status_lbl}: " + ("BANNED" if target_id in b_data['users']['banned'] else ("Active" if target_id in b_data['users']['active'] else "Inactive"))
+                await message.answer(group_safe_info, parse_mode="HTML")
+        else:
+            await message.answer(info, parse_mode="HTML")
     except Exception:
-        msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
+        target_anon = f"[{get_anon_id(target_id)}]"
+        msg = f"Anon ID: <code>{target_anon}</code>"
         await message.answer(msg, parse_mode="HTML")
     try:
         await message.delete()
@@ -28127,7 +28231,7 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b>{post_info_str} (ID: <code>{target_id}</code>) и снести его посты?", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b>{post_info_str} (Анон-ID: <code>[{get_anon_id(target_id)}]</code>) и снести его посты?", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
@@ -28306,7 +28410,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
 
     board_label = "ВСЕХ досках" if is_global else f"/{board_id}/"
     await message.answer(
-        f"⚠️ Вайп: <b>{anon_name}</b> (ID: <code>{target_id}</code>) на {board_label} {time_label}.\n"
+        f"⚠️ Вайп: <b>{anon_name}</b> (Анон-ID: <code>[{get_anon_id(target_id)}]</code>) на {board_label} {time_label}.\n"
         f"Нажмите подтверждение — шедоумут и удаление постов применятся только после этого.",
         parse_mode="HTML", reply_markup=kb
     )
@@ -28444,21 +28548,23 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
         if target_id in b_data['anime_strict_limits']:
             b_data['anime_strict_limits'].remove(target_id)
             action_log = "REMOVED FROM STRICT LIMITS"
+            target_anon = f"[{get_anon_id(target_id)}]"
             if lang == 'en':
-                res = f"✅ User <code>{target_id}</code> removed from strict anime limits."
+                res = f"✅ Anon <code>{target_anon}</code> removed from strict anime limits."
             elif lang == 'jp':
-                res = f"✅ ユーザー <code>{target_id}</code> のアニメリミットを解除しました。"
+                res = f"✅ アノン <code>{target_anon}</code> のアニメリミットを解除しました。"
             else:
-                res = f"✅ С пользователя <code>{target_id}</code> снято жесткое ограничение на аниме."
+                res = f"✅ С анона <code>{target_anon}</code> снято жесткое ограничение на аниме."
         else:
             b_data['anime_strict_limits'].add(target_id)
             action_log = "ADDED TO STRICT LIMITS (10/day)"
+            target_anon = f"[{get_anon_id(target_id)}]"
             if lang == 'en':
-                res = f"🚫 User <code>{target_id}</code> now restricted to 10 anime images per 24h."
+                res = f"🚫 Anon <code>{target_anon}</code> now restricted to 10 anime images per 24h."
             elif lang == 'jp':
-                res = f"🚫 ユーザー <code>{target_id}</code> に1日10枚の制限をかけました。"
+                res = f"🚫 アノン <code>{target_anon}</code> に1日10枚の制限をかけました。"
             else:
-                res = f"🚫 Пользователю <code>{target_id}</code> установлено ограничение: 10 картинок в сутки."
+                res = f"🚫 Анону <code>{target_anon}</code> установлено ограничение: 10 картинок в сутки."
 
     await log_global_event('bot', f"🔰 ANIME_LIMIT: Админ {message.from_user.id} {action_log} для {target_id} на /{board_id}/")
     await message.answer(res, parse_mode="HTML")
@@ -28513,7 +28619,7 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
         thread_info.setdefault('local_shadow_mutes', {})[target_id] = expires_ts
     phrases = thread_messages.get(lang, {}).get('shadowmute_threads_success', ["Shadowmuted in threads."])
     response_text = random.choice(phrases).format(
-        user_id=target_id,
+        user_id=f"[{get_anon_id(target_id)}]",
         duration=str(int(total_seconds / 60))
     )
     await message.answer(response_text)
@@ -28749,16 +28855,17 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
     if is_global_request:
         from common.database import remove_global_mute
         await remove_global_mute(target_id)
+    target_anon = f"[{get_anon_id(target_id)}]"
     if unbanned or is_global_request:
         await add_or_activate_user(target_id, board_id)
-        if lang == 'en': msg = f"User {target_id} unbanned on {board_name}."
-        elif lang == 'jp': msg = f"ユーザー {target_id} のBANを解除しました ({board_name})。"
-        else: msg = f"Пользователь {target_id} разбанен на доске {board_name}."
+        if lang == 'en': msg = f"Anon {target_anon} unbanned on {board_name}."
+        elif lang == 'jp': msg = f"アノン {target_anon} のBANを解除しました ({board_name})。"
+        else: msg = f"Анон {target_anon} разбанен на доске {board_name}."
         await message.answer(msg)
     else:
-        if lang == 'en': msg = f"User {target_id} was not banned."
-        elif lang == 'jp': msg = f"ユーザー {target_id} はBANされていません。"
-        else: msg = f"Пользователь {target_id} не был забанен на этой доске."
+        if lang == 'en': msg = f"Anon {target_anon} was not banned."
+        elif lang == 'jp': msg = f"アノン {target_anon} はBANされていません。"
+        else: msg = f"Анон {target_anon} не был забанен на этой доске."
         await message.answer(msg)
     try: await message.delete()
     except Exception: pass
@@ -28890,7 +28997,7 @@ async def cmd_set_neo(message: types.Message, board_id: str | None = None, strea
         await db.commit()
 
     ach_note = f"\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!" if (unlocked and ach_info) else ""
-    target_str = f"Анону <code>[ID:{target_id}]</code>" if target_id != caller_id else "тебе"
+    target_str = f"Анону <b>[{get_anon_id(target_id)}]</b>" if target_id != caller_id else "тебе"
     resp = (
         f"🕶️ <b>СЕТ «ИЗБРАННЫЙ / НЕО» УСПЕШНО АКТИВИРОВАН!</b>\n\n"
         f"Успешно выдан и надет {target_str}:\n"
