@@ -556,21 +556,23 @@ async def execute_daily_airdrop(db, bots: dict) -> dict:
             pool_size=pool_size,
             payout=payout_per_winner,
         )
+        content = {
+            "type": "text",
+            "text": announcement_text,
+            "is_system_message": True,
+            "archive_allowed": True,
+        }
+        # Публикуем каноничный пост один раз, чтобы избежать дублирования post_num в Posts
+        canonical_pnum = await create_post(
+            author_id=0,
+            board_id="b",
+            content=content,
+            timestamp=time.time(),
+            stream="ru",
+        )
         for target_board in ["b", "thread"]:
             try:
-                content = {
-                    "type": "text",
-                    "text": announcement_text,
-                    "is_system_message": True,
-                    "archive_allowed": True,
-                }
-                pnum = await create_post(
-                    author_id=0,
-                    board_id=target_board,
-                    content=content,
-                    timestamp=time.time(),
-                    stream="ru",
-                )
+                pnum = canonical_pnum
                 try:
                     from shared_state import (
                         board_data, enqueue_board_message, storage_lock,

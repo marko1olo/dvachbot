@@ -613,21 +613,23 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
         top_allocations=allocations,
         remaining_fund=remaining_fund
     )
+    content = {
+        "type": "text",
+        "text": announcement_text,
+        "is_system_message": True,
+        "archive_allowed": True
+    }
+    # Публикуем каноничный пост один раз, чтобы избежать дублирования post_num в Posts
+    canonical_pnum = await create_post(
+        author_id=0,
+        board_id="b",
+        content=content,
+        timestamp=time.time(),
+        stream="ru"
+    )
     for target_board in ["b", "thread"]:
         try:
-            content = {
-                "type": "text",
-                "text": announcement_text,
-                "is_system_message": True,
-                "archive_allowed": True
-            }
-            pnum = await create_post(
-                author_id=0,
-                board_id=target_board,
-                content=content,
-                timestamp=time.time(),
-                stream="ru"
-            )
+            pnum = canonical_pnum
             # Ставим в очередь доставки борды, чтобы сообщение ушло ВСЕМ активным анонам в Telegram:
             try:
                 from shared_state import (
