@@ -1445,14 +1445,16 @@ async def delete_single_post(post_num: int, bot_instance: Bot, background: bool 
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
             except Exception:
                 pass
+    deleted_channels_count = len(channel_copies) if channel_copies else 0
     if not messages_to_delete_info:
-        return 0 if deleted_from_db else 0
+        return deleted_channels_count if deleted_channels_count > 0 else (1 if deleted_from_db else 0)
 
     if background:
         from common.task_manager import spawn_task
         spawn_task(delete_messages_background(messages_to_delete_info, bot_instance, board_id))
-        return len(messages_to_delete_info)
-    return await delete_messages_background(messages_to_delete_info, bot_instance, board_id)
+        return len(messages_to_delete_info) + deleted_channels_count
+    pm_deleted = await delete_messages_background(messages_to_delete_info, bot_instance, board_id)
+    return pm_deleted + deleted_channels_count
 
 async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
     """

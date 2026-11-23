@@ -8716,11 +8716,15 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         loss = min(int(u_balance * pct), 100000)
         from common.anon_identity import generate_anon_name
         target_anon = generate_anon_name(target_id)
+        robber_hash = get_anon_id(user_id)
+        target_hash = get_anon_id(target_id)
         async with db_lock:
             if loss > 0:
                 ok_tin, _ = await deduct_user_global_balance(db, user_id, board_id, loss)
                 if ok_tin:
+                    await add_user_global_balance(db, target_id, board_id, loss)
                     await add_user_transaction(db, user_id, -loss, 'rob', f'Порез об Шапочку из фольги при попытке грабежа (жертва: {target_anon})')
+                    await add_user_transaction(db, target_id, loss, 'rob', f'Оброненные шекели грабителя [{robber_hash}] об Шапочку из фольги')
             await db.execute(
                 "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
@@ -8733,18 +8737,46 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             )
             await db.commit()
 
-        await log_global_event('bot', f"👽 ROB_TINFOIL: Фольга Anon[{get_anon_id(target_id)}] защитила от грабежа Anon[{get_anon_id(user_id)}] на /{board_id}/ (грабитель обронил {loss} ₪)")
-        if destroyed:
-            tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!\nОт твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
-            target_text = "🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nАнон попытался ограбить тебя с заточкой! Твоя Шапочка спасла шекели (грабитель порезался сам), но <b>была уничтожена</b> от удара!"
-        else:
-            tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!\nФольга жертвы помялась (-4ч, осталось {left_h}ч {left_m}мин)."
-            target_text = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nАнон попытался ограбить тебя! Твоя Шапочка спасла твои шекели, но потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+        await log_global_event('bot', f"👽 ROB_TINFOIL: Фольга Anon[{target_hash}] защитила от грабежа Anon[{robber_hash}] на /{board_id}/ (грабитель обронил {loss} ₪)")
 
+        loss_str = f"{loss:,} ₪"
+        if destroyed:
+            tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss:,}</code> шекелей!\nОт твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_text = (
+                f"🛡 <b>Твоя Шапочка из фольги защитила тебя от ограбления Аноном [<code>{robber_hash}</code>]!</b>\n\n"
+                f"Неудачливый грабитель обронил <b>{loss_str}</b>, которые перешли в твой карман.\n"
+                f"🔥 От мощного удара твоя Шапочка <b>сгорела дотла</b>! Загляни в /shop, чтобы купить новую защиту."
+            )
+            robber_pm_text = (
+                f"🤕 <b>ОСЕЧКА ПРИ ОГРАБЛЕНИИ В /{board_id}/!</b>\n\n"
+                f"Ты попытался ограбить Анона [<code>{target_hash}</code>], но у него оказалась <b>Шапочка из фольги</b>!\n"
+                f"Ты в панике порезался собственной заточкой и обронил <b>{loss_str}</b>, которые перешли в карман жертвы.\n"
+                f"🔥 Шапочка жертвы сгорела, но твоя заточка сломалась. Загляни в /shop за новой!"
+            )
+        else:
+            tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss:,}</code> шекелей!\nФольга жертвы помялась (-4ч, осталось {left_h}ч {left_m}мин)."
+            target_text = (
+                f"🛡 <b>Твоя Шапочка из фольги защитила тебя от ограбления Аноном [<code>{robber_hash}</code>]!</b>\n\n"
+                f"Неудачливый грабитель обронил <b>{loss_str}</b>, которые перешли в твой карман.\n"
+                f"ℹ️ Фольга помялась (-4ч прочности, осталось {left_h}ч {left_m}мин защиты)."
+            )
+            robber_pm_text = (
+                f"🤕 <b>ОСЕЧКА ПРИ ОГРАБЛЕНИИ В /{board_id}/!</b>\n\n"
+                f"Ты попытался ограбить Анона [<code>{target_hash}</code>], но у него оказалась <b>Шапочка из фольги</b>!\n"
+                f"Ты в панике порезался собственной заточкой и обронил <b>{loss_str}</b>, которые перешли в карман жертвы.\n"
+                f"🔪 Твоя заточка сломалась о фольгу. Загляни в /shop за новым оружием!"
+            )
+
+        # ЛС жертве
         try:
             await message.bot.send_message(target_id, target_text, parse_mode="HTML")
-        except Exception as e:
-            logger.error("Failed to delete message: %s", e, exc_info=True)
+        except Exception:
+            pass
+
+        # ЛС грабителю с объяснением осечки
+        try:
+            await message.bot.send_message(user_id, robber_pm_text, parse_mode="HTML")
+        except Exception:
             pass
 
         try:
@@ -8832,15 +8864,17 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     try:
         kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="👽 Купить Шапочку из фольги (800 ₪)", callback_data="fast_rescue:buy_tinfoil")],
-            [InlineKeyboardButton(text="🔪 Купить Заточку для мести (400 ₪)", callback_data="fast_rescue:buy_knife")]
+            [InlineKeyboardButton(text="🔪 Купить Заточку для мести (400 ₪)", callback_data="fast_rescue:buy_knife")],
+            [InlineKeyboardButton(text="🏪 Теневой магазин (/shop)", callback_data="shop_main")]
         ])
         from common.anon_identity import generate_anon_name
         robber_name = generate_anon_name(user_id)
+        robber_hash = get_anon_id(user_id)
         await message.bot.send_message(
             target_id,
-            f"🔪 <b>ТЕБЯ ОГРАБИЛ {robber_name.upper()} В /{board_id}/!</b>\n"
-            f"Анон {robber_name} с заточкой украл у тебя <code>{stolen}</code> шекелей.\n\n"
-            f"⚡ <b>Самооборона:</b> нажми кнопку ниже, чтобы защитить кошелек или отомстить:",
+            f"🔪 <b>ТЕБЯ ОГРАБИЛ АНОН [<code>{robber_hash}</code>] В /{board_id}/!</b>\n\n"
+            f"Наглый грабитель с заточкой украл у тебя <b>{stolen:,} ₪</b>!\n\n"
+            f"🛡️ <b>Совет по самообороне:</b> загляни в <b>/shop</b> и купи средства защиты (Шапочку из фольги, бронежилет), чтобы обезопасить свои шекели, или заточку для мести:",
             reply_markup=kb_rescue,
             parse_mode="HTML"
         )
@@ -11158,9 +11192,17 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
 def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, str | None]:
     """
     Разбирает сумму перевода из текстового токена.
-    Поддерживает: '500', '500₪', '5k', '1.5k', '1m', 'all', 'все', 'всё', 'вабанк', 'half', '50%' и т.д.
+    Поддерживает: '500', '500₪', '5k', '50к', '1.5k', '1m', '1.5m', '100kk', '1b', '2б',
+    'all', 'все', 'всё', 'вабанк', 'half', '50%' и т.д.
+    Защита от NaN, Inf, отрицательных чисел, дробей меньше 1 ₪.
     """
-    t = token.strip().lower().replace(" ", "").replace(",", ".")
+    if not token:
+        return None, "invalid_format"
+
+    t = token.strip().lower()
+    # Удаляем артефакты форматирования Markdown/Telegram (*, _, `, ~)
+    t = t.replace("*", "").replace("_", "").replace("`", "").replace("~", "").replace(" ", "")
+
     for suffix in ["₪", "шекелей", "шекеля", "шекель", "рублей", "рубля", "руб", "р", "rub", "$", "usd"]:
         if t.endswith(suffix):
             t = t[:-len(suffix)].strip()
@@ -11169,7 +11211,7 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
     if t in ["all", "все", "всё", "вабанк", "ва-банк", "макс", "max", "весь", "всю"]:
         if sender_balance <= 0:
             return None, "empty_balance"
-        low, high = 1, int(sender_balance)
+        low, high = 1, min(int(sender_balance), 10_000_000)
         best = 0
         while low <= high:
             mid = (low + high) // 2
@@ -11187,7 +11229,7 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
         return (amt if amt > 0 else None), ("empty_balance" if amt <= 0 else None)
 
     if t.endswith("%"):
-        pct_str = t[:-1]
+        pct_str = t[:-1].replace(",", ".")
         try:
             pct = float(pct_str)
             if not math.isnan(pct) and not math.isinf(pct) and 0 < pct <= 100:
@@ -11206,6 +11248,11 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
     elif t.endswith(("m", "м")):
         multiplier = 1_000_000
         t = t[:-1]
+    elif t.endswith(("b", "б")):
+        multiplier = 1_000_000_000
+        t = t[:-1]
+
+    t = t.replace(",", ".")
 
     try:
         val = float(t) * multiplier
@@ -11215,6 +11262,8 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
             return None, "too_large"
         if val <= 0:
             return None, "negative_or_zero"
+        if val < 1:
+            return None, "fractional_less_than_one"
         if val > 10_000_000:
             return None, "too_large"
         int_val = int(val)
@@ -11260,11 +11309,11 @@ async def _resolve_target_user_id(db, target_str: str) -> int | None:
 
 
 
-@dp.message(F.text.regexp(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+[kк]?|all|всё|все)(?:\s+.*)?$", flags=re.IGNORECASE))
+@dp.message(F.text.regexp(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+(?:[.,]\d+)?(?:k|к|kk|кк|m|м|b|б)?|all|всё|все)(?:@\w+)?(?:\s+.*)?$", flags=re.IGNORECASE))
 async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     if not message.text:
         return
-    m = re.match(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+[kк]?|all|всё|все)(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
+    m = re.match(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+(?:[.,]\d+)?(?:k|к|kk|кк|m|м|b|б)?|all|всё|все)(?:@\w+)?(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
     if not m:
         return
     amt = m.group(1)
@@ -11485,7 +11534,13 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         elif err_reason == "too_large":
             await message.reply(
                 "🏦 <b>Финмониторинг Абу заблокировал перевод!</b>\n"
-                "Максимальная сумма одной транзакции — <b>10 000 000 ₪</b>. Не ломай экономику борды, олигарх мамкин.",
+                "Максимальная сумма одной транзакции — <b>10,000,000 ₪</b>. Не ломай экономику борды, олигарх мамкин.",
+                parse_mode="HTML"
+            )
+        elif err_reason == "fractional_less_than_one":
+            await message.reply(
+                "🪙 <b>Дробные копейки не принимаются!</b>\n"
+                "Минимальная сумма перевода — <b>1 ₪</b> (дробные шекели меньше единицы переводить нельзя).",
                 parse_mode="HTML"
             )
         elif err_reason == "negative_or_zero":
@@ -12071,7 +12126,11 @@ async def cb_duel_accept(callback: types.CallbackQuery, board_id: str | None):
     token = callback.data.split(":", 1)[1]
     challenger_id = resolve_duel_token(token)
     if challenger_id is None:
-        await callback.answer("⏳ Вызов истёк или недействителен.", show_alert=True)
+        from shared_state import is_duel_cancelled_by_creator
+        if is_duel_cancelled_by_creator(token):
+            await callback.answer("❌ Дуэль была отозвана создателем.", show_alert=True)
+        else:
+            await callback.answer("⏳ Вызов истёк или недействителен.", show_alert=True)
         return
     user_id = callback.from_user.id
     if user_id == challenger_id:
@@ -13498,104 +13557,204 @@ async def cb_work_alert_toggle_off(callback: types.CallbackQuery, board_id: str 
 
 
 
-# =============================================================================
-# 🌱 ONBOARDING, REPUTATION GATE & ANTI-SOFTLOCK RESCUE HANDLERS
+
 # =============================================================================
 
+# 🌱 ONBOARDING, REPUTATION GATE & ANTI-SOFTLOCK RESCUE HANDLERS
+
+# =============================================================================
+
+
+
 @dp.callback_query(F.data == "onboard_how_rep")
+
 async def cb_onboard_how_rep(callback: types.CallbackQuery, board_id: str | None = None):
+
     board_id = board_id or "b"
+
     await safe_callback_answer(callback)
+
     from common.reputation_engine import format_how_to_earn_reputation
+
     text = format_how_to_earn_reputation(stream="ru")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
+
         [InlineKeyboardButton(text="⚡ Первая смена на заводе", callback_data="onboard_first_shift")],
+
         [InlineKeyboardButton(text="ℹ️ Гайд новичка", callback_data="onboard_guide")],
+
         [InlineKeyboardButton(text="💼 Биржа труда (/work)", callback_data="work_main_hub")],
+
     ])
+
     await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+
+
+
 
 
 @dp.callback_query(F.data == "onboard_guide")
+
 async def cb_onboard_guide(callback: types.CallbackQuery, board_id: str | None = None):
+
     board_id = board_id or "b"
+
     await safe_callback_answer(callback)
+
     from common.reputation_engine import format_newcomer_guide
+
     text = format_newcomer_guide(stream="ru")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
+
         [InlineKeyboardButton(text="💼 Как заработать репутацию", callback_data="onboard_how_rep")],
+
         [InlineKeyboardButton(text="⚡ Начать работать", callback_data="onboard_first_shift")],
+
         [InlineKeyboardButton(text="🪪 Мой паспорт (/me)", callback_data="prof_card:main")],
+
     ])
+
     await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
 
 
+
+
+
 @dp.callback_query(F.data == "onboard_first_shift")
+
 async def cb_onboard_first_shift(callback: types.CallbackQuery, board_id: str | None = None):
+
     board_id = board_id or "b"
+
     callback.data = "work_do_bottles"
+
     await cb_work_do(callback, board_id=board_id)
 
 
+
+
+
 @dp.callback_query(F.data == "work_overtime")
+
 async def cb_work_overtime(callback: types.CallbackQuery, board_id: str | None = None):
+
     board_id = board_id or "b"
+
     user_id = callback.from_user.id
+
     db = await get_pool()
+
     items = await _get_user_active_items(db, user_id, board_id)
+
     balance = await get_user_global_balance(db, user_id)
+
+
 
     from common.reputation_engine import is_soft_locked, rescue_soft_locked_user, execute_free_rest
 
+
+
     if is_soft_locked(items, balance):
+
         rescued, msg, updated_items = rescue_soft_locked_user(user_id, items, balance, stream="ru")
+
         if rescued:
+
             async with db_transaction(db):
+
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(updated_items), user_id))
+
             await safe_callback_answer(callback, "Гуманитарная помощь Абу выдана! +40⚡ +40❤️", show_alert=True)
+
             text, kb = await _build_work_card(user_id, board_id)
+
             await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+
             return
 
+
+
     # Check free rest
+
     ok, rest_msg, remaining = execute_free_rest(user_id, items, stream="ru")
+
     if ok:
+
         async with db_transaction(db):
+
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
+
         await safe_callback_answer(callback, f"😴 Ты вздремнул на сверхурочных! {rest_msg}", show_alert=True)
+
         text, kb = await _build_work_card(user_id, board_id)
+
         await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+
     else:
+
         await safe_callback_answer(callback, f"⏳ {rest_msg}", show_alert=True)
 
 
+
+
+
 @dp.message(Command("rest", "отдых", "спать", "поспать", "сычевать", "сычевание", ignore_case=True, ignore_mention=True))
+
 async def cmd_rest(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+
     """Команда /rest — бесплатное восстановление энергии и здоровья на диване (cooldown 5 мин)."""
+
     board_id = board_id or "b"
+
     user_id = message.from_user.id
+
     db = await get_pool()
+
     items = await _get_user_active_items(db, user_id, board_id)
+
     balance = await get_user_global_balance(db, user_id)
+
+
 
     from common.reputation_engine import is_soft_locked, rescue_soft_locked_user, execute_free_rest
 
+
+
     # Auto rescue check
+
     if is_soft_locked(items, balance):
+
         rescued, rescue_msg, updated_items = rescue_soft_locked_user(user_id, items, balance, stream=stream)
+
         if rescued:
+
             async with db_transaction(db):
+
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(updated_items), user_id))
+
             await message.answer(rescue_msg, parse_mode="HTML")
+
             return
 
+
+
     ok, rest_msg, remaining = execute_free_rest(user_id, items, stream=stream)
+
     if ok:
+
         async with db_transaction(db):
+
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
+
         await message.answer(f"🛋️ {rest_msg}\n\n<i>Следующий отдых доступен через 5 минут.</i>", parse_mode="HTML")
+
     else:
+
         await message.answer(f"⏳ {rest_msg}\n\n<i>Нужно взбодриться быстрее? Купи Flash Ultra в /shop!</i>", parse_mode="HTML")
+
+
 
 @dp.callback_query(F.data.in_(["casino_main_hub", "casino_hub"]))
 async def cb_casino_main_hub(callback: types.CallbackQuery, board_id: str | None = None):
@@ -15057,6 +15216,9 @@ async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, b
 async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
     if casino_engine.is_casino_in_flight(user_id):
         return
+    ok_debounce, _ = casino_engine.check_action_debounce(user_id, action="roulette", min_interval=1.0)
+    if not ok_debounce:
+        return
     try:
         async with casino_engine.casino_in_flight_guard(user_id, action_name="roulette"):
             await _run_russian_roulette_shot(bot, chat_id, user_id, board_id, bet, message_to_edit)
@@ -15312,6 +15474,10 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             if casino_engine.is_casino_in_flight(user_id):
                 await callback.answer("⏳ Барабан уже крутится! Не кликай повторно.", show_alert=True)
                 return
+            ok_debounce, debounce_msg = casino_engine.check_action_debounce(user_id, action="spin", min_interval=1.0)
+            if not ok_debounce:
+                await callback.answer(debounce_msg, show_alert=True)
+                return
             await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
             await callback.answer()
 
@@ -15537,6 +15703,10 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
         if action == "shoot":
             if casino_engine.is_casino_in_flight(user_id):
                 await callback.answer("⏳ Выстрел уже обрабатывается! Не кликай повторно.", show_alert=True)
+                return
+            ok_debounce, debounce_msg = casino_engine.check_action_debounce(user_id, action="roulette", min_interval=1.0)
+            if not ok_debounce:
+                await callback.answer(debounce_msg, show_alert=True)
                 return
             await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
             await callback.answer()
@@ -16794,30 +16964,82 @@ async def cmd_dossier(message: types.Message, board_id: str | None = None, strea
     safe_schizo_name = escape_html(str(schizo_name))
     safe_role_str = escape_html(str(role_str))
 
+    from common.reputation_engine import calculate_user_reputation, format_reputation_badge
+    target_active_items = await _get_user_active_items(db, target_id, board_id) if db else {}
+    rep_score = calculate_user_reputation(
+        user_id=target_id,
+        items=target_active_items,
+        posts_count=posts_cnt,
+        balance=bal,
+        is_verified_b=bool(stats.get('is_verified_b'))
+    )
+    rep_badge = format_reputation_badge(rep_score, stream=stream)
+
+    # Активные предметы гардероба и оружие
+    now_ts = int(time.time())
+    equipped_gear_list = []
+    if target_active_items.get("tinfoil_hat", 0) > now_ts:
+        equipped_gear_list.append("👽 Фольга")
+    if target_active_items.get("reflect_shield_until", 0) > now_ts:
+        equipped_gear_list.append("🔰 Щит")
+    if target_active_items.get("janitor_until", 0) > now_ts:
+        equipped_gear_list.append(f"🚮 Дворник ({target_active_items.get('janitor_deletes_left', 0)})")
+    for g_key, g_title in [
+        ("mute_gun", "🔫 Мут-Ган"),
+        ("knife_gun", "🔪 Заточка"),
+        ("shit_gun", "💩 Говномёт"),
+        ("vomit_gun", "🤮 Блевота"),
+        ("pepperspray", "🧯 Перцовка"),
+        ("partyvan_gun", "🚔 Пативэн"),
+    ]:
+        if target_active_items.get(g_key):
+            equipped_gear_list.append(g_title)
+    try:
+        from wardrobe_engine import get_equipped_gear
+        g_map = get_equipped_gear(target_active_items, current_time=now_ts)
+        for g_val in g_map.values():
+            if g_val and g_val.get('name'):
+                equipped_gear_list.append(f"🎽 {escape_html(g_val['name'])}")
+    except Exception:
+        pass
+    wardrobe_display = ", ".join(equipped_gear_list) if equipped_gear_list else "<i>Ничего не надето</i>"
+
+    # Статус кармы
+    approval_pct = stats.get('approval_pct', 85)
+    if approval_pct >= 85 and cringe < 20:
+        karma_status = f"🟢 Благословенная (+{rx_rec:,} / {approval_pct}%)"
+    elif approval_pct >= 50 and cringe < 50:
+        karma_status = f"🟡 Нейтральная (Одобрение: {approval_pct}%, Зашквар: {cringe}%)"
+    else:
+        karma_status = f"🔴 Зашкварная (Зашквар: {cringe}%)"
+
     lines = [
         f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА [{get_anon_id(target_id)}]</b>{is_self}",
     ]
     if warning_banner:
-        lines.append(warning_banner)
+        lines.append(escape_html(warning_banner))
     lines.extend([
         f"<code>{'═'*26}</code>",
         f"👤 <b>Позывной:</b> {safe_schizo_name}{prefix_str}",
         f"🎖 <b>Статус:</b> {safe_role_str}",
+        f"🌟 <b>Репутация:</b> {rep_badge}",
         f"⚖️ <b>Благонадежность:</b> {reliability}",
+        f"☯️ <b>Карма:</b> {karma_status}",
+        f"🎽 <b>Гардероб:</b> {wardrobe_display}",
         f"<code>{'—'*26}</code>",
         f"📝 <b>Постов на борде:</b> <code>{posts_cnt:,}</code> (Ранг #{stats['rank']}/{stats['total_users']})",
         f"🎭 <b>Реакций:</b> <code>+{rx_rec:,}</code> | <b>Зашквар:</b> <code>{cringe}%</code>",
         f"💰 <b>Активы:</b> <code>{bal:,} ₪</code> | <b>Карцер:</b> <code>{mutes} мутов</code>",
         f"<code>{'—'*26}</code>",
         "📋 <b>Инкриминируемые статьи:</b>",
-        f" • <i>{chosen_cases[0]}</i>",
-        f" • <i>{chosen_cases[1]}</i>",
+        f" • <i>{escape_html(chosen_cases[0])}</i>",
+        f" • <i>{escape_html(chosen_cases[1])}</i>",
         f"\n{chosen_evidence_header}",
-        f"<i>\"{chosen_evidence_body}\"</i>",
+        f"<i>\"{escape_html(chosen_evidence_body)}\"</i>",
         "\n🔍 <b>Оперативная заметка:</b>",
-        f"<i>\"{chosen_note}\"</i>",
+        f"<i>\"{escape_html(chosen_note)}\"</i>",
         f"<code>{'═'*26}</code>",
-        f"📑 <i>{chosen_footer}</i>"
+        f"📑 <i>{escape_html(chosen_footer)}</i>"
     ])
 
     dossier_text = "\n".join(lines)
@@ -17581,24 +17803,92 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     anon_name = generate_anon_name(target_id)
     balance = 0
     post_count = 0
+    is_verified_b = 0
+    active_items = {}
     try:
         async with db_lock:
             db = await get_pool()
-            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (target_id,)) as cursor:
+            async with db.execute("SELECT SUM(balance), MAX(is_verified_b) FROM Users WHERE user_id = ?", (target_id,)) as cursor:
                 row = await cursor.fetchone()
-                balance = row[0] if row and row[0] else 0
+                balance = row[0] if row and row[0] is not None else 0
+                is_verified_b = row[1] if row and row[1] is not None else 0
             async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (target_id,)) as cursor:
                 row = await cursor.fetchone()
                 post_count = row[0] if row and row[0] else 0
+            active_items = await _get_user_active_items(db, target_id, board_id)
     except Exception as e:
         logger.error(f"Error fetching whois info: {e}", exc_info=True)
 
-    if lang == 'en': header = f"🗂 <b>Dossier on {anon_name}:</b>\n<code>{'—'*20}</code>"
-    elif lang == 'jp': header = f"🗂 <b>{anon_name} の調査書:</b>\n<code>{'—'*20}</code>"
-    else: header = f"🗂 <b>Досье на {anon_name}:</b>\n<code>{'—'*20}</code>"
+    safe_anon_name = escape_html(anon_name)
+    if lang == 'en': header = f"🗂 <b>Dossier on {safe_anon_name}:</b>\n<code>{'—'*20}</code>"
+    elif lang == 'jp': header = f"🗂 <b>{safe_anon_name} の調査書:</b>\n<code>{'—'*20}</code>"
+    else: header = f"🗂 <b>Досье на {safe_anon_name}:</b>\n<code>{'—'*20}</code>"
 
     report = [header]
     report.append(f"🆔 <b>Анон-ID:</b> <code>[{get_anon_id(target_id, stream=lang)}]</code>")
+
+    # 1. Текущая репутация (титул из reputation_engine)
+    from common.reputation_engine import calculate_user_reputation, format_reputation_badge
+    rep_score = calculate_user_reputation(
+        user_id=target_id,
+        items=active_items,
+        posts_count=post_count,
+        balance=balance,
+        is_verified_b=bool(is_verified_b)
+    )
+    rep_badge = format_reputation_badge(rep_score, stream=lang)
+    rep_title = "Reputation" if lang == 'en' else ("評判" if lang == 'jp' else "Репутация")
+    report.append(f"🌟 <b>{rep_title}:</b> {rep_badge}")
+
+    # 2. Активные предметы гардероба и снаряжение
+    now_ts = int(time.time())
+    equipped_gear_list = []
+    if active_items.get("tinfoil_hat", 0) > now_ts:
+        equipped_gear_list.append("👽 Фольга")
+    if active_items.get("reflect_shield_until", 0) > now_ts:
+        equipped_gear_list.append("🔰 Щит")
+    if active_items.get("janitor_until", 0) > now_ts:
+        equipped_gear_list.append(f"🚮 Дворник ({active_items.get('janitor_deletes_left', 0)})")
+    for g_key, g_title in [
+        ("mute_gun", "🔫 Мут-Ган"),
+        ("knife_gun", "🔪 Заточка"),
+        ("shit_gun", "💩 Говномёт"),
+        ("vomit_gun", "🤮 Блевота"),
+        ("pepperspray", "🧯 Перцовка"),
+        ("partyvan_gun", "🚔 Пативэн"),
+    ]:
+        if active_items.get(g_key):
+            equipped_gear_list.append(g_title)
+    try:
+        from wardrobe_engine import get_equipped_gear
+        g_map = get_equipped_gear(active_items, current_time=now_ts)
+        for g_val in g_map.values():
+            if g_val and g_val.get('name'):
+                equipped_gear_list.append(f"🎽 {escape_html(g_val['name'])}")
+    except Exception:
+        pass
+    wardrobe_str = ", ".join(equipped_gear_list) if equipped_gear_list else "<i>Ничего не надето</i>"
+    wardrobe_title = "Equipment" if lang == 'en' else ("装備" if lang == 'jp' else "Гардероб")
+    report.append(f"🎽 <b>{wardrobe_title}:</b> {wardrobe_str}")
+
+    # 3. Статус кармы
+    try:
+        from stats_generator import fetch_user_stats_data
+        stats = fetch_user_stats_data(target_id, board_id)
+        approval_pct = stats.get('approval_pct', 85)
+        cringe = stats.get('cringe_factor', 0)
+        rx_rec = stats.get('rx_received', 0)
+        if approval_pct >= 85 and cringe < 20:
+            karma_status = f"🟢 Благословенная (+{rx_rec:,} / {approval_pct}%)"
+        elif approval_pct >= 50 and cringe < 50:
+            karma_status = f"🟡 Нейтральная (Одобрение: {approval_pct}%, Зашквар: {cringe}%)"
+        else:
+            karma_status = f"🔴 Зашкварная (Зашквар: {cringe}%)"
+    except Exception:
+        karma_status = "⚪ Неизвестно"
+    karma_title = "Karma" if lang == 'en' else ("カルマ" if lang == 'jp' else "Карма")
+    report.append(f"☯️ <b>{karma_title}:</b> {karma_status}")
+
     report.append(f"💸 <b>Баланс:</b> {int(balance)} RUB")
     report.append(f"💩 <b>Постов:</b> {post_count}")
     report.append(f"<code>{'—'*20}</code>")
@@ -17634,7 +17924,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
 
         if status:
             total_activity = True
-            board_name = BOARD_CONFIG[b_id]['name']
+            board_name = escape_html(BOARD_CONFIG[b_id]['name'])
             report.append(f"<b>{board_name}</b>: {', '.join(status)}")
 
     if not total_activity:
@@ -27369,22 +27659,33 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         from post_helpers import extract_post_num_from_message
         post_num = extract_post_num_from_message(target_msg)
 
+    # 1.5. Проверка существования поста в БД/RAM (защита билетов дворника от сгорания)
+    if post_num:
+        existing_post = None
+        async with storage_lock:
+            if post_num in messages_storage:
+                existing_post = messages_storage[post_num]
+        if not existing_post:
+            existing_post = await get_post_by_num(post_num)
+
+        if not existing_post:
+            try: await target_msg.delete()
+            except Exception: pass
+            if lang == 'en':
+                msg = f"⚠️ Post #{post_num} is already deleted."
+            elif lang == 'jp':
+                msg = f"⚠️ 投稿 #{post_num} は既に削除されています。"
+            else:
+                msg = f"⚠️ Пост №{post_num} уже удалён."
+            await message.answer(msg)
+            try: await message.delete()
+            except Exception: pass
+            return
+
     # 2. Проверка возраста поста и защиты фольгой (только для обычных дворников)
     if is_janitor and not admin_status:
-        post_author_id = 0
-        post_ts = 0
-        if post_num:
-            async with storage_lock:
-                if post_num in messages_storage:
-                    p_data = messages_storage[post_num]
-                    post_author_id = p_data.get('author_id', 0)
-                    post_ts = p_data.get('timestamp', 0)
-            if not post_ts or not post_author_id:
-                async with db.execute("SELECT author_id, timestamp FROM Posts WHERE post_num = ?", (post_num,)) as cur:
-                    p_row = await cur.fetchone()
-                    if p_row:
-                        post_author_id = p_row[0]
-                        post_ts = p_row[1]
+        post_author_id = existing_post.get('author_id', 0) if existing_post else 0
+        post_ts = existing_post.get('timestamp', 0) if existing_post else 0
 
         post_ts_float = 0.0
         if post_ts:
@@ -27444,53 +27745,71 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
                 except Exception: pass
                 return
 
-        # Списываем 1 попытку только при успешном удалении
-        async with db_lock:
-            janitor_deletes_left -= 1
-            active_items["janitor_deletes_left"] = janitor_deletes_left
-            del_history.append(now)
-            active_items["janitor_del_history"] = del_history
-            active_items["last_janitor_del_ts"] = now
-            await db.execute(
-                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                (json.dumps(active_items), user_id, board_id)
-            )
-            await db.commit()
-
     # 3. Выполнение удаления
     deleted_count = 0
+    user_copies_count = 0
+    channel_copies_count = 0
     if post_num:
-        deleted_count = await delete_single_post(post_num, message.bot)
-        role_str = "Админ" if admin_status else "Дворник"
-        await log_global_event('bot', f"🗑️ DEL: {role_str} {user_id} удалил пост #{post_num} на /{board_id}/ (и {deleted_count} копий)")
+        raw_copies = await get_post_copies(post_num)
+        ch_copies = await get_all_channel_copies(post_num)
+        user_copies_count = len(raw_copies) if raw_copies else 0
+        channel_copies_count = len(ch_copies) if ch_copies else 0
 
+        deleted_count = await delete_single_post(post_num, message.bot)
+
+        # Списание билета и ачивка дворника строго атомарно через db_transaction
+        now = time.time()
         ach_janitor_note = ""
-        if is_janitor and deleted_count > 0:
+        if is_janitor:
             from shared_state import register_target_attack
             register_target_attack(user_id, duration_seconds=900)
             from achievements_engine import check_and_unlock_achievement
-            unlocked, ach_info = check_and_unlock_achievement(active_items, "ach_janitor_clean")
-            if unlocked and ach_info:
-                await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
-                async with db_lock:
-                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-                    await db.commit()
-                ach_janitor_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+            from common.db_pool import db_transaction
 
-        if lang == 'en':
-            resp = f"🗑 Post #{post_num} deleted ({deleted_count} copies)."
-            if is_janitor:
-                resp += f" 🚮 Janitor: {janitor_deletes_left} deletes remaining."
-        elif lang == 'jp':
-            resp = f"🗑 投稿 #{post_num} とコピー ({deleted_count}件) を削除しました。"
-            if is_janitor:
-                resp += f" 🚮 掃除員チケット: 残り {janitor_deletes_left} 回。"
+            async with db_lock:
+                async with db_transaction(db):
+                    active_items = await _get_user_active_items(db, user_id, board_id)
+                    cur_deletes = active_items.get("janitor_deletes_left", 0)
+                    janitor_deletes_left = max(0, cur_deletes - 1)
+                    active_items["janitor_deletes_left"] = janitor_deletes_left
+                    del_history = active_items.get("janitor_del_history", [])
+                    del_history = [t for t in del_history if now - t < 86400]
+                    del_history.append(now)
+                    active_items["janitor_del_history"] = del_history
+                    active_items["last_janitor_del_ts"] = now
+
+                    unlocked, ach_info = check_and_unlock_achievement(active_items, "ach_janitor_clean")
+                    if unlocked and ach_info:
+                        await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                        ach_janitor_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+
+                    await db.execute(
+                        "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                        (json.dumps(active_items), user_id, board_id)
+                    )
+
+        # Маскировка ID дворника: Anon[...] (хэш) без утечки сырого числового ID
+        if is_janitor:
+            actor_str = f"Дворник Anon[{get_anon_id(user_id)}] ({safe_user_hash(user_id)})"
         else:
-            resp = f"🗑 Пост №{post_num} и копии ({deleted_count}) удалены."
+            actor_str = f"Админ {user_id}"
+        await log_global_event('bot', f"🗑️ DEL: {actor_str} удалил пост #{post_num} на /{board_id}/ (копий: {user_copies_count} лс, {channel_copies_count} каналы)")
+
+        # Подробный отчет для дворника/админа
+        if lang == 'en':
+            resp = f"🗑 <b>Post #{post_num} deleted.</b>\nPurged copies: {user_copies_count} from user DMs, {channel_copies_count} from channels."
             if is_janitor:
-                resp += f" 🚮 Удалено как Дворник (по Билету). Осталось: {janitor_deletes_left} удалений."
+                resp += f"\n🚮 Janitor: {janitor_deletes_left} deletes remaining."
+        elif lang == 'jp':
+            resp = f"🗑 <b>投稿 #{post_num} を削除しました。</b>\n削除されたコピー: DM {user_copies_count}件, チャンネル {channel_copies_count}件。"
+            if is_janitor:
+                resp += f"\n🚮 掃除員チケット: 残り {janitor_deletes_left} 回。"
+        else:
+            resp = f"🗑 <b>Пост №{post_num} удалён.</b>\nУдалено копий: {user_copies_count} из личек пользователей, {channel_copies_count} из каналов."
+            if is_janitor:
+                resp += f"\n🚮 Удалено как Дворник (по Билету). Осталось: {janitor_deletes_left} удалений."
         resp += ach_janitor_note
-        await message.answer(resp)
+        await message.answer(resp, parse_mode="HTML")
     else:
         try:
             await target_msg.delete()
@@ -27500,6 +27819,8 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
 
     try: await message.delete()
     except Exception: pass
+
+cmd_janitor_del = cmd_del
 
 async def _safe_delete_user_message(message: types.Message):
     try:

@@ -538,7 +538,11 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                 _active_duels.pop(user_id, None)
 
         if challenger_id not in _active_duels:
-            reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
+            from shared_state import is_duel_cancelled_by_creator
+            if is_duel_cancelled_by_creator(challenger_id):
+                reject_msg = "❌ Дуэль была отозвана создателем."
+            else:
+                reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
         else:
             duel = _active_duels[challenger_id]
             now = time.time()
@@ -822,6 +826,8 @@ async def decline_duel_logic(message: types.Message, challenger_id: int, user_id
 
 
     if user_id == challenger_id:
+        from shared_state import record_duel_cancelled_by_creator
+        record_duel_cancelled_by_creator(challenger_id)
         await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")
         return True
     else:

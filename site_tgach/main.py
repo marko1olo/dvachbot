@@ -98,6 +98,10 @@ from site_tgach.security import (
     verify_telegram_webapp_data,
     is_safe_url,
     ALLOWED_IMPORT_DOMAINS,
+    WHITELISTED_WELL_KNOWN,
+    is_whitelisted_well_known,
+    is_legitimate_crawler,
+    should_trap_bot,
 )
 from warhammer_mode import warhammer_transform
 from site_tgach.image_processing import (
@@ -2431,6 +2435,10 @@ def is_bot_by_headers(request: Request) -> bool:
     accept_lang = request.headers.get("accept-language", "")
     path = request.url.path
 
+    # 0. Легитимные поисковые краулеры (Googlebot, Applebot, YandexBot и т.д.)
+    if is_legitimate_crawler(ua):
+        return False
+
     # 1. Список явных библиотек для автоматизации
     bot_uas = [
         "python-requests",
@@ -2504,8 +2512,11 @@ async def ddos_guard_middleware(request: Request, call_next):
 
     # 2. Ручной троллинг (если ты добавил IP в список через админку)
     if client_ip in IP_TROLL_CONFIG:
-        cfg = IP_TROLL_CONFIG[client_ip]
-        if cfg["expires"] > time.time():
+        ua = request.headers.get("user-agent", "")
+        if is_legitimate_crawler(ua) or is_whitelisted_well_known(path):
+            del IP_TROLL_CONFIG[client_ip]
+        elif IP_TROLL_CONFIG[client_ip]["expires"] > time.time():
+            cfg = IP_TROLL_CONFIG[client_ip]
             # ПРОВЕРКА ЛИМИТА: Если ловушки полные, просто блокируем
             if ACTIVE_TROLL_CONNS >= MAX_TROLL_CONNS:
                 return Response("Too many requests", status_code=429)
@@ -3127,6 +3138,24 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 async def custom_404_handler(request: Request, exc):
     path = request.url.path.lower()
     client_ip = get_real_ip(request)
+    user_agent = request.headers.get("user-agent", "")
+
+    # 0. СЛУЖЕБНЫЕ RFC-ПУТИ (WHITELISTED_WELL_KNOWN)
+    # robots.txt, sitemap.xml, /.well-known/(apple-app-site-association|assetlinks.json|security.txt)
+    # НИ ПРИ КАКИХ УСЛОВИЯХ не должны триггерить бот-ловушку!
+    if is_whitelisted_well_known(path):
+        if "apple-app-site-association" in path or "assetlinks.json" in path:
+            return JSONResponse({}, status_code=404)
+        return templates.TemplateResponse(
+            request=request,
+            name="error.jinja2",
+            context={
+                "request": request,
+                "status_code": 404,
+                "detail": "Страница не найдена",
+            },
+            status_code=404,
+        )
 
     # 1. БЕЛЫЙ СПИСОК (Файлы и треды) - для предотвращения ложных срабатываний
     is_safe_path = (
@@ -3162,122 +3191,8 @@ async def custom_404_handler(request: Request, exc):
     if is_safe_path:
         return Response(status_code=404)
 
-    # 2. ПРОВЕРКА НА БОТА-СКАНЕРА (объединенный и улучшенный список)
-    troll_patterns = [
-        # System & Configs
-        "/.env",
-        "/.git",
-        "/.ssh",
-        "/.bash",
-        "/.profile",
-        "/.history",
-        "/.aws",
-        "/.rhosts",
-        "/.sh_history",
-        "/.wget",
-        "/.htpasswd",
-        "/.htaccess",
-        "/.ds_store",
-        "/.bak",
-        "/.old",
-        "/.save",
-        "/.log",
-        "/.txt",
-        "/.conf",
-        "/.sql",
-        "/goform",
-        "/hello.world",
-        "/mcp",
-        "/sse",
-        # CMS & Frameworks
-        "/wp-",
-        "/wp/",
-        "/xmlrpc",
-        "/wlwmanifest",
-        "/bitrix",
-        "/joomla",
-        "/drupal",
-        "/laravel",
-        "/symfony",
-        "/storage/logs",
-        "/vendor",
-        "/composer",
-        "/ajax",
-        # Admin Panels & DBs
-        "/admin",
-        "/phpmyadmin",
-        "/setup",
-        "/config",
-        "/backup",
-        "/dump",
-        "/db.sql",
-        "/console",
-        "/shell",
-        "/root",
-        "/eval",
-        "/invoker",
-        "/actuator",
-        "/api/v1",
-        "/dashboard",
-        "/cpanel",
-        "/whm",
-        "/sql",
-        "/install",
-        "/+CSCOL+/",
-        "/+CSCOL+",
-        "/+CSCOE+/",
-        "/+CSCOE+",
-        # Scanners
-        "/autodiscover",
-        "/owa",
-        "/exchange",
-        "/ecp",
-        "/_catalogs",
-        "/_vti",
-        "/hnap1",
-        "/nmap",
-        "/evox",
-        "/sdk",
-        "/phpunit",
-        "/cgi-bin",
-        "/~",
-        "/_",
-        "/1.bak",
-        "/0.bak",
-        "/a.bak",
-        "/12.bak",
-        "/config.json",
-        "/config.php",
-        "/onfig.js",
-    ]
-
-    is_bot = False
-
-    if path.startswith(("/.", "/_", "/~", "/api/v", "/wp-")):
-        is_bot = True
-    elif any(p in path for p in troll_patterns):
-        is_bot = True
-    elif path.endswith(
-        (
-            ".php",
-            ".asp",
-            ".aspx",
-            ".jsp",
-            ".cgi",
-            ".sh",
-            ".sql",
-            ".bak",
-            ".old",
-            ".save",
-            ".log",
-            ".rar",
-            ".zip",
-            ".7z",
-            ".env",
-            ".ini",
-        )
-    ):
-        is_bot = True
+    # 2. ПРОВЕРКА НА БОТА-СКАНЕРА ЧЕРЕЗ SECURITY ENGINE
+    is_bot = should_trap_bot(path, user_agent=user_agent)
 
     if is_bot:
         BOT_VIOLATIONS[client_ip] += 1
@@ -4793,6 +4708,16 @@ async def api_dummy_config():
     return JSONResponse({})
 
 
+@app.get("/.well-known/apple-app-site-association", include_in_schema=False)
+async def apple_app_site_association():
+    return JSONResponse({"applinks": {"apps": [], "details": []}}, media_type="application/json")
+
+
+@app.get("/.well-known/assetlinks.json", include_in_schema=False)
+async def assetlinks_json():
+    return JSONResponse([], media_type="application/json")
+
+
 @app.get("/.well-known/security.txt", response_class=Response)
 async def security_txt():
     return RedirectResponse(url="/static/security.txt")
@@ -4840,11 +4765,20 @@ async def overboard_page(
     if view_mode not in ["threads", "posts", "all"]:
         view_mode = "threads"
 
+    # Support overboard modes: ?mode=catalog (only OP posts) and ?mode=live (live feed with replies)
+    mode_param = request.query_params.get("mode", "").lower().strip()
+    if mode_param in ["catalog", "live"]:
+        overboard_mode = mode_param
+    elif view_mode == "catalog":
+        overboard_mode = "catalog"
+    else:
+        overboard_mode = "live"
+
     selected_boards = request.query_params.getlist("boards") or None
     boards_key = ",".join(sorted(selected_boards)) if selected_boards else "all"
     stream = getattr(request.state, "stream", "ru")
 
-    cache_key = f"bot_overboard_html:{sort_mode}:{view_mode}:{boards_key}:{stream}"
+    cache_key = f"bot_overboard_html:{sort_mode}:{view_mode}:{overboard_mode}:{boards_key}:{stream}"
     if is_bot and not user:
         backend = FastAPICache.get_backend()
         if backend:
@@ -4856,6 +4790,7 @@ async def overboard_page(
     is_skeleton = False
 
     observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
+    reply_limit = 0 if overboard_mode == "catalog" else 3  # reply_limit=3 default for live feed
     if view_mode == "threads":
         raw_posts = await get_op_posts_for_board(
             selected_boards,
@@ -4865,7 +4800,7 @@ async def overboard_page(
             stream=request.state.stream,
             observer_id=observer_id,
             ignore_pin=True,
-            reply_limit=3,
+            reply_limit=reply_limit,
         )
     elif view_mode == "posts":
         raw_posts = await get_global_feed_posts(
@@ -4903,6 +4838,7 @@ async def overboard_page(
         "all_boards": {k: v for k, v in local_boards.items() if k != "test"},
         "current_sort": sort_mode,
         "current_view": view_mode,
+        "current_mode": overboard_mode,
         "selected_boards": selected_boards or [],
         "is_skeleton": is_skeleton,
     }
@@ -6743,27 +6679,24 @@ async def read_board_threads(
             if cached:
                 return HTMLResponse(content=cached)
 
-    if is_bot:
-        # SSR для ботов: грузим данные сразу
-        observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
-        op_posts = await get_op_posts_for_board(
-            board_id,
-            sort_by=sort_mode,
-            page=1,
-            page_size=25,
-            stream=request.state.stream,
-            observer_id=observer_id,
-        )
-        op_posts = _convert_and_enrich_posts(op_posts)
-        is_ru = await is_request_from_ru(request)
-        await enrich_extra_data(op_posts, is_ru=is_ru)
-        uid = observer_id
-        for post in op_posts:
-            if post.get("author_id") == uid:
-                post["is_op"] = True
-    else:
-        # CSR для людей: отдаем скелет, JS подгрузит данные
-        is_skeleton = True
+    # SSR для всех: грузим данные сразу на сервере (полная доступность без JS)
+    observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
+    op_posts = await get_op_posts_for_board(
+        board_id,
+        sort_by=sort_mode,
+        page=1,
+        page_size=25,
+        stream=request.state.stream,
+        observer_id=observer_id,
+    )
+    op_posts = _convert_and_enrich_posts(op_posts)
+    is_ru = await is_request_from_ru(request)
+    await enrich_extra_data(op_posts, is_ru=is_ru)
+    uid = observer_id
+    for post in op_posts:
+        if post.get("author_id") == uid:
+            post["is_op"] = True
+    is_skeleton = False
 
     base_url = str(request.base_url).rstrip("/")
     meta_image = f"{base_url}/static/{random.choice(['logo.png', 'logo1.png'])}"
@@ -6886,45 +6819,30 @@ async def read_thread(
     replies = []
     is_skeleton = False
 
-    if is_bot:
-        # SSR: Полный рендеринг для ботов по real_thread_id
-        user_id = user["id"] if user else None
-        thread_data = await get_thread_by_op_post(
-            real_thread_id, current_user_id=user_id
-        )
-        if not thread_data:
-            raise HTTPException(status_code=404, detail="Thread not found")
-        op_post, replies = thread_data
+    # SSR для всех: полный рендеринг треда на сервере (доступность без JS)
+    user_id = user["id"] if user else None
+    thread_data = await get_thread_by_op_post(
+        real_thread_id, current_user_id=user_id
+    )
+    if not thread_data:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    op_post, replies = thread_data
 
-        full_list = _convert_and_enrich_posts([op_post] + replies)
-        is_ru = await is_request_from_ru(request)
-        await enrich_extra_data(full_list, is_ru=is_ru)
+    full_list = _convert_and_enrich_posts([op_post] + replies)
+    is_ru = await is_request_from_ru(request)
+    await enrich_extra_data(full_list, is_ru=is_ru)
 
-        op_post = full_list[0]
-        replies = full_list[1:]
+    op_post = full_list[0]
+    replies = full_list[1:]
 
-        if user_id:
-            user_hash = get_user_hash(user_id)
-            if op_post.get("author_id") == user_hash:
-                op_post["is_op_yours"] = True
-            for reply in replies:
-                if reply.get("author_id") == user_hash:
-                    reply["is_yours"] = True
-    else:
-        # CSR: Скелет для людей. Используем post_num из URL для правильной прокрутки JS-ом
-        is_skeleton = True
-        op_post = {
-            "id": real_thread_id,
-            "content": {"text": f"Загрузка треда #{real_thread_id}...", "files": []},
-            "timestamp": time.time(),
-            "author_id": 0,
-            "is_pinned": False,
-            "is_endless": False,
-            "is_archived": False,
-            "reply_count": 0,
-            "anon_count": 0,
-        }
-        replies = []
+    if user_id:
+        user_hash = get_user_hash(user_id)
+        if op_post.get("author_id") == user_hash:
+            op_post["is_op_yours"] = True
+        for reply in replies:
+            if reply.get("author_id") == user_hash:
+                reply["is_yours"] = True
+    is_skeleton = False
 
     stream = getattr(request.state, "stream", "ru")
     # Кэширование HTML только для анонимов и ботов (SSR)
@@ -7249,21 +7167,20 @@ async def read_board_catalog(
     is_skeleton = False
     current_sort = request.query_params.get("sort", "bump")
 
-    if is_bot:
-        observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
-        raw = await get_op_posts_for_board(
-            board_id,
-            sort_by=current_sort,
-            page=1,
-            page_size=100,
-            stream=request.state.stream,
-            observer_id=observer_id,
-        )
-        threads = _convert_and_enrich_posts(raw)
-        is_ru = await is_request_from_ru(request)
-        await enrich_extra_data(threads, is_ru=is_ru)
-    else:
-        is_skeleton = True
+    # SSR для всех: грузим треды каталога сразу на сервере
+    observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
+    raw = await get_op_posts_for_board(
+        board_id,
+        sort_by=current_sort,
+        page=1,
+        page_size=100,
+        stream=request.state.stream,
+        observer_id=observer_id,
+    )
+    threads = _convert_and_enrich_posts(raw)
+    is_ru = await is_request_from_ru(request)
+    await enrich_extra_data(threads, is_ru=is_ru)
+    is_skeleton = False
 
     return templates.TemplateResponse(
         request=request,

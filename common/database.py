@@ -2310,15 +2310,26 @@ async def create_post(
                             if not final_thread_id and inherited_thread_id is not None:
                                 final_thread_id = str(inherited_thread_id)
 
+                        # Гарантируем строго непрерывную последовательную нумерацию постов без пропусков:
+                        # Внутри db_transaction(immediate=True) вычисляем следующий post_num на основе актуального MAX(post_num).
+                        async with db.execute("SELECT COALESCE(MAX(post_num), 0) FROM Posts") as max_cur:
+                            max_row = await max_cur.fetchone()
+                            next_post_num = (max_row[0] if max_row else 0) + 1
+
                         post_query = """
-                            INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO Posts (post_num, board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """
                         async with db.execute(
                             post_query,
-                            (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
+                            (next_post_num, board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
                         ) as cursor:
-                            post_num = cursor.lastrowid
+                            post_num = next_post_num
+
+                        await db.execute(
+                            "UPDATE sqlite_sequence SET seq = ? WHERE name = 'Posts'",
+                            (post_num,)
+                        )
 
                         if final_thread_id and not is_shadow_muted:
                             try:
@@ -3674,7 +3685,8 @@ async def delete_post_by_num(post_num: int) -> bool:
                     await db.execute("DELETE FROM Backlinks WHERE target_post_num = ? OR source_post_num = ?", (post_id_int, post_id_int))
                     await db.execute("DELETE FROM UserReplies WHERE post_num = ? OR parent_num = ?", (post_id_int, post_id_int))
                     await db.execute("UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num = ?", (post_id_int,))
-                    await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
+                    del_res = await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
+                    was_deleted = del_res.rowcount > 0
 
                 # Мгновенная очистка медиа-кэша (удаляем все вхождения постов треда или одиночного поста)
                 del_post_nums_set = set(thread_post_nums) if is_thread else {post_id_int}
@@ -3684,7 +3696,7 @@ async def delete_post_by_num(post_num: int) -> bool:
                     cache_list[:] = [item for item in cache_list if item[0] not in del_post_nums_set]
 
                 await db.execute("COMMIT")
-                return True
+                return True if is_thread else was_deleted
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
