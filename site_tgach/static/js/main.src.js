@@ -3754,7 +3754,14 @@ const SettingsManager = {
             }
             const isMobile = window.innerWidth <= 768;
             this.current = { ...this.defaults, ...saved };
-            if (saved.showMascot === undefined && isMobile) {
+            const hideMascotFlag = localStorage.getItem('hide_mascot') === 'true';
+            if (hideMascotFlag || saved.showMascot === false) {
+                this.current.showMascot = false;
+                localStorage.setItem('hide_mascot', 'true');
+            } else if (saved.showMascot === true) {
+                this.current.showMascot = true;
+                localStorage.removeItem('hide_mascot');
+            } else if (saved.showMascot === undefined && isMobile) {
                 this.current.showMascot = false;
             }
             if (saved.previewSize === undefined && isMobile) {
@@ -3852,6 +3859,11 @@ const SettingsManager = {
     save() {
         localStorage.setItem(CONSTANTS.SETTINGS_KEY, JSON.stringify(this.current));
         localStorage.setItem('theme', this.current.theme);
+        if (this.current.showMascot === false) {
+            localStorage.setItem('hide_mascot', 'true');
+        } else {
+            localStorage.removeItem('hide_mascot');
+        }
         this.apply();
     },
     bindUI() {
@@ -3931,6 +3943,7 @@ const SettingsManager = {
         }
     }
 };
+window.SettingsManager = SettingsManager;
 
 window.startSpankGame = function() {
     
@@ -5325,7 +5338,7 @@ const MascotManager = {
     init() {
         if (window.isStaticMascotActive) return;
         if (this.initialized) return; 
-        if (!SettingsManager.current.showMascot) return;
+        if (!SettingsManager.current.showMascot || localStorage.getItem('hide_mascot') === 'true') return;
         if (document.body.classList.contains('page-roulette')) return;
         if (document.body.classList.contains('page-random-img')) return;
         if (document.querySelector('.catalog-grid')) return;
@@ -5360,14 +5373,16 @@ const MascotManager = {
             e.preventDefault();
             if(confirm(t('confirm_mascot_hide', 'Скрыть маскота?'))) {
                 this.wrapper.style.display = 'none';
-                if (window.SettingsManager) {
+                localStorage.setItem('hide_mascot', 'true');
+                if (typeof SettingsManager !== 'undefined') {
+                    SettingsManager.current.showMascot = false;
+                    SettingsManager.save();
+                } else if (window.SettingsManager) {
                     window.SettingsManager.current.showMascot = false;
                     window.SettingsManager.save();
-                    const checkbox = document.querySelector('input[data-setting="showMascot"]');
-                    if (checkbox) checkbox.checked = false;
-                } else {
-                    localStorage.setItem('hide_mascot', 'true');
                 }
+                const checkbox = document.querySelector('input[data-setting="showMascot"]');
+                if (checkbox) checkbox.checked = false;
                 this.isFrozen = true;
                 this.isPhysicsRunning = false;
                 if (this.timers.logic) clearTimeout(this.timers.logic);
@@ -6580,6 +6595,7 @@ const CaptchaManager = {
     isEnabled: false,
     activeForm: null,
     isReloading: false,
+    isSolved: false,
     dragState: { active: false, el: null, startX: 0, startY: 0, initialX: 0, initialY: 0 },
     async init(form) {
         let globalEnabled = false;
@@ -6648,8 +6664,8 @@ const CaptchaManager = {
         else if (submitBtn) submitBtn.before(container);
         else form.appendChild(container);
         this.activeForm = form;
-        const isHidden = container.classList.contains('captcha-hidden');
-        this.toggleSubmitBtn(form, isHidden);
+        const isUnlocked = this.isSolved || container.classList.contains('captcha-hidden');
+        this.toggleSubmitBtn(form, isUnlocked);
     },
     async render(form) {
         this.activeForm = form;
@@ -6688,6 +6704,8 @@ const CaptchaManager = {
         }
 
         if (!this.isEnabled) return;
+        this.isSolved = false;
+        if (container) container.classList.remove('captcha-hidden');
         this.isReloading = true;
         const btn = document.getElementById('c-reload-btn');
         if(btn) btn.classList.add('rotating');
@@ -6699,6 +6717,7 @@ const CaptchaManager = {
         }, 1000);
     },
     async loadChallenge() {
+        this.isSolved = false;
         CaptchaAudio.init();
         const view = document.getElementById('c-view-area');
         let container = document.getElementById('captcha-container');
@@ -6761,6 +6780,7 @@ const CaptchaManager = {
         }
     },
     solve() {
+        this.isSolved = true;
         const container = document.getElementById('captcha-container');
         const currentForm = container ? container.closest('form') : this.activeForm;
         this.toggleSubmitBtn(currentForm, true);
@@ -6772,9 +6792,9 @@ const CaptchaManager = {
             view.style.pointerEvents = 'none';
         }
         showToast(t('captcha_passed'));
-        setTimeout(() => {
-            if (container) container.classList.add('captcha-hidden');
-        }, 2000);
+        if (container) {
+            container.classList.add('captcha-hidden');
+        }
     },
     renderMonkey(view, data) {
         document.getElementById('captcha-container').classList.remove('square-mode');
@@ -8460,30 +8480,8 @@ const FormManager = {
             this.pushUndoSnapshot(textarea);
         }, { passive: true });
 
-        // Robust native-compatible Undo / Redo handling (Ctrl+Z / Ctrl+Y)
-        textarea.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-                if (e.key === 'z' || e.code === 'KeyZ') {
-                    if (e.shiftKey) {
-                        e.preventDefault();
-                        this.redoText(textarea);
-                    } else {
-                        const beforeVal = textarea.value;
-                        let nativeSuccess = false;
-                        try {
-                            nativeSuccess = document.execCommand('undo');
-                        } catch (err) {}
-                        if (!nativeSuccess || textarea.value === beforeVal) {
-                            e.preventDefault();
-                            this.undoText(textarea);
-                        }
-                    }
-                } else if (e.key === 'y' || e.code === 'KeyY') {
-                    e.preventDefault();
-                    this.redoText(textarea);
-                }
-            }
-        });
+        // Native Undo / Redo (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z) is preserved for standard browser textareas
+        // to avoid input lag, broken Cyrillic undo, or wiping native history stack.
 
         form.addEventListener('submit', (e) => this.handleSubmit(e, form));
     },
@@ -9296,7 +9294,10 @@ const FormManager = {
                     return;
                 }
                 showToast(`❌ ${errorMsg}`);
-                if (typeof CaptchaManager !== 'undefined') CaptchaManager.reset();
+                const isCaptchaErr = (xhr.status === 400 || xhr.status === 403) && /captcha|капч|cap_|pow/i.test(errorMsg);
+                if (isCaptchaErr && typeof CaptchaManager !== 'undefined') {
+                    CaptchaManager.reset();
+                }
                 if(btn) {
                     btn.disabled = false;
                     btn.textContent = btn.dataset.originalText || t('send_btn_default');

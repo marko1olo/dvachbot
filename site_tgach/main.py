@@ -975,10 +975,17 @@ _SITE_NICK_SUFFIXES = [
 ]
 
 
-def nick_from_hash(author_id: str, stream: str = "ru") -> str:
+_HASH_TO_ANON_NAME: dict[str, str] = {}
+_MAX_HASH_TO_ANON_CACHE: int = 100000
+
+
+def nick_from_hash(author_id: Union[str, int, None], stream: str = "ru") -> str:
     """Детерминированный канонический ник автора: 'Анон [Шолтер5]' (RU) / 'Anon [Sholter5]' (EN). Без раскрытия identity."""
     if not author_id or author_id == "system":
         return "Аноним" if stream not in ["en", "int"] else "Anonymous"
+    s_id = str(author_id)
+    if s_id in _HASH_TO_ANON_NAME:
+        return _HASH_TO_ANON_NAME[s_id]
     return generate_anon_name(author_id, stream=stream)
 
 
@@ -1048,6 +1055,10 @@ def verify_captcha_solution(session: dict, captcha_value: str | None, captcha_x:
                 diff = abs(a - b) % 360
                 return min(diff, 360 - diff)
             return angle_diff(user_h, target_h) <= 15 and angle_diff(user_m, target_m) <= 15
+        elif mode == "major":
+            return str(captcha_value).strip().lower() == "denounced"
+        elif mode == "protocol":
+            return str(captcha_value).strip().lower() in ("confessed", "silent_consent")
         elif mode == "can":
             return str(captcha_value).strip().lower() == "opened"
         return False
@@ -3455,7 +3466,8 @@ def to_makaba_post(post_data: dict, board_id: str) -> dict:
         "comment": comment,
         "files": files_makaba,
         "name": (
-            generate_anon_name(post_data.get("author_id"))
+            post_data.get("anon_name")
+            or nick_from_hash(post_data.get("author_id"))
             if post_data.get("author_id")
             else "Аноним"
         ),
@@ -4156,8 +4168,16 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 content["type"] = "text"
         post["report_count"] = post.get("report_count", 0)
         if "author_id" in post:
-            post["author_id"] = safe_user_hash(post["author_id"])
-            post["anon_name"] = generate_anon_name(post["author_id"], stream="ru")
+            raw_author_id = post["author_id"]
+            stream = post.get("stream", "ru")
+            if "anon_name" not in post or not post["anon_name"]:
+                post["anon_name"] = generate_anon_name(raw_author_id, stream=stream)
+            masked_author_id = safe_user_hash(raw_author_id)
+            post["author_id"] = masked_author_id
+            _HASH_TO_ANON_NAME[str(masked_author_id)] = post["anon_name"]
+            if len(_HASH_TO_ANON_NAME) > _MAX_HASH_TO_ANON_CACHE:
+                for k in list(_HASH_TO_ANON_NAME.keys())[:25000]:
+                    _HASH_TO_ANON_NAME.pop(k, None)
         if "user_id" in post:
             post["user_id"] = safe_user_hash(post["user_id"])
     return posts
@@ -4182,7 +4202,7 @@ templates.env.filters.update(
         "bayan_label": format_bayan_label,
         "clean_title": clean_title_text,
         "nick_from_hash": nick_from_hash,
-        "anon_name": generate_anon_name,
+        "anon_name": nick_from_hash,
         "anon_id": get_anon_id,
         "user_hash": safe_user_hash,
         "get_user_hash": safe_user_hash,
@@ -6088,7 +6108,7 @@ async def api_captcha_generate(request: Request):
     elif mode == "major":
         user = request.session.get("user")
         if user and user.get("id"):
-            user_id = str(user["id"])
+            user_id = safe_user_hash(user["id"])
         else:
             user_id = get_real_ip(request)
         random_post_num = random.randint(180000, 320999)
@@ -7724,12 +7744,12 @@ async def api_send_feedback(
     now = time.time()
     msg_hash = hashlib.sha256(data.message.strip().encode()).hexdigest()
     cache_key = (uid, msg_hash)
-    if now - _feedback_dedup_cache.get(cache_key, 0.0) < 10.0:
+    if now - _feedback_dedup_cache.get(cache_key, 0.0) < 30.0:
         return {"status": "ok"}
+    _feedback_dedup_cache[cache_key] = now
 
     success = await create_feedback(uid, data.category, data.contact, data.message)
     if success:
-        _feedback_dedup_cache[cache_key] = now
         if len(_feedback_dedup_cache) > 200:
             cutoff = now - 60.0
             for k in list(_feedback_dedup_cache.keys()):
@@ -8172,6 +8192,10 @@ async def api_create_post(
     t = request.state.t
     is_guest = user.get("is_guest", False)
     author_id = int(user["id"])
+    if is_guest and post_mode == "chat_post":
+        raise HTTPException(status_code=403, detail=t("err_guest_chat"))
+    if SITE_ACCESS_MODE == "PUBLIC_READ" and is_guest:
+        raise HTTPException(status_code=403, detail=t("err_read_only_mode"))
     if thread_type not in {"default", "image", "video", "audio", "media"}:
         thread_type = "default"
     if email:
@@ -8296,6 +8320,12 @@ async def api_create_post(
                         raise HTTPException(400, t("err_cap_clock"))
                 except Exception:
                     raise HTTPException(400, t("err_cap_clock"))
+            elif mode == "major":
+                if str(captcha_value).strip().lower() != "denounced":
+                    raise HTTPException(400, t("err_cap_major", "Донос не оформлен"))
+            elif mode == "protocol":
+                if str(captcha_value).strip().lower() not in ("confessed", "silent_consent"):
+                    raise HTTPException(400, t("err_cap_protocol", "Протокол не подписан"))
             elif mode == "can":
                 if str(captcha_value) != "opened":
                     raise HTTPException(400, t("err_cap_can"))
@@ -8381,7 +8411,7 @@ async def api_create_post(
                 return {
                     "id": int(time.time()),
                     "board_id": board_id,
-                    "author_id": author_id,
+                    "author_id": safe_user_hash(author_id),
                     "content": {"text": text, "files": [], "type": "text"},
                     "timestamp": time.time(),
                     "reply_to_post_num": reply_to,
@@ -8904,7 +8934,7 @@ async def api_create_post(
     return {
         "id": new_post_num,
         "board_id": board_id,
-        "author_id": author_id,
+        "author_id": safe_user_hash(author_id),
         "content": content,
         "timestamp": current_ts,
         "reply_to_post_num": reply_to,
