@@ -11075,7 +11075,7 @@ async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None,
 
 @dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат", "задонатить", "перевести", "поделиться", "пей", ignore_case=True, ignore_mention=True))
 async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru', raw_command_text: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     sender_id = message.from_user.id
     if is_user_isolated(sender_id, board_id):
         await message.answer("🧘 <b>Вы находитесь в режиме самоизоляции.</b> Перевод шекелей недоступен (капитал заморожен).", parse_mode="HTML")
@@ -11101,26 +11101,39 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
     elif len(args) >= 2:
         target_candidate = args[0]
         amt_candidate = args[1]
-        amt_parsed, err = _parse_pay_amount(amt_candidate, sender_bal)
-        if amt_parsed is not None:
-            target_user_id = await _resolve_target_user_id(db, target_candidate)
-            amount, err_reason = amt_parsed, err
+
+        target_1 = await _resolve_target_user_id(db, target_candidate)
+        target_2 = await _resolve_target_user_id(db, amt_candidate) if not target_1 else None
+
+        if target_1:
+            target_user_id = target_1
+            amount, err_reason = _parse_pay_amount(amt_candidate, sender_bal)
+        elif target_2:
+            target_user_id = target_2
+            amount, err_reason = _parse_pay_amount(target_candidate, sender_bal)
         else:
-            amt_parsed_rev, err_rev = _parse_pay_amount(target_candidate, sender_bal)
-            if amt_parsed_rev is not None:
-                target_user_id = await _resolve_target_user_id(db, amt_candidate)
-                amount, err_reason = amt_parsed_rev, err_rev
+            amt_parsed, err = _parse_pay_amount(amt_candidate, sender_bal)
+            if amt_parsed is not None:
+                target_user_id = await _resolve_target_user_id(db, target_candidate)
+                amount, err_reason = amt_parsed, err
             else:
-                amount, err_reason = None, "invalid_format"
+                amt_parsed_rev, err_rev = _parse_pay_amount(target_candidate, sender_bal)
+                if amt_parsed_rev is not None:
+                    target_user_id = await _resolve_target_user_id(db, amt_candidate)
+                    amount, err_reason = amt_parsed_rev, err_rev
+                else:
+                    amount, err_reason = None, err or err_rev or "invalid_format"
     elif len(args) == 1:
-        amt_parsed, _ = _parse_pay_amount(args[0], sender_bal)
+        amt_parsed, err_single = _parse_pay_amount(args[0], sender_bal)
         if amt_parsed is not None:
             amount = amt_parsed
         else:
             target_user_id = await _resolve_target_user_id(db, args[0])
+            if not target_user_id:
+                err_reason = err_single
 
     # Подсказка, если команда вызвана без параметров и без реплая
-    if not message.reply_to_message and not target_user_id and amount is None:
+    if not message.reply_to_message and not target_user_id and amount is None and not err_reason:
         await message.reply(
             "💸 <b>КАК ПЕРЕВЕСТИ ШЕКЕЛИ АНОНУ:</b>\n\n"
             "1. <b>В ответ на пост:</b>\n"
@@ -11137,10 +11150,18 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     # Обработка edge cases целей
-    if target_user_id == 0:
+    bot_id = message.bot.id if message.bot else 0
+    if target_user_id == 0 or (bot_id and target_user_id == bot_id):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main"),
+                InlineKeyboardButton(text="💼 Работа (/work)", callback_data="work_main_hub")
+            ]
+        ])
         await message.reply(
             "🤖 <b>Ты пытаешься задонатить боту?</b>\n"
             "Абу и так гребёт налог с каждой транзакции себе на яхту. Не корми серверное железо, манька.",
+            reply_markup=kb,
             parse_mode="HTML"
         )
         return
@@ -11163,9 +11184,13 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     if target_user_id == sender_id:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💼 На завод (/work)", callback_data="work_main_hub")]
+        ])
         await message.reply(
             "🤦‍♂️ <b>Перекладываешь шекели из левого кармана в правый?</b>\n"
             "Самому себе донатить нельзя, шизофреник. Иди на завод устраивайся: /work",
+            reply_markup=kb,
             parse_mode="HTML"
         )
         return
@@ -11232,16 +11257,27 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
     # Обработка edge cases сумм
     if amount is None or math.isnan(amount) or math.isinf(amount) or amount <= 0:
         if err_reason == "empty_balance":
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="💼 Биржа труда (/work)", callback_data="work_main_hub"),
+                    InlineKeyboardButton(text="📦 Лутбокс (/lootbox)", callback_data="shop_cat_lootbox")
+                ]
+            ])
             await message.reply(
                 "🦴 <b>Ты нищ как церковная крыса!</b>\n"
                 f"Твой баланс: <b>{int(sender_bal)} ₪</b>. В карманах только прошлогодний насвай и пыль.\n"
                 "Иди подметай парашу (/work) или пытай удачу в /lootbox.",
+                reply_markup=kb,
                 parse_mode="HTML"
             )
         elif err_reason == "cant_afford_fee":
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💼 Заработать на заводе (/work)", callback_data="work_main_hub")]
+            ])
             await message.reply(
                 "💸 <b>Твоих шекелей не хватит даже на налог Абу!</b>\n"
                 "Комиссия за перевод съедает весь твой баланс. Подкопи шекелей через /work.",
+                reply_markup=kb,
                 parse_mode="HTML"
             )
         elif err_reason == "too_large":
@@ -11251,9 +11287,16 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
                 parse_mode="HTML"
             )
         elif err_reason == "negative_or_zero":
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="💼 Заработать (/work)", callback_data="work_main_hub"),
+                    InlineKeyboardButton(text="💳 Проверить баланс (/wallet)", callback_data="wallet_view")
+                ]
+            ])
             await message.reply(
                 "🃏 <b>Шулер ебаный, отрицательные шекели в карман не запихнешь.</b>\n"
                 "Введи нормальное положительное число: <code>/pay 500</code>",
+                reply_markup=kb,
                 parse_mode="HTML"
             )
         else:
@@ -11952,13 +11995,25 @@ async def cb_duel_create_fast(callback: types.CallbackQuery, board_id: str | Non
 # Classic Duel Watchdog & Live Dynamic Countdown Updates
 # -----------------------------------------------------------------------------
 async def classic_duel_watchdog_step(bot: Bot | None = None):
-    """Checks for expired classic /duel challenges (120s) and cleans them up with live updates."""
+    """Checks for expired classic /duel challenges (120s) and cleans them up with live updates, refunding escrow upon timeout or if creator is muted."""
     now = time.time()
     expired_duels = []
+    muted_duels = []
     updates_to_send = []
+
+    db = await get_pool()
+    from common.database import is_shadow_muted as check_db_shadow_muted
+    from common.bot_helpers import check_user_is_muted
 
     async with classic_duel_lock:
         for ch_id, duel in list(_active_duels.items()):
+            b_id = duel.get("board_id", "b")
+            is_muted = await check_db_shadow_muted(ch_id, b_id, db=db) or await check_user_is_muted(db, ch_id, b_id)
+            if is_muted:
+                _active_duels.pop(ch_id, None)
+                muted_duels.append((ch_id, duel))
+                continue
+
             elapsed = now - duel["ts"]
             if elapsed > _DUEL_TIMEOUT:
                 _active_duels.pop(ch_id, None)
@@ -11971,6 +12026,36 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
                     rem = max(0, int(_DUEL_TIMEOUT - elapsed))
                     if rem > 5 and bot and duel.get("chat_id") and duel.get("msg_id"):
                         updates_to_send.append((duel["chat_id"], duel["msg_id"], ch_id, duel["amount"], rem))
+
+    # Handle muted duels (immediate escrow refund)
+    for ch_id, duel in muted_duels:
+        if duel.get("escrowed"):
+            try:
+                async with db_transaction(db):
+                    await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
+                    await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: создатель замучен')
+            except Exception as ex:
+                logger.error(f"Failed to refund muted duel bet to {ch_id}: {ex}")
+
+        muted_text = (
+            f"🔇 <b>ВЫЗОВ НА ДУЭЛЬ АННУЛИРОВАН!</b>\n\n"
+            f"Создатель вызова был замучен. Ставка <code>{duel['amount']:,} ₪</code> возвращена на баланс."
+        )
+        if bot and ch_id:
+            spawn_task(send_pvp_direct_notification(bot, ch_id, muted_text), name="pvp_notify_duel_muted")
+
+        all_msgs = duel.get("broadcast_msgs") or []
+        if not all_msgs and duel.get("chat_id") and duel.get("msg_id"):
+            all_msgs = [(duel["chat_id"], duel["msg_id"])]
+        for cid, mid in all_msgs:
+            if bot:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=cid, message_id=mid,
+                        text=muted_text, reply_markup=None, parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
 
     for ch_id, duel in expired_duels:
         if duel.get("escrowed"):
@@ -12127,7 +12212,7 @@ async def start_solo_casino_watchdog_loop(bot: Bot):
 
 @dp.message(Command("wallet", "balance", "money", "кошелек", "кошелёк", "баланс", "шекели", "деньги", "cash", ignore_case=True, ignore_mention=True))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = message.from_user.id
 
     db = await get_pool()
@@ -13311,6 +13396,16 @@ async def cb_economy_dice(callback: types.CallbackQuery, board_id: str | None):
 async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or 'b'
     user_id = callback.from_user.id
+    if casino_engine.is_casino_in_flight(user_id):
+        await callback.answer("⏳ Бросок костей уже обрабатывается! Подожди завершения.", show_alert=True)
+        return
+    try:
+        async with casino_engine.casino_in_flight_guard(user_id, action_name="dice"):
+            await _handle_dice_bet_quick(callback, board_id, user_id)
+    except casino_engine.CasinoInFlightError:
+        await callback.answer("⏳ Бросок костей уже обрабатывается! Подожди завершения.", show_alert=True)
+
+async def _handle_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None, user_id: int):
     raw_bet = callback.data.replace("dice_bet_", "")
     db = await get_pool()
     result = random.randint(1, 100)
@@ -14026,6 +14121,15 @@ async def _show_slots_lobby(bot, chat_id: int, user_id: int, board_id: str, bet:
 
 
 async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
+    if casino_engine.is_casino_in_flight(user_id):
+        return
+    try:
+        async with casino_engine.casino_in_flight_guard(user_id, action_name="slots"):
+            await _run_slots_spin(bot, chat_id, user_id, board_id, bet, message_to_edit)
+    except casino_engine.CasinoInFlightError:
+        return
+
+async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
@@ -14288,6 +14392,15 @@ async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, b
 
 
 async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None):
+    if casino_engine.is_casino_in_flight(user_id):
+        return
+    try:
+        async with casino_engine.casino_in_flight_guard(user_id, action_name="coinflip"):
+            await _run_coinflip(bot, chat_id, user_id, board_id, bet, chosen_side, message_to_edit)
+    except casino_engine.CasinoInFlightError:
+        return
+
+async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
@@ -14742,6 +14855,15 @@ async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, b
 
 
 async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
+    if casino_engine.is_casino_in_flight(user_id):
+        return
+    try:
+        async with casino_engine.casino_in_flight_guard(user_id, action_name="roulette"):
+            await _run_russian_roulette_shot(bot, chat_id, user_id, board_id, bet, message_to_edit)
+    except casino_engine.CasinoInFlightError:
+        return
+
+async def _run_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
     bet = max(casino_engine.MIN_CASINO_BET, min(casino_engine.MAX_ROULETTE_BET, bet))
     db = await get_pool()
     async with casino_engine.session_lock:
@@ -15029,6 +15151,9 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             await callback.answer(f"Ставка: {bet} ₪")
         elif action == "spin":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            if casino_engine.is_casino_in_flight(user_id):
+                await callback.answer("⏳ Барабан уже крутится! Не кликай повторно.", show_alert=True)
+                return
             await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
             await callback.answer()
 
@@ -15040,6 +15165,9 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             await callback.answer(f"Ставка: {bet} ₪")
         elif side_or_action in ["heads", "tails"]:
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            if casino_engine.is_casino_in_flight(user_id):
+                await callback.answer("⏳ Монетка уже в воздухе! Не кликай повторно.", show_alert=True)
+                return
             await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action, message_to_edit=callback.message)
             await callback.answer()
         elif side_or_action == "preset":
@@ -15252,6 +15380,9 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
         bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
 
         if action == "shoot":
+            if casino_engine.is_casino_in_flight(user_id):
+                await callback.answer("⏳ Выстрел уже обрабатывается! Не кликай повторно.", show_alert=True)
+                return
             await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
             await callback.answer()
         elif action in ("cashout", "take"):
@@ -15526,6 +15657,44 @@ def _generate_passport_text(ctx: PassportContext) -> str:
         f"{sc_emoji} <b>{labels[8]}:</b> {social_credit}\n"
         f"<code>{'—'*22}</code>\n"
     )
+
+@dp.message(Command("anon", "анон", "whoami", "ктоя", ignore_case=True, ignore_mention=True))
+async def cmd_anon(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    """
+    Показывает анонимную идентификацию пользователя:
+    Анон-ID, системный псевдоним, доску и статус.
+    """
+    board_id = board_id or "b"
+    user_id = message.from_user.id if getattr(message, 'from_user', None) else message.chat.id
+    anon_id_ru = get_anon_id(user_id, "ru")
+    anon_id_en = get_anon_id(user_id, "en")
+    anon_name = generate_anon_name(user_id, board_id)
+
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+
+    text = (
+        f"🕶 <b>ТВОЯ АНОНИМНАЯ ЛИЧНОСТЬ</b>\n{'—'*24}\n"
+        f"👤 <b>Псевдоним:</b> <code>{escape_html(anon_name)}</code>\n"
+        f"🆔 <b>Анон-ID:</b> <code>[{escape_html(anon_id_ru)}]</code> (int: <code>[{escape_html(anon_id_en)}]</code>)\n"
+        f"📌 <b>Текущая доска:</b> <code>/{board_id}/</code>\n"
+        f"💰 <b>Баланс:</b> <code>{int(balance):,} ₪</code>\n\n"
+        f"<i>Твой реальный Telegram ID надёжно скрыт криптографическим хэшем.</i>"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🪪 Паспорт (/me)", callback_data="prof_card:main"),
+            InlineKeyboardButton(text="💳 Кошелёк (/wallet)", callback_data="wallet_view"),
+        ],
+        [
+            InlineKeyboardButton(text="💼 Биржа труда (/work)", callback_data="work_main_hub"),
+            InlineKeyboardButton(text="👔 Гардероб (/wardrobe)", callback_data="wardrobe_main"),
+        ]
+    ])
+
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
 
 @dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я", ignore_case=True, ignore_mention=True))
 async def cmd_passport(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
@@ -26761,6 +26930,17 @@ async def _process_stacked_anime_command(
                                     caption_sent = True
                                 except Exception as item_err:
                                     runtime_logger.debug(f"Skipping bad item in waifu drop: {item_err}")
+                            if not caption_sent and waifu_drop_caption:
+                                try:
+                                    from aiogram.types import LinkPreviewOptions
+                                    await message.bot.send_message(
+                                        chat_id=message.chat.id,
+                                        text=waifu_drop_caption,
+                                        parse_mode='HTML',
+                                        link_preview_options=LinkPreviewOptions(is_disabled=True)
+                                    )
+                                except Exception as text_fallback_err:
+                                    runtime_logger.warning(f"Failed waifu drop text fallback: {text_fallback_err}")
                     except Exception as e:
                         runtime_logger.error(f"Failed to send event media group: {e}", exc_info=True)
                 for gif_url in gif_urls:
@@ -31739,6 +31919,42 @@ async def cmd_report(message: types.Message, board_id: str | None = None, stream
         await message.answer("🤡 Репортишь сам себя, дебил?", parse_mode="HTML")
         return
 
+    # 5.5 Prevent reporting the bot
+    bot_id = message.bot.id if message.bot else 0
+    is_bot_target = False
+    if author_id and bot_id and author_id == bot_id:
+        is_bot_target = True
+    elif reported_msg and reported_msg.from_user and (reported_msg.from_user.is_bot or (bot_id and reported_msg.from_user.id == bot_id)):
+        is_bot_target = True
+    elif author_id == 0 and not reported_msg:
+        if post_num and p_data and (p_data.get("is_bot") or p_data.get("author_id") == 0):
+            is_bot_target = True
+
+    if is_bot_target:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💡 Написать отзыв / багрепорт (/feedback)", callback_data="feedback_prompt_info")]
+        ])
+        if lang == 'en':
+            msg = (
+                "🤖 <b>Reporting the bot?</b>\n\n"
+                "The bot obeys Abu's rules and cannot be muted or banned.\n"
+                "If you found a bug or have a suggestion, please use <code>/feedback</code>."
+            )
+        elif lang == 'jp':
+            msg = (
+                "🤖 <b>ボットを通报しますか？</b>\n\n"
+                "ボットはアブの掟に従って動作しており、処罰できません。\n"
+                "不具合報告や提案は <code>/feedback</code> を使用してください。"
+            )
+        else:
+            msg = (
+                "🤖 <b>Жалоба на бота?</b>\n\n"
+                "Бот исполняет законы Абу и не может быть забанен или замучен.\n"
+                "Если ты нашёл баг или хочешь предложить фичу — используй <code>/feedback</code>."
+            )
+        await message.answer(msg, reply_markup=kb, parse_mode="HTML")
+        return
+
     # 6. Cooldown check
     now = time.time()
     last_report_ts = _REPORT_USER_COOLDOWNS.get(reporter_id, 0)
@@ -31880,6 +32096,19 @@ async def cmd_feedback_or_suggest(message: types.Message, board_id: str | None =
     except Exception as e:
         runtime_logger.error(f"Error saving feedback from user {user_id}: {e}", exc_info=True)
         await message.answer("❌ Ошибка при отправке отзыва. Попробуйте позже.")
+
+
+@dp.callback_query(F.data == "feedback_prompt_info")
+async def cb_feedback_prompt_info(callback: types.CallbackQuery, board_id: str | None = None):
+    board_id = board_id or "b"
+    await safe_callback_answer(callback)
+    await callback.message.answer(
+        "💡 <b>Как отправить обратную связь разработчикам:</b>\n\n"
+        "• Отправь команду: <code>/feedback &lt;текст отзыва или багрепорта&gt;</code>\n"
+        "• Или: <code>/suggest &lt;твоя идея по улучшению борды&gt;</code>\n\n"
+        "Сообщение будет мгновенно доставлено напрямую разработчикам.",
+        parse_mode="HTML"
+    )
 
 
 @dp.callback_query(F.data.startswith("rep_t:"))

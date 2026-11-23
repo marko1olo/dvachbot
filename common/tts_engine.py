@@ -43,6 +43,24 @@ class CyberchadPreset:
 CYBERCHAD_GTTS_FALLBACK_FILTER = "asetrate=24000*0.74,atempo=1.35,bass=g=14:f=90,treble=g=-3:f=3500,aresample=48000"
 
 # Pool of Cyberchad voice personas and DSP modulation presets
+CYBERCHAD_DEFAULT_FALLBACK_ROASTS = [
+    "Ты даже два слова связать не можешь, омежка. Иди проспись и не позорься в треде.",
+    "Что ты там промычал, чучело? Родной язык забыл или пальцы судорогой свело? Сиди молча у параши.",
+    "Очередной невнятный высер от местного дурачка. Попробуй родить хоть одну связную мысль, прежде чем открывать рот.",
+    "Слышишь этот звук? Это звон в твоей пустой башке. Завали хлебало и не позорь борду своими соплями.",
+    "Твой пустой бред даже нейросеть не смогла переварить. Выдерни шнур из розетки и иди делай уроки."
+]
+
+def is_speakable_tts_text(text: str | None) -> bool:
+    """
+    Checks if text contains speakable content (at least 2 letters or alphanumeric tokens).
+    Rejects empty text, whitespace, emoji-only strings, punctuation-only strings, and unpronounceable symbol noise.
+    """
+    if not text:
+        return False
+    alphanumeric = re.findall(r'[а-яА-ЯёЁa-zA-Z0-9]', text)
+    return len(alphanumeric) >= 2
+
 CYBERCHAD_PRESETS: Dict[str, CyberchadPreset] = {
     "classic": CyberchadPreset(
         key="classic",
@@ -403,18 +421,23 @@ def clean_tts_text(text: str) -> str:
         logger.warning(f"⚠️ [clean_tts_text] Intercepted AI safety refusal leak: {clean[:80]}. Replacing with canonical Cyberchad roast.")
         clean = "Поплачь ещё в треде, сопливая омежка. Единственный твой гуманный выбор — это выдернуть провод из розетки и перестать позориться на глазах у всех. Сиди у параши и не вякай."
 
-    # Markdown formatting cleanup
+    # Markdown formatting cleanup and post references
     clean = re.sub(r'```.*?```', ' ', clean, flags=re.DOTALL)
     clean = re.sub(r'`[^`]+`', ' ', clean)
-    clean = re.sub(r'[*_~#>`]', ' ', clean)
+    clean = re.sub(r'\[(?:id|club)\d+\|[^\]]+\]', ' ', clean)
+    clean = re.sub(r'>>\d+', ' ', clean)
+    clean = re.sub(r'#\d+', ' ', clean)
+    clean = re.sub(r'[*_~>`]', ' ', clean)
 
-    # Replace ampersands to prevent XML entity parsing failure in SSML
-    clean = re.sub(r'&(?:amp;)?', ' и ', clean)
+    # Strip unpronounceable symbol noise
+    clean = re.sub(r'[@#$%^~|\\/+=_{}\[\]]', ' ', clean)
 
-    # Strip surrogate pairs, zero-width chars, formatting symbols
-    clean = re.sub(r'[\U00010000-\U0010ffff\u200b-\u200f\ufeff\u00ad\u00a0]', '', clean)
-    # Remove emoji spam or special characters that sound awkward in TTS
-    clean = re.sub(r'[💩🔥📝🎵🎧👠💥✨👑❌✅⚠️🤖🛸📻⚡👺😈💪👍👎❤️💔🤡💀☠️👀👁️🙏🤝🎉💯🚀💣🔪🩸]', '', clean)
+    # Replace ampersands with ' и ' only when connecting words (e.g. Rock & Roll); strip isolated/repeated &
+    clean = re.sub(r'(?<=\w)\s*&+(?:\s*amp;)?\s*(?=\w)', ' и ', clean)
+    clean = re.sub(r'&(?:amp;)?', ' ', clean)
+
+    # Strip surrogate pairs, zero-width chars, formatting symbols, and all emojis (astral + BMP emoji blocks)
+    clean = re.sub(r'[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50\u2b55\u200b-\u200f\ufeff\u00ad\u00a0\ufe0e\ufe0f\u200d\u20e3]', '', clean)
 
     # Collapse excessive punctuation and whitespace
     clean = re.sub(r'\s+([,.\?!;:])', r'\1', clean)
@@ -424,8 +447,8 @@ def clean_tts_text(text: str) -> str:
     clean = re.sub(r'-{2,}', '-', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
 
-    # If there are no Cyrillic or Latin letters, it's not speech (just punctuation or symbols)
-    if not re.search(r'[а-яА-ЯёЁa-zA-Z]', clean):
+    # If text is not speakable (fewer than 2 letters/digits or only symbols), return empty string
+    if not is_speakable_tts_text(clean):
         return ""
     if len(clean) > 1000:
         clean = clean[:1000] + "..."
@@ -486,9 +509,20 @@ async def synthesize_cyberchad_voice_with_meta(
     active_preset = get_preset(preset) if preset is not None else get_random_preset()
     active_voice = voice if voice is not None else active_preset.voice
 
-    clean_text = clean_tts_text(text)
-    if not clean_text or not re.search(r'[а-яА-ЯёЁa-zA-Z]', clean_text):
+    # Validation: If input is completely empty or whitespace, return gracefully without attempting synthesis
+    if not text or not str(text).strip():
         return None, active_preset
+
+    clean_text = clean_tts_text(text)
+    if not is_speakable_tts_text(clean_text):
+        # Input was non-empty (e.g. emoji spam or unpronounceable symbols from LLM or user)
+        # Substitute canonical Cyberchad roast instead of crashing Edge-TTS with NoAudioReceived or hanging
+        fallback_roast = random.choice(CYBERCHAD_DEFAULT_FALLBACK_ROASTS)
+        logger.info(
+            f"🛡️ [TTS] Text after sanitization was unpronounceable (<2 speakable chars). "
+            f"Substituted canonical Cyberchad roast: '{fallback_roast[:60]}...'"
+        )
+        clean_text = fallback_roast
 
     # Cache Check: Instant return if identical speech & preset was already synthesized
     cache_key = _compute_cache_key(clean_text, active_preset.key, active_voice, apply_dsp)
@@ -512,16 +546,18 @@ async def synthesize_cyberchad_voice_with_meta(
         is_female_voice = False
         is_gtts_fallback = False
 
-        # Multi-tier cascade configuration for Edge-TTS
+        # Multi-tier cascade configuration for Edge-TTS with fallback voice rotation
         # Tier 1: Primary voice with preset rate and pitch
         # Tier 2: Dmitry with safe rate & standard pitch (+0Hz) in case negative pitch Hz triggered dropout
         # Tier 3: Svetlana Neural with -25Hz pitch (modulated with masculine cyborg DSP filter)
         # Tier 4: Brian Multilingual (Male on independent cluster)
+        # Tier 5: Andrew Multilingual (Male on independent Azure cluster)
         attempts_cfg = [
-            (active_voice, active_preset.rate, active_preset.pitch, False, min(timeout, 8.0)),
-            (active_voice, active_preset.rate, "+0Hz", False, min(timeout, 7.0)),
-            ("ru-RU-SvetlanaNeural", active_preset.rate, "-25Hz", True, min(timeout, 7.0)),
-            ("en-US-BrianMultilingualNeural", "+0%", "+0Hz", False, min(timeout, 7.0)),
+            (active_voice, active_preset.rate, active_preset.pitch, False, min(timeout, 5.0)),
+            (active_voice, active_preset.rate, "+0Hz", False, min(timeout, 4.5)),
+            ("ru-RU-SvetlanaNeural", active_preset.rate, "-25Hz", True, min(timeout, 4.5)),
+            ("en-US-BrianMultilingualNeural", "+0%", "+0Hz", False, min(timeout, 4.5)),
+            ("en-US-AndrewMultilingualNeural", "+0%", "+0Hz", False, min(timeout, 4.5)),
         ]
 
         try:
@@ -550,14 +586,15 @@ async def synthesize_cyberchad_voice_with_meta(
                             break
                         else:
                             sz = os.path.getsize(raw_mp3) if os.path.exists(raw_mp3) else 0
-                            logger.warning(
-                                f"⚠️ [TTS] Edge-TTS attempt {attempt_idx} ({cand_voice}) produced undersized audio ({sz} < {min_voice_size} bytes)"
+                            logger.info(
+                                f"ℹ️ [TTS] Edge-TTS attempt {attempt_idx} ({cand_voice}) produced undersized audio ({sz} < {min_voice_size} bytes)"
                             )
                     except (asyncio.TimeoutError, TimeoutError, Exception) as attempt_err:
                         err_desc = f"{type(attempt_err).__name__}: {attempt_err}" if str(attempt_err).strip() else type(attempt_err).__name__
                         if attempt_idx < len(attempts_cfg):
-                            pause_sec = 0.15 * attempt_idx + random.uniform(0.05, 0.15)
-                            logger.info(
+                            pause_sec = 0.12 * attempt_idx + random.uniform(0.04, 0.10)
+                            log_fn = logger.info if ("no audio" in err_desc.lower() or "timeouterror" in err_desc.lower()) else logger.warning
+                            log_fn(
                                 f"🔄 [TTS] Edge-TTS attempt {attempt_idx} ({cand_voice}) failed ({err_desc}), retrying tier {attempt_idx+1} in {pause_sec:.2f}s..."
                             )
                             await asyncio.sleep(pause_sec)
@@ -569,7 +606,7 @@ async def synthesize_cyberchad_voice_with_meta(
 
         except Exception as edge_err:
             err_desc = f"{type(edge_err).__name__}: {edge_err}" if str(edge_err).strip() else type(edge_err).__name__
-            logger.warning(f"⚠️ [TTS] edge-tts error ({err_desc}) after all attempts.")
+            logger.info(f"ℹ️ [TTS] Edge-TTS cascade completed ({err_desc}). Trying secondary fallbacks...")
 
             # Strict Male Voice Policy: If allow_female_fallback is explicitly False, do not invoke gTTS
             if not allow_female_fallback and not in_test_env:

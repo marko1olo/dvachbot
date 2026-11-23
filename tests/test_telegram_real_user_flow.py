@@ -22,6 +22,7 @@ Covers:
 import asyncio
 import re
 import time
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram import Bot, types
@@ -33,6 +34,22 @@ from main import (
     _format_reactions_block as main_format_reactions_block,
     CallbackAnswerGuardMiddleware,
     _CALLBACK_DEBOUNCE_TRACKER,
+    cmd_report,
+    process_report_pipeline,
+    cmd_passport,
+    cmd_dossier,
+    cmd_help,
+    cmd_boards,
+    cmd_pay,
+    cmd_anon,
+    cmd_wallet,
+    cb_feedback_prompt_info,
+)
+from common.tts_engine import (
+    clean_tts_text,
+    is_speakable_tts_text,
+    synthesize_cyberchad_voice_with_meta,
+    CYBERCHAD_DEFAULT_FALLBACK_ROASTS,
 )
 from broadcaster import _format_reactions_block as broadcaster_format_reactions_block
 from common.html_utils import escape_html
@@ -69,14 +86,54 @@ def make_mock_message(
     msg.chat = chat
 
     msg.reply_to_message = reply_to_message
+    msg.forward_from = None
+    msg.forward_from_chat = None
     msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
     msg.delete = AsyncMock()
 
     bot = MagicMock(spec=Bot)
+    bot.id = 99999999
     bot.send_message = AsyncMock()
     msg.bot = bot
 
     return msg
+
+
+@asynccontextmanager
+async def _mock_db_tx(db=None):
+    yield db
+
+
+class MockCursor:
+    def __init__(self, fetchone_val=None, fetchall_val=None):
+        self._fetchone = fetchone_val
+        self._fetchall = fetchall_val or []
+
+    async def fetchone(self):
+        return self._fetchone
+
+    async def fetchall(self):
+        return self._fetchall
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return None
+
+    def __await__(self):
+        async def _dummy():
+            return self
+        return _dummy().__await__()
+
+
+class MockDB:
+    def __init__(self, fetchone_val=None, fetchall_val=None):
+        self.cursor = MockCursor(fetchone_val=fetchone_val, fetchall_val=fetchall_val)
+
+    def execute(self, *args, **kwargs):
+        return self.cursor
 
 
 def make_mock_callback(
@@ -837,3 +894,269 @@ async def test_cmd_help_and_boards_dm_graceful():
         mock_banner.reset_mock()
         await cmd_boards(boards_msg, board_id=None, stream="ru")
         assert mock_banner.call_count == 1
+
+
+# =============================================================================
+# WAVE 2 TESTS: EDGE-TTS RESILIENCE, VOICE ROTATION & CHAT/DM COMMAND UI/UX
+# =============================================================================
+
+def test_clean_tts_text_unpronounceable_emoji_only_returns_empty():
+    """Unpronounceable emoji, punctuation, or symbol noise returns empty string."""
+    assert clean_tts_text("🔥🔥🔥 💩💩 🤖🛸") == ""
+    assert clean_tts_text("... ??? --- !?!") == ""
+    assert clean_tts_text("@@@###$$$%%%^^^&&&***") == ""
+    assert clean_tts_text(">>123456 #654321") == ""
+    assert clean_tts_text("а") == ""  # < 2 chars
+    assert clean_tts_text("") == ""
+
+
+def test_is_speakable_tts_text_rules():
+    """is_speakable_tts_text requires >= 2 alphanumeric characters."""
+    assert is_speakable_tts_text("Да") is True
+    assert is_speakable_tts_text("Привет анон") is True
+    assert is_speakable_tts_text("42") is True
+    assert is_speakable_tts_text("а") is False
+    assert is_speakable_tts_text("🔥") is False
+    assert is_speakable_tts_text("... ???") is False
+    assert is_speakable_tts_text("") is False
+    assert is_speakable_tts_text(None) is False
+
+
+@pytest.mark.asyncio
+async def test_synthesize_empty_or_whitespace_returns_none_instantly():
+    """synthesize_cyberchad_voice_with_meta returns None instantly on empty/whitespace input."""
+    res, preset = await synthesize_cyberchad_voice_with_meta("")
+    assert res is None
+    assert preset is not None
+
+    res_space, _ = await synthesize_cyberchad_voice_with_meta("    ")
+    assert res_space is None
+
+
+@pytest.mark.asyncio
+async def test_synthesize_unpronounceable_text_substitutes_canonical_cyberchad_roast():
+    """When input has symbols but is unpronounceable, substitutes canonical Cyberchad roast."""
+    import io
+    unpronounceable = "🔥💩🤡 🤖🛸⚡"
+
+    with patch("edge_tts.Communicate") as mock_comm_cls:
+        mock_comm = AsyncMock()
+        mock_comm.save = AsyncMock()
+        mock_comm_cls.return_value = mock_comm
+
+        with patch("shutil.which", return_value="C:\\ffmpeg\\bin\\ffmpeg.exe"):
+            with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+                mock_proc = AsyncMock()
+                mock_proc.communicate.return_value = (b"", b"")
+                mock_exec.return_value = mock_proc
+
+                with patch("os.path.exists", return_value=True), \
+                     patch("os.path.getsize", return_value=5000), \
+                     patch("builtins.open", MagicMock(return_value=io.BytesIO(b"MOCK_FALLBACK_AUDIO"))):
+
+                    data, preset = await synthesize_cyberchad_voice_with_meta(unpronounceable, preset="classic")
+                    assert data == b"MOCK_FALLBACK_AUDIO"
+                    # Edge-TTS was called with one of the canonical roasts
+                    mock_comm_cls.assert_called_once()
+                    called_text = mock_comm_cls.call_args[0][0]
+                    # The text pronounced was one of the canonical roasts, NOT empty or raw emoji
+                    assert any(r[:15] in called_text for r in CYBERCHAD_DEFAULT_FALLBACK_ROASTS)
+
+
+@pytest.mark.asyncio
+async def test_cmd_pay_negative_number_shows_sharp_alert_and_buttons():
+    """cmd_pay with negative amount alerts user sharply and shows action buttons."""
+    msg = make_mock_message(user_id=1001, text="/pay 2002 -500")
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=10000), \
+         patch("main._resolve_target_user_id", new_callable=AsyncMock, return_value=2002), \
+         patch("main.is_user_isolated", return_value=False):
+
+        await cmd_pay(msg, board_id="b", stream="ru")
+
+        msg.reply.assert_called_once()
+        reply_text = msg.reply.call_args[0][0]
+        reply_kb = msg.reply.call_args[1].get("reply_markup")
+        assert "отрицательные шекели" in reply_text
+        assert reply_kb is not None
+
+
+@pytest.mark.asyncio
+async def test_cmd_pay_zero_shows_friendly_minimum_fee():
+    """cmd_pay with 0 amount rejects with minimum donation alert."""
+    msg = make_mock_message(user_id=1001, text="/pay 2002 0")
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=10000), \
+         patch("main._resolve_target_user_id", new_callable=AsyncMock, return_value=2002), \
+         patch("main.is_user_isolated", return_value=False):
+
+        await cmd_pay(msg, board_id="b", stream="ru")
+
+        msg.reply.assert_called_once()
+        reply_text = msg.reply.call_args[0][0]
+        assert "отрицательные шекели" in reply_text or "Слишком мелкая подачка" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_cmd_pay_nan_and_inf_handled_safely():
+    """cmd_pay handles NaN and inf without crashing."""
+    msg_nan = make_mock_message(user_id=1001, text="/pay 2002 nan")
+    msg_inf = make_mock_message(user_id=1001, text="/pay 2002 inf")
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=10000), \
+         patch("main._resolve_target_user_id", new_callable=AsyncMock, return_value=2002), \
+         patch("main.is_user_isolated", return_value=False):
+
+        await cmd_pay(msg_nan, board_id="b", stream="ru")
+        msg_nan.reply.assert_called_once()
+        assert "корректную сумму" in msg_nan.reply.call_args[0][0]
+
+        await cmd_pay(msg_inf, board_id="b", stream="ru")
+        msg_inf.reply.assert_called_once()
+        assert "Финмониторинг Абу" in msg_inf.reply.call_args[0][0] or "корректную сумму" in msg_inf.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_pay_to_self_blocked_with_work_button():
+    """cmd_pay targeting oneself is blocked and provides /work button."""
+    msg = make_mock_message(user_id=1001, text="/pay 1001 500")
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=10000), \
+         patch("main._resolve_target_user_id", new_callable=AsyncMock, return_value=1001), \
+         patch("main.is_user_isolated", return_value=False):
+
+        await cmd_pay(msg, board_id="b", stream="ru")
+
+        msg.reply.assert_called_once()
+        reply_text = msg.reply.call_args[0][0]
+        reply_kb = msg.reply.call_args[1].get("reply_markup")
+        assert "Самому себе донатить нельзя" in reply_text
+        assert reply_kb is not None
+        assert any(btn.callback_data == "work_main_hub" for row in reply_kb.inline_keyboard for btn in row)
+
+
+@pytest.mark.asyncio
+async def test_cmd_pay_to_bot_blocked_with_bank_button():
+    """cmd_pay targeting the bot is blocked with Abu bank button."""
+    msg = make_mock_message(user_id=1001, text="/pay 99999999 500")
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=10000), \
+         patch("main._resolve_target_user_id", new_callable=AsyncMock, return_value=99999999), \
+         patch("main.is_user_isolated", return_value=False):
+
+        await cmd_pay(msg, board_id="b", stream="ru")
+
+        msg.reply.assert_called_once()
+        reply_text = msg.reply.call_args[0][0]
+        reply_kb = msg.reply.call_args[1].get("reply_markup")
+        assert "задонатить боту" in reply_text
+        assert reply_kb is not None
+        assert any(btn.callback_data == "bank_main" for row in reply_kb.inline_keyboard for btn in row)
+
+
+@pytest.mark.asyncio
+async def test_cmd_pay_dm_graceful():
+    """cmd_pay called in DM (board_id=None) does not silently return."""
+    msg = make_mock_message(user_id=1001, text="/pay")
+    mock_db = MockDB(fetchone_val=None)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=5000), \
+         patch("main.is_user_isolated", return_value=False):
+
+        await cmd_pay(msg, board_id=None, stream="ru")
+
+        msg.reply.assert_called_once()
+        assert "КАК ПЕРЕВЕСТИ ШЕКЕЛИ" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_report_reporting_bot_intercepted_with_feedback_button():
+    """cmd_report reporting a bot message intercepts with feedback button."""
+    bot_msg = make_mock_message(user_id=99999999, message_id=50, text="Бот пост")
+    bot_msg.from_user.is_bot = True
+
+    rep_msg = make_mock_message(user_id=1001, message_id=51, text="/report", reply_to_message=bot_msg)
+
+    with patch("main.spawn_task"):
+        await cmd_report(rep_msg, board_id="b", stream="ru")
+
+        rep_msg.answer.assert_called_once()
+        ans_text = rep_msg.answer.call_args[0][0]
+        ans_kb = rep_msg.answer.call_args[1].get("reply_markup")
+        assert "Жалоба на бота" in ans_text
+        assert ans_kb is not None
+        assert any(btn.callback_data == "feedback_prompt_info" for row in ans_kb.inline_keyboard for btn in row)
+
+
+@pytest.mark.asyncio
+async def test_cb_feedback_prompt_info_responds_friendly():
+    """cb_feedback_prompt_info sends guidance for /feedback and /suggest."""
+    cb = make_mock_callback(user_id=1001, data="feedback_prompt_info")
+    cb.message.answer = AsyncMock()
+
+    with patch("main.safe_callback_answer", new_callable=AsyncMock) as mock_ans:
+        await cb_feedback_prompt_info(cb, board_id="b")
+
+        mock_ans.assert_called_once()
+        cb.message.answer.assert_called_once()
+        assert "/feedback" in cb.message.answer.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_anon_displays_anon_id_and_action_buttons():
+    """cmd_anon displays user anon ID, pseudonym, and quick navigation buttons."""
+    msg = make_mock_message(user_id=7777, text="/anon")
+
+    mock_db = AsyncMock()
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=12345):
+
+        await cmd_anon(msg, board_id="b", stream="ru")
+
+        msg.answer.assert_called_once()
+        ans_text = msg.answer.call_args[0][0]
+        ans_kb = msg.answer.call_args[1].get("reply_markup")
+        assert "ТВОЯ АНОНИМНАЯ ЛИЧНОСТЬ" in ans_text
+        assert "Анон-ID:" in ans_text
+        assert "12,345" in ans_text
+        assert ans_kb is not None
+        btn_callbacks = [btn.callback_data for row in ans_kb.inline_keyboard for btn in row]
+        assert "prof_card:main" in btn_callbacks
+        assert "wallet_view" in btn_callbacks
+        assert "work_main_hub" in btn_callbacks
+
+
+@pytest.mark.asyncio
+async def test_cmd_wallet_dm_graceful():
+    """cmd_wallet (/balance) called in DM (board_id=None) responds with wallet banner card."""
+    msg = make_mock_message(user_id=8888, text="/balance")
+    mock_db = MockDB(fetchone_val=(5000.0, 1, 0))
+
+    bot_user = MagicMock()
+    bot_user.username = "dvach_test_bot"
+    msg.bot.get_me = AsyncMock(return_value=bot_user)
+
+    with patch("main.get_pool", new_callable=AsyncMock, return_value=mock_db), \
+         patch("main.db_transaction", side_effect=_mock_db_tx), \
+         patch("main._get_user_active_items", new_callable=AsyncMock, return_value={}), \
+         patch("banner_manager.send_banner_message", new_callable=AsyncMock) as mock_banner:
+
+        await cmd_wallet(msg, board_id=None, stream="ru")
+
+        mock_banner.assert_called_once()
+        caption = mock_banner.call_args[1]["caption"]
+        reply_kb = mock_banner.call_args[1]["reply_markup"]
+        assert "КОШЕЛЕК И БАЛАНС" in caption
+        assert "5,000 ₪" in caption
+        assert reply_kb is not None
