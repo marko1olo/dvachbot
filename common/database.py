@@ -656,6 +656,17 @@ async def _create_tables(db):
         );
         """)
         await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id INTEGER NOT NULL,
+            referred_id INTEGER NOT NULL UNIQUE,
+            board_id TEXT NOT NULL DEFAULT 'b',
+            reward_amount REAL DEFAULT 1488.0,
+            created_at REAL NOT NULL,
+            status TEXT DEFAULT 'active'
+        );
+        """)
+        await cursor.execute("""
         CREATE TABLE IF NOT EXISTS MarketListings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             seller_id INTEGER NOT NULL,
@@ -982,6 +993,21 @@ async def _apply_migrations(db):
         except aiosqlite.OperationalError: pass
         try:
             await cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER NOT NULL,
+                referred_id INTEGER NOT NULL UNIQUE,
+                board_id TEXT NOT NULL DEFAULT 'b',
+                reward_amount REAL DEFAULT 1488.0,
+                created_at REAL NOT NULL,
+                status TEXT DEFAULT 'active'
+            );
+            """)
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON Referrals(referrer_id);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON Referrals(referred_id);")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("""
             CREATE TABLE IF NOT EXISTS MarketListings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 seller_id INTEGER NOT NULL,
@@ -1225,6 +1251,8 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_mutes_expires_at ON Mutes(expires_at);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_modqueue_post_num ON ModQueue(post_num);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_aliases_user_id ON ReferralAliases(user_id);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON Referrals(referrer_id);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON Referrals(referred_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_notificationqueue_reply_post ON NotificationQueue(reply_post_num);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_reply_to ON Posts(reply_to_post_num) WHERE reply_to_post_num IS NOT NULL;")
         # UserReplies: get_weekly_active_users queries WHERE board_id=? AND created_at>=? AND user_id>0
@@ -2207,6 +2235,34 @@ async def create_post(
 
     content_json = fast_json_dumps(content, default=_json_serializer)
 
+    is_system_post = (author_id is not None and author_id <= 0) or (isinstance(content, dict) and bool(content.get('is_system_message')))
+    idempotency_key = None
+    if is_system_post:
+        try:
+            from common.idempotency import idempotency_tracker
+            content_hash = idempotency_tracker.compute_content_hash(content)
+            idempotency_key = f"sys_post:{content_hash}"
+            cached_pnum = await idempotency_tracker.get_result(idempotency_key)
+            if cached_pnum is not None:
+                local_logger.info(
+                    f"🛡️ [DEDUP_SYSTEM_POST] Post with content hash {content_hash[:12]} already created as #{cached_pnum}. Reusing existing post_num."
+                )
+                return cached_pnum
+            # If not cached yet, attempt to acquire lock or wait if in-flight
+            acquired = await idempotency_tracker.acquire(idempotency_key, ttl=30.0)
+            if not acquired:
+                # Concurrent in-flight post creation; wait up to 2.5s for leader to finish
+                for _ in range(50):
+                    await asyncio.sleep(0.05)
+                    cached_pnum = await idempotency_tracker.get_result(idempotency_key)
+                    if cached_pnum is not None:
+                        local_logger.info(
+                            f"🛡️ [DEDUP_SYSTEM_POST] Concurrent post resolved to #{cached_pnum}."
+                        )
+                        return cached_pnum
+        except Exception as e:
+            local_logger.debug(f"Idempotency check bypass on error: {e}")
+
     # Защищенная транзакция через db_transaction: автоматический ROLLBACK при таймауте/ошибке,
     # защита от зависания db_lock и сброс осиротевших транзакций.
     try:
@@ -2356,6 +2412,12 @@ async def create_post(
 
                     if _CACHED_MAX_POST_NUM is not None:
                         _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
+                    if idempotency_key:
+                        try:
+                            from common.idempotency import idempotency_tracker
+                            await idempotency_tracker.register_result(idempotency_key, post_num, ttl=60.0)
+                        except Exception:
+                            pass
                     return post_num
 
                 except sqlite3.OperationalError as e:
@@ -2367,12 +2429,30 @@ async def create_post(
                         )
                         await asyncio.sleep(wait_time)
                         continue
+                    if idempotency_key:
+                        try:
+                            from common.idempotency import idempotency_tracker
+                            await idempotency_tracker.release(idempotency_key)
+                        except Exception:
+                            pass
                     logging.getLogger("database").error(f"❌ [CREATE_POST_SQL_ERROR] author={author_id} board={board_id}: {e}")
                     return None
                 except Exception as e:
+                    if idempotency_key:
+                        try:
+                            from common.idempotency import idempotency_tracker
+                            await idempotency_tracker.release(idempotency_key)
+                        except Exception:
+                            pass
                     logging.getLogger("database").error(f"❌ [CREATE_POST_EXCEPTION] author={author_id} board={board_id}: {e}", exc_info=True)
                     return None
     except Exception as exc:
+        if idempotency_key:
+            try:
+                from common.idempotency import idempotency_tracker
+                await idempotency_tracker.release(idempotency_key)
+            except Exception:
+                pass
         exc_desc = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
         logging.getLogger("database").error(f"⚠️ [CREATE_POST_LOCK_TIMEOUT] author={author_id} board={board_id}: {exc_desc}")
         return None
@@ -6125,6 +6205,10 @@ async def create_report(post_num: int, category: str, reason: str, sender_ip_has
     Создает жалобу на пост.
     """
     from common.db_pool import get_pool, db_lock
+    from common.anon_identity import safe_user_hash
+
+    if sender_ip_hash:
+        sender_ip_hash = safe_user_hash(sender_ip_hash)
 
     async with db_lock:
         for attempt in range(10):
@@ -6516,20 +6600,37 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
     from common.db_pool import get_pool, db_lock
 
     now = time.time()
+    fb_key = None
+    try:
+        from common.idempotency import idempotency_tracker
+        msg_hash = idempotency_tracker.compute_content_hash(message)
+        fb_key = f"feedback:{user_id}:{msg_hash}"
+        acquired = await idempotency_tracker.acquire(fb_key, ttl=30.0)
+        if not acquired:
+            # Duplicate feedback within 30s window - return True without re-inserting
+            return True
+    except Exception:
+        pass
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
 
-                # Дедупликация: если тот же текст от того же юзера пришел менее 10 сек назад — отдавать True без повторной вставки
+                # Дедупликация: если тот же текст от того же юзера пришел менее 30 сек назад — отдавать True без повторной вставки
                 async with db.execute(
                     "SELECT id FROM Feedback WHERE user_id = ? AND message = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1",
-                    (user_id, message, now - 10.0)
+                    (user_id, message, now - 30.0)
                 ) as cursor:
                     existing = await cursor.fetchone()
                     if existing:
                         await db.execute("COMMIT")
+                        if fb_key:
+                            try:
+                                await idempotency_tracker.register_result(fb_key, True, ttl=30.0)
+                            except Exception:
+                                pass
                         return True
 
                 await db.execute(
@@ -6538,6 +6639,11 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
                 )
 
                 await db.execute("COMMIT")
+                if fb_key:
+                    try:
+                        await idempotency_tracker.register_result(fb_key, True, ttl=30.0)
+                    except Exception:
+                        pass
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -6552,6 +6658,11 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
                 except: pass
                 print(f"⚠️ Error creating feedback: {e}")
                 break
+    if fb_key:
+        try:
+            await idempotency_tracker.release(fb_key)
+        except Exception:
+            pass
     return False
 async def get_all_feedback(limit: int = 50) -> list[dict]:
     """Получает последние сообщения обратной связи."""
@@ -7886,6 +7997,15 @@ async def log_global_event(source: str, text: str):
     Записывает событие в единую базу логов.
     """
     from common.db_pool import get_pool, db_lock
+    from common.anon_identity import get_anon_id
+
+    if text:
+        def _replace_id(match):
+            prefix = match.group(1) or ""
+            uid = int(match.group(2))
+            return f"{prefix}Anon[{get_anon_id(uid)}]"
+
+        text = re.sub(r'(?<![#№\d/])(\b)(\d{7,12})\b', _replace_id, text)
 
     async with db_lock:
         for attempt in range(10):

@@ -5,11 +5,14 @@ Implements:
 1. 50/50 CVCVCV & CVCCVC + Digit (1-9) phonetic generator (>100M combinations).
 2. ASCII Transliteration for Telegram-safe referral links.
 3. Clean, authentic Anon naming: 'Анон [Шолтер5]' (RU) / 'Anon [Sholter5]' (EN).
+4. Deterministic safe 12-character user hashing for PII eradication (safe_user_hash).
 """
 
 import hmac
 import hashlib
+import re
 from functools import lru_cache
+from typing import Union
 
 
 # Secret salt for one-way deterministic hashing of user IDs
@@ -99,3 +102,16 @@ def generate_anon_name(user_id: int, stream: str = "ru") -> str:
     anon_id = get_anon_id(user_id, stream=stream)
     prefix = "Anon" if stream in ["en", "int"] else "Анон"
     return f"{prefix} [{anon_id}]"
+
+
+def safe_user_hash(val: Union[int, str, None]) -> str:
+    """
+    Безопасное получение 12-символьного хеша юзера на базе секретной соли ТГАЧ.
+    Идемпотентно: если уже 12-символьный hex-хеш — возвращает его без изменений.
+    """
+    if not val:
+        return "system"
+    s = str(val).strip()
+    if len(s) == 12 and re.fullmatch(r"[0-9a-f]{12}", s):
+        return s
+    return hmac.new(SALT, s.encode("utf-8"), hashlib.sha256).hexdigest()[:12]

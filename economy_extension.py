@@ -888,7 +888,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
     try:
         await message.bot.send_message(
             user_id,
-            f"🚔 Пативэн успешно выслан за аноном <code>{target_id}</code>!",
+            f"🚔 Пативэн успешно выслан за Аноном <b>[{get_anon_id(target_id)}]</b>!",
             parse_mode="HTML"
         )
     except Exception: pass
@@ -1000,7 +1000,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
         try:
             await message.bot.send_message(
                 user_id,
-                f"🐒 Ты успешно метнул кусок говна в <code>{target_id}</code>!",
+                f"🐒 Ты успешно метнул кусок говна в Анона <b>[{get_anon_id(target_id)}]</b>!",
                 parse_mode="HTML"
             )
         except Exception: pass
