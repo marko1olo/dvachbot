@@ -1073,19 +1073,50 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
     if target_items.get("tinfoil_hat", 0) > now:
         # Tinfoil blocks the attack
         destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=4.0, burn_chance=0.15)
+        pct = random.uniform(0.1, 0.3)
+        user_balance = 0
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            if row and row[0]:
+                user_balance = row[0]
+        loss = min(int(user_balance * pct), 100000)
+        robber_hash = get_anon_id(user_id)
+        target_hash = get_anon_id(target_id)
         async with db_lock:
+            if loss > 0:
+                await db.execute("UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?", (loss, user_id, board_id))
+                await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (loss, target_id, board_id))
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(target_items), target_id, board_id))
             await db.commit()
 
+        loss_str = f"{loss:,} ₪"
         if destroyed:
-            attacker_msg = "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось, но от твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
-            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели! От удара она <b>была уничтожена</b>."
+            attacker_msg = (
+                f"🤕 <b>ОСЕЧКА ПРИ ОГРАБЛЕНИИ!</b>\n\n"
+                f"Ты попытался ограбить Анона [<code>{target_hash}</code>], но у него оказалась <b>Шапочка из фольги</b>!\n"
+                f"Ты в панике порезался собственной заточкой и обронил <b>{loss_str}</b>, которые перешли в карман жертвы.\n"
+                f"🔥 Шапочка жертвы сгорела дотла, но твоя заточка сломалась. Загляни в /shop за новой!"
+            )
+            target_msg = (
+                f"🛡 <b>Твоя Шапочка из фольги защитила тебя от ограбления Аноном [<code>{robber_hash}</code>]!</b>\n\n"
+                f"Неудачливый грабитель обронил <b>{loss_str}</b>, которые перешли в твой карман.\n"
+                f"🔥 От мощного удара твоя Шапочка <b>сгорела дотла</b>! Загляни в /shop, чтобы купить новую защиту."
+            )
         else:
-            attacker_msg = f"🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось. Фольга жертвы помялась (-4ч, осталось {left_h}ч {left_m}мин)."
-            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели! Она потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+            attacker_msg = (
+                f"🤕 <b>ОСЕЧКА ПРИ ОГРАБЛЕНИИ!</b>\n\n"
+                f"Ты попытался ограбить Анона [<code>{target_hash}</code>], но у него оказалась <b>Шапочка из фольги</b>!\n"
+                f"Ты в панике порезался собственной заточкой и обронил <b>{loss_str}</b>, которые перешли в карман жертвы.\n"
+                f"🔪 Твоя заточка сломалась о фольгу. Загляни в /shop за новым оружием!"
+            )
+            target_msg = (
+                f"🛡 <b>Твоя Шапочка из фольги защитила тебя от ограбления Аноном [<code>{robber_hash}</code>]!</b>\n\n"
+                f"Неудачливый грабитель обронил <b>{loss_str}</b>, которые перешли в твой карман.\n"
+                f"ℹ️ Фольга помялась (-4ч прочности, осталось {left_h}ч {left_m}мин защиты)."
+            )
 
         try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
         except Exception: pass
@@ -1126,9 +1157,23 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         except Exception: pass
         return
 
-    try: await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <b>[{get_anon_id(user_id)}]</b> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
+    robber_hash = get_anon_id(user_id)
+    target_hash = get_anon_id(target_id)
+    try:
+        await message.bot.send_message(
+            target_id,
+            f"🔪 <b>ТЕБЯ ОГРАБИЛ АНОН [<code>{robber_hash}</code>] В /{board_id}/!</b>\n\n"
+            f"Грабитель с заточкой украл у тебя <b>{stolen:,} ₪</b>!\n\n"
+            f"🛡️ <b>Совет по самообороне:</b> загляни в <b>/shop</b> и купи средства защиты (Шапочку из фольги, бронежилет), чтобы обезопасить свои шекели, или заточку для мести!",
+            parse_mode="HTML"
+        )
     except Exception: pass
-    try: await message.bot.send_message(user_id, f"🔪 Ограбление прошло успешно! Ты отжал у Анона <b>[{get_anon_id(target_id)}]</b> <b>{stolen} Шекелей</b>.", parse_mode="HTML")
+    try:
+        await message.bot.send_message(
+            user_id,
+            f"🔪 Ограбление прошло успешно! Ты отжал у Анона [<code>{target_hash}</code>] <b>{stolen:,} ₪</b>.",
+            parse_mode="HTML"
+        )
     except Exception: pass
     try: await message.delete()
     except Exception: pass

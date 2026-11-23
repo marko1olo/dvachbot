@@ -90,9 +90,9 @@ class TestLiveRobHandler(unittest.IsolatedAsyncioTestCase):
                 await live_handler("rob")(msg, BOARD)
 
             self.assertIn("ШАПОЧКА ИЗ ФОЛЬГИ", " ".join(live.answers(msg)))
-            # 20% от 300 своих = 60 потеряно; у жертвы не тронуто ничего.
+            # 20% от 300 своих = 60 потеряно; оброненные шекели перешли жертве.
             self.assertEqual(await live.balance_of(ROBBER), 240.0)
-            self.assertEqual(await live.balance_of(VICTIM), 1000.0)
+            self.assertEqual(await live.balance_of(VICTIM), 1060.0)
             self.assertFalse((await live.items_of(ROBBER))["knife_gun"])
 
     async def test_successful_robbery_moves_exact_amount(self):
@@ -121,8 +121,8 @@ class TestLiveRobHandler(unittest.IsolatedAsyncioTestCase):
             with mock.patch("random.uniform", return_value=0.3):
                 await live_handler("rob")(msg, BOARD)
 
-            self.assertEqual(await live.balance_of(ROBBER), 1000.0)
-            self.assertEqual(await live.balance_of(VICTIM), 99000.0)
+            self.assertEqual(await live.balance_of(ROBBER), 15000.0)
+            self.assertEqual(await live.balance_of(VICTIM), 85000.0)
 
     async def test_concurrent_robberies_cannot_overdraw_victim(self):
         """ГОНКА. Два одновременных грабежа по 200 при 250 на счету жертвы.
