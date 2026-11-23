@@ -574,6 +574,7 @@ def is_wardrobe_item_broken(active_items: Any, item_id: str) -> bool:
 def get_equipped_gear(active_items: Any, current_time: Optional[int] = None) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Extracts currently equipped wardrobe items from active_items dictionary across all slots.
+    Enriches item dictionaries with live durability, broken status, duration label, and repair cost.
     """
     equipped = {
         "head": None,
@@ -594,7 +595,43 @@ def get_equipped_gear(active_items: Any, current_time: Optional[int] = None) -> 
             expires = items_dict.get(f"{eq_id}_expires", 0)
             has_exp = f"{eq_id}_expires" in items_dict
             if is_perm or (expires > now if has_exp else True):
-                equipped[slot] = CLOTHING_CATALOG[eq_id]
+                item_copy = dict(CLOTHING_CATALOG[eq_id])
+                dur = items_dict.get(f"{eq_id}_durability")
+                if isinstance(items_dict.get(eq_id), dict):
+                    dur = items_dict[eq_id].get("durability", dur)
+                if dur is None:
+                    curr_dur = 100.0
+                else:
+                    try:
+                        curr_dur = float(dur)
+                    except (ValueError, TypeError):
+                        curr_dur = 100.0
+                curr_dur = max(0.0, min(100.0, curr_dur))
+                is_broken = is_wardrobe_item_broken(items_dict, eq_id) or curr_dur <= 0.0
+
+                item_copy["durability"] = curr_dur
+                item_copy["broken"] = is_broken
+                item_copy["is_broken"] = is_broken
+                item_copy["is_permanent"] = is_perm
+                item_copy["expires"] = expires
+                if not is_perm and has_exp:
+                    rem_sec = max(0, expires - now)
+                    item_copy["expires_in_hours"] = int(rem_sec // 3600)
+                    days = rem_sec // 86400
+                    hours = (rem_sec % 86400) // 3600
+                    mins = (rem_sec % 3600) // 60
+                    if days >= 1:
+                        item_copy["duration_label"] = f"{days}д {hours}ч"
+                    elif hours >= 1:
+                        item_copy["duration_label"] = f"{hours}ч {mins}м"
+                    else:
+                        item_copy["duration_label"] = f"{mins} мин"
+                else:
+                    item_copy["expires_in_hours"] = 0
+                    item_copy["duration_label"] = "🌟 Навсегда" if is_perm else "активен"
+
+                item_copy["repair_cost"] = calculate_item_repair_cost(eq_id, curr_dur)
+                equipped[slot] = item_copy
             else:
                 items_dict.pop(f"equipped_{slot}", None)
 
@@ -897,8 +934,10 @@ def get_owned_wardrobe_items(active_items: Any) -> List[Dict[str, Any]]:
             info["is_permanent"] = is_perm
             if is_perm:
                 info["duration_label"] = "🌟 Навсегда"
+                info["expires_in_hours"] = 0
             else:
                 rem_sec = expires - now
+                info["expires_in_hours"] = max(0, int(rem_sec // 3600))
                 days = rem_sec // 86400
                 hours = (rem_sec % 86400) // 3600
                 mins = (rem_sec % 3600) // 60
@@ -908,6 +947,24 @@ def get_owned_wardrobe_items(active_items: Any) -> List[Dict[str, Any]]:
                     info["duration_label"] = f"{hours}ч {mins}м"
                 else:
                     info["duration_label"] = f"{mins} мин"
+
+            dur = items_dict.get(f"{item_id}_durability")
+            if isinstance(items_dict.get(item_id), dict):
+                dur = items_dict[item_id].get("durability", dur)
+            if dur is None:
+                curr_dur = 100.0
+            else:
+                try:
+                    curr_dur = float(dur)
+                except (ValueError, TypeError):
+                    curr_dur = 100.0
+            curr_dur = max(0.0, min(100.0, curr_dur))
+            is_broken = is_wardrobe_item_broken(items_dict, item_id) or curr_dur <= 0.0
+
+            info["durability"] = curr_dur
+            info["broken"] = is_broken
+            info["is_broken"] = is_broken
+            info["repair_cost"] = calculate_item_repair_cost(item_id, curr_dur)
             owned.append(info)
     return owned
 
@@ -1183,6 +1240,7 @@ def apply_armor_durability_hit(
             active_items[item_id]["broken"] = True
         if auto_unequip:
             unequip_slot(active_items, slot)
+            active_items[f"{item_id}_unequipped_reason"] = "сломался из-за 0% прочности"
         return True, f"Предмет {item_name} сломался! Защита отключена до ремонта."
 
     active_items[broken_key] = False
@@ -1294,3 +1352,394 @@ def repair_wardrobe_item(
         active_items[item_id]["broken"] = False
 
     return True, f"Предмет {item_name} успешно отремонтирован до 100% за {cost:,.0f} ₪.", cost
+
+
+# -----------------------------------------------------------------------------
+# Wardrobe & Inventory UX, Card Formatting & Anonymity Helpers
+# -----------------------------------------------------------------------------
+
+def sanitize_anon_display(user_id: Union[int, str, None]) -> str:
+    """
+    Guarantees raw user_id never leaks into public UI, logs, cards, or item history.
+    Always converts raw user_id into cryptographic anonymous phonetic hash: 'Анон [Шолтер5]'.
+    """
+    if user_id is None:
+        return "Анон"
+    try:
+        from common.anon_identity import get_anon_id
+        if isinstance(user_id, int) or (isinstance(user_id, str) and str(user_id).isdigit()):
+            uid_int = int(user_id)
+            return f"Анон [{get_anon_id(uid_int)}]"
+    except Exception:
+        pass
+    val_str = str(user_id).strip()
+    if val_str.isdigit():
+        return f"Анон [id_{hash(val_str) & 0xffff}]"
+    return val_str
+
+
+def format_durability_bar(durability: float, is_broken: bool = False, bar_len: int = 10) -> str:
+    """
+    Renders an intuitive visual progress bar for item durability.
+    E.g.:
+    - 100%: [██████████] 100%
+    - 75%:  [███████░░░] 75%
+    - 20%:  [██░░░░░░░░] 20% (⚠️ Износ!)
+    - 0%:   [░░░░░░░░░░] 0% (💔 СЛОМАНО!)
+    """
+    if is_broken or durability <= 0.0:
+        return f"[{'░' * bar_len}] 0.0% (💔 СЛОМАНО!)"
+    dur = max(0.0, min(100.0, float(durability)))
+    filled = int(round((dur / 100.0) * bar_len))
+    empty = bar_len - filled
+    bar = "█" * filled + "░" * empty
+    if dur <= 25.0:
+        return f"[{bar}] {dur:.1f}% (⚠️ Износ!)"
+    return f"[{bar}] {dur:.1f}%"
+
+
+def format_equipment_slot_line(
+    slot: str,
+    item_info: Optional[Dict[str, Any]],
+    active_items: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Formats a single equipment slot with item name, durability bar, stats, and expiration timer.
+    """
+    slot_emojis = {
+        "head": "🎩",
+        "torso": "🧥",
+        "face": "🎭",
+        "feet": "👟"
+    }
+    slot_names = {
+        "head": "Голова",
+        "torso": "Торс",
+        "face": "Лицо",
+        "feet": "Обувь"
+    }
+    emo = slot_emojis.get(slot, "🎽")
+    sname = slot_names.get(slot, slot.capitalize())
+    if not item_info:
+        empty_defaults = {
+            "head": "<i>(Без убора)</i>",
+            "torso": "<i>(Обычная футболка)</i>",
+            "face": "<i>(Чистое лицо)</i>",
+            "feet": "<i>(Босиком)</i>"
+        }
+        return f"• {emo} <b>{sname}:</b> {empty_defaults.get(slot, '<i>(Пусто)</i>')}"
+
+    item_id = item_info.get("id", "")
+    item_name = item_info.get("name", item_id)
+    durability = item_info.get("durability", 100.0)
+    is_broken = item_info.get("is_broken", False) or item_info.get("broken", False) or durability <= 0.0
+
+    dur_bar = format_durability_bar(durability, is_broken=is_broken, bar_len=8)
+
+    is_perm = item_info.get("is_permanent", False)
+    duration_label = item_info.get("duration_label", "")
+    if is_perm:
+        dur_label = "🌟 Навсегда"
+    elif duration_label:
+        dur_label = duration_label
+    else:
+        dur_label = "активен"
+
+    stats_parts = []
+    if item_info.get("defense"):
+        stats_parts.append(f"🛡️+{item_info['defense']}")
+    if item_info.get("toxicity"):
+        stats_parts.append(f"⚔️+{item_info['toxicity']}")
+    if item_info.get("sanity"):
+        stats_parts.append(f"🧠+{item_info['sanity']}")
+    stats_str = f" [{', '.join(stats_parts)}]" if stats_parts else ""
+
+    if is_broken:
+        return f"• {emo} <b>{sname}:</b> {item_name}{stats_str} <b>{dur_bar}</b> — <i>Защита отключена! (/repair {item_id})</i>"
+    return f"• {emo} <b>{sname}:</b> {item_name}{stats_str} {dur_bar} ({dur_label})"
+
+
+def format_wardrobe_stats_summary(active_items: Any) -> str:
+    """
+    Formats complete RPG stats with intuitive explanations for real users:
+    Defense (armor & deflection), Toxicity (damage/power), Sanity (resistances), Work perks.
+    """
+    stats = get_wardrobe_total_stats(active_items)
+    lines = [
+        "📊 <b>RPG ХАРАКТЕРИСТИКИ ЭКИПИРОВКИ:</b>",
+        f"• 🛡️ <b>Броня и Защита:</b> <code>+{stats['total_defense']}</code> (Рикошет грабежа: <code>{stats['rob_deflect_chance']*100:.1f}%</code>, Срез урона: <code>{stats['rob_stolen_reduction_pct']*100:.1f}%</code>)",
+        f"• ⚔️ <b>Токсичность:</b> <code>+{stats['total_toxicity']}</code> (Сила троллинга и атак в тредах)",
+        f"• 🧠 <b>Рассудок:</b> <code>+{stats['total_sanity']}</code> (Срез дебаффов: <code>{stats['debuff_reduction_pct']*100:.1f}%</code>)"
+    ]
+
+    perks = []
+    if stats.get("mute_reduction_pct", 0) > 0:
+        perks.append(f"🔇 Мут-резист: <b>-{stats['mute_reduction_pct']}%</b> времени выстрела /shoot")
+    if stats.get("evasion_chance", 0.0) > 0:
+        perks.append(f"⚡ Уворот: <b>{stats['evasion_chance']*100:.0f}%</b> от облавы пативэна /partyvan")
+    if stats.get("rob_fear_chance", 0.0) > 0:
+        perks.append(f"😱 Испуг грабителя: <b>{stats['rob_fear_chance']*100:.0f}%</b> при /rob")
+    if stats.get("salary_mult", 1.0) > 1.0:
+        bonus_pct = int(round((stats["salary_mult"] - 1.0) * 100))
+        perks.append(f"💵 Зарплата: <b>+{bonus_pct}%</b> на всех сменах /work")
+    if stats.get("tips_mult", 1.0) > 1.0:
+        tips_pct = int(round((stats["tips_mult"] - 1.0) * 100))
+        perks.append(f"☕ Чаевые: <b>+{tips_pct}%</b> на работе")
+    if stats.get("cooldown_mult", 1.0) < 1.0:
+        cool_pct = int(round((1.0 - stats["cooldown_mult"]) * 100))
+        perks.append(f"⏱️ Отдых: кулдаун работы сокращен на <b>{cool_pct}%</b>")
+    if stats.get("casino_bonus_pct", 0) > 0:
+        perks.append(f"🎰 Казино-удача: <b>+{stats['casino_bonus_pct']}%</b> к кушу")
+    if stats.get("lootbox_flat_chance", 0.0) > 0 or stats.get("lootbox_drop_mult", 1.0) > 1.0:
+        perks.append("📦 Лутбокс-магнит: повышенный шанс дропа кейсов на работе")
+
+    # Immunities
+    imm_list = []
+    if stats.get("shit_immunity"):
+        imm_list.append("💩 Говно (/shit)")
+    if stats.get("schizo_immunity"):
+        imm_list.append("🧠 Шиза (/curse)")
+    if stats.get("laxative_immunity"):
+        imm_list.append("🚽 Слабительное")
+    if stats.get("work_fine_immunity"):
+        imm_list.append("💼 Штрафы на работе")
+    if stats.get("stealth_profile"):
+        imm_list.append("🕶️ Стелс баланса от налётчиков")
+
+    if imm_list:
+        lines.append(f"• 🔰 <b>Иммунитеты:</b> {', '.join(imm_list)}")
+    if perks:
+        lines.append("• ⚡ <b>Пассивные перки:</b> " + "; ".join(perks))
+
+    return "\n".join(lines)
+
+
+def format_active_set_bonuses_summary(active_items: Any) -> str:
+    """
+    Formats active set bonuses with clean perk descriptions.
+    """
+    sets = get_active_set_bonuses(active_items)
+    if not sets:
+        return "✨ <b>АКТИВНЫЕ СЕТЫ:</b> <i>(Нет активных сетов. Надень полный комплект одежды!)</i>"
+    lines = ["✨ <b>АКТИВНЫЕ СЕТ-БОНУСЫ:</b>"]
+    for s in sets:
+        short = s.get("short_desc") or s.get("bonus_desc", "")
+        lines.append(f"• <b>{s['name']}:</b> <i>{short}</i>")
+    return "\n".join(lines)
+
+
+def get_wardrobe_durability_warnings(active_items: Any) -> List[str]:
+    """
+    Inspects equipped gear and returns actionable warnings for broken or low-durability items.
+    """
+    equipped = get_equipped_gear(active_items)
+    warnings = []
+    for slot, item in equipped.items():
+        if not item:
+            continue
+        item_id = item["id"]
+        item_name = item.get("name", item_id)
+        dur = item.get("durability", 100.0)
+        is_broken = item.get("is_broken", False) or item.get("broken", False) or dur <= 0.0
+        if is_broken:
+            warnings.append(
+                f"💔 <b>{item_name} СЛОМАН (0% прочности)!</b> "
+                f"Защита (+{item.get('defense', 0)} Брони) отключена. Отремонтируй: <code>/repair {item_id}</code>"
+            )
+        elif dur <= 25.0:
+            warnings.append(
+                f"⚠️ <b>{item_name} на грани поломки ({dur:.1f}% прочности)!</b> "
+                f"Отремонтируй до боя: <code>/repair {item_id}</code>"
+            )
+    return warnings
+
+
+def format_wardrobe_full_card(
+    active_items: Any,
+    user_id: Optional[Union[int, str]] = None,
+    balance: float = 0.0,
+    page: int = 1,
+    page_size: int = 6
+) -> str:
+    """
+    Generates a crystal-clear, beautifully formatted Telegram wardrobe card.
+    1. Cryptographic Anonymous header (NO raw user_id leakage!)
+    2. Real-time balance and equipment overview with visual durability bars
+    3. Active Set Bonuses and RPG Stats breakdown
+    4. Actionable breakdown alerts and repair prompts
+    """
+    items_dict = _safe_dict_payload(active_items) or {}
+    now = int(time.time())
+    equipped = get_equipped_gear(items_dict, current_time=now)
+    owned = get_owned_wardrobe_items(items_dict)
+    active_sets = get_active_set_bonuses(items_dict)
+    warnings = get_wardrobe_durability_warnings(items_dict)
+
+    anon_str = sanitize_anon_display(user_id)
+    total_items = len(owned)
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+
+    lines = [
+        f"🎽 <b>ПРИМЕРОЧНАЯ И ГАРДЕРОБ [{anon_str}]</b> (Стр. {page}/{total_pages})",
+        f"💳 Твой баланс: <code>{int(balance):,} ₪</code>",
+        f"<code>{'—'*28}</code>",
+        "🥋 <b>НАДЕТАЯ ЭКИПИРОВКА:</b>"
+    ]
+
+    for slot in ("head", "torso", "face", "feet"):
+        lines.append(format_equipment_slot_line(slot, equipped.get(slot), items_dict))
+
+    if warnings:
+        lines.append("")
+        lines.append("⚠️ <b>ТРЕБУЕТСЯ РЕМОНТ:</b>")
+        for w in warnings:
+            lines.append(f" • {w}")
+
+    if active_sets:
+        lines.append("")
+        lines.append("✨ <b>АКТИВНЫЕ СЕТ-БОНУСЫ:</b>")
+        for s in active_sets:
+            short = s.get("short_desc") or s.get("bonus_desc", "")
+            lines.append(f" • <b>{s['name']}:</b> <i>{short}</i>")
+
+    lines.append("")
+    lines.append(format_wardrobe_stats_summary(items_dict))
+
+    lines.append(f"<code>{'—'*28}</code>")
+    lines.append(f"👗 <b>КОЛЛЕКЦИЯ ВЕЩЕЙ В ШКАФУ ({total_items} шт.):</b>")
+
+    if owned:
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        page_items = owned[start_idx:end_idx]
+
+        for itm in page_items:
+            eq_tag = " [НАДЕТО]" if itm.get("is_equipped") else ""
+            brk_tag = " [💔 СЛОМАНО]" if itm.get("is_broken") else ""
+            dur_val = itm.get("durability", 100.0)
+            dur_pct = f"{dur_val:.0f}%" if dur_val < 100.0 else "100%"
+            lines.append(f"• <b>{itm['name']}</b> ({dur_pct}){eq_tag}{brk_tag} — {itm.get('duration_label', '')}")
+    else:
+        lines.append("<i>Твой шкаф пуст! Приобретай вещи в Бутике одежды или выбивай из Лутбоксов.</i>")
+
+    return "\n".join(lines)
+
+
+def format_inventory_wardrobe_section(active_items: Any) -> str:
+    """
+    Renders the wardrobe & equipped gear subsection for /inventory.
+    Displays slot, item name, durability bar, and expiration timer without user_id leakage.
+    """
+    items_dict = _safe_dict_payload(active_items) or {}
+    equipped = get_equipped_gear(items_dict)
+    lines = []
+    has_any = False
+    for slot in ("head", "torso", "face", "feet"):
+        item = equipped.get(slot)
+        if item:
+            has_any = True
+            lines.append(format_equipment_slot_line(slot, item, items_dict))
+
+    if not has_any:
+        return "👗 <b>НАДЕТЫЙ ГАРДЕРОБ:</b> <i>(Ничего не надето. Загляни в /wardrobe)</i>"
+
+    res = ["👗 <b>НАДЕТЫЙ ГАРДЕРОБ И СТАТЫ:</b>"] + lines
+    warnings = get_wardrobe_durability_warnings(items_dict)
+    if warnings:
+        res.append("⚠️ <i>Внимание: часть экипировки повреждена или сломана! Почини: /repair</i>")
+    return "\n".join(res)
+
+
+def degrade_equipped_gear_on_combat(
+    active_items: Dict[str, Any],
+    action: str = "shoot",
+    damage_pct: float = 0.05,
+    auto_unequip: bool = False
+) -> Tuple[bool, List[str]]:
+    """
+    Applies realistic wear & tear across relevant equipped armor slots during PvP combat.
+    - 'rob': degrades torso armor (or fallback head/face/feet)
+    - 'shoot': degrades head (helmet) and torso armor
+    - 'partyvan': degrades feet (shoes) and torso
+    - 'shit': degrades head and torso
+    Returns (any_hit_applied, list_of_warning_messages).
+    """
+    if not isinstance(active_items, dict):
+        return False, []
+
+    slot_targets = {
+        "rob": ["torso", "head", "feet", "face"],
+        "shoot": ["head", "torso"],
+        "partyvan": ["feet", "torso"],
+        "shit": ["head", "torso"],
+    }.get(action, ["torso", "head"])
+
+    alerts = []
+    any_applied = False
+
+    for slot in slot_targets:
+        normalized_slot = "torso" if slot == "body" else slot
+        eq_id = active_items.get(f"equipped_{normalized_slot}")
+        if eq_id and eq_id in CLOTHING_CATALOG:
+            old_dur = active_items.get(f"{eq_id}_durability")
+            old_dur = float(old_dur) if old_dur is not None else 100.0
+            ok, msg = apply_armor_durability_hit(active_items, slot=normalized_slot, damage_pct=damage_pct, auto_unequip=auto_unequip)
+            if ok:
+                any_applied = True
+                new_dur = active_items.get(f"{eq_id}_durability", 0.0)
+                is_broken = active_items.get(f"{eq_id}_broken", False) or new_dur <= 0.0
+                item_name = CLOTHING_CATALOG[eq_id].get("name", eq_id)
+                if is_broken:
+                    alerts.append(f"💔 <b>{item_name} СЛОМАЛСЯ В БОЮ!</b> Защита отключена. Почини: <code>/repair {eq_id}</code>")
+                elif new_dur <= 25.0 and old_dur > 25.0:
+                    alerts.append(f"⚠️ <b>{item_name} получил тяжелые повреждения ({new_dur:.1f}%)!</b> Почини: <code>/repair {eq_id}</code>")
+            break
+
+    return any_applied, alerts
+
+
+def degrade_equipped_gear_on_work(
+    active_items: Dict[str, Any],
+    shift_risk: float = 0.03,
+    damage_pct: float = 0.02
+) -> Tuple[bool, List[str]]:
+    """
+    Applies subtle equipment wear & tear during hazardous work shifts.
+    Users with work_fine_immunity (e.g. Шлем ОМОНа, Сет ОМОНа, Кибер-Костюм) are completely immune.
+    """
+    if not isinstance(active_items, dict):
+        return False, []
+
+    stats = get_wardrobe_total_stats(active_items)
+    if stats.get("work_fine_immunity"):
+        return False, []
+
+    import random
+    if random.random() >= shift_risk:
+        return False, []
+
+    candidates = []
+    for slot in ("feet", "torso", "head"):
+        eq_id = active_items.get(f"equipped_{slot}")
+        if eq_id and eq_id in CLOTHING_CATALOG:
+            candidates.append((slot, eq_id))
+
+    if not candidates:
+        return False, []
+
+    slot, eq_id = random.choice(candidates)
+    old_dur = active_items.get(f"{eq_id}_durability")
+    old_dur = float(old_dur) if old_dur is not None else 100.0
+
+    ok, msg = apply_armor_durability_hit(active_items, slot=slot, damage_pct=damage_pct, auto_unequip=False)
+    alerts = []
+    if ok:
+        new_dur = active_items.get(f"{eq_id}_durability", 0.0)
+        is_broken = active_items.get(f"{eq_id}_broken", False) or new_dur <= 0.0
+        item_name = CLOTHING_CATALOG[eq_id].get("name", eq_id)
+        if is_broken:
+            alerts.append(f"💔 <b>{item_name} износился до нуля на смене!</b> Защита отключена. Почини: <code>/repair {eq_id}</code>")
+        elif new_dur <= 25.0 and old_dur > 25.0:
+            alerts.append(f"⚠️ <b>{item_name} сильно износился ({new_dur:.1f}%) на работе.</b> Почини через /repair!")
+    return ok, alerts
