@@ -340,6 +340,7 @@ class TicTacToeGame:
 active_ttt_games: Dict[str, TicTacToeGame] = {}
 user_active_ttt_session: Dict[int, str] = {}  # user_id -> game_id
 ttt_lock = asyncio.Lock()
+_cancelled_ttt_games: Dict[str, float] = {}
 
 
 def check_user_active_in_any_game(user_id: int, current_game_id: Optional[str] = None) -> Optional[str]:
@@ -1106,8 +1107,12 @@ async def accept_ttt_challenge(
     async with ttt_lock:
         game = active_ttt_games.get(game_id)
         if not game:
+            if game_id in _cancelled_ttt_games:
+                return False, "❌ Дуэль была отозвана создателем.", None
             return False, "❌ Вызов не найден или устарел.", None
         if game.status not in ("waiting",):
+            if game.status == "cancelled" or getattr(game, "cancel_requested", False) or getattr(game, "finish_reason", "") == "cancelled" or game_id in _cancelled_ttt_games:
+                return False, "❌ Дуэль была отозвана создателем.", None
             return False, "❌ Эта игра уже начата или завершена.", None
         if game.challenger_id == opponent_id:
             return False, "❌ Ты не можешь принять собственный вызов!", None
@@ -1191,6 +1196,17 @@ async def accept_ttt_challenge(
 
     # Launch Game
     async with ttt_lock:
+        if game.status == "cancelled" or getattr(game, "cancel_requested", False) or getattr(game, "finish_reason", "") == "cancelled" or game_id in _cancelled_ttt_games:
+            async with db_lock:
+                async with db_transaction(db):
+                    await add_user_global_balance(db, game.challenger_id, game.board_id, game.bet)
+                    await add_user_global_balance(db, opponent_id, game.board_id, game.bet)
+                    await record_user_transaction(db, game.challenger_id, game.bet, "ttt", f"Возврат ставки: вызов #{game_id} отозван создателем")
+                    await record_user_transaction(db, opponent_id, game.bet, "ttt", f"Возврат ставки: вызов #{game_id} отозван создателем")
+            if user_active_ttt_session.get(opponent_id) == game_id:
+                user_active_ttt_session.pop(opponent_id, None)
+            return False, "❌ Дуэль была отозвана создателем.", None
+
         game.opponent_id = opponent_id
         game.status = "active"
         game.current_turn = game.challenger_id  # ❌ starts first
@@ -1199,6 +1215,15 @@ async def accept_ttt_challenge(
 
         # Start 120s turn timer
         _reset_and_start_timer(game)
+
+    # Dual-Channel Fanout: notify challenger in PM that challenge was accepted
+    if bot and game.challenger_id:
+        acc_dm = (
+            f"⚔️ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ПРИНЯТ!</b>\n\n"
+            f"Анон <b>[{get_anon_id(opponent_id)}]</b> принял твой вызов на партию (ставка <code>{game.bet:,} ₪</code>)!\n"
+            f"Твой первый ход крестиками."
+        )
+        asyncio.create_task(send_pvp_direct_notification(bot, game.challenger_id, acc_dm))
 
     return True, "OK", game
 
@@ -1475,9 +1500,6 @@ async def cancel_ttt_challenge(
             if user_active_ttt_session.get(user_id) == game_id:
                 user_active_ttt_session.pop(user_id, None)
             return False, "❌ Вызов не найден или уже завершен."
-        if game.status != "waiting":
-            return False, "❌ Нельзя отменить уже начатую игру!"
-
         is_creator = (game.challenger_id == user_id)
         is_target = (game.target_user_id and game.target_user_id == user_id)
         if not is_creator and not is_target:
@@ -1486,6 +1508,23 @@ async def cancel_ttt_challenge(
         ch_id = game.challenger_id
         tgt_id = game.target_user_id
 
+        if game.status != "waiting":
+            if game.status == "accepting" and is_creator:
+                # Creator cancelled while opponent is in flight!
+                _cancelled_ttt_games[game_id] = time.time()
+                game.status = "finished"
+                game.finish_reason = "cancelled"
+                game.cancel_requested = True
+                game.finished_at = time.time()
+                active_ttt_games.pop(game_id, None)
+                if user_active_ttt_session.get(ch_id) == game_id:
+                    user_active_ttt_session.pop(ch_id, None)
+                if tgt_id and user_active_ttt_session.get(tgt_id) == game_id:
+                    user_active_ttt_session.pop(tgt_id, None)
+                return True, "✅ Вызов успешно отменен."
+            return False, "❌ Нельзя отменить уже начатую игру!"
+
+        _cancelled_ttt_games[game_id] = time.time()
         game.status = "finished"
         game.finish_reason = "cancelled"
         game.finished_at = time.time()
@@ -2032,6 +2071,15 @@ async def ttt_watchdog_step(bot=None):
                     game.status = "finished"
                     game.finished_at = now
                     game.finish_reason = "cancelled"
+                    if getattr(game, "escrowed", False) and ch_id and game.bet > 0:
+                        try:
+                            db_inst = await get_pool()
+                            async with db_lock:
+                                async with db_transaction(db_inst):
+                                    await add_user_global_balance(db_inst, ch_id, game.board_id, game.bet)
+                                    await record_user_transaction(db_inst, ch_id, game.bet, "ttt", f"Возврат ставки: таймаут вызова #{gid}")
+                        except Exception as ex_ref:
+                            logger.error(f"[TTT] timeout refund error: {ex_ref}")
                     if user_active_ttt_session.get(ch_id) == gid:
                         user_active_ttt_session.pop(ch_id, None)
                     if tgt_id and user_active_ttt_session.get(tgt_id) == gid:

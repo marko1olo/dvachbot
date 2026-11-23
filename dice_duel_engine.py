@@ -66,6 +66,7 @@ user_active_dice_game: Dict[int, str] = {}
 user_last_dice_created: Dict[int, float] = {}
 pair_last_dice_duel: Dict[Tuple[int, int], float] = {}
 dice_engine_lock = asyncio.Lock()
+_cancelled_dice_games: Dict[str, float] = {}
 
 
 def check_user_active_in_any_game(user_id: int, current_game_id: Optional[str] = None) -> Optional[str]:
@@ -552,7 +553,8 @@ async def create_dice_challenge(
 
 async def accept_dice_challenge(
     game_id: str,
-    acceptor_id: int
+    acceptor_id: int,
+    bot: Any = None
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
     Accepts pending challenge, performs atomic escrow deduction for both players,
@@ -561,8 +563,12 @@ async def accept_dice_challenge(
     async with dice_engine_lock:
         game = active_dice_games.get(game_id)
         if not game:
+            if game_id in _cancelled_dice_games:
+                return False, "❌ Дуэль была отозвана создателем.", None
             return False, "❌ Игра не найдена или время вызова истекло.", None
         if game["state"] not in ("pending",):
+            if game.get("state") == "cancelled" or game.get("cancel_requested") or game_id in _cancelled_dice_games:
+                return False, "❌ Дуэль была отозвана создателем.", None
             return False, "❌ Этот вызов уже принят или закрыт!", None
         if game["player_1"] == acceptor_id:
             return False, "❌ Нельзя играть в кости с самим собой, шизофреник.", None
@@ -660,12 +666,34 @@ async def accept_dice_challenge(
             await record_user_transaction(db, acceptor_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')
 
     async with dice_engine_lock:
+        if game.get("state") == "cancelled" or game.get("cancel_requested") or game_id in _cancelled_dice_games:
+            # Creator cancelled concurrently during DB transaction!
+            # Atomic escrow rollback for both players:
+            async with db_lock:
+                async with db_transaction(db):
+                    await add_user_global_balance(db, challenger_id, board_id, bet)
+                    await add_user_global_balance(db, acceptor_id, board_id, bet)
+                    await record_user_transaction(db, challenger_id, bet, 'dice_duel', f'Возврат ставки: дуэль #{game_id} отозвана создателем')
+                    await record_user_transaction(db, acceptor_id, bet, 'dice_duel', f'Возврат ставки: дуэль #{game_id} отозвана создателем')
+            if user_active_dice_game.get(acceptor_id) == game_id:
+                user_active_dice_game.pop(acceptor_id, None)
+            return False, "❌ Дуэль была отозвана создателем.", None
+
         game["player_2"] = acceptor_id
         game["state"] = "playing"
         # First turn is randomized
         game["current_turn"] = challenger_id if secrets.randbelow(2) == 0 else acceptor_id
         game["turn_deadline_ts"] = time.time() + DICE_TURN_TIMEOUT_SEC
         user_active_dice_game[acceptor_id] = game_id
+
+    # Dual-Channel Fanout: notify challenger in PM that challenge was accepted
+    if bot and challenger_id:
+        acc_dm = (
+            f"⚔️ <b>ВЫЗОВ НА ДАЙС-ДУЭЛЬ ПРИНЯТ!</b>\n\n"
+            f"Анон <b>[{get_anon_id(acceptor_id)}]</b> принял твой вызов на кости (ставка <code>{bet:,} ₪</code>)!\n"
+            f"Партия началась."
+        )
+        asyncio.create_task(send_pvp_direct_notification(bot, challenger_id, acc_dm))
 
     return True, "✅ Вызов принят! Кости на столе!", game
 
@@ -682,13 +710,27 @@ async def cancel_dice_challenge(
             if user_active_dice_game.get(user_id) == game_id:
                 user_active_dice_game.pop(user_id, None)
             return False, "❌ Вызов не найден."
-        if game["state"] != "pending":
-            return False, "❌ Нельзя отменить уже начавшуюся дуэль!"
-        if user_id != game["player_1"] and (not game.get("target_id") or user_id != game.get("target_id")):
-            return False, "❌ Только участники вызова могут его отменить."
-
         p1 = game["player_1"]
         tgt = game.get("target_id")
+        if user_id != p1 and (not tgt or user_id != tgt):
+            return False, "❌ Только участники вызова могут его отменить."
+
+        if game["state"] != "pending":
+            if game["state"] == "accepting" and user_id == p1:
+                # Creator cancelled while acceptor transaction is in flight!
+                _cancelled_dice_games[game_id] = time.time()
+                game["state"] = "cancelled"
+                game["cancel_requested"] = True
+                game["finished"] = True
+                game["finished_ts"] = time.time()
+                if user_active_dice_game.get(p1) == game_id:
+                    user_active_dice_game.pop(p1, None)
+                if tgt and user_active_dice_game.get(tgt) == game_id:
+                    user_active_dice_game.pop(tgt, None)
+                return True, "🗑 Вызов успешно отменен."
+            return False, "❌ Нельзя отменить уже начавшуюся дуэль!"
+
+        _cancelled_dice_games[game_id] = time.time()
         game["state"] = "cancelled"
         game["finished"] = True
         game["finished_ts"] = time.time()
@@ -1410,6 +1452,15 @@ async def dice_watchdog_step(bot=None):
                     game["finished"] = True
                     game["state"] = "expired"
                     game["finished_ts"] = now
+                    if game.get("escrowed") and ch_id and game.get("bet", 0) > 0:
+                        try:
+                            db_inst = await get_pool()
+                            async with db_lock:
+                                async with db_transaction(db_inst):
+                                    await add_user_global_balance(db_inst, ch_id, game.get("board_id", "b"), game["bet"])
+                                    await record_user_transaction(db_inst, ch_id, game["bet"], 'dice_duel', f'Возврат ставки: таймаут вызова #{gid}')
+                        except Exception as ex_ref:
+                            shared_state.runtime_logger.error(f"[DiceDuel] timeout refund error: {ex_ref}")
                     if user_active_dice_game.get(ch_id) == gid:
                         user_active_dice_game.pop(ch_id, None)
                     if tgt_id and user_active_dice_game.get(tgt_id) == gid:
@@ -1747,7 +1798,7 @@ def register_dice_duel_handlers(dp: Any):
         game_id = callback.data.split(":", 1)[1]
         user_id = callback.from_user.id
 
-        ok, msg_text, game = await accept_dice_challenge(game_id, user_id)
+        ok, msg_text, game = await accept_dice_challenge(game_id, user_id, bot=callback.bot)
         if not ok:
             shared_state.runtime_logger.warning(
                 f"[DiceDuel] accept FAILED gid={game_id} uid={user_id}: {msg_text}"

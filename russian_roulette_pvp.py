@@ -58,6 +58,7 @@ RR_RAKE_PERCENT = 0.05  # 5% to Abu's Fund
 active_rr_games: Dict[str, Dict[str, Any]] = {}
 user_active_rr_game: Dict[int, str] = {}
 rr_lock = asyncio.Lock()
+_cancelled_rr_games: Dict[str, float] = {}
 
 
 def check_user_active_in_any_game(user_id: int, current_game_id: Optional[str] = None) -> Optional[str]:
@@ -915,15 +916,19 @@ async def create_rr_challenge(
     return True, "✅ Вызов создан!", game_id
 
 
-async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+async def accept_rr_challenge(game_id: str, acceptor_id: int, bot: Any = None) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
     Accepts pending challenge, locks escrow from both players, and starts the game.
     """
     async with rr_lock:
         game = active_rr_games.get(game_id)
         if not game:
+            if game_id in _cancelled_rr_games:
+                return False, "❌ Дуэль была отозвана создателем.", None
             return False, "❌ Игра не найдена или была отменена.", None
         if game["state"] not in ("pending",):
+            if game.get("state") == "cancelled" or game.get("cancel_requested") or game_id in _cancelled_rr_games:
+                return False, "❌ Дуэль была отозвана создателем.", None
             return False, "❌ Вызов уже был принят или завершен!", None
         if game["challenger_id"] == acceptor_id:
             return False, "❌ Нельзя играть в Русскую Рулетку с самим собой, шизик.", None
@@ -999,6 +1004,18 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
             await record_user_transaction(db, acceptor_id, -bet, 'rr_pvp', f'Ставка в Русской Рулетке #{game_id}')
 
     async with rr_lock:
+        if game.get("state") == "cancelled" or game.get("cancel_requested") or game_id in _cancelled_rr_games:
+            # Creator cancelled during DB deduction!
+            async with db_lock:
+                async with db_transaction(db):
+                    await add_user_global_balance(db, challenger_id, board_id, bet)
+                    await add_user_global_balance(db, acceptor_id, board_id, bet)
+                    await record_user_transaction(db, challenger_id, bet, 'rr_pvp', f'Возврат ставки: дуэль #{game_id} отозвана создателем')
+                    await record_user_transaction(db, acceptor_id, bet, 'rr_pvp', f'Возврат ставки: дуэль #{game_id} отозвана создателем')
+            if user_active_rr_game.get(acceptor_id) == game_id:
+                user_active_rr_game.pop(acceptor_id, None)
+            return False, "❌ Дуэль была отозвана создателем.", None
+
         game["acceptor_id"] = acceptor_id
         game["state"] = "playing"
         # 50/50 starting player
@@ -1007,6 +1024,15 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         game["turn_deadline_ts"] = time.time() + RR_TURN_TIMEOUT_SEC
         game["last_action_ts"] = time.time()
         user_active_rr_game[acceptor_id] = game_id
+
+    # Dual-Channel Fanout: notify challenger in PM that challenge was accepted
+    if bot and challenger_id:
+        acc_dm = (
+            f"⚔️ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ПРИНЯТ!</b>\n\n"
+            f"Анон <b>[{get_anon_id(acceptor_id)}]</b> принял твой вызов на смертельную дуэль (ставка <code>{bet:,} ₪</code>)!\n"
+            f"Револьвер заряжен."
+        )
+        asyncio.create_task(send_pvp_direct_notification(bot, challenger_id, acc_dm))
 
     return True, "✅ Дуэль началась!", game
 
@@ -1021,15 +1047,29 @@ async def decline_or_cancel_rr_challenge(game_id: str, user_id: int, bot=None) -
             if user_active_rr_game.get(user_id) == game_id:
                 user_active_rr_game.pop(user_id, None)
             return False, "❌ Вызов не найден."
-        if game["state"] != "pending":
-            return False, "❌ Нельзя отменить уже начавшуюся дуэль."
-
         ch_id = game["challenger_id"]
         tgt_id = game.get("target_id")
 
         if user_id != ch_id and (not tgt_id or user_id != tgt_id):
             return False, "❌ Только участники вызова могут его отменить."
 
+        if game["state"] != "pending":
+            if game["state"] == "accepting" and user_id == ch_id:
+                # Creator cancelled while acceptor transaction is in flight!
+                _cancelled_rr_games[game_id] = time.time()
+                game["finished"] = True
+                game["state"] = "cancelled"
+                game["cancel_requested"] = True
+                game["finished_ts"] = time.time()
+                active_rr_games.pop(game_id, None)
+                if user_active_rr_game.get(ch_id) == game_id:
+                    user_active_rr_game.pop(ch_id, None)
+                if tgt_id and user_active_rr_game.get(tgt_id) == game_id:
+                    user_active_rr_game.pop(tgt_id, None)
+                return True, "❌ Вызов на дуэль отменен создателем."
+            return False, "❌ Нельзя отменить уже начавшуюся дуэль."
+
+        _cancelled_rr_games[game_id] = time.time()
         game["finished"] = True
         game["state"] = "cancelled"
         game["finished_ts"] = time.time()
@@ -1345,6 +1385,15 @@ async def rr_watchdog_step(bot=None):
                     game["finished"] = True
                     game["state"] = "expired"
                     game["finished_ts"] = now
+                    if game.get("escrowed") and ch_id and game.get("bet", 0) > 0:
+                        try:
+                            db_inst = await get_pool()
+                            async with db_lock:
+                                async with db_transaction(db_inst):
+                                    await add_user_global_balance(db_inst, ch_id, game.get("board_id", "b"), game["bet"])
+                                    await record_user_transaction(db_inst, ch_id, game["bet"], 'rr_pvp', f'Возврат ставки: таймаут вызова #{gid}')
+                        except Exception as ex_ref:
+                            logger.error(f"[RR] timeout refund error: {ex_ref}")
                     if user_active_rr_game.get(ch_id) == gid:
                         user_active_rr_game.pop(ch_id, None)
                     if tgt_id and user_active_rr_game.get(tgt_id) == gid:
@@ -1825,7 +1874,7 @@ async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = Non
     game_id = parts[1]
     user_id = callback.from_user.id
 
-    ok, msg, game = await accept_rr_challenge(game_id, user_id)
+    ok, msg, game = await accept_rr_challenge(game_id, user_id, bot=callback.bot)
     if not ok:
         runtime_logger.warning(f"[RR] accept FAILED gid={game_id} uid={user_id}: {msg}")
         await callback.answer(msg, show_alert=True)

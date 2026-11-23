@@ -8,7 +8,7 @@ import asyncio
 import random
 from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from common.db_pool import LazyLock
 
 
@@ -95,6 +95,28 @@ _persona_processed_posts: set[int] = set()
 last_persona_dialogue_user_ts = _last_persona_dialogue_user_ts
 last_persona_board_ts = _last_persona_board_ts
 _active_duels = {}
+_cancelled_duels_by_creator: dict[str, float] = {}
+
+
+def record_duel_cancelled_by_creator(challenger_id: int):
+    """Marks a duel as revoked/cancelled by creator to alert late joiners."""
+    from common.anon_identity import get_anon_id
+    now = time.time()
+    _cancelled_duels_by_creator[str(challenger_id)] = now
+    _cancelled_duels_by_creator[get_anon_id(challenger_id)] = now
+    # Evict entries older than 10 minutes
+    for k, ts in list(_cancelled_duels_by_creator.items()):
+        if now - ts > 600:
+            _cancelled_duels_by_creator.pop(k, None)
+
+
+def is_duel_cancelled_by_creator(challenger_id_or_token: Union[int, str]) -> bool:
+    """Checks if a duel was cancelled/revoked by creator."""
+    now = time.time()
+    ts = _cancelled_duels_by_creator.get(str(challenger_id_or_token))
+    if ts and (now - ts <= 600):
+        return True
+    return False
 
 
 def make_duel_token(challenger_id: int) -> str:
