@@ -3053,9 +3053,20 @@ def _format_text_report(data: UserStatsCardData) -> str:
     safe_schizo = html.escape(str(data.schizo_name))
     safe_role = html.escape(str(data.role_name))
     safe_prefix = f"({html.escape(str(data.custom_prefix))})" if data.custom_prefix else ""
+
+    from common.reputation_engine import calculate_user_reputation, format_reputation_badge
+    rep_score = calculate_user_reputation(
+        user_id=data.user_id,
+        items=data.active_items or {},
+        posts_count=data.posts_count,
+        balance=data.balance,
+    )
+    rep_badge = format_reputation_badge(rep_score, stream="ru")
+    rep_line = f"🌟 <b>Репутация:</b> {rep_badge}\n"
     res = (
         f"☘️ <b>Статистика пользователя {safe_schizo}</b> (/{data.board_id}/)\n\n"
         f"👤 <b>Статус:</b> {safe_role} {safe_prefix}\n"
+        f"{rep_line}"
         f"🏅 <b>Ранг борды:</b> #{data.rank} из {data.total_users}\n"
         f"📝 <b>Написано постов:</b> {data.posts_count:,}\n"
         f"🎭 <b>Получено реакций:</b> +{data.rx_received:,} (Одобрение: {data.approval_pct}%)\n"
@@ -3069,6 +3080,14 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"💬 <i>\"{data.slang_comment}\"</i>\n"
         f"💡 <i>Карточка персонажа RPG и гардероб: /avatar</i>"
     )
+    # STRICT LAW OF ANONYMITY: Ensure raw numerical Telegram user_id never leaks in text report
+    if data.user_id and data.user_id > 10000:
+        raw_uid_str = str(data.user_id)
+        if raw_uid_str in res:
+            from common.anon_identity import get_anon_id
+            anon_tag = get_anon_id(data.user_id, stream="ru")
+            res = res.replace(raw_uid_str, anon_tag)
+
     from common.text_utils import safe_tg_caption
     return safe_tg_caption(res, max_len=1024)
 

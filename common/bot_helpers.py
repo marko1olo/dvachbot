@@ -11,6 +11,12 @@ from common.db_pool import LazyLock
 from common.anon_identity import get_anon_id
 from typing import Optional, Any, Union
 from post_processor import process_new_post
+from post_helpers import (
+    safe_edit_message,
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_edit_message_caption,
+)
 
 classic_duel_lock = LazyLock()
 
@@ -653,16 +659,14 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
     # Обновляем все карточки вызова на доске
     if bot and broadcast_msgs:
         for cid, mid in broadcast_msgs:
-            try:
-                await bot.edit_message_text(
-                    chat_id=cid,
-                    message_id=mid,
-                    text=duel_text,
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+            await safe_edit_message(
+                bot,
+                cid,
+                mid,
+                duel_text,
+                reply_markup=None,
+                parse_mode="HTML"
+            )
 
     # Уведомление участникам дуэли в ЛС об исходе битвы
     if bot:
@@ -807,16 +811,14 @@ async def decline_duel_logic(message: types.Message, challenger_id: int, user_id
     bot = getattr(message, "bot", None)
     if bot and broadcast_msgs:
         for cid, mid in broadcast_msgs:
-            try:
-                await bot.edit_message_text(
-                    chat_id=cid,
-                    message_id=mid,
-                    text="❌ <b>Вызов на дуэль был отменен или отклонен.</b>",
-                    reply_markup=None,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+            await safe_edit_message(
+                bot,
+                cid,
+                mid,
+                "❌ <b>Вызов на дуэль был отменен или отклонен.</b>",
+                reply_markup=None,
+                parse_mode="HTML"
+            )
 
 
     if user_id == challenger_id:
@@ -1014,14 +1016,13 @@ async def handle_cyberchad_counter_action(message: types.Message, action: str, u
 async def delete_message_after_delay(message: types.Message, delay: int):
     try:
         await asyncio.sleep(delay)
-        await asyncio.wait_for(message.delete(), timeout=15.0)
+        await asyncio.wait_for(safe_delete_message(message), timeout=15.0)
     except asyncio.CancelledError:
         pass
     except asyncio.TimeoutError:
-        print(f"⚠️ Таймаут при удалении сообщения {message.message_id} в чате {message.chat.id}")
+        logging.getLogger("runtime").debug("⚠️ Таймаут при удалении сообщения %s в чате %s", getattr(message, "message_id", 0), getattr(getattr(message, "chat", None), "id", 0))
     except Exception as e:
-        if "message to delete not found" not in str(e).lower():
-            print(f"🔥 Ошибка в delete_message_after_delay: {type(e).__name__}: {e}")
+        logging.getLogger("runtime").debug("delete_message_after_delay error: %s", e)
 
 
 async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int = 1800, reason: str | None = None):
@@ -1770,16 +1771,7 @@ def install_message_safety_guard():
 
 async def _safe_delete_message(msg: Any) -> bool:
     """Safely deletes message without throwing unhandled exceptions."""
-    if not msg or not hasattr(msg, "delete"):
-        return False
-    try:
-        import inspect
-        res = msg.delete()
-        if inspect.isawaitable(res):
-            await res
-        return True
-    except Exception:
-        return False
+    return await safe_delete_message(msg)
 
 
 _MENU_MESSAGE_OWNERS: dict[tuple[int, int], int] = {}
@@ -2001,22 +1993,14 @@ async def render_menu_transition(
     if is_media:
         if prefer_banner and can_fit_caption:
             try:
-                if hasattr(msg, "edit_caption"):
-                    res = msg.edit_caption(
-                        caption=text,
-                        reply_markup=reply_markup,
-                        parse_mode="HTML"
-                    )
-                    if inspect.isawaitable(res):
-                        await res
+                res = await safe_edit_message(msg, text=text, reply_markup=reply_markup, parse_mode="HTML")
+                if res:
                     _track_transition_owner(msg)
-                    await _safe_answer_if_needed()
+                    if res is True and not hasattr(res, "message_id"):
+                        await _safe_answer_if_needed("🔄 Информация актуальна")
+                    else:
+                        await _safe_answer_if_needed()
                     return
-            except TelegramBadRequest as ex:
-                if "message is not modified" in str(ex).lower():
-                    await _safe_answer_if_needed("🔄 Информация актуальна")
-                    return
-                logging.getLogger("runtime").debug(f"render_menu_transition: edit_caption failed: {ex}")
             except Exception as ex:
                 logging.getLogger("runtime").debug(f"render_menu_transition: edit_caption error: {ex}")
 
@@ -2083,41 +2067,18 @@ async def render_menu_transition(
             await _safe_answer_if_needed()
             return
         else:
-            # Source is text and target is text: try edit_text
+            # Source is text and target is text: try safe_edit_message
             try:
-                if hasattr(msg, "edit_text"):
-                    res = msg.edit_text(
-                        text=text,
-                        reply_markup=reply_markup,
-                        parse_mode="HTML",
-                        disable_web_page_preview=True
-                    )
-                    if inspect.isawaitable(res):
-                        await res
+                res = await safe_edit_message(msg, text=text, reply_markup=reply_markup, parse_mode="HTML")
+                if res:
                     _track_transition_owner(msg)
-                    await _safe_answer_if_needed()
-                    return
-            except TelegramBadRequest as ex:
-                if "message is not modified" in str(ex).lower():
-                    await _safe_answer_if_needed("🔄 Информация актуальна")
-                    return
-                if "parse" in str(ex).lower() or "entity" in str(ex).lower():
-                    try:
-                        res = msg.edit_text(
-                            text=text,
-                            reply_markup=reply_markup,
-                            parse_mode=None,
-                            disable_web_page_preview=True
-                        )
-                        if inspect.isawaitable(res):
-                            await res
+                    if res is True and not hasattr(res, "message_id"):
+                        await _safe_answer_if_needed("🔄 Информация актуальна")
+                    else:
                         await _safe_answer_if_needed()
-                        return
-                    except Exception:
-                        pass
-                logging.getLogger("runtime").debug(f"render_menu_transition: edit_text failed: {ex}")
+                    return
             except Exception as ex:
-                logging.getLogger("runtime").debug(f"render_menu_transition: edit_text error: {ex}")
+                logging.getLogger("runtime").debug(f"render_menu_transition: safe_edit_message failed: {ex}")
 
             # Fallback if edit_text fails (e.g. message too old or was deleted)
             sent = await _send_safe_text_message(msg, bot, chat_id, text, reply_markup=reply_markup)

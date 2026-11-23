@@ -2072,7 +2072,7 @@ def execute_job_action(
                 if cur_energy <= 0:
                     return JobResult(
                         False, 0,
-                        "⚡ У тебя закончилась энергия (0⚡)! Выпей Flash Ultra (/work overtime) или отдохни, чтобы восстановить силы.",
+                        "⚡ У тебя закончилась энергия (0⚡)! Выпей Flash Ultra (/work overtime) или отдохни (/rest), чтобы восстановить силы.",
                         None
                     )
             except (ValueError, TypeError):
@@ -2084,7 +2084,7 @@ def execute_job_action(
                 if cur_health <= 0:
                     return JobResult(
                         False, 0,
-                        "❤️ Твое здоровье на нуле (0 HP)! Ты не можешь работать в таком состоянии. Подлечись в аптечке (/cure)!",
+                        "❤️ Твое здоровье на нуле (0 HP)! Ты не можешь работать в таком состоянии. Подлечись в аптечке (/cure) или отдохни (/rest)!",
                         None
                     )
             except (ValueError, TypeError):
@@ -2227,7 +2227,7 @@ def execute_job_action(
                 False,
                 0,
                 f"🔒 Вакансия заблокирована! Требуется стаж: {req_shifts} смен (у тебя: {total_shifts}, осталось: {left_shifts}). "
-                f"Отрабатывай доступные смены для повышения квалификации!",
+                f"Начни с доступных смен (🍾 Стеклотара или 🚮 Дворник) для прокачки стажа и репутации!",
                 None
             )
 

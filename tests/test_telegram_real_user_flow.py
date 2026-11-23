@@ -1413,3 +1413,305 @@ async def test_cmd_get_id_group_privacy():
         expected_anon = get_anon_id(target_id)
         assert f"[{expected_anon}]" in group_answer
 
+
+# =============================================================================
+# TESTS FOR SAFE MESSAGE EDIT & DELETE INQUISITOR (Media vs Text, Fallbacks, Exception Shield)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_text_message():
+    """Verify safe_edit_message calls edit_text for a standard text message."""
+    from post_helpers import safe_edit_message
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = None
+    msg.video = None
+    msg.animation = None
+    msg.caption = None
+    msg.chat = MagicMock(id=111222)
+    msg.message_id = 333
+    msg.edit_text = AsyncMock(return_value=True)
+    msg.edit_caption = AsyncMock()
+
+    res = await safe_edit_message(msg, "Updated text", reply_markup=None)
+    assert res is True
+    msg.edit_text.assert_called_once()
+    msg.edit_caption.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_media_message():
+    """Verify safe_edit_message auto-detects media (photo) and calls edit_caption."""
+    from post_helpers import safe_edit_message
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = [MagicMock()]
+    msg.video = None
+    msg.animation = None
+    msg.caption = "Old caption"
+    msg.chat = MagicMock(id=111222)
+    msg.message_id = 333
+    msg.edit_caption = AsyncMock(return_value=True)
+    msg.edit_text = AsyncMock()
+
+    res = await safe_edit_message(msg, "Updated caption", reply_markup=None)
+    assert res is True
+    msg.edit_caption.assert_called_once()
+    msg.edit_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_fallback_on_no_text_in_message():
+    """Verify safe_edit_message falls back to edit_caption when Telegram says 'there is no text in the message to edit'."""
+    from post_helpers import safe_edit_message
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = None
+    msg.video = None
+    msg.animation = None
+    msg.caption = None
+    msg.chat = MagicMock(id=111222)
+    msg.message_id = 333
+    msg.edit_text = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="Bad Request: there is no text in the message to edit"))
+    msg.edit_caption = AsyncMock(return_value=True)
+
+    res = await safe_edit_message(msg, "Fallback caption text", reply_markup=None)
+    assert res is True
+    msg.edit_text.assert_called_once()
+    msg.edit_caption.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_fallback_on_no_caption_in_message():
+    """Verify safe_edit_message falls back to edit_text when Telegram says 'there is no caption in the message to edit'."""
+    from post_helpers import safe_edit_message
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = [MagicMock()]
+    msg.caption = "Old"
+    msg.chat = MagicMock(id=111222)
+    msg.message_id = 333
+    msg.edit_caption = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="Bad Request: there is no caption in the message to edit"))
+    msg.edit_text = AsyncMock(return_value=True)
+
+    res = await safe_edit_message(msg, "Fallback text message", reply_markup=None)
+    assert res is True
+    msg.edit_caption.assert_called_once()
+    msg.edit_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_silences_message_not_modified():
+    """Verify 'message is not modified' error is silenced and returns True."""
+    from post_helpers import safe_edit_message
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = None
+    msg.caption = None
+    msg.chat = MagicMock(id=111222)
+    msg.message_id = 333
+    msg.edit_text = AsyncMock(side_effect=TelegramBadRequest(
+        method=MagicMock(),
+        message="Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message"
+    ))
+
+    res = await safe_edit_message(msg, "Exact same text")
+    assert res is True
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_parse_error_fallback_to_plain():
+    """Verify entity parse error falls back to plain text (parse_mode=None)."""
+    from post_helpers import safe_edit_message
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = None
+    msg.caption = None
+    msg.chat = MagicMock(id=111222)
+    msg.message_id = 333
+
+    call_count = 0
+    async def fake_edit_text(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if kwargs.get("parse_mode") == "HTML":
+            raise TelegramBadRequest(method=MagicMock(), message="Bad Request: can't parse entities: can't find end tag")
+        return True
+
+    msg.edit_text = AsyncMock(side_effect=fake_edit_text)
+
+    res = await safe_edit_message(msg, "<b>Unclosed bold tag", parse_mode="HTML")
+    assert res is True
+    assert call_count == 2
+    last_call = msg.edit_text.call_args[1]
+    assert last_call.get("parse_mode") is None
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_callback_query_support():
+    """Verify safe_edit_message works directly with CallbackQuery object."""
+    from post_helpers import safe_edit_message
+
+    cb = MagicMock(spec=types.CallbackQuery)
+    cb.data = "test_cb"
+    cb_msg = MagicMock(spec=types.Message)
+    cb_msg.photo = None
+    cb_msg.caption = None
+    cb_msg.chat = MagicMock(id=777)
+    cb_msg.message_id = 888
+    cb_msg.edit_text = AsyncMock(return_value=True)
+    cb.message = cb_msg
+
+    res = await safe_edit_message(cb, "Text for callback")
+    assert res is True
+    cb_msg.edit_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_bot_chat_msg_id_support():
+    """Verify safe_edit_message works with (bot, chat_id, message_id) signature."""
+    from post_helpers import safe_edit_message
+
+    bot = MagicMock(spec=Bot)
+    bot.edit_message_text = AsyncMock(return_value=True)
+
+    res = await safe_edit_message(bot, 12345, 999, "Text via bot", reply_markup=None)
+    assert res is True
+    bot.edit_message_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_delete_message_normal_and_harmless_errors():
+    """Verify safe_delete_message handles normal deletion and suppresses 'message to delete not found' cleanly."""
+    from post_helpers import safe_delete_message
+
+    # 1. Normal deletion on message
+    msg = MagicMock(spec=types.Message)
+    msg.delete = AsyncMock(return_value=True)
+    msg.chat = MagicMock(id=123)
+    msg.message_id = 456
+    msg.bot = MagicMock()
+    msg.bot.delete_message = AsyncMock(return_value=True)
+
+    assert await safe_delete_message(msg) is True
+
+    # 2. TelegramBadRequest: message to delete not found -> returns True, no exception
+    msg_gone = MagicMock(spec=types.Message)
+    msg_gone.chat = MagicMock(id=123)
+    msg_gone.message_id = 456
+    bot_mock = MagicMock()
+    bot_mock.delete_message = AsyncMock(side_effect=TelegramBadRequest(
+        method=MagicMock(),
+        message="Bad Request: message to delete not found"
+    ))
+    msg_gone.bot = bot_mock
+
+    assert await safe_delete_message(msg_gone) is True
+
+    # 3. Direct bot, chat_id, message_id call
+    assert await safe_delete_message(bot_mock, 123, 456) is True
+
+    # 4. Inaccessible / None target
+    assert await safe_delete_message(None) is False
+
+
+@pytest.mark.asyncio
+async def test_render_menu_transition_uses_safe_edit_message():
+    """Verify render_menu_transition delegates editing to safe_edit_message for media message."""
+    from common.bot_helpers import render_menu_transition
+
+    msg = MagicMock(spec=types.Message)
+    msg.photo = [MagicMock()]
+    msg.caption = "Old caption"
+    msg.chat = MagicMock(id=55555)
+    msg.message_id = 999
+    msg.edit_caption = AsyncMock(return_value=True)
+
+    with patch("common.bot_helpers.safe_edit_message", new_callable=AsyncMock) as mock_safe_edit:
+        mock_safe_edit.return_value = True
+        await render_menu_transition(msg, "New Menu Text", reply_markup=None, prefer_banner=True)
+        mock_safe_edit.assert_called_once()
+        call_kwargs = mock_safe_edit.call_args[1]
+        assert call_kwargs.get("text") == "New Menu Text"
+
+
+@pytest.mark.asyncio
+async def test_cmd_wardrobe_and_inventory_use_safe_delete_message():
+    """Verify cmd_wardrobe and cmd_inventory safely delete trigger message."""
+    from main import cmd_wardrobe, cmd_inventory
+
+    wardrobe_msg = make_mock_message(user_id=111, message_id=10, text="/wardrobe")
+    inv_msg = make_mock_message(user_id=222, message_id=20, text="/inventory")
+
+    with patch("main.get_pool", new_callable=AsyncMock), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=5000), \
+         patch("main._get_user_active_items", new_callable=AsyncMock, return_value={}), \
+         patch("main._build_dressing_room_content", return_value=("Wardrobe Text", None)), \
+         patch("main._build_inventory_content", new_callable=AsyncMock, return_value=("Inv Text", None)), \
+         patch("banner_manager.send_banner_message", new_callable=AsyncMock, return_value=MagicMock(chat=MagicMock(id=111), message_id=55)), \
+         patch("main.safe_delete_message", new_callable=AsyncMock) as mock_safe_delete:
+
+        await cmd_wardrobe(wardrobe_msg, board_id="b")
+        mock_safe_delete.assert_called_with(wardrobe_msg)
+
+        mock_safe_delete.reset_mock()
+        await cmd_inventory(inv_msg, board_id="b")
+        mock_safe_delete.assert_called_with(inv_msg)
+
+
+@pytest.mark.asyncio
+async def test_cmd_casino_hub_uses_safe_delete_message():
+    """Verify cmd_casino_hub uses safe_delete_message."""
+    from main import cmd_casino_hub
+
+    msg = make_mock_message(user_id=333, message_id=30, text="/casino")
+
+    with patch("main.get_pool", new_callable=AsyncMock), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=10000), \
+         patch("banner_manager.send_banner_message", new_callable=AsyncMock), \
+         patch("main.safe_delete_message", new_callable=AsyncMock) as mock_safe_delete:
+
+        await cmd_casino_hub(msg, board_id="b")
+        mock_safe_delete.assert_called_once_with(msg)
+
+
+@pytest.mark.asyncio
+async def test_casino_lobbies_use_safe_edit_message():
+    """Verify _show_slots_lobby, _show_coinflip_lobby, _show_blackjack_lobby, _show_roulette_lobby use safe_edit_message."""
+    from main import (
+        _show_slots_lobby,
+        _show_coinflip_lobby,
+        _show_blackjack_lobby,
+        _show_roulette_lobby,
+    )
+
+    msg_to_edit = MagicMock(spec=types.Message)
+    bot_mock = MagicMock(spec=Bot)
+
+    with patch("main.get_pool", new_callable=AsyncMock), \
+         patch("main.get_user_global_balance", new_callable=AsyncMock, return_value=25000), \
+         patch("main.safe_edit_message", new_callable=AsyncMock) as mock_safe_edit:
+
+        mock_safe_edit.return_value = True
+
+        # Slots lobby
+        await _show_slots_lobby(bot_mock, 12345, 999, "b", 100, message_to_edit=msg_to_edit)
+        mock_safe_edit.assert_called_once()
+
+        mock_safe_edit.reset_mock()
+        # Coinflip lobby
+        await _show_coinflip_lobby(bot_mock, 12345, 999, "b", 100, message_to_edit=msg_to_edit)
+        mock_safe_edit.assert_called_once()
+
+        mock_safe_edit.reset_mock()
+        # Blackjack lobby
+        await _show_blackjack_lobby(bot_mock, 12345, 999, "b", 100, message_to_edit=msg_to_edit)
+        mock_safe_edit.assert_called_once()
+
+        mock_safe_edit.reset_mock()
+        # Roulette lobby
+        await _show_roulette_lobby(bot_mock, 12345, 999, "b", 100, message_to_edit=msg_to_edit)
+        mock_safe_edit.assert_called_once()
+
+
+

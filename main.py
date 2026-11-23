@@ -43,7 +43,8 @@ import operator
 from post_helpers import (
     _format_header_inner, format_header,
     _format_post_text, _format_media_context, _MEDIA_DESC_CACHE,
-    _get_cached_anon_name, RE_MULTI_NEWLINES
+    _get_cached_anon_name, RE_MULTI_NEWLINES,
+    safe_edit_message, safe_delete_message,
 )
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 
@@ -71,7 +72,7 @@ import tracemalloc
 import uuid
 import math
 import random
-from common.anon_identity import get_anon_id, get_referral_code, generate_anon_name as _canonical_gen_anon_name
+from common.anon_identity import get_anon_id, get_referral_code, safe_user_hash, generate_anon_name as _canonical_gen_anon_name
 import re
 import secrets
 import html
@@ -424,6 +425,7 @@ _CALLBACK_DEBOUNCE_TRACKER: Dict[Tuple[int, str], float] = {}
 _CALLBACK_DEBOUNCE_THRESHOLD = 0.35  # 350 ms window for rapid duplicate clicks
 
 
+
 class CallbackAnswerGuardMiddleware(BaseMiddleware):
     """
     Гарантирует вызов safe_callback_answer() для каждого входящего CallbackQuery.
@@ -459,6 +461,7 @@ class CallbackAnswerGuardMiddleware(BaseMiddleware):
         finally:
             if isinstance(event, types.CallbackQuery):
                 await safe_callback_answer(event)
+
 
 
 class BoardMiddleware(BaseMiddleware):
@@ -598,11 +601,13 @@ SUMMARIZE_COOLDOWN = 1800  # 30 минут кулдаун на /summarize
 ROAST_COOLDOWN = 300
 
 
+
 NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Обосранный", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Гнойный", "Альфа", "Омега", "Сажный", "Хуевый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
 NICK_SUFFIXES = ["Битард", "Сыч", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Рак", "Гигачад", "Подпивас", "Ньюфаг", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Шкура", "Дрочер", "Школьник", "Дед", "Хиккан", "Сычидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
 
 def generate_anon_name(user_id: int, stream: str = 'ru') -> str:
     return _canonical_gen_anon_name(user_id, stream=stream)
+
 
 
 def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
@@ -1095,6 +1100,7 @@ def _contains_volatile_delivery_payload(value, depth: int = 0) -> bool:
 
 DURABLE_RESTORE_PAGE = 1000
 DURABLE_RESTORE_MAX_ITEMS = 100_000
+
 
 
 async def restore_durable_delivery_queue(limit: int = DURABLE_RESTORE_PAGE) -> None:
@@ -1707,6 +1713,7 @@ USER_BOARD_RAM_STORES = (
 )
 
 
+
 def _purge_users_from_board_ram_unlocked(b_data: dict, user_ids) -> int:
     """Вычищает per-user записи ушедших юзеров. Вызывать под storage_lock."""
     removed = 0
@@ -1718,6 +1725,7 @@ def _purge_users_from_board_ram_unlocked(b_data: dict, user_ids) -> int:
             if store.pop(user_id, None) is not None:
                 removed += 1
     return removed
+
 
 
 def _purge_users_from_global_ram(user_ids) -> int:
@@ -1741,6 +1749,7 @@ def _purge_users_from_global_ram(user_ids) -> int:
     return removed
 
 
+
 async def purge_users_from_board_ram(board_id: str, user_ids) -> int:
     """Единая точка освобождения RAM для юзеров, покинувших доску."""
     user_ids = [uid for uid in set(user_ids) if uid]
@@ -1755,6 +1764,7 @@ async def purge_users_from_board_ram(board_id: str, user_ids) -> int:
                 removed += 1
     removed += _purge_users_from_global_ram(user_ids)
     return removed
+
 
 
 async def _handle_telegram_forbidden_error(update) -> None:
@@ -1973,6 +1983,7 @@ async def load_state():
 SAVE_EXECUTOR_DRAIN_SEC = 5.0
 
 
+
 async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None:
     """
     Даёт отложенным записям на диск завершиться, не блокируя event loop.
@@ -2003,6 +2014,7 @@ async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None
         print("💾 Отложенные записи на диск завершены.")
     except asyncio.TimeoutError:
         logger.warning(f"⚠️ Записи на диск не уложились в {timeout:g} с — продолжаю остановку.")
+
 
 
 async def refund_all_pending_escrows():
@@ -2099,6 +2111,7 @@ async def refund_all_pending_escrows():
         print(f"💰 [Shutdown] Возвращено ставок: {refunded} активных PvP-игр.")
     except Exception as e:
         print(f"⚠️ [Shutdown] Ошибка при возврате ставок: {e}")
+
 
 
 async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | None = None, emergency: bool = False):
@@ -2447,6 +2460,7 @@ def _format_post_for_chunk(post: dict, board_id: str, time_threshold: datetime, 
     return text
 
 
+
 def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
     name = content.get('username') or content.get('name') or content.get('author_name')
     if not name:
@@ -2677,6 +2691,7 @@ def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str
     return None, None
 
 
+
 def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
     """Check if the user is repeatedly sending the same or highly similar messages."""
     content, msg_type = msg_info
@@ -2722,6 +2737,7 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
                     last_items_deque.clear()
                     return False
     return True
+
 
 
         # Уведомление пользователю отключено по просьбе админа
@@ -3192,13 +3208,9 @@ class ShadowRejectContext:
 
 
 
-
-
-
 from dataclasses import dataclass
 
 @dataclass
-
 
 
 
@@ -3211,10 +3223,6 @@ class NewPostParams:
     reply_to_post: int | None
     is_shadow_muted: bool
     stream: str = 'ru'
-
-
-
-
 
 
 
@@ -3652,6 +3660,7 @@ def _format_main_text(content: dict) -> str | None:
          return convert_site_tags_to_telegram(main_text_raw)
 
 
+
 def _normalize_quote_file_type(raw_type) -> str:
     media_type = str(raw_type or 'file').split('.')[-1].lower()
     if media_type in {'image', 'picture'}:
@@ -3696,8 +3705,6 @@ def _quote_info_from_content(replied_content: dict | None) -> dict | None:
 
 
 
-
-
 def _phase_time_budget_sec(delivery_phase: str) -> float:
     if delivery_phase == "priority":
         return PRIORITY_PHASE_BUDGET_SEC
@@ -3710,20 +3717,9 @@ _LIE_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
 
 
 
-
-
-
-
-
-
-
 # Alias for backwards compat
 WORKER_RESTART_DELAY_SEC = 2.0
 WORKER_RESTART_MAX_DELAY_SEC = 60.0
-
-
-
-
 
 
 
@@ -4117,6 +4113,7 @@ async def safe_callback_answer(callback: types.CallbackQuery, *args, **kwargs) -
         return False
 
 
+
 class SafeMessageProxy:
     def __init__(self, original_msg, user, bot=None):
         self._msg = original_msg
@@ -4297,6 +4294,7 @@ def calculate_capital_surcharge_pct(balance: float | None) -> float:
         return 24.00
 
 
+
 SHOP_ITEM_ALIASES: dict[str, str] = {
     # Pills / Medicine
     "pills": "pills", "аптечка": "pills", "аминазин": "pills", "таблетки": "pills",
@@ -4387,6 +4385,7 @@ def resolve_shop_item(query: str) -> str | None:
     return None
 
 
+
 def get_current_item_price(item_key: str, user_id: int | None = None, balance: float | None = None) -> int:
     from shared_state import market_state, get_user_daily_shop_buys
     base = BASE_SHOP_PRICES.get(item_key, 100)
@@ -4470,6 +4469,7 @@ def _build_main_shop_hub(user_id: int, balance: float):
     return text, kb
 
 
+
 def _build_weapons_shop_content(user_id: int, balance: float):
     p_shit = get_current_item_price('shit', user_id=user_id, balance=balance)
     p_vomit = get_current_item_price('vomit', user_id=user_id, balance=balance)
@@ -4529,6 +4529,7 @@ def _build_weapons_shop_content(user_id: int, balance: float):
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
     ])
     return text, kb
+
 
 
 def _build_clothes_shop_content(user_id: int, balance: float):
@@ -4622,6 +4623,7 @@ def _build_clothes_shop_content(user_id: int, balance: float):
     return text, kb
 
 
+
 def _build_dressing_room_content(user_id: int, balance: float, active_items: dict, page: int = 1, page_size: int = 6):
     from wardrobe_engine import get_owned_wardrobe_items, get_active_set_bonuses
     equipped = get_equipped_gear(active_items)
@@ -4703,6 +4705,7 @@ def _build_dressing_room_content(user_id: int, balance: float, active_items: dic
     return full_text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
+
 def _build_pharma_shop_content(user_id: int, balance: float):
     p_pills = get_current_item_price('pills', user_id=user_id, balance=balance)
     p_shield = get_current_item_price('shield', user_id=user_id, balance=balance)
@@ -4742,6 +4745,7 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
     ])
     return text, kb
+
 
 
 def _build_lootbox_shop_content(user_id: int, balance: float, active_items: dict | None = None):
@@ -4804,6 +4808,7 @@ def _build_lootbox_shop_content(user_id: int, balance: float, active_items: dict
     return text, kb
 
 
+
 def _build_lootbox_opened_content(reveal_text: str, user_id: int, balance: float, active_items: dict | None = None):
     p_trash = get_current_item_price("lootbox_trash")
     p_gold = get_current_item_price("lootbox_gold")
@@ -4846,6 +4851,7 @@ def _build_lootbox_opened_content(reveal_text: str, user_id: int, balance: float
         ]
     ])
     return text, kb
+
 
 
 def _build_color_picker_content(user_id: int, balance: float, active_items: dict):
@@ -4925,6 +4931,7 @@ _BANNER_CAT_LABELS = {
     "cards": "🃏 Карты",
     "market": "🏷 Базар",
 }
+
 
 
 async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = "all", sort: str = "alpha", seed: int = 0, **kwargs):
@@ -5121,6 +5128,7 @@ async def _send_banners_page(bot: Bot, chat_id: int, page: int, category: str = 
         )
 
 
+
 @dp.message(Command("banner", "баннер", "banners", "баннеры", "gallery", "галерея", "art", "арт", ignore_case=True, ignore_mention=True))
 async def cmd_banners(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     if not board_id:
@@ -5159,6 +5167,7 @@ async def cmd_banners(message: types.Message, board_id: str | None = None, strea
         pass
 
 
+
 @dp.message(Command("reload_banners", "banners_reload", ignore_case=True, ignore_mention=True))
 async def cmd_reload_banners(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     from banner_manager import reload_banners, _CATEGORIZED_BANNERS
@@ -5171,10 +5180,12 @@ async def cmd_reload_banners(message: types.Message, board_id: str | None = None
     )
 
 
+
 @dp.message(Command("broadcast_reactions", "reactions_broadcast", ignore_case=True, ignore_mention=True))
 async def cmd_broadcast_reactions(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     from reaction_broadcast_engine import handle_broadcast_reactions_command
     await handle_broadcast_reactions_command(message, is_admin_check_func=lambda uid: is_admin(uid, board_id))
+
 
 
 @dp.callback_query(F.data.startswith("bn:"))
@@ -5195,6 +5206,7 @@ async def cb_banners_page(callback: types.CallbackQuery):
     await _send_banners_page(callback.bot, callback.message.chat.id, page=page, category=category, sort=sort, seed=seed)
 
 
+
 @dp.callback_query(F.data == "bn_noop")
 async def cb_banners_noop(callback: types.CallbackQuery):
     await callback.answer("⬅️ ▶️ — листать, ⏪ ⏩ — скип на 5 стр., 🎲 — случайный порядок", show_alert=False)
@@ -5206,6 +5218,7 @@ from common.bot_helpers import (
     record_menu_owner as _record_menu_owner,
     check_menu_owner as _check_menu_owner
 )
+
 
 
 @dp.message(Command("shop", "store", "магазин", ignore_case=True, ignore_mention=True))
@@ -5229,6 +5242,7 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
         _record_menu_owner(sent_msg.chat.id, sent_msg.message_id, user_id)
     try: await message.delete()
     except Exception: pass
+
 
 
 @dp.message(Command("wardrobe", "boutique", "clothes", "гардероб", "бутик", "шмот", ignore_case=True, ignore_mention=True))
@@ -5255,8 +5269,8 @@ async def cmd_wardrobe(message: types.Message, board_id: str | None, stream: str
     )
     if sent_wardrobe and hasattr(sent_wardrobe, "message_id"):
         _record_menu_owner(sent_wardrobe.chat.id, sent_wardrobe.message_id, user_id)
-    try: await message.delete()
-    except Exception: pass
+    await safe_delete_message(message)
+
 
 
 @dp.message(Command("lootbox", "лутбокс", "box", "cases", "кейс", "кейсы", "open_safe", "safe", "safes", "gold_safe", "trash_safe", "whale_safe", "сейф", "сейфы", "открыть_сейф", ignore_case=True, ignore_mention=True))
@@ -5304,6 +5318,7 @@ async def cmd_lootbox(message: types.Message, board_id: str | None = None, strea
     )
     try: await message.delete()
     except Exception: pass
+
 
 
 @dp.message(Command("color", "badge", "badgecolor", "цвет", "бейдж", "uncolor", "снятьцвет", "снять_цвет", "resetcolor", ignore_case=True, ignore_mention=True))
@@ -5428,6 +5443,7 @@ async def cmd_buy(message: types.Message, board_id: str | None, stream: str = 'r
     await message.reply(f"{prefix}{msg}\n💳 Баланс: <code>{int(new_bal):,} ₪</code>", parse_mode="HTML")
 
 
+
 @dp.message(Command("equip", "надеть", "экипировать", "одеть", ignore_case=True, ignore_mention=True))
 async def cmd_equip(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """Команда /equip <предмет> — надеть вещь из гардероба по названию или ID."""
@@ -5464,6 +5480,7 @@ async def cmd_equip(message: types.Message, board_id: str | None, stream: str = 
         await message.reply(f"❌ {msg}\nПроверь доступный гардероб: /wardrobe", parse_mode="HTML")
 
 
+
 @dp.message(Command("unequip", "снять", "разоружить", ignore_case=True, ignore_mention=True))
 async def cmd_unequip(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """Команда /unequip <слот_или_предмет> — снять экипированную вещь."""
@@ -5495,6 +5512,7 @@ async def cmd_unequip(message: types.Message, board_id: str | None, stream: str 
         await message.reply(f"✅ {msg}", parse_mode="HTML")
     else:
         await message.reply(f"❌ {msg}", parse_mode="HTML")
+
 
 
 @dp.message(Command("use", "использовать", "юзать", ignore_case=True, ignore_mention=True))
@@ -5578,6 +5596,7 @@ async def cmd_use(message: types.Message, board_id: str | None, stream: str = 'r
         )
 
 
+
 @dp.message(Command("craft", "крафт", "создать", ignore_case=True, ignore_mention=True))
 async def cmd_craft(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """Команда /craft [рецепт] — крафт и объединение предметов."""
@@ -5632,6 +5651,7 @@ async def cmd_craft(message: types.Message, board_id: str | None, stream: str = 
 
     else:
         await message.reply(f"❌ Рецепт «{recipe}» не найден. Посмотри список рецептов в <code>/craft</code>.", parse_mode="HTML")
+
 
 
 @dp.message(Command("amulet", "оберег", "unamület", "unamule", "снятьоберег", "снять_оберег", "noamulet", ignore_case=True, ignore_mention=True))
@@ -5726,6 +5746,7 @@ async def cmd_amulet(message: types.Message, board_id: str | None, stream: str =
         except Exception: pass
 
 
+
 @dp.callback_query(F.data == "amulet_toggle")
 async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -5789,6 +5810,7 @@ async def cb_amulet_toggle(callback: types.CallbackQuery, board_id: str | None):
             pass
 
 
+
 @dp.callback_query(F.data == "amulet_discard")
 async def cb_amulet_discard(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -5826,6 +5848,7 @@ async def cb_amulet_discard(callback: types.CallbackQuery, board_id: str | None)
         except Exception as e:
             logger.error("Failed to delete message: %s", e, exc_info=True)
             pass
+
 
 
 @dp.message(Command("avatar", "look", "char", "аватар", "аватарка", "персонаж"))
@@ -5886,6 +5909,7 @@ async def cmd_avatar(message: types.Message, board_id: str | None, stream: str =
     except Exception: pass
 
 
+
 async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, category: str = "shop"):
     """
     Universally renders or edits shop/wardrobe/wiki subviews whether the source message
@@ -5943,10 +5967,12 @@ async def cb_avatar_view(callback: types.CallbackQuery, board_id: str | None):
     await safe_callback_answer(callback)
 
 
+
 @dp.callback_query(F.data == "avatar_refresh")
 async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
     await cb_avatar_view(callback, board_id)
+
 
 
 # --- Category Navigation Callbacks ---
@@ -5967,6 +5993,7 @@ async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
     await safe_callback_answer(callback)
 
 
+
 @dp.callback_query(F.data == "shop_cat_weapons")
 async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -5979,6 +6006,7 @@ async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
     text, kb = _build_weapons_shop_content(user_id, balance)
     await _render_shop_subview(callback, text, kb, category="weapons")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data == "shop_cat_clothes")
@@ -5995,6 +6023,7 @@ async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
     await safe_callback_answer(callback)
 
 
+
 @dp.callback_query(F.data == "shop_cat_pharma")
 async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -6007,6 +6036,7 @@ async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None
     text, kb = _build_pharma_shop_content(user_id, balance)
     await _render_shop_subview(callback, text, kb, category="pharma")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data == "shop_cat_lootbox")
@@ -6024,6 +6054,7 @@ async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
     await safe_callback_answer(callback)
 
 
+
 @dp.callback_query(F.data == "shop_cat_color")
 async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -6037,6 +6068,7 @@ async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None)
     text, kb = _build_color_picker_content(user_id, balance, active_items)
     await _render_shop_subview(callback, text, kb, category="shop")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data.startswith("color_set_"))
@@ -6096,6 +6128,7 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
     await _render_shop_subview(callback, text, kb, category="shop")
 
 
+
 @dp.callback_query(F.data == "wardrobe_dressing_room")
 async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str | None):
     if not _check_menu_owner(callback):
@@ -6109,6 +6142,7 @@ async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items, page=1)
     await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data.startswith("wardrobe_page_"))
@@ -6129,6 +6163,7 @@ async def cb_wardrobe_page(callback: types.CallbackQuery, board_id: str | None):
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items, page=page)
     await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data.startswith("wardrobe_equip_"))
@@ -6164,6 +6199,7 @@ async def cb_wardrobe_equip(callback: types.CallbackQuery, board_id: str | None)
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items, page=page)
     await _render_shop_subview(callback, text_dr, kb_dr, category="wardrobe")
+
 
 
 @dp.callback_query(F.data.startswith("wardrobe_unequip_"))
@@ -6257,6 +6293,7 @@ def _get_damaged_wardrobe_items(active_items: dict, user_balance: float = 0.0) -
             })
 
     return damaged
+
 
 
 @dp.message(Command("repair", "починка", "чинить", "ремонт", ignore_case=True, ignore_mention=True))
@@ -6448,6 +6485,7 @@ async def cmd_repair(message: types.Message, board_id: str | None = None, stream
     await message.answer("\n".join(lines), reply_markup=kb, parse_mode="HTML")
 
 
+
 @dp.callback_query(F.data == "repair_all_items")
 async def callback_repair_all(callback: types.CallbackQuery, board_id: str | None = None):
     if not _check_menu_owner(callback):
@@ -6557,6 +6595,7 @@ def _build_wiki_hub_content():
     return text, kb
 
 
+
 @dp.message(Command("items", "item", "wiki", "вещи", "предметы", "справка_вещи", "сеты", "энциклопедия"))
 async def cmd_wiki_items(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -6574,12 +6613,14 @@ async def cmd_wiki_items(message: types.Message, board_id: str | None, stream: s
     except Exception: pass
 
 
+
 @dp.callback_query(F.data == "wiki_main_hub")
 async def cb_wiki_main_hub(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
     text, kb = _build_wiki_hub_content()
     await _render_shop_subview(callback, text, kb, category="wiki")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data == "wiki_cat_weapons")
@@ -6614,6 +6655,7 @@ async def cb_wiki_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
     await safe_callback_answer(callback)
 
 
+
 @dp.callback_query(F.data == "wiki_cat_clothes")
 async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -6638,6 +6680,7 @@ async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
     ])
     await _render_shop_subview(callback, text, kb, category="clothes")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data == "wiki_cat_sets")
@@ -6670,6 +6713,7 @@ async def cb_wiki_cat_sets(callback: types.CallbackQuery, board_id: str | None):
     await safe_callback_answer(callback)
 
 
+
 @dp.callback_query(F.data == "wiki_cat_pharma")
 async def cb_wiki_cat_pharma(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -6690,6 +6734,7 @@ async def cb_wiki_cat_pharma(callback: types.CallbackQuery, board_id: str | None
     ])
     await _render_shop_subview(callback, text, kb, category="pharma")
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data == "wiki_cat_lootbox")
@@ -6742,6 +6787,7 @@ async def cmd_achievements(message: types.Message, board_id: str | None, stream:
     except Exception: pass
 
 
+
 @dp.callback_query(F.data == "achievements_view")
 async def cb_achievements_view(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -6753,6 +6799,7 @@ async def cb_achievements_view(callback: types.CallbackQuery, board_id: str | No
     text, kb = achievements_engine.build_achievements_content(user_id, active_items)
     await _render_shop_subview(callback, text, kb, category="achievements")
     await callback.answer()
+
 
 
 async def _build_inventory_content(user_id: int, board_id: str):
@@ -6984,6 +7031,7 @@ async def _build_inventory_content(user_id: int, board_id: str):
     return full_text, kb
 
 
+
 @dp.message(Command("inv", "inventory", "рюкзак", "инвентарь", "bag"))
 async def cmd_inventory(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -6999,8 +7047,8 @@ async def cmd_inventory(message: types.Message, board_id: str | None, stream: st
         category="inventory",
         parse_mode="HTML"
     )
-    try: await message.delete()
-    except Exception: pass
+    await safe_delete_message(message)
+
 
 
 @dp.callback_query(F.data == "prof_inventory")
@@ -7010,6 +7058,7 @@ async def cb_prof_inventory(callback: types.CallbackQuery, board_id: str | None)
     text, kb = await _build_inventory_content(user_id, board_id)
     await _render_shop_subview(callback, text, kb, category="wallet")
     await safe_callback_answer(callback)
+
 
 
 _LOOTBOX_USER_COOLDOWNS: dict[tuple[int, str], float] = {}
@@ -7028,6 +7077,7 @@ def _get_lootbox_penalty_multiplier(user_id: int, now_ts: float) -> tuple[float,
         return 1.0, cnt
     multiplier = min(4.0, 1.0 + (cnt - 10) * 0.3)
     return multiplier, cnt
+
 
 
 LOOTBOX_COOLDOWN_EXCUSES = [
@@ -7480,6 +7530,7 @@ async def execute_shop_purchase(db, user_id: int, board_id: str, item: str) -> t
     return True, msg, new_bal
 
 
+
 @dp.callback_query(F.data.startswith("shop_buy_"))
 async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or 'b'
@@ -7520,6 +7571,7 @@ class ShootContext:
     t_items: dict = dataclasses.field(default_factory=dict)
 
 
+
 # Здесь лежала вторая, более ранняя копия _handle_shoot_bounce с сигнатурой
 # (ctx, t_items). Её молча затирало определение ниже, так что работала только
 # нижняя версия — а вызовы были написаны под эту, верхнюю. Удалена, чтобы
@@ -7534,7 +7586,7 @@ async def _handle_shoot_bounce(ctx: ShootContext):
     async with storage_lock:
         board_data[ctx.board_id]['mutes'][ctx.user_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(ctx.user_id, ctx.board_id, 3600)
-    await log_global_event('bot', f"🛡️ SHOOT_BOUNCE: Выстрел {ctx.user_id} срикошетил от {ctx.target_id} на /{ctx.board_id}/ (стрелок в муте на 1ч)")
+    await log_global_event('bot', f"🛡️ SHOOT_BOUNCE: Выстрел Anon[{get_anon_id(ctx.user_id)}] срикошетил от Anon[{get_anon_id(ctx.target_id)}] на /{ctx.board_id}/ (стрелок в муте на 1ч)")
     bounce = (
         "🔰 <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
         "Анон попытался выстрелить из Мут-Гана в автора этого поста, "
@@ -7580,7 +7632,7 @@ async def _handle_shoot_success(ctx: ShootContext):
         await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(ctx.active_items), ctx.user_id, ctx.board_id))
         await ctx.db.commit()
-    await log_global_event('bot', f"💥 SHOOT: Юзер {ctx.user_id} пристрелил {ctx.target_id} на /{ctx.board_id}/ (мут на {mute_min}м)")
+    await log_global_event('bot', f"💥 SHOOT: Юзер Anon[{get_anon_id(ctx.user_id)}] пристрелил Anon[{get_anon_id(ctx.target_id)}] на /{ctx.board_id}/ (мут на {mute_min}м)")
 
     helmet_note = "\n🪖 <i>Шлем ОМОНа поглотил 50% урона! Мут сокращен до 30 минут.</i>" if has_helmet else ""
     alert = (
@@ -7611,6 +7663,7 @@ async def _handle_shoot_success(ctx: ShootContext):
         await ctx.message.delete()
     except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
+
 
 
 async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple[bool, str]:
@@ -8139,6 +8192,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         pass
 
 
+
 @dp.message(Command("pepperspray", "pepper", "перцовка", "баллончик", "пшик"))
 async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -8156,6 +8210,7 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
         return
 
     import time, json
+    from common.anon_identity import generate_anon_name
     from shared_state import (
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
@@ -8278,6 +8333,16 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
             reply_to_message_id=message.reply_to_message.message_id,
             parse_mode="HTML"
         )
+        try:
+            attacker_anon = generate_anon_name(user_id)
+            await message.bot.send_message(
+                target_id,
+                f"🪞 <b>ЗЕРКАЛЬНЫЙ ЩИТ ОТРАЗИЛ ПЕРЦОВКУ В /{board_id}/!</b>\n"
+                f"Анон {attacker_anon} попытался залить тебя перцем, но твой щит отразил струю прямо ему в глаза!",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
         return
     elif action_type == "helmet":
         await message.bot.send_message(
@@ -8288,6 +8353,16 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
             reply_to_message_id=message.reply_to_message.message_id,
             parse_mode="HTML"
         )
+        try:
+            attacker_anon = generate_anon_name(user_id)
+            await message.bot.send_message(
+                target_id,
+                f"🪖 <b>ШЛЕМ ОМОНА ЗАЩИТИЛ ОТ ПЕРЦОВКИ В /{board_id}/!</b>\n"
+                f"Анон {attacker_anon} попытался пшикнуть в тебя перцем, но забрало твоего шлема полностью спасло лицо!",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
         return
 
     from achievements_engine import check_and_unlock_achievement
@@ -8307,9 +8382,24 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
         reply_to_message_id=message.reply_to_message.message_id,
         parse_mode="HTML"
     )
-    await log_global_event('bot', f"🧯 PEPPER: Юзер {user_id} залил перцем {target_id} на /{board_id}/ на 1ч")
+    try:
+        attacker_anon = generate_anon_name(user_id)
+        await message.bot.send_message(
+            target_id,
+            f"🧯 <b>В ТЕБЯ РАСПЫЛИЛИ ПЕРЦОВЫЙ БАЛЛОНЧИК В /{board_id}/!</b>\n\n"
+            f"Анон {attacker_anon} залил тебе лицо жгучим перцем.\n"
+            f"Ты ослеплен на 1 час: возможность нападать и грабить заблокирована!\n"
+            f"💡 Ты можешь отмыться Огнетушителем ОБЭП (/shop).",
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except Exception:
+        pass
+    await log_global_event('bot', f"🧯 PEPPER: Юзер Anon[{get_anon_id(user_id)}] залил перцем Anon[{get_anon_id(target_id)}] на /{board_id}/ на 1ч")
     try: await message.delete()
     except Exception: pass
+
 
 
 @dp.message(Command("rob", "knife", "заточка", "гопстоп", "ограбить", "отжать"))
@@ -8573,7 +8663,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         )
         try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
         except Exception: pass
-        await log_global_event('bot', f"🪞 ROB_MIRROR: Ограбление {user_id} отражено зеркалом {target_id} на /{board_id}/ (грабитель потерял {loss} ₪)")
+        await log_global_event('bot', f"🪞 ROB_MIRROR: Ограбление Anon[{get_anon_id(user_id)}] отражено зеркалом Anon[{get_anon_id(target_id)}] на /{board_id}/ (грабитель потерял {loss} ₪)")
         await message.answer(reflect_txt, parse_mode="HTML")
         return
 
@@ -8604,7 +8694,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             )
             await db.commit()
 
-        await log_global_event('bot', f"🧯 ROB_SPRAY: Жертва {target_id} залила грабителя {user_id} перцовкой на /{board_id}/ (штраф {penalty} ₪)")
+        await log_global_event('bot', f"🧯 ROB_SPRAY: Жертва Anon[{get_anon_id(target_id)}] залила грабителя Anon[{get_anon_id(user_id)}] перцовкой на /{board_id}/ (штраф {penalty} ₪)")
         from common.debuff_phrases import get_spray_defense_texts
         spray_text, target_text = get_spray_defense_texts(penalty)
         try: await message.bot.send_message(target_id, target_text, parse_mode="HTML")
@@ -8643,7 +8733,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             )
             await db.commit()
 
-        await log_global_event('bot', f"👽 ROB_TINFOIL: Фольга {target_id} защитила от грабежа {user_id} на /{board_id}/ (грабитель обронил {loss} ₪)")
+        await log_global_event('bot', f"👽 ROB_TINFOIL: Фольга Anon[{get_anon_id(target_id)}] защитила от грабежа Anon[{get_anon_id(user_id)}] на /{board_id}/ (грабитель обронил {loss} ₪)")
         if destroyed:
             tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!\nОт твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
             target_text = "🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nАнон попытался ограбить тебя с заточкой! Твоя Шапочка спасла шекели (грабитель порезался сам), но <b>была уничтожена</b> от удара!"
@@ -8711,7 +8801,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
                 (user_id, board_id, json.dumps(active_items))
             )
     if ok:
-        await log_global_event('bot', f"🔪 ROB: Юзер {user_id} ограбил {target_id} на /{board_id}/ на {stolen} ₪")
+        await log_global_event('bot', f"🔪 ROB: Юзер Anon[{get_anon_id(user_id)}] ограбил Anon[{get_anon_id(target_id)}] на /{board_id}/ на {stolen} ₪")
     if not ok:
         await message.answer(
             "🔪 Не удалось провести ограбление, заточка осталась при тебе.",
@@ -8887,7 +8977,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         target_txt = "🪞 <b>ЗЕРКАЛО ОТРАЗИЛО АТАКУ!</b>\nАнон попытался кинуть в тебя говном, но Зеркало отбило снаряд обратно в метателя!"
         try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
         except Exception: pass
-        await log_global_event('bot', f"🪞 SHIT_MIRROR: Говно от {user_id} отражено зеркалом {target_id} на /{board_id}/ (метатель в говне на {dur_str})")
+        await log_global_event('bot', f"🪞 SHIT_MIRROR: Говно от Anon[{get_anon_id(user_id)}] отражено зеркалом Anon[{get_anon_id(target_id)}] на /{board_id}/ (метатель в говне на {dur_str})")
         await message.answer(reply_txt, parse_mode="HTML")
         return
 
@@ -8906,7 +8996,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
 
-        await log_global_event('bot', f"👽 SHIT_FOIL: Говно от {user_id} отскочило от фольги {target_id} на /{board_id}/ (метатель в говне на {dur_str})")
+        await log_global_event('bot', f"👽 SHIT_FOIL: Говно от Anon[{get_anon_id(user_id)}] отскочило от фольги Anon[{get_anon_id(target_id)}] на /{board_id}/ (метатель в говне на {dur_str})")
         reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на {dur_str}!"
         await message.answer(reply_txt, parse_mode="HTML")
         return
@@ -8924,7 +9014,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             (target_id, board_id, json.dumps(t_items))
         )
         await db.commit()
-    await log_global_event('bot', f"💩 SHIT: Юзер {user_id} обмазал говном {target_id} на /{board_id}/ на {dur_str}")
+    await log_global_event('bot', f"💩 SHIT: Юзер Anon[{get_anon_id(user_id)}] обмазал говном Anon[{get_anon_id(target_id)}] на /{board_id}/ на {dur_str}")
     register_attacker_effect("shit_gun", user_id, target_id, duration_sec)
     register_target_attack(target_id)
     from common.debuff_phrases import get_shit_hit_text
@@ -8952,6 +9042,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
     except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
+
 
 
 @dp.message(Command("vomit", "puke", "блевота", "блевать", "blevota", ignore_case=True, ignore_mention=True))
@@ -9048,7 +9139,7 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
         target_txt = "🪞 <b>ЗЕРКАЛО ОТРАЗИЛО АТАКУ!</b>\nАнон попытался облевать тебя, но Зеркало отразило брызги прямо в нападающего!"
         try: await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
         except Exception: pass
-        await log_global_event('bot', f"🪞 VOMIT_MIRROR: Блевота от {user_id} отражена зеркалом {target_id} на /{board_id}/ (метатель облёван на {dur_str})")
+        await log_global_event('bot', f"🪞 VOMIT_MIRROR: Блевота от Anon[{get_anon_id(user_id)}] отражена зеркалом Anon[{get_anon_id(target_id)}] на /{board_id}/ (метатель облёван на {dur_str})")
         await message.answer(reply_txt, parse_mode="HTML")
         return
 
@@ -9060,7 +9151,7 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
             await db.commit()
 
-        await log_global_event('bot', f"👽 VOMIT_FOIL: Блевота от {user_id} отскочила от фольги {target_id} на /{board_id}/ (метатель облёван на {dur_str})")
+        await log_global_event('bot', f"👽 VOMIT_FOIL: Блевота от Anon[{get_anon_id(user_id)}] отскочила от фольги Anon[{get_anon_id(target_id)}] на /{board_id}/ (метатель облёван на {dur_str})")
         if destroyed:
             reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Блевота отскочила от фольги прямо тебе в лицо. Теперь ТЫ изблеван на {dur_str}!\nОт кислоты Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
             target_txt = "🔥 <b>ШАПОЧКА ИСПОРЧЕНА!</b>\nКакой-то анон пытался облевать тебя! Твоя Шапочка отбила блевоту обратно в нападающего, но от кислоты <b>сгорела дотла</b>!"
@@ -9089,7 +9180,7 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
             (target_id, board_id, json.dumps(t_items))
         )
         await db.commit()
-    await log_global_event('bot', f"🤮 VOMIT: Юзер {user_id} облевал {target_id} на /{board_id}/ на {dur_str}")
+    await log_global_event('bot', f"🤮 VOMIT: Юзер Anon[{get_anon_id(user_id)}] облевал Anon[{get_anon_id(target_id)}] на /{board_id}/ на {dur_str}")
     register_attacker_effect("vomit_gun", user_id, target_id, duration_sec)
     register_target_attack(target_id)
     from common.debuff_phrases import get_vomit_hit_text
@@ -9115,6 +9206,7 @@ async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 
         await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
     except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
+
 
 
 @dp.message(Command("flag_ua", "ua", "ukraine", "украина", "хохол", "жовтоблакит", "флаг_украины", ignore_case=True, ignore_mention=True))
@@ -9233,6 +9325,7 @@ async def cmd_flag_ua(message: types.Message, board_id: str | None, stream: str 
         pass
 
 
+
 @dp.message(Command("flag_ru", "ru", "russia", "россия", "гойда", "триколор", "флаг_россии", ignore_case=True, ignore_mention=True))
 async def cmd_flag_ru(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -9349,6 +9442,7 @@ async def cmd_flag_ru(message: types.Message, board_id: str | None, stream: str 
         pass
 
 
+
 @dp.message(Command("cure", "heal", "pills", "аминазин", "лечение", "снятьфлаг", "снять_флаг", "unflag", ignore_case=True, ignore_mention=True))
 async def cmd_cure(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -9414,8 +9508,9 @@ async def cmd_cure(message: types.Message, board_id: str | None, stream: str = '
     from shared_state import clear_combat_cooldown
     clear_combat_cooldown(user_id)
 
-    await log_global_event('bot', f"💊 CURE: Юзер {user_id} принял Аминазин за {price} ₪ на /{board_id}/ (дебаффы сняты)")
+    await log_global_event('bot', f"💊 CURE: Юзер Anon[{get_anon_id(user_id)}] принял Аминазин за {price} ₪ на /{board_id}/ (дебаффы сняты)")
     await message.reply(f"💊 <b>ТЫ ПРИНЯЛ АМИНАЗИН ЗА {price} ₪!</b>\nВсе дебаффы (флаги 🇺🇦/🇷🇺, говно 💩, блевота 🤮, понос, шиза и пена) моментально смыты! Твои посты снова чистые.", parse_mode="HTML")
+
 
 
 @dp.message(Command("extinguish", "тушить", "огнетушитель", "extinguisher", "потушить", ignore_case=True, ignore_mention=True))
@@ -9512,7 +9607,7 @@ async def cmd_extinguish(message: types.Message, board_id: str | None, stream: s
                                  (json.dumps(row_items), user_id, b_row_id))
             await db.commit()
 
-        await log_global_event('bot', f"🧯 EXTINGUISH_SELF: Юзер {user_id} смыл с себя все дебаффы Огнетушителем ОБЭП на /{board_id}/ (осталось {rem_charges} зар.)")
+        await log_global_event('bot', f"🧯 EXTINGUISH_SELF: Юзер Anon[{get_anon_id(user_id)}] смыл с себя все дебаффы Огнетушителем ОБЭП на /{board_id}/ (осталось {rem_charges} зар.)")
         await message.reply(
             f"🧯 <b>ОГНЕТУШИТЕЛЬ ОБЭП: САМООЧИЩЕНИЕ!</b>\n"
             f"Ты сорвал чеку и окатил себя плотной очищающей пеной!\n"
@@ -9560,7 +9655,7 @@ async def cmd_extinguish(message: types.Message, board_id: str | None, stream: s
                                  (json.dumps(row_items), target_id, b_row_id))
             await db.commit()
 
-        await log_global_event('bot', f"🧯 EXTINGUISH_RESCUE: Юзер {user_id} спас {target_id} от дебаффов Огнетушителем ОБЭП на /{board_id}/ (осталось {rem_charges} зар.)")
+        await log_global_event('bot', f"🧯 EXTINGUISH_RESCUE: Юзер Anon[{get_anon_id(user_id)}] спас Anon[{get_anon_id(target_id)}] от дебаффов Огнетушителем ОБЭП на /{board_id}/ (осталось {rem_charges} зар.)")
         await message.reply(
             f"🧯 <b>СПАСАТЕЛЬНАЯ ОПЕРАЦИЯ ОБЭП!</b>\n\n"
             f"Анон <b>[{get_anon_id(user_id)}]</b> вскрыл Огнетушитель ОБЭП и залил пеной жертву травли <b>[{get_anon_id(target_id)}]</b>!\n"
@@ -9630,7 +9725,7 @@ async def cmd_extinguish(message: types.Message, board_id: str | None, stream: s
                              (json.dumps(t_items), target_id, board_id))
             await db.commit()
 
-        await log_global_event('bot', f"🪞 EXTINGUISH_BOUNCE: Огнетушитель от {user_id} отскочил в щит {target_id}! Нападающий сам в пене.")
+        await log_global_event('bot', f"🪞 EXTINGUISH_BOUNCE: Огнетушитель от Anon[{get_anon_id(user_id)}] отскочил в щит Anon[{get_anon_id(target_id)}]! Нападающий сам в пене.")
         await message.answer(
             "🪞 <b>ОТРАЖЕНИЕ ЗЕРКАЛА ЗАДНЕГО ВИДА!</b>\n\n"
             f"Анон <b>[{get_anon_id(target_id)}]</b> выставил Зеркальный Щит!\n"
@@ -9660,7 +9755,7 @@ async def cmd_extinguish(message: types.Message, board_id: str | None, stream: s
         await db.commit()
 
     guns_note = f" (выбито оружие: {len(disarmed_target_guns)} шт.)" if disarmed_target_guns else ""
-    await log_global_event('bot', f"🧯 EXTINGUISH_DISARM: Юзер {user_id} залил пеной и обезоружил {target_id} на /{board_id}/ (осталось {rem_charges} зар.)")
+    await log_global_event('bot', f"🧯 EXTINGUISH_DISARM: Юзер Anon[{get_anon_id(user_id)}] залил пеной и обезоружил Anon[{get_anon_id(target_id)}] на /{board_id}/ (осталось {rem_charges} зар.)")
     await message.reply(
         f"🧯 <b>ОБЭП НАКРЫЛ С ПЕНОЙ!</b>\n\n"
         f"Анон <b>[{get_anon_id(user_id)}]</b> выпустил струю пены из Огнетушителя ОБЭП в лицо анону <b>[{get_anon_id(target_id)}]</b>!\n"
@@ -9668,6 +9763,7 @@ async def cmd_extinguish(message: types.Message, board_id: str | None, stream: s
         f"<i>(Осталось зарядов: {rem_charges}/3)</i>",
         parse_mode="HTML"
     )
+
 
 
 @dp.message(Command("curse", "laxative", "понос", "слабительное", ignore_case=True, ignore_mention=True))
@@ -9801,7 +9897,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
                              (json.dumps(t_items), target_id, board_id))
             await db.commit()
 
-        await log_global_event('bot', f"👽 CURSE_FOIL: Фольга {target_id} нейтрализовала слабительное от {user_id} на /{board_id}/")
+        await log_global_event('bot', f"👽 CURSE_FOIL: Фольга Anon[{get_anon_id(target_id)}] нейтрализовала слабительное от Anon[{get_anon_id(user_id)}] на /{board_id}/")
         if destroyed:
             reply_txt = "👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Слабительное нейтрализовано фольгой, но от едкой химии Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
             target_txt = "🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nКакой-то анон пытался подсыпать тебе слабительное! Шапочка спасла твои штаны, но <b>расплавилась дотла</b>!"
@@ -9835,7 +9931,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
             (target_id, board_id, json.dumps(t_items), current_time + curse_duration)
         )
         await db.commit()
-    await log_global_event('bot', f"🚽 CURSE: Юзер {user_id} подлил слабительное {target_id} на /{board_id}/ (понос на {curse_duration//60}м)")
+    await log_global_event('bot', f"🚽 CURSE: Юзер Anon[{get_anon_id(user_id)}] подлил слабительное Anon[{get_anon_id(target_id)}] на /{board_id}/ (понос на {curse_duration//60}м)")
     register_attacker_effect("laxative_gun", user_id, target_id, curse_duration)
     from common.debuff_phrases import get_curse_hit_text
     await message.answer(get_curse_hit_text(), parse_mode="HTML")
@@ -10034,6 +10130,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.answer("🚨 <b>Сбой связи!</b> В дежурной части не ответили, пативэн уехал на другой вызов.", parse_mode="HTML")
         return
     import json, time
+    from common.anon_identity import generate_anon_name
     from datetime import datetime, timedelta, UTC
     from shared_state import (
         count_active_attacker_effects, register_attacker_effect,
@@ -10190,7 +10287,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             board_data.setdefault(board_id, {}).setdefault('mutes', {})[user_id] = datetime.now(UTC) + timedelta(hours=2)
 
         await apply_regular_mute(user_id, board_id, 7200)
-        await log_global_event('bot', f"🚨 PARTYVAN_BACKFIRE: Юзер {user_id} вызвал ОМОН на /{board_id}/, но сам сел в КПЗ на 2ч")
+        await log_global_event('bot', f"🚨 PARTYVAN_BACKFIRE: Юзер Anon[{get_anon_id(user_id)}] вызвал ОМОН на /{board_id}/, но сам сел в КПЗ на 2ч")
         set_partyvan_user_cooldown(user_id, current_time + 3600)
         record_combat_attack(user_id, user_id, "partyvan")
 
@@ -10223,6 +10320,16 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
         await message.answer("👟 <b>ТЯГИ БАРХАТНЫЕ СПАСЛИ!</b>\nЖертва на бархатных подкрадулях ловко ускользнула от наряда ОМОНа через дворы (0 арестов)!", parse_mode="HTML")
+        try:
+            attacker_anon = generate_anon_name(user_id)
+            await message.bot.send_message(
+                target_id,
+                f"👟 <b>ТЯГИ БАРХАТНЫЕ СПАСЛИ ТЕБЯ В /{board_id}/!</b>\n"
+                f"Анон {attacker_anon} вызвал на тебя ОМОН, но твои бархатные подкрадули позволили тебе ловко ускользнуть через дворы (0 арестов)!",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
         return
 
     # 2. 15% stealth from body_cloak
@@ -10236,6 +10343,16 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
                 await db.commit()
             await message.answer("🧥 <b>ПЛАЩ НЕО СКРЫЛ ОТ ОБЛАВЫ!</b>\nЖертва растворилась в цифровом шуме! ОМОН приехал по пустому адресу.", parse_mode="HTML")
+            try:
+                attacker_anon = generate_anon_name(user_id)
+                await message.bot.send_message(
+                    target_id,
+                    f"🧥 <b>ПЛАЩ НЕО СПАС ТЕБЯ В /{board_id}/!</b>\n"
+                    f"Анон {attacker_anon} вызвал на тебя ОМОН, но твой Плащ Нео скрыл тебя в цифровом шуме! ОМОН приехал по пустому адресу.",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
             return
 
     if t_items.get("reflect_shield_until", 0) > current_time:
@@ -10252,7 +10369,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
             board_data.setdefault(board_id, {}).setdefault('mutes', {})[user_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
 
         await apply_regular_mute(user_id, board_id, duration_sec)
-        await log_global_event('bot', f"🪞 PARTYVAN_MIRROR: ОМОН от {user_id} отражён зеркалом {target_id} на /{board_id}/ (доносчик сел на {format_duration_str(duration_sec)})")
+        await log_global_event('bot', f"🪞 PARTYVAN_MIRROR: ОМОН от Anon[{get_anon_id(user_id)}] отражён зеркалом Anon[{get_anon_id(target_id)}] на /{board_id}/ (доносчик сел на {format_duration_str(duration_sec)})")
         register_attacker_effect("partyvan_gun", target_id, user_id, duration_sec)
 
         reply_txt = (
@@ -10300,7 +10417,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     async with storage_lock:
         board_data.setdefault(board_id, {}).setdefault('mutes', {})[target_id] = datetime.now(UTC) + timedelta(seconds=duration_sec)
     await apply_regular_mute(target_id, board_id, duration_sec)
-    await log_global_event('bot', f"🚔 PARTYVAN: Юзер {user_id} упаковал {target_id} в автозак на /{board_id}/ на {format_duration_str(duration_sec)}")
+    await log_global_event('bot', f"🚔 PARTYVAN: Юзер Anon[{get_anon_id(user_id)}] упаковал Anon[{get_anon_id(target_id)}] в автозак на /{board_id}/ на {format_duration_str(duration_sec)}")
     register_attacker_effect("partyvan_gun", user_id, target_id, duration_sec)
     register_target_attack(target_id)
     record_combat_attack(user_id, target_id, "partyvan")
@@ -10363,7 +10480,6 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         await message.delete()
     except Exception:
         pass
-
 
 
 
@@ -10471,7 +10587,7 @@ async def cmd_bribe(message: types.Message, board_id: str | None = None, stream:
         await record_user_transaction(db, user_id, -cost, 'bribe', 'Покупка индульгенции /bribe')
         await add_to_abu_fund(db, cost, donor_id=user_id, reason="Взятка /bribe")
     b_data.get('mutes', {}).pop(user_id, None)
-    await log_global_event('bot', f"🕊️ BRIBE: Юзер {user_id} дал взятку {cost} ₪ на /{board_id}/ (досрочный размут + 1ч иммунитет)")
+    await log_global_event('bot', f"🕊️ BRIBE: Юзер Anon[{get_anon_id(user_id)}] дал взятку {cost} ₪ на /{board_id}/ (досрочный размут + 1ч иммунитет)")
 
     # Иммунитет жертвы: 1 час после досрочного освобождения из пативэна
     from shared_state import set_partyvan_victim_immunity
@@ -10541,6 +10657,7 @@ async def cmd_mega(message: types.Message, board_id: str | None = None, stream: 
             pass
     except Exception as e:
         runtime_logger.error(f"[cmd_mega] Ошибка при выполнении /mega: {e}", exc_info=True)
+
 
 
 @dataclass
@@ -10770,6 +10887,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         return []
 
 
+
 def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     import io as _io
     import sqlite3 as _sqlite3
@@ -10859,8 +10977,10 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
         _plt.close('all')
 
 
+
 _stats_cooldown_tracker = {}
 _STATS_TTL = 300  # 5 минут кэш графиков статистики
+
 
 
 @dp.message(Command("stats", "stat", "activity", "heatmap", "статистика", ignore_case=True, ignore_mention=True))
@@ -10880,8 +11000,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                 spawn_task(delete_message_after_delay(sent, 10))
             except Exception:
                 pass
-            try: await message.delete()
-            except Exception: pass
+            await safe_delete_message(message)
             return
         _stats_cooldown_tracker[(user_id, board_id)] = now
 
@@ -10914,8 +11033,8 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
         )
         await message.answer_media_group(media)
 
-    try: await message.delete()
-    except Exception: pass
+    await safe_delete_message(message)
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11032,6 +11151,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     except Exception: pass
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # /pay — Перевод шекелей другому анону (через Reply или /pay <anon_id> <amount>)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11105,6 +11225,7 @@ def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, st
         return None, "invalid_format"
 
 
+
 async def _resolve_target_user_id(db, target_str: str) -> int | None:
     """Определяет Telegram user_id по переданной строке (Anon-ID или числовой ID)."""
     if not target_str:
@@ -11138,6 +11259,7 @@ async def _resolve_target_user_id(db, target_str: str) -> int | None:
     return None
 
 
+
 @dp.message(F.text.regexp(r"^/(?:pay|give|tip|перевод|скинуть|донат|задонатить|перевести|поделиться|пей)(\d+[kк]?|all|всё|все)(?:\s+.*)?$", flags=re.IGNORECASE))
 async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     if not message.text:
@@ -11149,6 +11271,7 @@ async def cmd_pay_shorthand(message: types.Message, board_id: str | None = None,
     rest = m.group(2)
     override_text = f"/pay {amt}" + (f" {rest}" if rest else "")
     return await cmd_pay(message, board_id=board_id, stream=stream, raw_command_text=override_text)
+
 
 
 @dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат", "задонатить", "перевести", "поделиться", "пей", ignore_case=True, ignore_mention=True))
@@ -11332,6 +11455,7 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
 
+
     # Обработка edge cases сумм
     if amount is None or math.isnan(amount) or math.isinf(amount) or amount <= 0:
         if err_reason == "empty_balance":
@@ -11513,6 +11637,7 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
         )
     except Exception:
         pass
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11984,6 +12109,7 @@ async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
         except Exception: pass
 
 
+
 @dp.callback_query(F.data.startswith("duel_lobby_bet:"))
 async def cb_duel_lobby_bet(callback: types.CallbackQuery, board_id: str | None):
     """Updates the selected bet in the classic duel lobby."""
@@ -12041,6 +12167,7 @@ async def cb_duel_lobby_bet(callback: types.CallbackQuery, board_id: str | None)
     except Exception: pass
 
 
+
 @dp.callback_query(F.data.startswith("duel_create_fast:"))
 async def cb_duel_create_fast(callback: types.CallbackQuery, board_id: str | None):
     """Creates a classic duel challenge from the lobby button."""
@@ -12067,6 +12194,7 @@ async def cb_duel_create_fast(callback: types.CallbackQuery, board_id: str | Non
     await _handle_duel_create(_FakeMsg(), board_id, [str(amount)], 'ru')
     try: await callback.answer("⚔️ Вызов создан!")
     except Exception: pass
+
 
 
 # -----------------------------------------------------------------------------
@@ -12193,6 +12321,7 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
             pass
 
 
+
 async def start_classic_duel_watchdog_loop(bot: Bot):
     """Continuous background loop for classic /duel expiration and dynamic updates."""
     runtime_logger.info("Classic /duel watchdog loop started.")
@@ -12204,6 +12333,7 @@ async def start_classic_duel_watchdog_loop(bot: Bot):
         except Exception as e:
             runtime_logger.error(f"Error in classic_duel_watchdog_loop: {e}")
         await asyncio.sleep(2.5)
+
 
 
 async def solo_casino_watchdog_step(bot: Bot | None = None):
@@ -12269,6 +12399,7 @@ async def solo_casino_watchdog_step(bot: Bot | None = None):
                 runtime_logger.warning(f"⚠️ [Solo Watchdog] Ошибка авто-завершения блэкджека {user_id}: {bj_err}")
 
 
+
 async def start_solo_casino_watchdog_loop(bot: Bot):
     """Фоновый цикл авто-кэшаута и очистки одиночных сессий казино."""
     runtime_logger.info("Solo casino watchdog loop started.")
@@ -12280,6 +12411,7 @@ async def start_solo_casino_watchdog_loop(bot: Bot):
         except Exception as e:
             runtime_logger.error(f"Error in solo_casino_watchdog_loop: {e}")
         await asyncio.sleep(60.0)
+
 
 
 # =============================================================================
@@ -12499,7 +12631,6 @@ async def cb_select_method(callback: types.CallbackQuery, state: FSMContext):
 
 
 
-
 def _get_tgach_rates_content():
     res = ["📈 <b>ПРАЙС-ЛИСТ И КУРСЫ TGACH PAY / EXCHANGE</b>\n"]
     res.append("💰 <b>Доходы:</b> Реферал <code>+1488₪</code> | Тред <code>+150₪</code> | Смена <code>+15–160₪</code> | Daily <code>+75–145₪</code> | Реакция <code>+8.5₪</code>\n")
@@ -12684,6 +12815,7 @@ async def cb_support_prank(callback: types.CallbackQuery):
     except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -13285,6 +13417,7 @@ async def cb_work_refresh(callback: types.CallbackQuery, board_id: str | None = 
     await callback.answer("🔄 Биржа обновлена")
 
 
+
 @dp.callback_query(F.data == "work_microloan")
 async def cb_work_microloan(callback: types.CallbackQuery, board_id: str | None = None):
     """
@@ -13336,6 +13469,7 @@ async def cb_work_toggle_alerts(callback: types.CallbackQuery, board_id: str | N
         pass
 
 
+
 @dp.callback_query(F.data == "work_alert_toggle_off")
 async def cb_work_alert_toggle_off(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
@@ -13361,6 +13495,107 @@ async def cb_work_alert_toggle_off(callback: types.CallbackQuery, board_id: str 
     except Exception:
         pass
 
+
+
+
+# =============================================================================
+# 🌱 ONBOARDING, REPUTATION GATE & ANTI-SOFTLOCK RESCUE HANDLERS
+# =============================================================================
+
+@dp.callback_query(F.data == "onboard_how_rep")
+async def cb_onboard_how_rep(callback: types.CallbackQuery, board_id: str | None = None):
+    board_id = board_id or "b"
+    await safe_callback_answer(callback)
+    from common.reputation_engine import format_how_to_earn_reputation
+    text = format_how_to_earn_reputation(stream="ru")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚡ Первая смена на заводе", callback_data="onboard_first_shift")],
+        [InlineKeyboardButton(text="ℹ️ Гайд новичка", callback_data="onboard_guide")],
+        [InlineKeyboardButton(text="💼 Биржа труда (/work)", callback_data="work_main_hub")],
+    ])
+    await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "onboard_guide")
+async def cb_onboard_guide(callback: types.CallbackQuery, board_id: str | None = None):
+    board_id = board_id or "b"
+    await safe_callback_answer(callback)
+    from common.reputation_engine import format_newcomer_guide
+    text = format_newcomer_guide(stream="ru")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💼 Как заработать репутацию", callback_data="onboard_how_rep")],
+        [InlineKeyboardButton(text="⚡ Начать работать", callback_data="onboard_first_shift")],
+        [InlineKeyboardButton(text="🪪 Мой паспорт (/me)", callback_data="prof_card:main")],
+    ])
+    await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "onboard_first_shift")
+async def cb_onboard_first_shift(callback: types.CallbackQuery, board_id: str | None = None):
+    board_id = board_id or "b"
+    callback.data = "work_do_bottles"
+    await cb_work_do(callback, board_id=board_id)
+
+
+@dp.callback_query(F.data == "work_overtime")
+async def cb_work_overtime(callback: types.CallbackQuery, board_id: str | None = None):
+    board_id = board_id or "b"
+    user_id = callback.from_user.id
+    db = await get_pool()
+    items = await _get_user_active_items(db, user_id, board_id)
+    balance = await get_user_global_balance(db, user_id)
+
+    from common.reputation_engine import is_soft_locked, rescue_soft_locked_user, execute_free_rest
+
+    if is_soft_locked(items, balance):
+        rescued, msg, updated_items = rescue_soft_locked_user(user_id, items, balance, stream="ru")
+        if rescued:
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(updated_items), user_id))
+            await safe_callback_answer(callback, "Гуманитарная помощь Абу выдана! +40⚡ +40❤️", show_alert=True)
+            text, kb = await _build_work_card(user_id, board_id)
+            await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+            return
+
+    # Check free rest
+    ok, rest_msg, remaining = execute_free_rest(user_id, items, stream="ru")
+    if ok:
+        async with db_transaction(db):
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
+        await safe_callback_answer(callback, f"😴 Ты вздремнул на сверхурочных! {rest_msg}", show_alert=True)
+        text, kb = await _build_work_card(user_id, board_id)
+        await safe_edit_message(callback.message, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await safe_callback_answer(callback, f"⏳ {rest_msg}", show_alert=True)
+
+
+@dp.message(Command("rest", "отдых", "спать", "поспать", "сычевать", "сычевание", ignore_case=True, ignore_mention=True))
+async def cmd_rest(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    """Команда /rest — бесплатное восстановление энергии и здоровья на диване (cooldown 5 мин)."""
+    board_id = board_id or "b"
+    user_id = message.from_user.id
+    db = await get_pool()
+    items = await _get_user_active_items(db, user_id, board_id)
+    balance = await get_user_global_balance(db, user_id)
+
+    from common.reputation_engine import is_soft_locked, rescue_soft_locked_user, execute_free_rest
+
+    # Auto rescue check
+    if is_soft_locked(items, balance):
+        rescued, rescue_msg, updated_items = rescue_soft_locked_user(user_id, items, balance, stream=stream)
+        if rescued:
+            async with db_transaction(db):
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(updated_items), user_id))
+            await message.answer(rescue_msg, parse_mode="HTML")
+            return
+
+    ok, rest_msg, remaining = execute_free_rest(user_id, items, stream=stream)
+    if ok:
+        async with db_transaction(db):
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(items), user_id))
+        await message.answer(f"🛋️ {rest_msg}\n\n<i>Следующий отдых доступен через 5 минут.</i>", parse_mode="HTML")
+    else:
+        await message.answer(f"⏳ {rest_msg}\n\n<i>Нужно взбодриться быстрее? Купи Flash Ultra в /shop!</i>", parse_mode="HTML")
 
 @dp.callback_query(F.data.in_(["casino_main_hub", "casino_hub"]))
 async def cb_casino_main_hub(callback: types.CallbackQuery, board_id: str | None = None):
@@ -14061,6 +14296,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             await callback.answer("Отменено")
 
 
+
 # --- КАЗИНО: ХАБ, СЛОТЫ, МОНЕТКА, БЛЭКДЖЕК, РУЛЕТКА ---
 
 @dp.message(Command("poker", "покер", ignore_case=True, ignore_mention=True))
@@ -14103,6 +14339,7 @@ async def cmd_poker(message: types.Message, board_id: str | None = None, stream:
     except Exception: pass
 
 
+
 @dp.message(Command("casino", "казино", "игры", "games", "рулетка", ignore_case=True, ignore_mention=True))
 async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -14132,10 +14369,8 @@ async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: s
         category="casino",
         parse_mode="HTML"
     )
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(message)
+
 
 
 @dp.message(Command("slots", "казик", "слоты", "777", "spin"))
@@ -14146,10 +14381,8 @@ async def cmd_slots(message: types.Message, board_id: str | None, stream: str = 
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
     await _show_slots_lobby(message.bot, message.chat.id, user_id, board_id, bet)
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(message)
+
 
 
 async def _show_slots_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
@@ -14175,23 +14408,12 @@ async def _show_slots_lobby(bot, chat_id: int, user_id: int, board_id: str, bet:
         f"👇 Выбери размер ставки и нажми «Крутить барабан»:"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="slots", parse_mode="HTML")
+
 
 
 async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
@@ -14209,18 +14431,12 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
     if not is_ok:
         cooldown_caption = f"⏳ <b>Барабан еще остывает!</b>\nПодожди <code>{rem}с</code> перед следующим спином."
         if message_to_edit:
-            try:
-                db = await get_pool()
-                balance = await get_user_global_balance(db, user_id)
-                kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
-                await message_to_edit.edit_caption(caption=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+            db = await get_pool()
+            balance = await get_user_global_balance(db, user_id)
+            kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
+            edited = await safe_edit_message(message_to_edit, text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+            if edited:
                 return
-            except Exception:
-                try:
-                    await message_to_edit.edit_text(text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
-                    return
-                except Exception:
-                    pass
         from banner_manager import send_banner_message
         await send_banner_message(
             bot=bot,
@@ -14238,16 +14454,10 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
         if balance < bet:
             no_funds_caption = f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку."
             if message_to_edit:
-                try:
-                    kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
-                    await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
+                edited = await safe_edit_message(message_to_edit, text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                if edited:
                     return
-                except Exception:
-                    try:
-                        await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
-                        return
-                    except Exception:
-                        pass
             from banner_manager import send_banner_message
             await send_banner_message(
                 bot=bot,
@@ -14273,13 +14483,7 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
             f"<i>🌀 Барабаны крутятся... (ставка {bet} ₪)</i>\n"
             f"⏳ <i>Ловим удачу за хвост...</i>"
         )
-        try:
-            await message_to_edit.edit_caption(caption=spin_caption, reply_markup=None, parse_mode="HTML")
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=spin_caption, reply_markup=None, parse_mode="HTML")
-            except Exception:
-                pass
+        await safe_edit_message(message_to_edit, text=spin_caption, reply_markup=None, parse_mode="HTML")
         await asyncio.sleep(0.9)
 
     tax_note = ""
@@ -14389,21 +14593,9 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
         f"{tax_note}"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=bot,
@@ -14415,6 +14607,7 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
     )
 
 
+
 @dp.message(Command("coinflip", "flip", "монетка", "монета", "орел", "решка"))
 async def cmd_coinflip(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -14423,10 +14616,8 @@ async def cmd_coinflip(message: types.Message, board_id: str | None, stream: str
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
     await _show_coinflip_lobby(message.bot, message.chat.id, user_id, board_id, bet)
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(message)
+
 
 
 async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
@@ -14446,23 +14637,12 @@ async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, b
         f"👇 Выбери ставку и сторону для броска:"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="coinflip", parse_mode="HTML")
+
 
 
 async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None):
@@ -14480,18 +14660,12 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
     if not is_ok:
         cooldown_caption = f"⏳ <b>Монетка еще не остыла!</b>\nПодожди <code>{rem}с</code> перед следующим броском."
         if message_to_edit:
-            try:
-                db = await get_pool()
-                balance = await get_user_global_balance(db, user_id)
-                kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
-                await message_to_edit.edit_caption(caption=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+            db = await get_pool()
+            balance = await get_user_global_balance(db, user_id)
+            kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
+            edited = await safe_edit_message(message_to_edit, text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
+            if edited:
                 return
-            except Exception:
-                try:
-                    await message_to_edit.edit_text(text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
-                    return
-                except Exception:
-                    pass
         from banner_manager import send_banner_message
         await send_banner_message(
             bot=bot,
@@ -14509,16 +14683,10 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
         if balance < bet:
             no_funds_caption = f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
             if message_to_edit:
-                try:
-                    kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
-                    await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
+                edited = await safe_edit_message(message_to_edit, text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                if edited:
                     return
-                except Exception:
-                    try:
-                        await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
-                        return
-                    except Exception:
-                        pass
             from banner_manager import send_banner_message
             await send_banner_message(
                 bot=bot,
@@ -14541,13 +14709,7 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
             "<i>🪙 Монетка взлетает в воздух и крутится...</i>\n"
             "✨ <i>Орёл или Решка? Ловим шекель...</i>"
         )
-        try:
-            await message_to_edit.edit_caption(caption=flip_caption, reply_markup=None, parse_mode="HTML")
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=flip_caption, reply_markup=None, parse_mode="HTML")
-            except Exception:
-                pass
+        await safe_edit_message(message_to_edit, text=flip_caption, reply_markup=None, parse_mode="HTML")
         await asyncio.sleep(0.7)
 
     ach_note = ""
@@ -14643,21 +14805,9 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
         f"{tax_note}"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=bot,
@@ -14669,6 +14819,7 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
     )
 
 
+
 @dp.message(Command("blackjack", "bj", "блэкджек", "21", "очко"))
 async def cmd_blackjack(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -14677,10 +14828,8 @@ async def cmd_blackjack(message: types.Message, board_id: str | None, stream: st
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
     await _show_blackjack_lobby(message.bot, message.chat.id, user_id, board_id, bet)
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(message)
+
 
 
 async def _show_blackjack_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
@@ -14702,23 +14851,12 @@ async def _show_blackjack_lobby(bot, chat_id: int, user_id: int, board_id: str, 
         f"👇 Выбери ставку и нажми «Раздать карты»:"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
+
 
 
 async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int):
@@ -14876,6 +15014,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
     await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="blackjack", parse_mode="HTML")
 
 
+
 @dp.message(Command("rroulette", "гусар", "русская_рулетка", "самострел"))
 async def cmd_russian_roulette(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -14884,10 +15023,8 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None, str
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(casino_engine.MIN_CASINO_BET, min(casino_engine.MAX_ROULETTE_BET, bet))
     await _show_roulette_lobby(message.bot, message.chat.id, user_id, board_id, bet)
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(message)
+
 
 
 async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
@@ -14909,23 +15046,12 @@ async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, b
         f"👇 Выбери ставку и нажми «Взвести курок»:"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="russian_roulette", parse_mode="HTML")
+
 
 
 async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
@@ -14953,16 +15079,10 @@ async def _run_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: 
                     balance = await get_user_global_balance(db, user_id)
                     no_funds_caption = f"❌ <b>Недостаточно средств для Русской Рулетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>."
                     if message_to_edit:
-                        try:
-                            kb = casino_engine.get_roulette_lobby_keyboard(bet, balance=int(balance))
-                            await message_to_edit.edit_caption(caption=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                        kb = casino_engine.get_roulette_lobby_keyboard(bet, balance=int(balance))
+                        edited = await safe_edit_message(message_to_edit, text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
+                        if edited:
                             return
-                        except Exception:
-                            try:
-                                await message_to_edit.edit_text(text=no_funds_caption, reply_markup=kb, parse_mode="HTML")
-                                return
-                            except Exception:
-                                pass
                     from banner_manager import send_banner_message
                     await send_banner_message(
                         bot=bot,
@@ -15000,15 +15120,9 @@ async def _run_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: 
         )
         kb = casino_engine.get_casino_hub_keyboard()
         if message_to_edit:
-            try:
-                await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+            if edited:
                 return
-            except Exception:
-                try:
-                    await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                    return
-                except Exception:
-                    pass
         from banner_manager import send_banner_message
         await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="duel", parse_mode="HTML")
         return
@@ -15025,23 +15139,12 @@ async def _run_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: 
         f"Рискнешь нажать на спуск еще раз или заберешь деньги?"
     )
     if message_to_edit:
-        try:
-            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+        edited = await safe_edit_message(message_to_edit, text=caption, reply_markup=kb, parse_mode="HTML")
+        if edited:
             return
-        except TelegramBadRequest as ex:
-            if "message is not modified" in str(ex).lower():
-                return
-        except Exception:
-            try:
-                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                return
-            except TelegramBadRequest as ex2:
-                if "message is not modified" in str(ex2).lower():
-                    return
-            except Exception:
-                pass
     from banner_manager import send_banner_message
     await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="duel", parse_mode="HTML")
+
 
 
 @dp.callback_query(F.data.startswith("cas:"))
@@ -15051,6 +15154,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None 
         await _cb_casino_handler_impl(callback, board_id)
     finally:
         await safe_callback_answer(callback)
+
 
 
 async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str | None = None):
@@ -15104,16 +15208,7 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
                 f"💰 Выбранная ставка: <code>{default_bet:,} ₪</code>\n\n"
                 f"Выбери размер ставки и создай вызов на доску:"
             )
-            edited = False
-            try:
-                await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
-                edited = True
-            except Exception:
-                try:
-                    await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
-                    edited = True
-                except Exception:
-                    pass
+            edited = await safe_edit_message(callback.message, text=caption, reply_markup=kb, parse_mode="HTML")
             if not edited:
                 from banner_manager import send_banner_message
                 await send_banner_message(
@@ -15135,9 +15230,8 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
                 f"💳 Твой баланс: <code>{int(bal):,} ₪</code>\n\n"
                 f"Выбери режим и ставку:"
             )
-            try:
-                await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
-            except Exception:
+            edited = await safe_edit_message(callback.message, text=caption, reply_markup=kb, parse_mode="HTML")
+            if not edited:
                 await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
         elif game == "duel_rr":
             # Open RR PvP lobby instead of hardcoding 100₪
@@ -15146,16 +15240,7 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             from russian_roulette_pvp import get_rr_lobby_keyboard, format_rr_lobby_message
             kb = get_rr_lobby_keyboard(100, balance=int(bal))
             caption = format_rr_lobby_message(balance=int(bal), bet=100)
-            edited = False
-            try:
-                await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
-                edited = True
-            except Exception:
-                try:
-                    await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
-                    edited = True
-                except Exception:
-                    pass
+            edited = await safe_edit_message(callback.message, text=caption, reply_markup=kb, parse_mode="HTML")
             if not edited:
                 from banner_manager import send_banner_message
                 await send_banner_message(
@@ -15206,9 +15291,8 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
                 f"💰 <b>Ставка:</b> <code>{default_bet:,} ₪</code>\n\n"
                 f"Выбери ставку кнопками:"
             )
-            try:
-                await callback.message.edit_text(caption, reply_markup=kb_lobby, parse_mode="HTML")
-            except Exception:
+            edited = await safe_edit_message(callback.message, text=caption, reply_markup=kb_lobby, parse_mode="HTML")
+            if not edited:
                 await callback.message.answer(caption, reply_markup=kb_lobby, parse_mode="HTML")
         elif game == "balance":
             async with db_lock:
@@ -15318,10 +15402,7 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
                 f"• Ставка: <code>{bet} ₪</code>\n"
                 f"👇 Твой ход: взять карту или остановиться?"
             )
-            try:
-                await callback.message.edit_caption(caption=caption, parse_mode="HTML", reply_markup=kb)
-            except Exception:
-                pass
+            await safe_edit_message(callback.message, text=caption, reply_markup=kb, parse_mode="HTML")
             session["busy"] = False
             await callback.answer()
             return
@@ -15528,17 +15609,10 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             )
             kb = casino_engine.get_casino_hub_keyboard()
             if callback.message:
-                try:
-                    await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+                edited = await safe_edit_message(callback.message, text=caption, reply_markup=kb, parse_mode="HTML")
+                if edited:
                     await callback.answer(f"Забрано +{payout} ₪!")
                     return
-                except Exception:
-                    try:
-                        await callback.message.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
-                        await callback.answer(f"Забрано +{payout} ₪!")
-                        return
-                    except Exception:
-                        pass
             from banner_manager import send_banner_message
             await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="russian_roulette", parse_mode="HTML")
             await callback.answer(f"Забрано +{payout} ₪!")
@@ -15547,6 +15621,7 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """Делегирует в cmd_passport — то же самое, без дублирования кода."""
     await cmd_passport(message, board_id, stream)
+
 
 
 _PASSPORT_DATA = {
@@ -15714,12 +15789,25 @@ def _generate_passport_text(ctx: PassportContext) -> str:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
         anon_tag = f"[{get_anon_id(ctx.user_id, 'ru')}]"
 
+    from common.reputation_engine import calculate_user_reputation, format_reputation_badge
+    rep_score = calculate_user_reputation(
+        user_id=ctx.user_id,
+        items=ctx.active_items,
+        posts_count=ctx.post_count,
+        balance=ctx.balance,
+        is_verified_b=bool(ctx.is_verified),
+    )
+    rep_badge = format_reputation_badge(rep_score, stream=ctx.lang)
+    rep_label = "Reputation" if ctx.lang == 'en' else ("評判" if ctx.lang == 'jp' else "Репутация")
+    rep_line = f"🌟 <b>{rep_label}:</b> {rep_badge}\n"
+
     prefix_line = f"👑 <b>Титул:</b> {escape_html(ctx.custom_prefix)}\n" if ctx.custom_prefix else ""
     return (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
         f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
         f"{prefix_line}"
+        f"{rep_line}"
         f"🏷 <b>{labels[2]}:</b> {ctx.rank}\n"
         f"💼 <b>{labels[3]}:</b> {ctx.role}\n"
         f"💩 <b>{labels[4]}:</b> {ctx.post_count}\n"
@@ -15770,6 +15858,7 @@ async def cmd_anon(message: types.Message, board_id: str | None = None, stream: 
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+
 @dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я", ignore_case=True, ignore_mention=True))
 async def cmd_passport(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
@@ -15789,6 +15878,9 @@ async def cmd_passport(message: types.Message, board_id: str | None = None, stre
     import asyncio
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🤝 Пригласить друга (+22,320 ₪)", callback_data="prof_ref"),
+        ],
         [
             InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view"),
             InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room"),
@@ -15830,6 +15922,56 @@ async def cmd_passport(message: types.Message, board_id: str | None = None, stre
             text_report += f"\n⚠️ <b>Меченые шекели:</b> <code>{int(dirty_bal):,} ₪</code> (СБ Банка блокирует вклады! Отмой через /launder)"
         if stars > 0:
             text_report += f"\n🚨 <b>Статус розыска:</b> {'⭐️' * stars} (Награда за голову: <code>{int(bounty):,} ₪</code>! Сбрось через /bribe_cop или жди ареста)"
+
+        try:
+            # 1. Reputation title and badge
+            from common.reputation_engine import calculate_user_reputation, format_reputation_badge
+            bal_for_rep = await get_user_global_balance(db, user_id)
+            async with db.execute("SELECT COALESCE(SUM(posts_count), 0), COALESCE(MAX(is_verified_b), 0) FROM Users WHERE user_id = ?", (user_id,)) as cur:
+                row_u = await cur.fetchone()
+                p_cnt = int(row_u[0] or 0) if row_u else 0
+                is_ver = bool(row_u[1] or 0) if row_u else False
+
+            rep_score = calculate_user_reputation(
+                user_id=user_id,
+                items=active_items,
+                posts_count=p_cnt,
+                balance=bal_for_rep,
+                is_verified_b=is_ver,
+            )
+            rep_badge = format_reputation_badge(rep_score, stream=stream)
+            if "Репутация:" not in text_report:
+                text_report += f"\n🌟 <b>Репутация:</b> {rep_badge}"
+        except Exception:
+            pass
+
+        try:
+            # 2. Referral statistics
+            from common.referral_engine import get_referral_stats
+            ref_stats = await get_referral_stats(db, user_id)
+            ref_count = ref_stats.get("referrals_count", 0)
+            ref_earned = ref_stats.get("total_earned", 0.0)
+            if "Рефералы:" not in text_report:
+                text_report += f"\n🤝 <b>Рефералы:</b> {ref_count} анонов (Заработано: <code>{int(ref_earned):,} ₪</code>)"
+        except Exception:
+            pass
+
+
+
+        # 3. STRICT LAW OF ANONYMITY: Ensure raw numerical Telegram user_id never leaks in public chats
+        from common.anon_identity import get_anon_id
+        if user_id and user_id > 10000:
+
+            raw_uid_str = str(user_id)
+
+            if raw_uid_str in text_report:
+
+                anon_tag = get_anon_id(user_id, stream=stream)
+
+                text_report = text_report.replace(raw_uid_str, anon_tag)
+
+
+
         if photo_buf:
             safe_caption = safe_tg_caption(text_report, max_len=1024)
             photo = BufferedInputFile(photo_buf.getvalue(), filename='passport.png')
@@ -15840,8 +15982,8 @@ async def cmd_passport(message: types.Message, board_id: str | None = None, stre
         runtime_logger.warning("cmd_passport: failed generating stats card: %s", e)
         await message.answer("⚠️ Ошибка генерации паспорта. Попробуй позже.", reply_markup=kb)
 
-    try: await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError): pass
+    await safe_delete_message(message)
+
 
 
 @dp.callback_query(F.data.startswith("prof_card"))
@@ -15871,6 +16013,9 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
     import asyncio
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🤝 Пригласить друга (+22,320 ₪)", callback_data="prof_ref"),
+        ],
         [
             InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view"),
             InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room"),
@@ -15910,6 +16055,57 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
             text_report += f"\n⚠️ <b>Меченые шекели:</b> <code>{int(dirty_bal):,} ₪</code> (СБ Банка блокирует вклады! Отмой через /launder)"
         if stars > 0:
             text_report += f"\n🚨 <b>Статус розыска:</b> {'⭐️' * stars} (Награда за голову: <code>{int(bounty):,} ₪</code>! Сбрось через /bribe_cop или жди ареста)"
+        try:
+            # 1. Reputation title and badge
+            from common.reputation_engine import calculate_user_reputation, format_reputation_badge
+            bal_for_rep = await get_user_global_balance(db, user_id)
+            async with db.execute("SELECT COALESCE(SUM(posts_count), 0), COALESCE(MAX(is_verified_b), 0) FROM Users WHERE user_id = ?", (user_id,)) as cur:
+                row_u = await cur.fetchone()
+                p_cnt = int(row_u[0] or 0) if row_u else 0
+                is_ver = bool(row_u[1] or 0) if row_u else False
+
+            rep_score = calculate_user_reputation(
+                user_id=user_id,
+                items=active_items,
+                posts_count=p_cnt,
+                balance=bal_for_rep,
+                is_verified_b=is_ver,
+            )
+            rep_badge = format_reputation_badge(rep_score, stream=stream)
+            if "Репутация:" not in text_report:
+                text_report += f"\n🌟 <b>Репутация:</b> {rep_badge}"
+        except Exception:
+            pass
+
+        try:
+            # 2. Referral statistics
+            from common.referral_engine import get_referral_stats
+            ref_stats = await get_referral_stats(db, user_id)
+            ref_count = ref_stats.get("referrals_count", 0)
+            ref_earned = ref_stats.get("total_earned", 0.0)
+            if "Рефералы:" not in text_report:
+                text_report += f"\n🤝 <b>Рефералы:</b> {ref_count} анонов (Заработано: <code>{int(ref_earned):,} ₪</code>)"
+        except Exception:
+            pass
+
+
+
+        # 3. STRICT LAW OF ANONYMITY: Ensure raw numerical Telegram user_id never leaks in public chats
+
+        if user_id and user_id > 10000:
+
+            raw_uid_str = str(user_id)
+
+            if raw_uid_str in text_report:
+
+                from common.anon_identity import get_anon_id
+
+                anon_tag = get_anon_id(user_id, stream=stream)
+
+                text_report = text_report.replace(raw_uid_str, anon_tag)
+
+
+
         if photo_buf:
             from common.text_utils import safe_tg_caption
             safe_caption = safe_tg_caption(text_report, max_len=1024)
@@ -15932,12 +16128,25 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
         runtime_logger.warning("cb_prof_card: failed regenerating stats card: %s", e)
 
 
+
+@dp.callback_query(F.data.in_(["prof_ref", "ref_hub"]))
+async def cb_prof_referral(callback: types.CallbackQuery, board_id: str | None = None, stream: str = 'ru'):
+    """Открывает реферальный хаб прямо из паспорта/профиля."""
+    board_id = board_id or 'b'
+    await safe_callback_answer(callback)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
+    from common.referral_engine import handle_referral_command
+    await handle_referral_command(fake_msg, board_id=board_id, stream=stream)
+
+
+
 @dp.callback_query(F.data == "prof_dossier")
 async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
     fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
     await cmd_dossier(fake_msg, board_id=board_id)
     await safe_callback_answer(callback)
+
 
 
 @dp.callback_query(F.data == "prof_wallet")
@@ -15948,12 +16157,14 @@ async def cb_prof_wallet(callback: types.CallbackQuery, board_id: str | None, st
     await cmd_wallet(fake_msg, board_id=board_id, stream=stream)
 
 
+
 @dp.callback_query(F.data == "prof_shop")
 async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     board_id = board_id or 'b'
     await safe_callback_answer(callback)
     fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
     await cmd_shop(fake_msg, board_id=board_id, stream=stream)
+
 
 
 @dp.message(Command("dossier", "досье", "дело", "case", "личноедело", "пробив", ignore_case=True, ignore_mention=True))
@@ -16620,6 +16831,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None = None, strea
     )
 
 
+
 async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = None, limit: int = 25) -> str:
     """
     Получает последние посты на доске для понимания текущей атмосферы чата (до 25 последних сообщений).
@@ -16880,6 +17092,7 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
 
 # _last_persona_board_ts, _last_persona_dialogue_user_ts, _persona_processed_posts
 # are canonical in shared_state.py and imported via 'from shared_state import *'
+
 
 
 @dp.message(Command("trigger"))
@@ -17738,6 +17951,7 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         ))
 
 
+
 MOTIVATION_TARGET_BOARDS = {'b', 'sex', 'thread'}
 
 async def _is_board_eligible_for_motivation(board_id: str) -> bool:
@@ -17765,6 +17979,7 @@ async def _is_board_eligible_for_motivation(board_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Error checking motivation eligibility for {board_id}: {e}")
         return False
+
 
 
 async def _board_motivation_worker(board_id: str):
@@ -17856,6 +18071,7 @@ async def _board_motivation_worker(board_id: str):
         except Exception as e:
             logger.error(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}", exc_info=True)
             await asyncio.sleep(600)
+
 
 
 async def motivation_broadcaster():
@@ -18120,6 +18336,7 @@ GRAPH_STATS_BACKUP_PATH = "graph.json.bak"
 GRAPH_STATS_RETENTION_DAYS = 90  # /graph принимает максимум 30d, держим тройной запас
 
 
+
 def _sync_save_graph_stats(data_to_save: dict) -> bool:
     """
     Атомарно сохраняет статистику графика на диск.
@@ -18160,6 +18377,7 @@ def _sync_save_graph_stats(data_to_save: dict) -> bool:
                 logger.error(f"Error removing temp file: {traceback.format_exc()}")
 
 
+
 def _coerce_graph_stats(raw) -> dict:
     """
     Приводит загруженный JSON к ожидаемой форме {board_id: {iso_ts: int}}.
@@ -18186,6 +18404,7 @@ def _coerce_graph_stats(raw) -> dict:
     return cleaned
 
 
+
 def _prune_graph_stats(data: dict, retention_days: int = GRAPH_STATS_RETENTION_DAYS) -> int:
     """Выбрасывает точки старше retention_days. Возвращает число удалённых."""
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
@@ -18210,6 +18429,7 @@ def _prune_graph_stats(data: dict, retention_days: int = GRAPH_STATS_RETENTION_D
     return removed
 
 
+
 def _report_graph_save_result(future) -> None:
     """Callback для run_in_executor: не даём ошибке записи утонуть без следа."""
     try:
@@ -18217,6 +18437,7 @@ def _report_graph_save_result(future) -> None:
             logger.warning("⚠️ graph.json не сохранён (см. ошибку выше), данные остались только в RAM.")
     except Exception as e:
         logger.error(f"⛔ Поток сохранения graph.json упал: {type(e).__name__}: {e}", exc_info=True)
+
 
 
 def _sync_load_graph_stats() -> dict:
@@ -18246,10 +18467,12 @@ def _sync_load_graph_stats() -> dict:
     return {}
 
 
+
 async def load_graph_stats_async():
     """Асинхронная загрузка статистики графика в рабочем потоке без блокировки Event Loop."""
     global graph_stats
     graph_stats = await asyncio.to_thread(_sync_load_graph_stats)
+
 
 
 def load_graph_stats():
@@ -18334,6 +18557,7 @@ def _prepare_graph_data(board_id: str, days: int):
     return df_resampled
 
 
+
 def _setup_graph_axes(ax, days: int, df_resampled, board_id: str):
     """Настраивает оси, сетку и подписи графика."""
     board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
@@ -18374,6 +18598,7 @@ def _setup_graph_axes(ax, days: int, df_resampled, board_id: str):
     ax.tick_params(axis='both', which='minor', length=4, width=0.5)
 
 
+
 def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
     """
     Генерирует изображение графика статистики постов для указанной доски за заданный период.
@@ -18391,6 +18616,7 @@ def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
     except ChartLockTimeout as e:
         logger.warning(f"⛔ График не построен: {e}")
         return None
+
 
 
 def _generate_statistics_graph_locked(board_id: str, days: int) -> bytes | None:
@@ -18990,6 +19216,7 @@ class StackedAnimeHandler:
         return final_caption
 
 
+
 @dp.message(F.text.regexp(rf"(?i)^/({_ANIME_CMDS_PATTERN})(?:@\w+)?(?=\s|\d|$)"))
 async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -19077,6 +19304,7 @@ async def cmd_contextual_replies(message: types.Message, board_id: str | None, s
         return
     args = (message.text or "").split()
     await message.delete()
+
 
 
 @dp.message(Command("roast", "prozharka", "прожарка", "база"))
@@ -20155,6 +20383,7 @@ async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, str
         await message.answer("⚠️ Не удалось загрузить облако тегов.")
 
 
+
 async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery, tag_name: str, offset: int = 0):
     try:
         # Через общий пул — та же причина, что и в cmd_tag_cloud: aiosqlite
@@ -20229,6 +20458,7 @@ async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery,
         runtime_logger.warning(f"⚠️ Ошибка в show_tagged_photos_gallery: {e}")
 
 
+
 @dp.callback_query(F.data.startswith("tagview:"))
 async def cq_tag_view(callback: types.CallbackQuery):
     try:
@@ -20239,6 +20469,7 @@ async def cq_tag_view(callback: types.CallbackQuery):
     except Exception as e:
         print(f"⚠️ Ошибка в cq_tag_view: {e}")
         await callback.answer("Ошибка показа тега")
+
 
 
 @dp.callback_query(F.data == "tagcloud_menu")
@@ -20424,6 +20655,7 @@ async def cmd_roll100(message: types.Message, board_id: str | None, stream: str 
         pass
 
 
+
 @dp.message(Command("quote", "цитата", "пост", "random_post"))
 async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -20465,6 +20697,7 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
         await message.delete()
     except Exception:
         pass
+
 
 
 @dp.message(Command("addmoney"))
@@ -21421,7 +21654,6 @@ async def cmd_slav_curse(message: types.Message, board_id: str | None = None, st
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, generate_rus_curse, text)
     await _send_safe_interactive_reply(message, result)
-
 
 
 
@@ -22705,6 +22937,7 @@ async def cb_create_thread_edit(callback: types.CallbackQuery, state: FSMContext
         except Exception: pass
 
 
+
 @dp.callback_query(F.data == "create_thread_cancel", ThreadCreateStates.waiting_for_confirmation)
 @dp.callback_query(F.data == "create_thread_cancel", ThreadCreateStates.waiting_for_op_post)
 async def cb_create_thread_cancel(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
@@ -23426,12 +23659,14 @@ STALE_TRACKER_TTL = 3600          # для окон в 0.5-60 сек
 STALE_DAILY_TRACKER_TTL = 172800  # для суточных лимитов (окно 86400)
 
 
+
 def _prune_by_timestamp(mapping: dict, now: float, ttl: float) -> int:
     """Удаляет ключи из {key: timestamp}, чей timestamp старше ttl."""
     stale = [k for k, ts in mapping.items() if not isinstance(ts, (int, float)) or now - ts > ttl]
     for k in stale:
         mapping.pop(k, None)
     return len(stale)
+
 
 
 def _prune_timestamp_sequences(mapping: dict, now: float, ttl: float) -> int:
@@ -23459,6 +23694,7 @@ def _prune_timestamp_sequences(mapping: dict, now: float, ttl: float) -> int:
     return len(stale)
 
 
+
 def _prune_idle_locks(locks: dict) -> int:
     """
     Удаляет незанятые asyncio.Lock.
@@ -23480,6 +23716,7 @@ def _prune_idle_locks(locks: dict) -> int:
     return len(stale)
 
 
+
 def _prune_contextual_reply_tracker(now: float, ttl: float) -> int:
     """Чистит {(board, user): {'last','window_start','count'}} по самой свежей отметке."""
     stale = []
@@ -23496,6 +23733,7 @@ def _prune_contextual_reply_tracker(now: float, ttl: float) -> int:
     for k in stale:
         contextual_reply_tracker.pop(k, None)
     return len(stale)
+
 
 
 def _prune_shadow_fake_counters() -> int:
@@ -23519,6 +23757,7 @@ def _prune_shadow_fake_counters() -> int:
     for k in stale:
         shadow_fake_post_counters.pop(k, None)
     return len(stale)
+
 
 
 def _sweep_stale_runtime_maps() -> dict[str, int]:
@@ -23842,6 +24081,7 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
         pass
 
     return removed
+
 
 
 async def auto_memory_cleaner():
@@ -24467,6 +24707,7 @@ async def cb_thread_like_placeholder(callback: types.CallbackQuery, board_id: st
         pass
 
 
+
 @dp.callback_query(F.data == "leave_thread")
 async def cb_leave_thread(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     """
@@ -24645,6 +24886,7 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
 
     try: await message.delete()
     except Exception: pass
+
 
 
 @dp.message(Command("unwarn", "снять_варн", "снятьпред", "снять_пред"))
@@ -26267,6 +26509,7 @@ def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
 
         content = {'type': 'media_group', 'media': media_items, 'caption': caption}
     return content
+
 
 
 async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int):
@@ -28953,6 +29196,7 @@ async def cmd_token(message: types.Message, board_id: str | None, stream: str = 
         pass
 
 
+
 NEO_ALLOWED_USERS = {7716348189, 7547199874}
 
 @dp.message(Command("set_neo", "neo_set", "избранный", ignore_case=True, ignore_mention=True))
@@ -29006,6 +29250,7 @@ async def cmd_set_neo(message: types.Message, board_id: str | None = None, strea
         f"✨ <b>АКТИВНЫЙ СЕТ-БОНУС:</b> +50 к Защите, скрытность баланса от налётов и +20% к выигрышу в казино!{ach_note}"
     )
     await message.answer(resp, parse_mode="HTML")
+
 
 
 @dp.message(Command("poll", "opros"))
@@ -29652,6 +29897,7 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
         spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream, post_num=created_num))
 
 
+
 def apply_greentext_formatting(text: str) -> str:
     """
     Применяет форматирование 'Greentext'.
@@ -29668,7 +29914,6 @@ def apply_greentext_formatting(text: str) -> str:
         else:
             processed_lines.append(line)
     return '\n'.join(processed_lines)
-
 
 
 
@@ -29934,6 +30179,7 @@ async def _check_board_inactivity_for_auto_summary(board_id: str, last_summary_t
     return True, f"quiet_window_confirmed (latest post {int(time_since_last_post // 60)}m ago, {text_posts_count} posts accumulated)"
 
 
+
 async def periodic_board_summary():
     """
     Автоматическое саммари для борды /b/, которое публикуется НЕ чаще раза в 8-10 часов
@@ -30142,6 +30388,7 @@ async def periodic_thread_digest():
                 digest_text += f"{i}. <a href='{url}'>{safe_title}</a> (💬 {t.get('posts_count', 0)})\n"
             digest_text += "\n🚀 <i>Будь в центре движухи!</i>"
             target_boards = ['thread', 'b']
+            canonical_pnum = None
             for board_id in target_boards:
                 if board_id not in board_data:
                     continue
@@ -30163,7 +30410,9 @@ async def periodic_thread_digest():
                     'is_system_message': True,
                     'archive_allowed': True
                 }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if canonical_pnum is None:
+                    canonical_pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                pnum = canonical_pnum
                 if pnum:
                     header_base = await format_header(board_id, pnum)
                     content['header'] = f"### DIGEST ###\n{header_base}"
@@ -30210,6 +30459,7 @@ async def periodic_newspaper_broadcast():
             )
 
             target_boards = ['thread', 'b']
+            canonical_pnum = None
             for board_id in target_boards:
                 if board_id not in board_data:
                     continue
@@ -30231,7 +30481,9 @@ async def periodic_newspaper_broadcast():
                     'is_system_message': True,
                     'archive_allowed': True
                 }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if canonical_pnum is None:
+                    canonical_pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                pnum = canonical_pnum
                 if pnum:
                     header_base = await format_header(board_id, pnum)
                     content['header'] = f"### NEWSPAPER ###\n{header_base}"
@@ -30278,6 +30530,7 @@ async def periodic_shop_broadcast():
             )
 
             target_boards = ['thread', 'b']
+            canonical_pnum = None
             for board_id in target_boards:
                 if board_id not in board_data:
                     continue
@@ -30305,7 +30558,9 @@ async def periodic_shop_broadcast():
                     'is_system_message': True,
                     'archive_allowed': True
                 }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if canonical_pnum is None:
+                    canonical_pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                pnum = canonical_pnum
                 if pnum:
                     header_base = await format_header(board_id, pnum)
                     content['header'] = f"### BLACK MARKET ###\n{header_base}"
@@ -30398,6 +30653,7 @@ async def periodic_economy_broadcast():
             ])
 
             target_boards = ['b', 'thread']
+            canonical_pnum = None
             for board_id in target_boards:
                 if board_id not in board_data:
                     continue
@@ -30437,7 +30693,9 @@ async def periodic_economy_broadcast():
                     'is_system_message': True,
                     'archive_allowed': True
                 }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if canonical_pnum is None:
+                    canonical_pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                pnum = canonical_pnum
                 if pnum:
                     header_base = await format_header(board_id, pnum)
                     content['header'] = f"### ECONOMY ###\n{header_base}"
@@ -30461,6 +30719,7 @@ async def periodic_economy_broadcast():
             print(f"❌ [ECONOMY BROADCAST] Ошибка: {e}")
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
+
 
 
 def _site_public_url(path: str | None) -> str | None:
@@ -30806,6 +31065,7 @@ def _event_loop_stall_watchdog_loop():
                     pass
 
 
+
         # CRITICAL AUTO-RESTART: If event loop is deadlocked for >= EVENT_LOOP_AUTO_RESTART_SEC,
         # forcefully terminate the process so the external watchdog/supervisor restarts it immediately!
         if lag_sec >= EVENT_LOOP_AUTO_RESTART_SEC:
@@ -30836,6 +31096,7 @@ def _event_loop_stall_watchdog_loop():
             os._exit(42)
 
         shutdown_event.wait(5)
+
 
 
 def start_event_loop_stall_watchdog():
@@ -31019,6 +31280,7 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
                 milestones = check_milestone_events(old_fund, new_fund)
                 for event in milestones:
                     announcement_text = format_milestone_announcement(event)
+                    canonical_pnum = None
                     for target_board in ['b', 'thread']:
                         if target_board in board_data:
                             recipients = (
@@ -31032,12 +31294,14 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
                                     'is_system_message': True,
                                     'archive_allowed': True
                                 }
-                                pnum = await create_post(
-                                    board_id=target_board,
-                                    author_id=0,
-                                    content=content_obj,
-                                    timestamp=time.time()
-                                )
+                                if canonical_pnum is None:
+                                    canonical_pnum = await create_post(
+                                        board_id=target_board,
+                                        author_id=0,
+                                        content=content_obj,
+                                        timestamp=time.time()
+                                    )
+                                pnum = canonical_pnum
                                 if pnum:
                                     header_base = await format_header(target_board, pnum)
                                     content_obj['header'] = f"### ABU YACHT MILESTONE ###\n{header_base}"
@@ -31065,15 +31329,18 @@ async def auction_finalizer_loop(bots: Any = None):
     Фоновая задача финализации аукционов (F3.2).
     Проверяет и завершает истекшие аукционы каждую минуту (60s),
     сжигает 100% победных ставок в Фонд Яхты Абу и выдает лоты победителям.
+    Отправляет ЛС победителю в Telegram и публикует объявление на борде.
     """
     await asyncio.sleep(10)
     while True:
         try:
             db = await get_pool()
             from whale_economy_engine import finish_active_auctions
-            finished = await finish_active_auctions(db)
+            from auction_engine import dispatch_auction_completion_notifications
+            finished = await finish_active_auctions(db, bots=bots, board_data=board_data)
             if finished:
                 print(f"🏛️ [Auction-Finalizer] Завершено {len(finished)} аукционов.")
+                await dispatch_auction_completion_notifications(bots, finished, board_data=board_data, db=db)
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             print("ℹ️ Воркер auction_finalizer_loop остановлен.")
@@ -31675,6 +31942,7 @@ async def fetch_user_report_dossier(author_id: int, limit: int = 15) -> tuple[st
         return "Ошибка извлечения досье из БД.", 0, 0
 
 
+
 async def analyze_report_with_ai(reported_post_text: str, dossier_text: str) -> dict:
     """
     Analyzes the reported post and suspect's dossier using LLM.
@@ -31706,6 +31974,7 @@ async def analyze_report_with_ai(reported_post_text: str, dossier_text: str) -> 
             "full_analysis": "<b>Профиль активности:</b> Обычная активность.\n<b>Оценка опасности:</b> 🟢 Низкая\n<b>Рекомендация админам:</b> Проверить вручную.\n<b>Вердикт для анона:</b> Сиди спокойно, разберёмся.",
             "raw": ""
         }
+
 
 
 _REPORT_CONTEXT_CACHE = BoundedDict(max_size=5000)
@@ -31802,6 +32071,7 @@ def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id
     return builder.as_markup()
 
 
+
 async def process_report_pipeline(
     bot,
     message: types.Message,
@@ -31888,9 +32158,12 @@ async def process_report_pipeline(
         runtime_logger.warning(f"Failed sending report feedback to user {reporter_id}: {e}")
 
     # 6. Notify all admins with interactive multi-select keyboard
+    from common.anon_identity import get_anon_id, safe_user_hash, generate_anon_name
     post_link_str = f"<a href=\"https://tgach.top/{board_id}/res/{thread_id or post_num}.html#post-{post_num}\">#{post_num}</a>" if post_num else f"сообщение <code>{msg_id}</code>"
     anon_suspect_name = generate_anon_name(author_id) if author_id else "Неизвестный"
     reason_line = f"\n💬 <b>Причина:</b> <i>{escape_html(reason_text)}</i>" if reason_text else ""
+    anon_reporter_str = generate_anon_name(reporter_id) if reporter_id else "Анонимус"
+    reporter_hash = safe_user_hash(reporter_id) if reporter_id else "system"
 
     admin_report_text = (
         f"🚨 <b>РЕПОРТ В /{board_id}/</b>\n\n"
@@ -31899,7 +32172,7 @@ async def process_report_pipeline(
         f"💬 <b>Текст:</b> <blockquote>{escape_html(reported_text[:300])}</blockquote>\n"
         f"📊 <b>Активность:</b> {total_posts} постов (за 24ч: {posts_24h})\n\n"
         f"🤖 <b>АНАЛИЗ НЕЙРОСЕТИ:</b>\n{escape_html(analysis_text)}\n\n"
-        f"🔍 <b>Репортёр:</b> <code>{reporter_id}</code> (@{escape_html(reporter_name)})"
+        f"🔍 <b>Репортёр:</b> <b>{escape_html(anon_reporter_str)}</b> (<code>{reporter_hash}</code>)"
     )
 
     markup = build_report_mod_keyboard(mask=0, author_id=author_id, post_num=post_num or 0, board_id=board_id, chat_id=chat_id, msg_id=msg_id)
@@ -31921,13 +32194,17 @@ async def process_report_pipeline(
     if post_num:
         try:
             db = await get_pool()
-            report_reason_db = f"Report from TG:{reporter_id}" + (f": {reason_text[:200]}" if reason_text else "")
+            from common.anon_identity import get_anon_id, safe_user_hash
+            reporter_anon_id = get_anon_id(reporter_id) if reporter_id else "Anon0"
+            sender_hash = safe_user_hash(reporter_id) if reporter_id else "system"
+            report_reason_db = f"Report from TG:Anon[{reporter_anon_id}]" + (f": {reason_text[:200]}" if reason_text else "")
             await db.execute(
                 "INSERT INTO Reports (post_num, category, reason, sender_ip_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                (post_num, "user_report", report_reason_db, str(reporter_id), time.time())
+                (post_num, "user_report", report_reason_db, sender_hash, time.time())
             )
         except Exception as e:
             runtime_logger.error(f"Error inserting into Reports table: {e}", exc_info=True)
+
 
 
 @dp.message(Command("report", "mods", "moderator", "rep"))
@@ -32111,6 +32388,7 @@ async def cmd_report(message: types.Message, board_id: str | None = None, stream
     ))
 
 
+
 @dp.message(Command("feedback", "suggest", "обратная_связь", "предложение", "жалоба", "багрепорт", "bugreport"))
 async def cmd_feedback_or_suggest(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
@@ -32167,9 +32445,23 @@ async def cmd_feedback_or_suggest(message: types.Message, board_id: str | None =
     category = "suggestion" if any(k in cmd_name for k in ["suggest", "предложен"]) else "complaint"
 
     try:
+        from common.idempotency import idempotency_tracker
         from common.database import create_feedback, log_global_event
+        msg_hash = idempotency_tracker.compute_content_hash(content)
+        cache_key = f"tg_feedback:{user_id}:{msg_hash}"
+        if not await idempotency_tracker.acquire(cache_key, ttl=30.0):
+            if lang == 'en':
+                resp = "✅ <b>Thank you!</b> Your feedback has already been received."
+            elif lang == 'jp':
+                resp = "✅ <b>ありがとうございます！</b> ご意見は既に受領されました。"
+            else:
+                resp = "✅ <b>Спасибо!</b> Ваше сообщение уже получено и передается разработчикам."
+            await message.answer(resp, parse_mode="HTML")
+            return
+
         saved = await create_feedback(user_id, category, contact, content)
         if saved:
+            await idempotency_tracker.register_result(cache_key, True, ttl=30.0)
             await log_global_event(
                 'bot',
                 f"📝 FEEDBACK ({category}) от {contact}: {content[:100]}"
@@ -32199,10 +32491,16 @@ async def cmd_feedback_or_suggest(message: types.Message, board_id: str | None =
                 resp = "✅ <b>Спасибо!</b> Ваше сообщение зафиксировано и передано разработчикам борды."
             await message.answer(resp, parse_mode="HTML")
         else:
+            await idempotency_tracker.release(cache_key)
             await message.answer("⚠️ Не удалось сохранить сообщение. Попробуйте позже.")
     except Exception as e:
+        try:
+            await idempotency_tracker.release(cache_key)
+        except Exception:
+            pass
         runtime_logger.error(f"Error saving feedback from user {user_id}: {e}", exc_info=True)
         await message.answer("❌ Ошибка при отправке отзыва. Попробуйте позже.")
+
 
 
 @dp.callback_query(F.data == "feedback_prompt_info")
@@ -32216,6 +32514,7 @@ async def cb_feedback_prompt_info(callback: types.CallbackQuery, board_id: str |
         "Сообщение будет мгновенно доставлено напрямую разработчикам.",
         parse_mode="HTML"
     )
+
 
 
 @dp.callback_query(F.data.startswith("rep_t:"))
@@ -32273,6 +32572,7 @@ async def on_report_toggle_option(callback: types.CallbackQuery, board_id: str |
     except Exception:
         pass
     await callback.answer()
+
 
 
 @dp.callback_query(F.data.startswith("rep_x:"))
@@ -32338,7 +32638,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
             await update_shadow_mute(author_id, b_id, expires_dt.timestamp())
             wiped = await execute_sdel_user_posts(callback.bot, author_id, 60, b_id)
             actions_done.append(f"👻 Шедоумут 8ч + sdel 1ч (скрыто {wiped} пст)")
-            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {admin_id} дал ШМ 8ч + sdel 1ч юзеру {author_id} на /{b_id}/")
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {safe_user_hash(admin_id)} дал ШМ 8ч + sdel 1ч юзеру Anon[{get_anon_id(author_id)}] на /{b_id}/")
 
     # 2. Шедоумут 24ч
     if mask & 2:
@@ -32348,7 +32648,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
                 b_data['shadow_mutes'][author_id] = expires_dt
             await update_shadow_mute(author_id, b_id, expires_dt.timestamp())
             actions_done.append("👻 Шедоумут 24ч")
-            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {admin_id} дал ШМ 24ч юзеру {author_id} на /{b_id}/")
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {safe_user_hash(admin_id)} дал ШМ 24ч юзеру Anon[{get_anon_id(author_id)}] на /{b_id}/")
 
     # 3. Шедоумут 4 дня
     if mask & 4:
@@ -32358,7 +32658,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
                 b_data['shadow_mutes'][author_id] = expires_dt
             await update_shadow_mute(author_id, b_id, expires_dt.timestamp())
             actions_done.append("👻 Шедоумут 4 дня")
-            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {admin_id} дал ШМ 4д юзеру {author_id} на /{b_id}/")
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {safe_user_hash(admin_id)} дал ШМ 4д юзеру Anon[{get_anon_id(author_id)}] на /{b_id}/")
 
     # 4. Toggle Media
     if mask & 8:
@@ -32371,7 +32671,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
             spawn_task(update_user_settings_db(author_id, b_id, shadow_media=1 if new_val else 0))
             st_text = "ЗАПРЕЩЕНЫ" if new_val else "РАЗРЕШЕНЫ"
             actions_done.append(f"🔇 Медиа: {st_text}")
-            await log_global_event('bot', f"🔇 MEDIA_TOGGLE: Мод {admin_id} установил media={new_val} для {author_id} на /{b_id}/")
+            await log_global_event('bot', f"🔇 MEDIA_TOGGLE: Мод {safe_user_hash(admin_id)} установил media={new_val} для Anon[{get_anon_id(author_id)}] на /{b_id}/")
 
     # 5. Toggle GIF
     if mask & 16:
@@ -32384,7 +32684,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
             spawn_task(update_user_settings_db(author_id, b_id, shadow_gif=1 if new_val else 0))
             st_text = "ЗАПРЕЩЕНЫ" if new_val else "РАЗРЕШЕНЫ"
             actions_done.append(f"🖼 GIF: {st_text}")
-            await log_global_event('bot', f"🖼 GIF_TOGGLE: Мод {admin_id} установил gif={new_val} для {author_id} на /{b_id}/")
+            await log_global_event('bot', f"🖼 GIF_TOGGLE: Мод {safe_user_hash(admin_id)} установил gif={new_val} для Anon[{get_anon_id(author_id)}] на /{b_id}/")
 
     # 6. Удалить пожалованный пост
     if mask & 32:
@@ -32402,14 +32702,14 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
         if author_id != 0:
             wiped = await execute_sdel_user_posts(callback.bot, author_id, 60, b_id)
             actions_done.append(f"🚮 Вайп sdel 1ч (скрыто {wiped} постов)")
-            await log_global_event('bot', f"🚮 WIPE_SDEL: Мод {admin_id} скрыл посты {author_id} за 1ч на /{b_id}/")
+            await log_global_event('bot', f"🚮 WIPE_SDEL: Мод {safe_user_hash(admin_id)} скрыл посты Anon[{get_anon_id(author_id)}] за 1ч на /{b_id}/")
 
     # 8. Вайп sdel 24ч
     if mask & 128:
         if author_id != 0:
             wiped = await execute_sdel_user_posts(callback.bot, author_id, 1440, b_id)
             actions_done.append(f"🚮 Вайп sdel 24ч (скрыто {wiped} постов)")
-            await log_global_event('bot', f"🚮 WIPE_SDEL: Мод {admin_id} скрыл посты {author_id} за 24ч на /{b_id}/")
+            await log_global_event('bot', f"🚮 WIPE_SDEL: Мод {safe_user_hash(admin_id)} скрыл посты Anon[{get_anon_id(author_id)}] за 24ч на /{b_id}/")
 
     summary_lines = "\n".join(f"• {a}" for a in actions_done) if actions_done else "• Меры применены"
     report_resolution = f"\n\n✅ <b>Применено модератором @{escape_html(admin_name)}:</b>\n{summary_lines}"
@@ -32439,6 +32739,7 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
             pass
 
     await callback.answer(f"Применено мер: {len(actions_done)}")
+
 
 
 @dp.callback_query(F.data.startswith("rep_i:"))
@@ -32489,6 +32790,7 @@ async def on_report_dismiss(callback: types.CallbackQuery, board_id: str | None 
             pass
 
     await callback.answer("Жалоба отклонена")
+
 
 
 @dp.callback_query(F.data.startswith("rep:"))
@@ -32906,6 +33208,7 @@ _INLINE_POPULAR_CMDS = [
 ]
 
 
+
 @dp.inline_query()
 async def handle_inline_query(inline_query: types.InlineQuery):
     raw_query = inline_query.query.strip()
@@ -33062,6 +33365,7 @@ async def cb_abu_fund_refresh(callback: types.CallbackQuery, board_id: str | Non
     await safe_callback_answer(callback, "✅ Статус Казны Абу обновлен!")
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 🧾 /ledger — Детализация и история операций (Выписка)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -33167,8 +33471,7 @@ async def cmd_ledger(message: types.Message, board_id: str | None, stream: str =
         category="ledger",
         parse_mode="HTML"
     )
-    try: await message.delete()
-    except Exception: pass
+    await safe_delete_message(message)
 
 @dp.callback_query(F.data.startswith("prof_ledger"))
 async def cb_prof_ledger(callback: types.CallbackQuery, board_id: str | None):

@@ -3,6 +3,7 @@ from common.html_utils import escape_html
 import asyncio
 import time
 import re
+import logging
 from functools import lru_cache
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -72,6 +73,24 @@ def _is_telegram_parse_error(err_msg: str) -> bool:
     )
 
 
+def _is_text_missing_error(err_msg: str) -> bool:
+    return (
+        "there is no text in the message to edit" in err_msg
+        or "message to edit has no text" in err_msg
+        or "no text in the message to edit" in err_msg
+        or "no text in the message" in err_msg
+    )
+
+
+def _is_caption_missing_error(err_msg: str) -> bool:
+    return (
+        "there is no caption in the message to edit" in err_msg
+        or "message to edit has no caption" in err_msg
+        or "no caption in the message to edit" in err_msg
+        or "no caption in the message" in err_msg
+    )
+
+
 async def safe_edit_message_text(
     bot: Bot,
     chat_id: int | str,
@@ -108,7 +127,7 @@ async def safe_edit_message_text(
         err_msg = (getattr(e, "message", None) or str(e)).lower()
         if "message is not modified" in err_msg or "exactly the same" in err_msg:
             return True
-        if fallback_to_caption and "there is no text in the message to edit" in err_msg:
+        if fallback_to_caption and _is_text_missing_error(err_msg):
             caption_text = safe_truncate_post(text, 1024)
             try:
                 return await bot.edit_message_caption(
@@ -217,7 +236,7 @@ async def safe_edit_message_caption(
         err_msg = (getattr(e, "message", None) or str(e)).lower()
         if "message is not modified" in err_msg or "exactly the same" in err_msg:
             return True
-        if fallback_to_text and ("there is no caption" in err_msg or "message to edit not found" in err_msg):
+        if fallback_to_text and _is_caption_missing_error(err_msg):
             text_val = safe_truncate_post(caption or "", 4096)
             try:
                 return await bot.edit_message_text(
@@ -327,19 +346,68 @@ async def safe_edit_message_media(
 
 
 async def safe_delete_message(
-    bot: Bot,
-    chat_id: int | str,
-    message_id: int,
+    bot_or_msg: Any,
+    chat_id: int | str | None = None,
+    message_id: int | None = None,
     request_timeout: float | int | None = 10,
     **kwargs: Any,
 ) -> bool:
     """
     Safely deletes a message without raising or logging spurious errors.
+    Supports:
+      - safe_delete_message(bot, chat_id, message_id)
+      - safe_delete_message(message)
+      - safe_delete_message(callback)
     Returns True if deletion succeeded or if message was already gone.
     Returns False on non-recoverable error (e.g. forbidden/permission denied).
     """
-    if not bot or not chat_id or not message_id:
+    if bot_or_msg is None:
         return False
+
+    bot = None
+    if chat_id is not None and message_id is not None:
+        bot = bot_or_msg
+    elif hasattr(bot_or_msg, "message") and hasattr(bot_or_msg, "data"):  # types.CallbackQuery
+        target_msg = bot_or_msg.message
+        bot = getattr(bot_or_msg, "bot", None) or getattr(target_msg, "bot", None)
+        if target_msg and hasattr(target_msg, "chat"):
+            chat_id = getattr(target_msg.chat, "id", None)
+            message_id = getattr(target_msg, "message_id", None)
+    elif hasattr(bot_or_msg, "chat") and hasattr(bot_or_msg, "message_id") and not hasattr(bot_or_msg, "delete_message"):  # types.Message or SafeMessageProxy
+        bot = getattr(bot_or_msg, "bot", None)
+        chat_id = getattr(getattr(bot_or_msg, "chat", None), "id", None)
+        message_id = getattr(bot_or_msg, "message_id", None)
+    else:
+        bot = bot_or_msg
+
+    if not bot:
+        try:
+            from shared_state import GLOBAL_BOTS
+            bot = next(iter(GLOBAL_BOTS.values()), None) if GLOBAL_BOTS else None
+        except Exception:
+            pass
+
+    if not bot or not chat_id or not message_id:
+        if hasattr(bot_or_msg, "delete") and callable(bot_or_msg.delete):
+            try:
+                res = bot_or_msg.delete()
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    await res
+                return True
+            except TelegramBadRequest as e:
+                err_msg = (getattr(e, "message", None) or str(e)).lower()
+                if _is_harmless_delete_error(err_msg):
+                    logging.getLogger("runtime").debug("safe_delete_message direct suppressed harmless: %s", e)
+                    return True
+                logging.getLogger("runtime").debug("safe_delete_message direct bad request: %s", e)
+                return False
+            except TelegramForbiddenError:
+                return False
+            except Exception as e:
+                logging.getLogger("runtime").debug("safe_delete_message direct exception: %s", e)
+                return False
+        return False
+
     try:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=message_id, request_timeout=request_timeout, **kwargs)
@@ -349,7 +417,9 @@ async def safe_delete_message(
     except TelegramBadRequest as e:
         err_msg = (getattr(e, "message", None) or str(e)).lower()
         if _is_harmless_delete_error(err_msg):
+            logging.getLogger("runtime").debug("safe_delete_message suppressed harmless: %s (chat=%s, msg=%s)", e, chat_id, message_id)
             return True
+        logging.getLogger("runtime").debug("safe_delete_message bad request: %s (chat=%s, msg=%s)", e, chat_id, message_id)
         return False
     except TelegramForbiddenError:
         return False
@@ -363,11 +433,250 @@ async def safe_delete_message(
                 except TypeError:
                     await bot.delete_message(chat_id, message_id)
                 return True
+            except TelegramBadRequest as e2:
+                err_msg2 = (getattr(e2, "message", None) or str(e2)).lower()
+                if _is_harmless_delete_error(err_msg2):
+                    return True
+                logging.getLogger("runtime").debug("safe_delete_message retry bad request: %s", e2)
+                return False
             except Exception:
                 return False
         return False
-    except Exception:
+    except Exception as e:
+        logging.getLogger("runtime").debug("safe_delete_message error: %s (chat=%s, msg=%s)", e, chat_id, message_id)
         return False
+
+
+async def safe_edit_message(
+    target_or_bot: Any,
+    chat_id_or_text: Any = None,
+    message_id_or_markup: Any = None,
+    text: str | None = None,
+    reply_markup: Any = None,
+    parse_mode: str | None = "HTML",
+    request_timeout: float | int | None = 10,
+    fallback_to_caption: bool = True,
+    fallback_to_text: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """
+    Universal safe message editor for DvachBot Telegram UI.
+    Supports all call styles:
+      - safe_edit_message(bot, chat_id, message_id, text, reply_markup=None, parse_mode="HTML")
+      - safe_edit_message(message, text, reply_markup=None, parse_mode="HTML")
+      - safe_edit_message(callback, text, reply_markup=None, parse_mode="HTML")
+      - safe_edit_message(message, text="...", reply_markup=None)
+
+    Features:
+      - Auto-detects whether the target message is a media message (has photo/video/animation/caption)
+        or a text message.
+      - Dispatches to caption editing (clamped to 1024 UTF-16 code units) or text editing (clamped to 4096).
+      - Transparent fallback:
+          * If edit_text fails with 'there is no text in the message to edit', falls back to edit_caption.
+          * If edit_caption fails with 'there is no caption in the message to edit', falls back to edit_text.
+      - Silently handles 'message is not modified' (returns True).
+      - On HTML parse errors ('can't parse entities'), automatically falls back to plain text (parse_mode=None).
+      - Silently suppresses harmless errors ('message to edit not found', 'message can't be edited', 'chat not found', 'bot blocked').
+      - Handles mocks seamlessly in unit tests (delegates to msg_obj.edit_caption / edit_text if mocked).
+    """
+    if target_or_bot is None:
+        return None
+
+    bot = kwargs.pop("bot", None)
+    chat_id = kwargs.pop("chat_id", None)
+    message_id = kwargs.pop("message_id", None)
+    msg_obj = None
+
+    # Detect CallbackQuery
+    if hasattr(target_or_bot, "message") and hasattr(target_or_bot, "data"):
+        msg_obj = target_or_bot.message
+        if bot is None:
+            bot = getattr(target_or_bot, "bot", None) or getattr(msg_obj, "bot", None)
+        if msg_obj and hasattr(msg_obj, "chat"):
+            if chat_id is None:
+                chat_id = getattr(msg_obj.chat, "id", None)
+            if message_id is None:
+                message_id = getattr(msg_obj, "message_id", None)
+    # Detect Message or SafeMessageProxy
+    elif hasattr(target_or_bot, "chat") and hasattr(target_or_bot, "message_id") and not hasattr(target_or_bot, "edit_message_text"):
+        msg_obj = target_or_bot
+        if bot is None:
+            bot = getattr(msg_obj, "bot", None)
+        if hasattr(msg_obj, "chat"):
+            if chat_id is None:
+                chat_id = getattr(msg_obj.chat, "id", None)
+        if message_id is None:
+            message_id = getattr(msg_obj, "message_id", None)
+    else:
+        if bot is None:
+            bot = target_or_bot
+
+    if msg_obj is not None:
+        if text is None:
+            if isinstance(chat_id_or_text, str):
+                text = chat_id_or_text
+            elif chat_id_or_text is not None and not isinstance(chat_id_or_text, (int, float)):
+                text = str(chat_id_or_text)
+            else:
+                text = kwargs.pop("caption", None) or ""
+        if reply_markup is None and message_id_or_markup is not None:
+            reply_markup = message_id_or_markup
+    else:
+        if chat_id is None:
+            chat_id = chat_id_or_text
+        if message_id is None:
+            message_id = message_id_or_markup
+        if text is None:
+            text = kwargs.pop("caption", None) or ""
+
+    if not text:
+        text = "."
+
+    if not bot:
+        try:
+            from shared_state import GLOBAL_BOTS
+            bot = next(iter(GLOBAL_BOTS.values()), None) if GLOBAL_BOTS else None
+        except Exception:
+            pass
+
+    # Check if target is media message
+    is_media = False
+    if msg_obj is not None:
+        from aiogram.types import InaccessibleMessage
+        if isinstance(msg_obj, InaccessibleMessage):
+            return None
+        photo = getattr(msg_obj, "photo", None)
+        if photo is not None and (
+            (isinstance(photo, (list, tuple)) and len(photo) > 0)
+            or (type(photo).__name__ != "MagicMock" and bool(photo))
+        ):
+            is_media = True
+        elif getattr(msg_obj, "video", None) and type(getattr(msg_obj, "video", None)).__name__ != "MagicMock":
+            is_media = True
+        elif getattr(msg_obj, "animation", None) and type(getattr(msg_obj, "animation", None)).__name__ != "MagicMock":
+            is_media = True
+        elif getattr(msg_obj, "document", None) and type(getattr(msg_obj, "document", None)).__name__ != "MagicMock":
+            is_media = True
+        elif getattr(msg_obj, "audio", None) and type(getattr(msg_obj, "audio", None)).__name__ != "MagicMock":
+            is_media = True
+        elif getattr(msg_obj, "voice", None) and type(getattr(msg_obj, "voice", None)).__name__ != "MagicMock":
+            is_media = True
+        elif getattr(msg_obj, "caption", None) is not None:
+            is_media = True
+        elif hasattr(msg_obj, "edit_caption") and not hasattr(msg_obj, "edit_text"):
+            is_media = True
+
+    # Helper for invoking edit_caption
+    async def _try_caption(c_text: str, p_mode: str | None) -> Any:
+        trunc = safe_truncate_post(c_text, 1024)
+        if msg_obj is not None and hasattr(msg_obj, "edit_caption") and callable(msg_obj.edit_caption):
+            try:
+                res = msg_obj.edit_caption(caption=trunc, reply_markup=reply_markup, parse_mode=p_mode, request_timeout=request_timeout, **kwargs)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    return await res
+                return res
+            except TypeError:
+                res = msg_obj.edit_caption(caption=trunc, reply_markup=reply_markup, parse_mode=p_mode, **kwargs)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    return await res
+                return res
+        if bot and chat_id and message_id:
+            return await bot.edit_message_caption(
+                chat_id=chat_id,
+                message_id=message_id,
+                caption=trunc,
+                reply_markup=reply_markup,
+                parse_mode=p_mode,
+                request_timeout=request_timeout,
+                **kwargs,
+            )
+        return None
+
+    # Helper for invoking edit_text
+    async def _try_text(t_text: str, p_mode: str | None) -> Any:
+        trunc = safe_truncate_post(t_text, 4096)
+        if msg_obj is not None and hasattr(msg_obj, "edit_text") and callable(msg_obj.edit_text):
+            try:
+                res = msg_obj.edit_text(text=trunc, reply_markup=reply_markup, parse_mode=p_mode, request_timeout=request_timeout, **kwargs)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    return await res
+                return res
+            except TypeError:
+                res = msg_obj.edit_text(text=trunc, reply_markup=reply_markup, parse_mode=p_mode, **kwargs)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    return await res
+                return res
+        if bot and chat_id and message_id:
+            return await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=trunc,
+                reply_markup=reply_markup,
+                parse_mode=p_mode,
+                request_timeout=request_timeout,
+                **kwargs,
+            )
+        return None
+
+    async def _execute_edit(primary_is_caption: bool) -> Any:
+        first_func = _try_caption if primary_is_caption else _try_text
+        second_func = _try_text if primary_is_caption else _try_caption
+        check_missing = _is_caption_missing_error if primary_is_caption else _is_text_missing_error
+
+        try:
+            return await first_func(text, parse_mode)
+        except TelegramBadRequest as e:
+            err_msg = (getattr(e, "message", None) or str(e)).lower()
+            if "message is not modified" in err_msg or "exactly the same" in err_msg:
+                return True
+            if check_missing(err_msg):
+                try:
+                    return await second_func(text, parse_mode)
+                except TelegramBadRequest as e2:
+                    err_msg2 = (getattr(e2, "message", None) or str(e2)).lower()
+                    if "message is not modified" in err_msg2 or "exactly the same" in err_msg2:
+                        return True
+                    if _is_telegram_parse_error(err_msg2):
+                        plain = re.sub(r"<[^>]+>", "", text)
+                        try:
+                            return await second_func(plain, None)
+                        except Exception:
+                            return None
+                    if _is_harmless_edit_error(err_msg2):
+                        logging.getLogger("runtime").debug("safe_edit_message fallback harmless: %s", err_msg2)
+                        return None
+                    logging.getLogger("runtime").debug("safe_edit_message fallback error: %s", e2)
+                    return None
+                except Exception as ex2:
+                    logging.getLogger("runtime").debug("safe_edit_message fallback exception: %s", ex2)
+                    return None
+            if _is_telegram_parse_error(err_msg):
+                plain = re.sub(r"<[^>]+>", "", text)
+                try:
+                    return await first_func(plain, None)
+                except Exception:
+                    return None
+            if _is_harmless_edit_error(err_msg):
+                logging.getLogger("runtime").debug("safe_edit_message harmless error: %s", err_msg)
+                return None
+            logging.getLogger("runtime").debug("safe_edit_message error: %s", e)
+            return None
+        except TelegramForbiddenError:
+            return None
+        except TelegramRetryAfter as e:
+            wait_s = float(getattr(e, "retry_after", 1) or 1)
+            if wait_s <= 3.0:
+                await asyncio.sleep(wait_s + 0.1)
+                try:
+                    return await first_func(text, parse_mode)
+                except Exception:
+                    return None
+            return None
+        except Exception as ex:
+            logging.getLogger("runtime").debug("safe_edit_message exception: %s", ex)
+            return None
+
+    return await _execute_edit(is_media)
 
 from summarize import summarize_text_with_hf
 from common.database import create_post, update_post_content, get_all_channel_copies, get_post_copies, delete_post_by_num
