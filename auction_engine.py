@@ -48,6 +48,9 @@ __all__ = [
     "format_shekels",
     "format_outbid_notification",
     "format_anti_sniping_notice",
+    "format_auction_winner_dm",
+    "format_auction_public_announcement",
+    "dispatch_auction_completion_notifications",
     "auction_bid_in_flight_guard",
     "is_bid_in_flight",
     "check_bid_debounce",
@@ -159,11 +162,17 @@ def format_outbid_notification(
     - Четко сообщает о перебитии ставки.
     - Подтверждает 100% возврат заблокированного депозита из эскроу на баланс.
     - Указывает актуальную лидирующую ставку лота.
+    - Соблюдает полную анонимность лидера (не выводит сырой user_id).
     """
+    if isinstance(new_leader_name, int) or (isinstance(new_leader_name, str) and new_leader_name.strip().isdigit()):
+        clean_leader = generate_anon_name(int(new_leader_name))
+    else:
+        clean_leader = html.escape(str(new_leader_name or "Другой участник"))
+
     return (
         f"🔔 <b>ВНИМАНИЕ! ТВОЮ СТАВКУ ПЕРЕБИЛИ!</b>\n\n"
         f"🏛️ <b>Аукцион:</b> #{auction_id} ({lot_title})\n"
-        f"👤 <b>Новый лидер:</b> {new_leader_name}\n"
+        f"👤 <b>Новый лидер:</b> {clean_leader}\n"
         f"⚡ <b>Новая ставка:</b> {format_shekels(new_bid)}\n\n"
         f"💰 <b>Возврат депозита:</b> Твоя заблокированная ставка {format_shekels(refunded_amount)} "
         f"автоматически и в полном объёме возвращена на твой баланс (100% эскроу-возврат)!\n\n"
@@ -181,6 +190,191 @@ def format_anti_sniping_notice(extension_sec: int = 300) -> str:
         f"Время аукциона автоматически продлено на +{mins} мин. (+{extension_sec} сек.), "
         f"чтобы исключить снайпинг в последнюю секунду и дать честный шанс всем участникам."
     )
+
+
+def format_auction_winner_dm(auc: Dict[str, Any]) -> str:
+    """
+    Формирует красивое и подробное личное уведомление (DM) победителю аукциона.
+    Включает информацию о выигранном лоте, финальной ставке, начисленной награде
+    и 100% сжигании средств в Фонд Яхты Абу.
+    """
+    auc_id = auc.get("auction_id", 0)
+    title = html.escape(str(auc.get("title", f"Лот #{auc_id}")))
+    lot_type = str(auc.get("lot_type", "")).strip().lower()
+    winning_bid = auc.get("winning_bid", 0.0)
+    raw_desc = str(auc.get("description", "")).strip()
+
+    reward_details = ""
+    if lot_type == "custom_role":
+        prefix = raw_desc if raw_desc.startswith("[") else f"[{raw_desc}]"
+        safe_prefix = html.escape(prefix)
+        reward_details = f"🏷️ <b>Награда:</b> Уникальный префикс <b>{safe_prefix}</b> активирован в твоем профиле на 30 дней!\n"
+    elif lot_type == "board_pin":
+        reward_details = "📌 <b>Награда:</b> VIP-ваучер на закрепление треда добавлен в твой профиль (активные предметы)!\n"
+    elif lot_type == "custom_badge":
+        reward_details = f"🎖️ <b>Награда:</b> Уникальный бейдж <b>{title}</b> добавлен в твой профиль!\n"
+    else:
+        reward_details = f"🎁 <b>Награда:</b> Лот «{title}» успешно начислен на твой аккаунт!\n"
+
+    return (
+        f"🎉 <b>ТЫ ВЫИГРАЛ АУКЦИОН #{auc_id}!</b>\n\n"
+        f"📦 <b>Выигранный лот:</b> {title}\n"
+        f"💰 <b>Финальная ставка:</b> <code>{format_shekels(winning_bid)}</code>\n"
+        f"{reward_details}\n"
+        f"🔥 100% шекелей твоей ставки сожжены в <b>Фонд Яхты Абу</b> на благо Двачеводства!\n\n"
+        f"Посмотреть активные лоты и участвовать снова: <code>/auction</code>"
+    )
+
+
+def format_auction_public_announcement(auc: Dict[str, Any]) -> str:
+    """
+    Формирует публичное объявление о завершении аукциона для публикации на доске / в треде.
+    СТРОГАЯ АНОНИМНОСТЬ: отображает ТОЛЬКО анонимный хэш/псевдоним победителя (anon_name),
+    сырой user_id НИКОГДА не выводится в публичный текст.
+    """
+    auc_id = auc.get("auction_id", 0)
+    title = html.escape(str(auc.get("title", f"Лот #{auc_id}")))
+    lot_type = str(auc.get("lot_type", "")).strip().lower()
+    winning_bid = auc.get("winning_bid", 0.0)
+    raw_winner_name = auc.get("winner_name")
+    winner_id = auc.get("winner_id")
+
+    # Строгая защита анонимности: если winner_name это сырой ID (цифры) или отсутствует
+    if not raw_winner_name or (isinstance(raw_winner_name, str) and raw_winner_name.strip().isdigit()):
+        anon_name = generate_anon_name(winner_id or 0)
+    else:
+        anon_name = str(raw_winner_name).strip()
+
+    safe_anon_name = html.escape(anon_name)
+
+    lot_type_labels = {
+        "custom_role": "Уникальный префикс",
+        "board_pin": "VIP-закрепление треда",
+        "custom_badge": "Коллекционный бейдж",
+    }
+    type_label = lot_type_labels.get(lot_type, "Особый лот")
+
+    return (
+        f"🏛️ <b>АУКЦИОН #{auc_id} ЗАВЕРШЕН!</b>\n\n"
+        f"📦 <b>Лот:</b> {title} (<i>{type_label}</i>)\n"
+        f"🏆 <b>Победитель:</b> <b>{safe_anon_name}</b>\n"
+        f"💰 <b>Финальная ставка:</b> <code>{format_shekels(winning_bid)}</code>\n\n"
+        f"🔥 100% суммы ({format_shekels(winning_bid)}) безвозвратно сожжены в Фонд Яхты Абу!\n"
+        f"Новые торги и текущие лоты: <code>/auction</code>"
+    )
+
+
+async def dispatch_auction_completion_notifications(
+    bots: Any,
+    finished_auctions: List[Dict[str, Any]],
+    board_data: Any = None,
+    db: Any = None
+) -> Dict[str, Any]:
+    """
+    Рассылает уведомления о завершении аукционов:
+    1. Персональное ЛС победителю в Telegram через бота.
+    2. Публичный анонс на доске Двачеводства (через create_post и enqueue_board_message).
+    Гарантирует идемпотентность (через флаг _notified) и отсутствие сбоев рабочего цикла.
+    """
+    stats = {
+        "dm_sent": 0,
+        "dm_failed": 0,
+        "board_posts": 0,
+        "board_posts_failed": 0,
+    }
+    if not finished_auctions:
+        return stats
+
+    b_bot = None
+    if isinstance(bots, dict):
+        b_bot = bots.get('b') or bots.get('ru') or (next(iter(bots.values())) if bots else None)
+    elif hasattr(bots, "send_message"):
+        b_bot = bots
+    if not b_bot:
+        try:
+            from common.bot_pool import global_bot_pool
+            b_bot = global_bot_pool.get_default_bot()
+        except Exception:
+            pass
+
+    if board_data is None:
+        try:
+            import shared_state
+            board_data = getattr(shared_state, "board_data", None)
+        except Exception:
+            pass
+
+    for auc in finished_auctions:
+        if auc.get("_notified"):
+            continue
+
+        winner_id = auc.get("winner_id")
+        winning_bid = auc.get("winning_bid", 0.0)
+
+        # 1. Личное сообщение победителю в Telegram
+        if winner_id and winning_bid > 0 and b_bot:
+            dm_text = format_auction_winner_dm(auc)
+            try:
+                await b_bot.send_message(
+                    chat_id=winner_id,
+                    text=dm_text,
+                    parse_mode="HTML"
+                )
+                stats["dm_sent"] += 1
+                await asyncio.sleep(0.05)
+            except Exception as e_dm:
+                stats["dm_failed"] += 1
+                logger.warning(f"Failed to dispatch auction winner DM to user {winner_id}: {e_dm}")
+
+        # 2. Публичный анонс на доске Двачеводства
+        target_board = str(auc.get("board_id") or "b")
+        announcement_text = format_auction_public_announcement(auc)
+
+        try:
+            from common.database import create_post, update_post_content
+            from post_helpers import format_header
+            import shared_state
+
+            content_obj = {
+                'type': 'text',
+                'text': announcement_text,
+                'is_system_message': True,
+                'archive_allowed': True
+            }
+
+            pnum = await create_post(
+                board_id=target_board,
+                author_id=0,
+                content=content_obj,
+                timestamp=time.time()
+            )
+
+            if pnum:
+                header_base = await format_header(target_board, pnum)
+                content_obj['header'] = f"### ABU YACHT AUCTION ###\n{header_base}"
+                await update_post_content(pnum, content_obj)
+
+                recipients = set()
+                if board_data and target_board in board_data:
+                    u_dict = board_data[target_board].get('users', {})
+                    active_u = u_dict.get('active', set())
+                    banned_u = u_dict.get('banned', set())
+                    recipients = active_u - banned_u
+
+                await shared_state.enqueue_board_message(target_board, {
+                    "recipients": recipients,
+                    "content": content_obj,
+                    "post_num": pnum,
+                    "board_id": target_board
+                })
+                stats["board_posts"] += 1
+        except Exception as e_board:
+            stats["board_posts_failed"] += 1
+            logger.warning(f"Failed to publish auction announcement to board {target_board}: {e_board}")
+
+        auc["_notified"] = True
+
+    return stats
 
 auction_router = Router(name="auction_router")
 
@@ -280,7 +474,7 @@ def build_auction_list_kb(page: int, total_pages: int) -> InlineKeyboardMarkup:
 # 1. /auction HANDLER
 # =============================================================================
 
-@auction_router.message(F.text.regexp(r"^/(auction|auctions|аукцион)\b", flags=re.IGNORECASE))
+@auction_router.message(F.text.regexp(r"^/(auction|auctions|аукцион)(?:@\w+)?(?:\s|$)", flags=re.IGNORECASE))
 async def cmd_auction(message: types.Message, board_id: str | None = None, **kwargs):
     """
     Displays active auctions or allows creating lots via /auction create.
@@ -387,7 +581,14 @@ async def cmd_auction(message: types.Message, board_id: str | None = None, **kwa
         hours_left = mins_left // 60
         rem_str = f"{hours_left} ч. {mins_left % 60} мин." if hours_left > 0 else f"{mins_left} мин."
         next_min = (auc["current_bid"] + auc["min_bid_step"]) if auc["current_winner_id"] else auc["start_price"]
-        leader = html.escape(str(auc["current_winner_name"] or "Нет ставок"))
+        raw_leader = auc.get("current_winner_name")
+        if raw_leader and not (isinstance(raw_leader, str) and raw_leader.strip().isdigit()):
+            leader_display = str(raw_leader).strip()
+        elif auc.get("current_winner_id"):
+            leader_display = generate_anon_name(auc["current_winner_id"])
+        else:
+            leader_display = "Нет ставок"
+        leader = html.escape(leader_display)
         safe_title = html.escape(str(auc['title']))
         safe_desc = html.escape(str(auc['description']))
 
@@ -441,7 +642,14 @@ async def cb_auction_page(callback: types.CallbackQuery):
             hours_left = mins_left // 60
             rem_str = f"{hours_left} ч. {mins_left % 60} мин." if hours_left > 0 else f"{mins_left} мин."
             next_min = (auc["current_bid"] + auc["min_bid_step"]) if auc["current_winner_id"] else auc["start_price"]
-            leader = html.escape(str(auc["current_winner_name"] or "Нет ставок"))
+            raw_leader = auc.get("current_winner_name")
+            if raw_leader and not (isinstance(raw_leader, str) and raw_leader.strip().isdigit()):
+                leader_display = str(raw_leader).strip()
+            elif auc.get("current_winner_id"):
+                leader_display = generate_anon_name(auc["current_winner_id"])
+            else:
+                leader_display = "Нет ставок"
+            leader = html.escape(leader_display)
             safe_title = html.escape(str(auc['title']))
             safe_desc = html.escape(str(auc['description']))
 
@@ -470,7 +678,7 @@ async def cb_auc_noop(callback: types.CallbackQuery):
     await safe_callback_answer(callback)
 
 
-@auction_router.message(F.text.regexp(r"^/(bid|auction_bid|ставка)\b", flags=re.IGNORECASE))
+@auction_router.message(F.text.regexp(r"^/(bid|auction_bid|ставка)(?:@\w+)?(?:\s|$)", flags=re.IGNORECASE))
 async def cmd_bid(message: types.Message):
     """
     Places an atomic bid on an active auction.
@@ -592,7 +800,7 @@ async def cmd_bid(message: types.Message):
 # 3. /whale_safe HANDLER
 # =============================================================================
 
-@auction_router.message(F.text.regexp(r"^/(whale_safe|whale|сейф_олигарха)\b", flags=re.IGNORECASE))
+@auction_router.message(F.text.regexp(r"^/(whale_safe|whale|сейф_олигарха)(?:@\w+)?(?:\s|$)", flags=re.IGNORECASE))
 async def cmd_whale_safe(message: types.Message, board_id: str | None = None, **kwargs):
     """
     Purchases and opens a Whale Safe (Сейф Олигарха).
@@ -659,7 +867,7 @@ async def cmd_whale_safe(message: types.Message, board_id: str | None = None, **
 # 4. /raid_oligarch & LOBBY HANDLERS
 # =============================================================================
 
-@auction_router.message(F.text.regexp(r"^/(raid_oligarch|раскулачить|raid|рейд)\b", flags=re.IGNORECASE))
+@auction_router.message(F.text.regexp(r"^/(raid_oligarch|раскулачить|raid|рейд)(?:@\w+)?(?:\s|$)", flags=re.IGNORECASE))
 async def cmd_raid_oligarch(message: types.Message, board_id: str | None = None, **kwargs):
     """
     Initiates or executes a collaborative proletarian raid against an oligarch.

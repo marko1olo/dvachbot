@@ -512,10 +512,15 @@ async def place_auction_bid(
     }
 
 
-async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
+async def finish_active_auctions(
+    db: Any,
+    bots: Any = None,
+    board_data: Any = None
+) -> List[Dict[str, Any]]:
     """
     Checks for ended auctions, marks status = 'finished',
     burns 100% of winning bids to abu_yacht_fund, and awards rewards.
+    Optionally dispatches DM to winner and board announcement if bots is provided.
     Returns list of processed auction records.
     """
     await ensure_auction_schema(db)
@@ -606,10 +611,20 @@ async def finish_active_auctions(db: Any) -> List[Dict[str, Any]]:
                         "auction_id": auc_id,
                         "lot_type": lot_type,
                         "title": title,
+                        "description": desc or "",
                         "winning_bid": winning_bid,
                         "winner_id": winner_id,
-                        "winner_name": winner_name
+                        "winner_name": winner_name,
+                        "board_id": board_id or "b",
                     })
+
+    if finished_list and bots is not None:
+        try:
+            from auction_engine import dispatch_auction_completion_notifications
+            await dispatch_auction_completion_notifications(bots, finished_list, board_data=board_data, db=db)
+        except Exception as e_fanout:
+            import logging
+            logging.getLogger(__name__).warning(f"Error dispatching auction notifications in finish_active_auctions: {e_fanout}")
 
     return finished_list
 
