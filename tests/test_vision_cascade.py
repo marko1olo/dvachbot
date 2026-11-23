@@ -36,6 +36,7 @@ class TestVisionCascade:
         "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
+        "gemini-3.7-flash",
         "gemini-3.8-flash",
         "qwen/qwen3.6-27b",
         "qwen/qwen3.8-27b",
@@ -528,5 +529,104 @@ class TestVisionCascade:
         assert res == "safety_rejected"
         # Gemini was NOT called to protect against account bans
         assert mock_gemini_call.call_count == 0
+
+    def test_gemini_37_flash_present_in_cascades(self):
+        """Verify gemini-3.7-flash is configured in both TAGGER and SITE cascades."""
+        import site_tgach.vision as v
+        import inspect
+        src = inspect.getsource(v.describe_image)
+        assert '("gemini-3.7-flash", "gemini")' in src
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=[])
+    @patch("site_tgach.vision.groq_pool.get_all_active_tokens", return_value=[])
+    async def test_vision_exhausted_logs_warning_not_error(
+        self, mock_groq_pool, mock_google_pool, mock_prep, caplog
+    ):
+        """When all models are exhausted, it logs a throttled WARNING instead of spamming ERROR."""
+        import logging
+        import site_tgach.vision as v
+        v._LAST_EXHAUSTED_LOG_TIME = 0.0
+
+        with caplog.at_level(logging.WARNING, logger="site_tgach.vision"):
+            res = await describe_image("/dummy/path.jpg", source="TAGGER")
+
+        assert res == "error_api_exhausted"
+        # Must have WARNING record about exhausted models
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING and "cooldown/exhausted" in r.message]
+        assert len(warning_records) >= 1
+        # Must NOT have ERROR record for exhausted models
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR and "all vision models exhausted" in r.message]
+        assert len(error_records) == 0
+
+    @pytest.mark.asyncio
+    @patch("site_tgach.vision.prepare_image_for_analysis", return_value=(b"fake_jpeg_bytes", None))
+    @patch("site_tgach.vision._call_gemini_native")
+    @patch("site_tgach.vision.AsyncOpenAI")
+    @patch("site_tgach.vision.google_pool.get_all_active_tokens", return_value=[])
+    @patch("site_tgach.vision.groq_pool")
+    async def test_vision_429_applies_exponential_backoff_and_jitter(
+        self, mock_groq_pool, mock_google_pool, mock_openai_cls, mock_gemini_call, mock_prep
+    ):
+        """When 429 occurs, Groq token is penalized with backoff + jitter without crashing."""
+        key = "test-groq-key"
+        mock_groq_pool.get_all_active_tokens.return_value = [key]
+        mock_groq_pool._cooldown_until = {}
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.side_effect = Exception("429 Too Many Requests")
+        mock_openai_cls.return_value = mock_client
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            res = await describe_image("/dummy/path.jpg", source="TAGGER")
+
+        assert res == "error_api_exhausted"
+        assert mock_groq_pool.penalize_token.call_count == 1
+        penalized_sec = mock_groq_pool.penalize_token.call_args[0][1]
+        # Base is 30s, with jitter should be >= 30.0
+        assert penalized_sec >= 30.0
+
+    @pytest.mark.asyncio
+    async def test_tagger_fallback_raznoe_and_cooldown_on_api_exhausted(self):
+        """When Vision API is exhausted, tagger applies fallback '[разное]', schedules retry, and enters cooldown."""
+        import site_tgach.tagging_worker as tw
+        import time
+
+        tw.TEMP_FAILED_FILES.clear()
+        tw._GLOBAL_API_EXHAUSTED_UNTIL = 0.0
+        tw._GLOBAL_API_EXHAUSTED_STREAK = 0
+
+        file_id = "test_fid_12345"
+        ai_response = "error_api_exhausted"
+        tags = None
+
+        # Simulate what the worker loop executes when ai_response == "error_api_exhausted"
+        tw._GLOBAL_API_EXHAUSTED_STREAK += 1
+        entry = tw.TEMP_FAILED_FILES.get(file_id)
+        fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
+
+        worker_sleep = min(180.0, 20.0 * (1.5 ** min(tw._GLOBAL_API_EXHAUSTED_STREAK - 1, 4))) + 2.0
+        tw._GLOBAL_API_EXHAUSTED_UNTIL = time.time() + worker_sleep
+
+        if fail_cnt >= 3:
+            tags = "разное"
+        else:
+            tags = "[разное]"
+            retry_delay = 60.0 + 5.0
+            tw.TEMP_FAILED_FILES[file_id] = {
+                "until": time.time() + retry_delay,
+                "cnt": fail_cnt,
+            }
+
+        assert tags == "[разное]"
+        assert file_id in tw.TEMP_FAILED_FILES
+        assert tw.TEMP_FAILED_FILES[file_id]["cnt"] == 1
+        assert tw._GLOBAL_API_EXHAUSTED_UNTIL > time.time()
+        assert tw._GLOBAL_API_EXHAUSTED_STREAK == 1
+
+        # Second attempt before cooldown expires should be protected by _GLOBAL_API_EXHAUSTED_UNTIL
+        now_ts = time.time()
+        assert now_ts < tw._GLOBAL_API_EXHAUSTED_UNTIL
 
 

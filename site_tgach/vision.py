@@ -53,6 +53,7 @@ BANNED_GEMINI_KEYS = set()
 _LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
 _GLOBAL_GEMINI_LAST_CALL = 0.0
 _GLOBAL_GROQ_LAST_CALL = 0.0
+_LAST_EXHAUSTED_LOG_TIME = 0.0
 _KEY_RATE_LOCK = None
 _KEY_RATE_LOCK_LOOP = None
 
@@ -426,6 +427,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
                     ("gemini-3.6-flash", "gemini"),
+                    ("gemini-3.7-flash", "gemini"),
                 ]
             else:
                 models_cascade = [
@@ -433,6 +435,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     ("gemini-3.5-flash-lite", "gemini"),
                     ("gemini-3.5-flash", "gemini"),
                     ("gemini-3.6-flash", "gemini"),
+                    ("gemini-3.7-flash", "gemini"),
                     ("qwen/qwen3.8-27b", "groq"),
                 ]
 
@@ -765,31 +768,35 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 continue
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
+                                jitter = random.uniform(0.5, 2.0)
                                 if provider == "groq":
-                                    # Exponential backoff for Groq 429: 2s, 4s, 8s, 16s, 32s, max 60s
-                                    groq_backoff = min(60.0, 2.0 * (2 ** (consecutive_429 - 1)))
+                                    # Exponential backoff for Groq 429: 2s, 4s, 8s, 16s, 32s, max 60s + jitter
+                                    groq_backoff = min(60.0, 2.0 * (2 ** (consecutive_429 - 1))) + jitter
                                     cd_duration = _extract_retry_after_seconds(
                                         err_str,
                                         default_sec=min(300.0, 30.0 * (2 ** (consecutive_429 - 1)))
-                                    )
+                                    ) + jitter
                                 else:
-                                    groq_backoff = 3.0
-                                    cd_duration = _extract_retry_after_seconds(err_str, default_sec=45.0)
+                                    groq_backoff = min(15.0, 3.0 * (1.5 ** (consecutive_429 - 1))) + jitter
+                                    cd_duration = _extract_retry_after_seconds(
+                                        err_str,
+                                        default_sec=min(180.0, 45.0 * (1.5 ** (consecutive_429 - 1)))
+                                    ) + jitter
 
                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} rate limited (429). Penalizing for {cd_duration:.0f}s.")
                                 pool.penalize_token(selected_key, cd_duration)
                                 async with _get_key_rate_lock():
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
                                     if provider == "gemini":
-                                        _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0)
+                                        _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0 + jitter)
                                     else:
                                         _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + groq_backoff)
                                         GROQ_COOLDOWN_UNTIL = max(GROQ_COOLDOWN_UNTIL, time.time() + groq_backoff)
                                 available_keys.remove(selected_key)
 
                                 if len(available_keys) == 0:
-                                    # All keys exhausted on rate limits — back off for 30 min (Groq) or 5 min (Gemini)
-                                    halt_sec = 1800.0 if provider == "groq" else 300.0
+                                    # All keys exhausted on rate limits — back off for 30 min (Groq) or 5 min (Gemini) with jitter
+                                    halt_sec = (1800.0 if provider == "groq" else 300.0) + random.uniform(5.0, 30.0)
                                     logger.warning(f"⚠️ [VISION] [{source}] {provider} hit rate limits and no keys remain. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
                                     async with _get_key_rate_lock():
                                         if provider == "gemini":
@@ -800,7 +807,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                             skip_groq_models = True
                                     break
 
-                                sleep_sec = groq_backoff if provider == "groq" else 3.0
+                                sleep_sec = groq_backoff if provider == "groq" else (3.0 + jitter)
                                 await asyncio.sleep(sleep_sec)
                                 continue
                             if "timeout" in err_str or "timed out" in err_str:
@@ -833,7 +840,13 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 logger.error(f"\u274c [VISION] [{source}] Image rejected by all models (permanent error). Marking as invalid.")
                 return "error_file_invalid"
 
-            logger.error(f"\u274c [VISION] [{source}] Image analysis failed: all vision models exhausted.")
+            global _LAST_EXHAUSTED_LOG_TIME
+            now_log = time.time()
+            if now_log - _LAST_EXHAUSTED_LOG_TIME > 60.0:
+                logger.warning(f"⚠️ [VISION] [{source}] All vision models currently in cooldown/exhausted. Temporary backoff.")
+                _LAST_EXHAUSTED_LOG_TIME = now_log
+            else:
+                logger.debug(f"ℹ️ [VISION] [{source}] Vision models still in cooldown/exhausted.")
             return "error_api_exhausted"
 
         except Exception as e:

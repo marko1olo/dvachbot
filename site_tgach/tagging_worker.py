@@ -36,6 +36,7 @@ Functions:
 import logging
 import re
 import os
+import random
 import tempfile
 import time
 import httpx
@@ -75,6 +76,8 @@ BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насилов
 
 GROQ_COOLDOWN_UNTIL = 0
 TEMP_FAILED_FILES = {}
+_GLOBAL_API_EXHAUSTED_UNTIL = 0.0
+_GLOBAL_API_EXHAUSTED_STREAK = 0
 
 # Терминальные статусы тегирования — файлы с этими tags не нужно повторно обрабатывать,
 # даже если у них phash IS NULL. Любой новый финальный статус должен добавляться сюда.
@@ -488,10 +491,10 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
         query_registry = f"""
             SELECT file_id, file_type, thumbnail_id
             FROM FileRegistry
-            WHERE (tags IS NULL OR tags = '' OR phash IS NULL)
+            WHERE (tags IS NULL OR tags = '' OR tags = '[разное]' OR phash IS NULL)
               {_terminal_excl}
               AND file_id NOT IN ({placeholders})
-            ORDER BY created_at DESC
+            ORDER BY (CASE WHEN tags = '[разное]' THEN 1 ELSE 0 END) ASC, created_at DESC
             LIMIT 50
         """
         params = tuple(ex_slice)
@@ -499,9 +502,9 @@ async def get_tasks(db, exclude_fids: set | list | None = None, limit: int | Non
         query_registry = f"""
             SELECT file_id, file_type, thumbnail_id
             FROM FileRegistry
-            WHERE (tags IS NULL OR tags = '' OR phash IS NULL)
+            WHERE (tags IS NULL OR tags = '' OR tags = '[разное]' OR phash IS NULL)
               {_terminal_excl}
-            ORDER BY created_at DESC
+            ORDER BY (CASE WHEN tags = '[разное]' THEN 1 ELSE 0 END) ASC, created_at DESC
             LIMIT 50
         """
         params = ()
@@ -874,7 +877,7 @@ async def count_tagging_backlog(db) -> int:
     Терминальные статусы (download_failed, format_unsupported и т.д.) исключены — они
     никогда не будут переобработаны, даже при phash IS NULL."""
     async with db.execute(
-        f"SELECT COUNT(*) FROM FileRegistry WHERE (tags IS NULL OR tags = '' OR phash IS NULL)"
+        f"SELECT COUNT(*) FROM FileRegistry WHERE (tags IS NULL OR tags = '' OR tags = '[разное]' OR phash IS NULL)"
         f" AND (tags IS NULL OR tags NOT IN {_TERMINAL_TAGS_SQL})"
     ) as cursor:
         return (await cursor.fetchone())[0]
@@ -1197,7 +1200,7 @@ async def tagging_loop():
                 description = None
                 async def _check_existing_tags():
                     async with db.execute(
-                        "SELECT tags, description FROM FileRegistry WHERE (sha256 = ? OR sha256 LIKE ?) AND tags IS NOT NULL AND tags != '' LIMIT 1",
+                        "SELECT tags, description FROM FileRegistry WHERE (sha256 = ? OR sha256 LIKE ?) AND tags IS NOT NULL AND tags != '' AND tags != '[разное]' LIMIT 1",
                         (sha, f"{sha}_%"),
                     ) as cursor:
                         return await cursor.fetchone()
@@ -1215,15 +1218,23 @@ async def tagging_loop():
                         exc_info=True,
                     )
 
-                # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
-                if tags is None:
-                    ai_response = await get_neuro_tags(resized_bytes)
+                # 3. НЕЙРОНКА (Только если теги еще не найдены в БД или стоят временные fallback '[разное]')
+                if tags is None or tags == "[разное]":
+                    tags = None
+                    now_ts = time.time()
+                    if now_ts < _GLOBAL_API_EXHAUSTED_UNTIL:
+                        logger.debug(
+                            f"⏸️ [TAGGER] Vision APIs currently in cooldown ({(_GLOBAL_API_EXHAUSTED_UNTIL - now_ts):.1f}s left). Applying fallback '[разное]' without API call."
+                        )
+                        ai_response = "error_api_exhausted"
+                    else:
+                        ai_response = await get_neuro_tags(resized_bytes)
                     if ai_response in ("error_413", "error_too_large"):
                         tags = "error_too_large"
                     elif ai_response in ("safety_rejected", "safety_blocked"):
                         tags = "ecchi, anime, illustration, art"
                     elif ai_response == "error_api_exhausted":
-                        tags = None  # Force retry
+                        tags = None  # Handled below
                     elif ai_response == "error_file_invalid":
                         tags = "error_no_tags"  # Permanent failure
                     elif ai_response:
@@ -1249,51 +1260,61 @@ async def tagging_loop():
                                     if tags == "parse_error":
                                         tags = "media, photo"
                                     description = str(parsed.get("description", "")).strip()
+                                    _GLOBAL_API_EXHAUSTED_STREAK = 0
+                                    _GLOBAL_API_EXHAUSTED_UNTIL = 0.0
                             except Exception:
                                 tags = stripped
                         else:
                             tags = stripped
 
-                if tags is not None and file_id in TEMP_FAILED_FILES:
+                if tags is not None and tags != "[разное]" and file_id in TEMP_FAILED_FILES:
                     del TEMP_FAILED_FILES[file_id]
 
-                if tags is None and ai_response in (None, "error_api_exhausted"):
+                worker_sleep = 0.0
+                if tags is None and ai_response == "error_api_exhausted":
+                    _GLOBAL_API_EXHAUSTED_STREAK += 1
+                    entry = TEMP_FAILED_FILES.get(file_id)
+                    fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
+
+                    # Worker-level exponential backoff with jitter (20s, 30s, 45s, 67s... max 180s)
+                    worker_sleep = min(180.0, 20.0 * (1.5 ** min(_GLOBAL_API_EXHAUSTED_STREAK - 1, 4))) + random.uniform(2.0, 8.0)
+                    _GLOBAL_API_EXHAUSTED_UNTIL = time.time() + worker_sleep
+
+                    if fail_cnt >= 3:
+                        # Max retries reached — settle permanently as safe local tag 'разное'
+                        tags = "разное"
+                        description = "Медиафайл [разное] (исчерпаны попытки нейро-тегирования из-за лимитов API)"
+                        logger.warning(
+                            f"⚠️ [TAGGER] AI tagging permanently exhausted after {fail_cnt} attempts for {file_id[:15]}. Settled with tag 'разное'."
+                        )
+                        if file_id in TEMP_FAILED_FILES:
+                            del TEMP_FAILED_FILES[file_id]
+                    else:
+                        # Graceful fallback: assign safe default tag '[разное]' and schedule queue retry
+                        tags = "[разное]"
+                        description = f"Медиафайл [разное] (автоматическое тегирование временно недоступно из-за лимитов API, попытка {fail_cnt}/3)"
+
+                        # Exponential backoff with jitter for individual file retry in queue
+                        retry_delay = min(600.0, 60.0 * (1.5 ** (fail_cnt - 1))) + random.uniform(5.0, 20.0)
+                        TEMP_FAILED_FILES[file_id] = {
+                            "until": time.time() + retry_delay,
+                            "cnt": fail_cnt,
+                        }
+                        logger.warning(
+                            f"⏸️ [TAGGER] Vision models exhausted (attempt {fail_cnt}/3 for {file_id[:15]}). "
+                            f"Applied fallback '[разное]', scheduled queue retry in {retry_delay:.0f}s. Worker pause {worker_sleep:.1f}s."
+                        )
+
+                elif tags is None:
                     entry = TEMP_FAILED_FILES.get(file_id)
                     fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
                     if fail_cnt >= 2:
                         default_style = "media, photo" if file_type in ("photo", "image") else (f"media, {file_type}" if file_type else "media, image")
                         tags = default_style
-                        description = "Медиафайл (автоматическое тегирование временно недоступно из-за лимитов API)"
-                        logger.warning(f"⚠️ [TAGGER] AI tagging exhausted after {fail_cnt} attempts for {file_id[:15]}. Applying fallback tags ('{tags}') with visual hashes.")
+                        description = "Медиафайл (автоматическое тегирование временно недоступно)"
+                        logger.warning(f"⚠️ [TAGGER] AI tagging failed after {fail_cnt} attempts for {file_id[:15]}. Applying fallback tags ('{tags}') with visual hashes.")
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
-                    elif ai_response == "error_api_exhausted":
-                        cooldown_secs = 30
-                        logger.warning(f"⏸️ [TAGGER] API exhausted (attempt {fail_cnt}/2 for {file_id[:15]}). Temporary cooldown {cooldown_secs}s before retry.")
-                        TEMP_FAILED_FILES[file_id] = {
-                            "until": time.time() + 180,
-                            "cnt": fail_cnt,
-                        }
-                        # Save partial hashes right away so they are never lost
-                        async def _save_partial_hashes():
-                            async with db_transaction(db):
-                                await db.execute(
-                                    """
-                                    INSERT INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-                                    ON CONFLICT(sha256) DO UPDATE SET
-                                        phash = COALESCE(excluded.phash, FileRegistry.phash),
-                                        blurhash = COALESCE(excluded.blurhash, FileRegistry.blurhash)
-                                    """,
-                                    (sha, phash, file_id, thumb_id, file_type, time.time(), b_hash),
-                                )
-                        try:
-                            await execute_with_retry(_save_partial_hashes, max_retries=3, base_delay=0.1)
-                        except Exception as p_err:
-                            logger.debug(f"Partial hashes save note: {p_err}")
-
-                        await asyncio.sleep(cooldown_secs)
-                        continue
                     else:
                         cooldown_secs = 10
                         logger.warning(f"⏸️ [TAGGER] Internal error (attempt {fail_cnt}/2 for {file_id[:15]}). Pausing tagger for {cooldown_secs}s cooldown before next file.")
@@ -1434,7 +1455,7 @@ async def tagging_loop():
                 # Проверка исключительно по ключевым словам в тегах и описании с контролем границ слов
                 # Telegram-стикеры и аудио не подлежат Deep Check веб-модератора
                 is_excluded_media = file_type in ("sticker", "audio", "voice") or str(file_id).startswith("CAAC") or str(file_id).startswith("sticker_")
-                if not is_excluded_media and save_success and tags and "error" not in tags:
+                if not is_excluded_media and save_success and tags and "error" not in tags and tags != "[разное]":
                     full_text = f"{tags} {description or ''}".lower()
                     # Исключаем ложные срабатывания (например, вейп charon_baby)
                     cleaned_text = re.sub(r'\bcharon[_\s]*baby\b', '', full_text)
@@ -1453,6 +1474,10 @@ async def tagging_loop():
                 if should_deep_check:
                     logger.warning(f"🛡️ Triggered DEEP CHECK for {file_id}")
                     spawn_task(run_deep_check(resized_bytes, file_id))
+
+                if worker_sleep > 0:
+                    await asyncio.sleep(worker_sleep)
+                    continue
 
                 if not tags and ai_response != "error_api_exhausted":
                     entry = TEMP_FAILED_FILES.get(file_id)
