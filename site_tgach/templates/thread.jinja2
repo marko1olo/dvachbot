@@ -150,18 +150,23 @@
     <noscript>
         <style>
             #app-loader { display: none; visibility: hidden; pointer-events: none; z-index: -1; }
-            .is-hidden-by-toggle { display: block; }
-            .thread-replies { display: block; }
+            #threads-loading-indicator, #no-replies-placeholder { display: none; }
+            .is-hidden-by-toggle { display: block !important; }
+            .thread-replies { display: block !important; }
+            .replies-list, .post, .op-post { display: block !important; }
+            img.lazy-load, video.lazy-load, canvas.blurhash-canvas, .lazy-badge { display: none; }
+            noscript img, noscript video { display: block !important; max-width: 100% !important; height: auto !important; border-radius: 4px; }
             .no-js-notice {
                 background: var(--bg-secondary, #2a2a2a);
                 color: var(--text-primary, #fff);
-                padding: 10px 15px;
-                margin: 10px auto;
+                padding: 12px 18px;
+                margin: 15px auto;
                 text-align: center;
                 border: 1px solid var(--accent-primary, #f90);
-                border-radius: 4px;
+                border-radius: 6px;
                 max-width: 800px;
-                font-size: 0.9em;
+                font-size: 0.95em;
+                line-height: 1.4;
             }
         </style>
     </noscript>
@@ -184,7 +189,7 @@
     </div>
         <noscript>
             <div class="no-js-notice">
-                ℹ️ JavaScript отключен. Вы просматриваете легкую статическую версию TGACH.
+                ℹ️ JavaScript отключен. Вы просматриваете статическую версию (SSR): чтение треда, ответов и просмотр картинок/медиа работают нативно. JavaScript требуется только для интерактивных функций (отправка сообщений, реакции, цитирование).
             </div>
         </noscript>
     <script>

@@ -7,9 +7,217 @@ import os
 import hmac
 import ipaddress
 import socket
+import re
 from urllib.parse import parse_qsl, urlparse
 
 logger = logging.getLogger("security")
+
+# --- Service & RFC Path Whitelists (RFC 5785, RFC 8615, robots.txt, sitemaps) ---
+# MUST NEVER trigger bot traps or IP penalties under any circumstances!
+WHITELISTED_WELL_KNOWN = {
+    r"^/\.well-known/(apple-app-site-association|assetlinks\.json|security\.txt)",
+    r"^/robots\.txt$",
+    r"^/sitemap\.xml$",
+}
+
+LEGITIMATE_CRAWLER_USER_AGENTS = (
+    "googlebot",
+    "google-inspectiontool",
+    "yandexbot",
+    "yandexmobilebot",
+    "yandexaccessibilitybot",
+    "yandeximages",
+    "yandexmetrika",
+    "applebot",
+    "bingbot",
+    "bingpreview",
+    "duckduckbot",
+    "baiduspider",
+    "slurp",
+    "coccocbot",
+    "mail.ru_bot",
+    "facebookexternalhit",
+    "telegrambot",
+    "twitterbot",
+    "discordbot",
+)
+
+_COMPILED_WELL_KNOWN = [
+    re.compile(p, re.IGNORECASE) for p in WHITELISTED_WELL_KNOWN
+]
+
+def is_whitelisted_well_known(path: str) -> bool:
+    """Checks if the given path is an RFC-standard or legitimate service path.
+
+    Paths matching WHITELISTED_WELL_KNOWN must NEVER trigger bot-traps or IP penalties
+    under any circumstances.
+    """
+    if not path or not isinstance(path, str):
+        return False
+    clean_path = path.split("?")[0].strip()
+    return any(p.search(clean_path) for p in _COMPILED_WELL_KNOWN)
+
+def is_legitimate_crawler(user_agent: str | None) -> bool:
+    """Checks if the User-Agent belongs to a legitimate search crawler or bot."""
+    if not user_agent or not isinstance(user_agent, str):
+        return False
+    ua_lower = user_agent.lower()
+    return any(crawler in ua_lower for crawler in LEGITIMATE_CRAWLER_USER_AGENTS)
+
+MALICIOUS_SCANNER_PATTERNS = [
+    # System & Configs
+    "/.env",
+    "/.git",
+    "/.ssh",
+    "/.bash",
+    "/.profile",
+    "/.history",
+    "/.aws",
+    "/.rhosts",
+    "/.sh_history",
+    "/.wget",
+    "/.htpasswd",
+    "/.htaccess",
+    "/.ds_store",
+    "/.bak",
+    "/.old",
+    "/.save",
+    "/.log",
+    "/.conf",
+    "/.sql",
+    "/goform",
+    "/hello.world",
+    "/mcp",
+    "/sse",
+    # CMS & Frameworks
+    "/wp-",
+    "/wp/",
+    "/xmlrpc",
+    "/wlwmanifest",
+    "/bitrix",
+    "/joomla",
+    "/drupal",
+    "/laravel",
+    "/symfony",
+    "/storage/logs",
+    "/vendor",
+    "/composer",
+    "/ajax",
+    # Admin Panels & DBs
+    "/admin",
+    "/phpmyadmin",
+    "/setup",
+    "/config",
+    "/backup",
+    "/dump",
+    "/db.sql",
+    "/console",
+    "/shell",
+    "/root",
+    "/eval",
+    "/invoker",
+    "/actuator",
+    "/api/v1",
+    "/dashboard",
+    "/cpanel",
+    "/whm",
+    "/sql",
+    "/install",
+    "/+CSCOL+/",
+    "/+CSCOL+",
+    "/+CSCOE+/",
+    "/+CSCOE+",
+    # Scanners
+    "/autodiscover",
+    "/owa",
+    "/exchange",
+    "/ecp",
+    "/_catalogs",
+    "/_vti",
+    "/hnap1",
+    "/nmap",
+    "/evox",
+    "/sdk",
+    "/phpunit",
+    "/cgi-bin",
+    "/~",
+    "/_",
+    "/1.bak",
+    "/0.bak",
+    "/a.bak",
+    "/12.bak",
+    "/config.json",
+    "/config.php",
+    "/onfig.js",
+]
+
+MALICIOUS_SCANNER_EXTENSIONS = (
+    ".php",
+    ".asp",
+    ".aspx",
+    ".jsp",
+    ".cgi",
+    ".sh",
+    ".sql",
+    ".bak",
+    ".old",
+    ".save",
+    ".log",
+    ".rar",
+    ".zip",
+    ".7z",
+    ".env",
+    ".ini",
+)
+
+def should_trap_bot(path: str, user_agent: str | None = None) -> bool:
+    """Determines whether a 404 path constitutes a malicious scanner that should trigger an auto-trap.
+
+    CRITICAL INVARIANTS:
+    1. RFC service paths (WHITELISTED_WELL_KNOWN) must NEVER trigger a bot-trap.
+    2. Legitimate crawlers (Googlebot, Applebot, YandexBot) browsing ordinary 404s must NEVER trigger a bot-trap.
+    3. Explicit malicious paths (/.git, /.env, /admin, /phpmyadmin) DO trigger traps even if claiming a crawler UA.
+    """
+    if not path or not isinstance(path, str):
+        return False
+
+    clean_path = path.split("?")[0].strip().lower()
+
+    # Rule 1: RFC-standard / well-known paths are NEVER trapped under any circumstances
+    if is_whitelisted_well_known(clean_path):
+        return False
+
+    # Rule 2: Static assets or media files never trap
+    is_safe_asset = (
+        clean_path.endswith((
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm", ".mov",
+            ".mkv", ".css", ".js", ".map", ".ico", ".svg", ".woff", ".woff2",
+            ".ttf", ".json", ".html",
+        ))
+        or "/res/" in clean_path
+        or "/img/" in clean_path
+        or "/files/" in clean_path
+        or "/static/" in clean_path
+    )
+    if is_safe_asset:
+        return False
+
+    # Rule 3: Malicious scanner detection
+    is_malicious = False
+    if any(p.lower() in clean_path for p in MALICIOUS_SCANNER_PATTERNS):
+        is_malicious = True
+    elif clean_path.endswith(MALICIOUS_SCANNER_EXTENSIONS):
+        is_malicious = True
+    elif clean_path.startswith(("/_", "/~", "/api/v", "/wp-")):
+        is_malicious = True
+    elif clean_path.startswith("/.") and not clean_path.startswith("/.well-known/"):
+        is_malicious = True
+
+    # If it's a legitimate crawler requesting a non-malicious URL that 404s, do NOT trap
+    if not is_malicious and is_legitimate_crawler(user_agent):
+        return False
+
+    return is_malicious
 
 ALLOWED_IMPORT_DOMAINS = {
     "2ch.hk",
@@ -163,6 +371,7 @@ def get_pow_challenge_data(difficulty: int = DEFAULT_POW_DIFFICULTY) -> dict:
         "challenge": challenge,
         "difficulty": difficulty
     }
+
 def cleanup_ddos_history():
     """
     Периодическая полная очистка просроченных IP из истории запросов, банов и PoW кэша.
@@ -183,7 +392,6 @@ def cleanup_ddos_history():
     expired_pow = [ch for ch, exp in list(POW_CACHE.items()) if now >= exp]
     for ch in expired_pow:
         POW_CACHE.pop(ch, None)
-
 
 def verify_pow(challenge: str, nonce: str, difficulty: int = DEFAULT_POW_DIFFICULTY) -> bool:
     """Проверяет решение с валидацией срока жизни и защиты от replay-атак."""

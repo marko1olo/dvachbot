@@ -58,8 +58,34 @@
             }
         }
     </style>
+    <noscript>
+        <style>
+            #app-loader { display: none; visibility: hidden; pointer-events: none; z-index: -1; }
+            #threads-loading-indicator { display: none; }
+            .catalog-grid { display: grid !important; }
+            img.lazy-load, video.lazy-load { display: none; }
+            noscript img { display: block !important; max-width: 100% !important; height: auto !important; }
+            .no-js-notice {
+                background: var(--bg-secondary, #2a2a2a);
+                color: var(--text-primary, #fff);
+                padding: 12px 18px;
+                margin: 15px auto;
+                text-align: center;
+                border: 1px solid var(--accent-primary, #f90);
+                border-radius: 6px;
+                max-width: 800px;
+                font-size: 0.95em;
+                line-height: 1.4;
+            }
+        </style>
+    </noscript>
 </head>
 <body data-user-id="{{ request.state.user_hash }}" data-current-board="{{ board_id }}" data-site-mode="{{ site_mode }}" data-skeleton="{{ 'true' if is_skeleton else 'false' }}">
+    <noscript>
+        <div class="no-js-notice">
+            ℹ️ JavaScript отключен. Вы просматриваете статическую версию каталога (SSR): список тредов отображается нативно. JavaScript требуется только для интерактивных фильтров.
+        </div>
+    </noscript>
     <script>
         (function() {
             try {
