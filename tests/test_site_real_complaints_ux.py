@@ -179,6 +179,12 @@ class TestInputLagAndUndoRedoResolution:
         assert result.returncode == 0, f"Node simulation failed:\n{result.stdout}\n{result.stderr}"
         assert "NODE_UNDO_REDO_PASSED" in result.stdout
 
+    @pytest.mark.parametrize("filename", ["main.js", "main.src.js", "main.min.js"])
+    def test_roulette_keydown_listeners_guard_against_input_and_textarea(self, filename):
+        """Video and image roulette keydown listeners must not intercept spacebar/arrows when typing in textarea."""
+        js_code = (STATIC_JS_DIR / filename).read_text(encoding="utf-8")
+        assert "['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)" in js_code
+
 
 # =========================================================================
 # 2. SCROLLBAR UX & CROSS-BROWSER COMFORT TESTS
@@ -355,6 +361,27 @@ class TestOverboardThreadActivityAndReplies:
         assert 'id="post-102"' in rendered
         assert "Первый ответ в треде на оверборде." in rendered
         assert "Второй ответ в треде на оверборде." in rendered
+
+    def test_overboard_renders_files_badge_and_anons_badge(self, jinja_env):
+        """overboard.jinja2 must render file counters and anon count badges when present."""
+        tmpl = jinja_env.get_template("overboard.jinja2")
+        ctx = self._make_overboard_context(view="threads")
+        ctx["posts"][0]["files_count"] = 5
+        ctx["posts"][0]["anon_count"] = 7
+        ctx["posts"][0]["content"]["files"] = [{"original_file_id": "test_img"}]
+        rendered = tmpl.render(ctx)
+
+        assert "thread-files-badge" in rendered
+        assert "Файлов: 5" in rendered or "Файлов: 1" in rendered
+        assert "thread-anons-badge" in rendered
+        assert "Анонов: 7" in rendered
+
+    def test_overboard_default_view_is_threads_and_reply_limit_is_3(self):
+        """site_tgach/main.py overboard_page must default to view=threads with reply_limit=3."""
+        main_py = ROOT_DIR / "site_tgach" / "main.py"
+        code = main_py.read_text(encoding="utf-8")
+        assert 'view_mode = request.query_params.get("view", "threads")' in code
+        assert 'reply_limit=3' in code
 
 
 # =========================================================================

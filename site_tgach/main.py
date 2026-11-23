@@ -4802,9 +4802,9 @@ async def overboard_page(
     sort_mode = request.query_params.get("sort", "bump")
     if sort_mode not in ["bump", "new", "random"]:
         sort_mode = "bump"
-    view_mode = request.query_params.get("view", "posts")
+    view_mode = request.query_params.get("view", "threads")
     if view_mode not in ["threads", "posts", "all"]:
-        view_mode = "posts"
+        view_mode = "threads"
 
     selected_boards = request.query_params.getlist("boards") or None
     boards_key = ",".join(sorted(selected_boards)) if selected_boards else "all"
@@ -4831,7 +4831,7 @@ async def overboard_page(
             stream=request.state.stream,
             observer_id=observer_id,
             ignore_pin=True,
-            reply_limit=2,
+            reply_limit=3,
         )
     elif view_mode == "posts":
         raw_posts = await get_global_feed_posts(

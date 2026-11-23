@@ -12922,6 +12922,7 @@ const RouletteManager = {
             this.video.onplaying = () => this.toggleLoader(false);
         }
         document.addEventListener('keydown', (e) => {
+            if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
             if (e.code === 'Space' || e.code === 'ArrowDown') {
                 e.preventDefault();
                 this.goNext();
@@ -13234,6 +13235,7 @@ const ImageRouletteManager = {
             this.toggleUI();
         });
         document.addEventListener('keydown', (e) => {
+            if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
             if (e.code === 'ArrowRight' || e.code === 'Space') {
                 e.preventDefault();
                 this.goNext();

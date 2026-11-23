@@ -350,12 +350,22 @@
                                 </div>
                         </div>
                     </div>
-                    {% if current_view == 'threads' %}
-                        {% if post.reply_count > 0 or post.latest_replies %}
+                    {% if current_view == 'threads' or post.reply_count > 0 or post.latest_replies %}
+                        {% if post.reply_count > 0 or post.latest_replies or post.files_count %}
                             <div class="thread-stats-container" style="margin: 6px 0 6px 15px; font-size: 0.85em; color: var(--text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                                 <span class="thread-replies-badge" style="background: var(--bg-secondary); border: 1px solid var(--border-primary); padding: 2px 8px; border-radius: 4px; font-weight: bold; color: var(--accent-primary);">
                                     💬 {{ request.state.t('stat_replies', 'Ответов') }}: {{ post.reply_count or (post.latest_replies|length) }}
                                 </span>
+                                {% if post.files_count or (post.content.files and post.content.files|length > 0) %}
+                                <span class="thread-files-badge" style="background: var(--bg-secondary); border: 1px solid var(--border-primary); padding: 2px 8px; border-radius: 4px; font-weight: bold; color: var(--text-secondary);">
+                                    📁 {{ request.state.t('stat_files', 'Файлов') }}: {{ post.files_count or (post.content.files|length) }}
+                                </span>
+                                {% endif %}
+                                {% if post.anon_count and post.anon_count > 1 %}
+                                <span class="thread-anons-badge" style="background: var(--bg-secondary); border: 1px solid var(--border-primary); padding: 2px 8px; border-radius: 4px; font-weight: bold; color: var(--text-secondary);">
+                                    👥 {{ request.state.t('stat_anons', 'Анонов') }}: {{ post.anon_count }}
+                                </span>
+                                {% endif %}
                                 {% if post.reply_count and post.latest_replies and post.reply_count > (post.latest_replies|length) %}
                                     <span class="thread-omitted-notice" style="color: var(--text-secondary);">
                                         (Пропущено: {{ post.reply_count - (post.latest_replies|length) }})
