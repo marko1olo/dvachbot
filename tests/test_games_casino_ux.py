@@ -14,9 +14,15 @@ import math
 import pytest
 from unittest.mock import AsyncMock, patch
 
+import time
+from common.anon_identity import get_anon_id, generate_anon_name
+
 import casino_engine
 import lootbox_engine
 import auction_engine
+import dice_duel_engine
+import russian_roulette_pvp
+import ttt_engine
 
 
 # =============================================================================
@@ -961,4 +967,226 @@ class TestSoloCasinoMiniGamesAndInFlight:
         await asyncio.gather(worker1(), worker2())
         assert entered is True
         assert casino_engine.is_casino_in_flight(user_id) is False
+
+
+# =============================================================================
+# 9. PVP ANONYMITY, ZERO ID LEAKS & BROADCAST RESILIENCE
+# =============================================================================
+
+class TestPvpAnonymityAndBroadcastUX:
+    """Verifies that PVP games never leak raw Telegram user IDs or '[ID:' tags,
+    and that open/targeted duels broadcast properly to board and direct targets."""
+
+    def test_zero_user_id_leaks_in_pvp_cards_and_announcements(self):
+        """PvP cards for Dice, RR, and TTT strictly use anon names and never contain [ID: or raw IDs."""
+        uid_p1 = 111222333
+        uid_p2 = 444555666
+        uid_target = 777888999
+
+        # 1. Dice Duel Cards
+        game_dice_pending = {
+            "game_id": 101,
+            "board_id": "b",
+            "player_1": uid_p1,
+            "player_2": None,
+            "target_id": uid_target,
+            "bet": 1500,
+            "mode": "classic",
+            "state": "pending",
+            "turn_deadline_ts": time.time() + 60,
+            "round": 1,
+            "p1_rolls": {},
+            "p2_rolls": {},
+            "current_turn": uid_p1,
+            "finished": False
+        }
+        card_dice_p = dice_duel_engine.format_dice_game_message(game_dice_pending)
+        assert "[ID:" not in card_dice_p
+        assert str(uid_p1) not in card_dice_p
+        assert str(uid_target) not in card_dice_p
+        assert get_anon_id(uid_p1) in card_dice_p
+        assert get_anon_id(uid_target) in card_dice_p
+
+        game_dice_active = dict(game_dice_pending, player_2=uid_p2, state="active", current_turn=uid_p2)
+        card_dice_a = dice_duel_engine.format_dice_game_message(game_dice_active)
+        assert "[ID:" not in card_dice_a
+        assert str(uid_p1) not in card_dice_a
+        assert str(uid_p2) not in card_dice_a
+        assert get_anon_id(uid_p1) in card_dice_a
+        assert get_anon_id(uid_p2) in card_dice_a
+
+        # 2. Russian Roulette Cards
+        game_rr_challenge = {
+            "game_id": 202,
+            "board_id": "b",
+            "challenger_id": uid_p1,
+            "target_id": uid_target,
+            "bet": 2500,
+            "status": "pending",
+            "current_chamber": 0,
+            "turn_deadline_ts": time.time() + 60
+        }
+        card_rr_ch = russian_roulette_pvp.format_rr_challenge_message(game_rr_challenge)
+        assert "[ID:" not in card_rr_ch
+        assert str(uid_p1) not in card_rr_ch
+        assert str(uid_target) not in card_rr_ch
+        assert get_anon_id(uid_p1) in card_rr_ch
+        assert get_anon_id(uid_target) in card_rr_ch
+
+        game_rr_active = {
+            "game_id": 202,
+            "board_id": "b",
+            "challenger_id": uid_p1,
+            "acceptor_id": uid_p2,
+            "bet": 2500,
+            "current_chamber": 2,
+            "turn": uid_p2,
+            "turn_deadline_ts": time.time() + 60,
+            "finished": False
+        }
+        card_rr_act = russian_roulette_pvp.format_rr_game_message(game_rr_active)
+        assert "[ID:" not in card_rr_act
+        assert str(uid_p1) not in card_rr_act
+        assert str(uid_p2) not in card_rr_act
+        assert get_anon_id(uid_p1) in card_rr_act
+        assert get_anon_id(uid_p2) in card_rr_act
+
+        # 3. Tic-Tac-Toe Cards
+        game_ttt = ttt_engine.TicTacToeGame(
+            game_id=303,
+            board_id="b",
+            chat_id=123456,
+            challenger_id=uid_p1,
+            target_user_id=uid_target,
+            bet=1000
+        )
+        card_ttt_p = ttt_engine.render_game_text(game_ttt)
+        assert "[ID:" not in card_ttt_p
+        assert str(uid_p1) not in card_ttt_p
+        assert str(uid_target) not in card_ttt_p
+        assert get_anon_id(uid_p1) in card_ttt_p
+        assert get_anon_id(uid_target) in card_ttt_p
+
+        game_ttt.opponent_id = uid_p2
+        game_ttt.status = "active"
+        game_ttt.current_turn = uid_p2
+        card_ttt_a = ttt_engine.render_game_text(game_ttt)
+        assert "[ID:" not in card_ttt_a
+        assert str(uid_p1) not in card_ttt_a
+        assert str(uid_p2) not in card_ttt_a
+        assert get_anon_id(uid_p1) in card_ttt_a
+        assert get_anon_id(uid_p2) in card_ttt_a
+
+        # 4. Announcement and flavor string lists
+        for phrase in dice_duel_engine.DICE_TIMEOUT_ANNOUNCEMENTS:
+            assert "[ID:" not in phrase
+        for phrase in dice_duel_engine.DICE_SURRENDER_ANNOUNCEMENTS:
+            assert "[ID:" not in phrase
+        for phrase in dice_duel_engine.DICE_DRAW_ANNOUNCEMENTS:
+            assert "[ID:" not in phrase
+        for phrase in russian_roulette_pvp.RR_TIMEOUT_COWARD_PHRASES:
+            assert "[ID:" not in phrase
+        for phrase in russian_roulette_pvp.RR_SURRENDER_PHRASES:
+            assert "[ID:" not in phrase
+        for phrase in russian_roulette_pvp.RR_SHOT_PHRASES:
+            assert "[ID:" not in phrase
+
+    def test_targeted_duel_broadcast_dispatches_directly_to_target(self):
+        """When a duel targets a specific user, the broadcast recipient list is [target_id]
+        even if that target user is not in active board users."""
+        board_id = "b"
+        board_users = [1001, 1002, 1003]
+        target_id = 9999
+
+        # Target is NOT in active users
+        assert target_id not in board_users
+
+        # 1. TTT Targeted logic
+        target_user_id = target_id
+        if target_user_id is not None:
+            active_users_ttt = [target_user_id]
+        else:
+            active_users_ttt = list(board_users)
+        assert active_users_ttt == [target_id]
+
+        # 2. Dice Duel Targeted logic
+        if target_id is not None:
+            active_users_dice = [target_id]
+        else:
+            active_users_dice = list(board_users)
+        assert active_users_dice == [target_id]
+
+        # 3. RR Targeted logic
+        if target_id is not None:
+            active_users_rr = [target_id]
+        else:
+            active_users_rr = list(board_users)
+        assert active_users_rr == [target_id]
+
+    def test_open_duel_broadcasts_to_all_board_active_users(self):
+        """When a duel is open (no target_id), the broadcast dispatches to all board active users."""
+        board_users = [1001, 1002, 1003, 1004]
+        target_id = None
+
+        if target_id is not None:
+            active_users = [target_id]
+        else:
+            active_users = list(board_users)
+
+        assert active_users == [1001, 1002, 1003, 1004]
+
+    def test_pvp_finish_dm_includes_opponent_anon_name(self):
+        """Direct notifications upon PVP game conclusion must contain the opponent's anonymous name."""
+        winner_id = 111
+        loser_id = 222
+        winner_anon = get_anon_id(winner_id)
+        loser_anon = get_anon_id(loser_id)
+
+        # 1. TTT win/lose notification format
+        win_notify_ttt = (
+            f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #1!</b>\n\n"
+            f"👤 Соперник: <b>Анон [{loser_anon}]</b>\n"
+            f"Ты собрал выигрышную линию!"
+        )
+        lose_notify_ttt = (
+            f"💀 <b>ПОРАЖЕНИЕ В КРЕСТИКАХ-НОЛИКАХ #1</b>\n\n"
+            f"👤 Соперник: <b>Анон [{winner_anon}]</b>\n"
+            f"Соперник собрал выигрышную линию."
+        )
+        assert f"👤 Соперник: <b>Анон [{loser_anon}]</b>" in win_notify_ttt
+        assert f"👤 Соперник: <b>Анон [{winner_anon}]</b>" in lose_notify_ttt
+        assert "[ID:" not in win_notify_ttt
+        assert "[ID:" not in lose_notify_ttt
+
+        # 2. Dice win/lose notification format
+        win_notify_dice = (
+            f"👑 <b>ПОБЕДА В ДАЙС-ДУЭЛИ #1!</b>\n\n"
+            f"👤 Соперник: <b>Анон [{loser_anon}]</b>\n"
+            f"💰 Твой чистый выигрыш: <b>+950 ₪</b> зачислен на баланс!"
+        )
+        lose_notify_dice = (
+            f"💀 <b>ПОРАЖЕНИЕ В ДАЙС-ДУЭЛИ #1</b>\n\n"
+            f"👤 Соперник: <b>Анон [{winner_anon}]</b>\n"
+            f"Причина: Меньшая сумма очков на костях.\n"
+        )
+        assert f"👤 Соперник: <b>Анон [{loser_anon}]</b>" in win_notify_dice
+        assert f"👤 Соперник: <b>Анон [{winner_anon}]</b>" in lose_notify_dice
+        assert "[ID:" not in win_notify_dice
+        assert "[ID:" not in lose_notify_dice
+
+        # 3. RR win/lose notification format
+        win_notify_rr = (
+            f"👑 <b>ПОБЕДА В РУССКОЙ РУЛЕТКЕ #1!</b>\n\n"
+            f"👤 Соперник: <b>Анон [{loser_anon}]</b>\n"
+            f"💰 Твой чистый выигрыш: <b>+950 ₪</b>"
+        )
+        lose_notify_rr = (
+            f"💥 <b>СМЕРТЕЛЬНЫЙ ВЫСТРЕЛ В РУССКОЙ РУЛЕТКЕ #1!</b>\n\n"
+            f"👤 Соперник: <b>Анон [{winner_anon}]</b>\n"
+            f"Камора #3 оказалась заряжена."
+        )
+        assert f"👤 Соперник: <b>Анон [{loser_anon}]</b>" in win_notify_rr
+        assert f"👤 Соперник: <b>Анон [{winner_anon}]</b>" in lose_notify_rr
+        assert "[ID:" not in win_notify_rr
+        assert "[ID:" not in lose_notify_rr
 

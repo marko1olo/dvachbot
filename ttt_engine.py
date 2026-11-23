@@ -1002,11 +1002,13 @@ async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
         if game.bot_instance:
             win_notify_text = (
                 f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game_id}!</b>\n\n"
+                f"👤 Соперник: <b>Анон [{loser_anon}]</b>\n"
                 f"Соперник пропустил таймер хода (120 сек).\n"
                 f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> (банк {game.pot:,} ₪ за вычетом рейка {rake:,} ₪ в Казну Абу) зачислен на баланс!"
             )
             lose_notify_text = (
                 f"⏱️ <b>ТАЙМАУТ В КРЕСТИКАХ-НОЛИКАХ #{game_id}</b>\n\n"
+                f"👤 Соперник: <b>Анон [{winner_anon}]</b>\n"
                 f"Ты не сделал ход за 120 секунд (техническое поражение).\n"
                 f"💸 Списано: <b>-{game.bet:,} ₪</b>."
             )
@@ -1321,13 +1323,17 @@ async def finish_ttt_game(
         )
         bot_to_use = bot or game.bot_instance
         if bot_to_use:
+            loser_anon = get_anon_id(loser_id)
+            winner_anon = get_anon_id(game.winner_id)
             win_notify_text = (
                 f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}!</b>\n\n"
+                f"👤 Соперник: <b>Анон [{loser_anon}]</b>\n"
                 f"Ты собрал выигрышную линию!\n"
                 f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> (банк {game.pot:,} ₪ за вычетом рейка {rake:,} ₪ в Казну Абу) зачислен на баланс!"
             )
             lose_notify_text = (
                 f"💀 <b>ПОРАЖЕНИЕ В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}</b>\n\n"
+                f"👤 Соперник: <b>Анон [{winner_anon}]</b>\n"
                 f"Соперник собрал выигрышную линию.\n"
                 f"💸 Списано: <b>-{game.bet:,} ₪</b>."
             )
@@ -1359,13 +1365,20 @@ async def finish_ttt_game(
         )
         bot_to_use = bot or game.bot_instance
         if bot_to_use:
-            draw_notify_text = (
+            draw_notify_text_x = (
                 f"🤝 <b>НИЧЬЯ В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}</b>\n\n"
+                f"👤 Соперник: <b>Анон [{anon_o}]</b>\n"
                 f"Все 9 клеток заняты, ничья!\n"
                 f"💰 Твоя ставка возвращена: <b>+{refund:,} ₪</b> (за вычетом 2% в Казну Абу)."
             )
-            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, draw_notify_text))
-            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.opponent_id, draw_notify_text))
+            draw_notify_text_o = (
+                f"🤝 <b>НИЧЬЯ В КРЕСТИКАХ-НОЛИКАХ #{game.game_id}</b>\n\n"
+                f"👤 Соперник: <b>Анон [{anon_x}]</b>\n"
+                f"Все 9 клеток заняты, ничья!\n"
+                f"💰 Твоя ставка возвращена: <b>+{refund:,} ₪</b> (за вычетом 2% в Казну Абу)."
+            )
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, draw_notify_text_x))
+            asyncio.create_task(send_pvp_direct_notification(bot_to_use, game.opponent_id, draw_notify_text_o))
             await publish_ttt_board_announcement(bot_to_use, game.board_id, announcement)
 
     return True, "OK", game
@@ -1433,11 +1446,13 @@ async def surrender_ttt_game(
     if bot_to_use:
         win_notify_text = (
             f"👑 <b>ПОБЕДА В КРЕСТИКАХ-НОЛИКАХ #{game_id}!</b>\n\n"
+            f"👤 Соперник: <b>Анон [{loser_anon}]</b>\n"
             f"Соперник сдался без боя!\n"
             f"💰 Твой чистый выигрыш: <b>+{net_win:,} ₪</b> зачислен на баланс!"
         )
         lose_notify_text = (
             f"🏳️ <b>КАПИТУЛЯЦИЯ В КРЕСТИКАХ-НОЛИКАХ #{game_id}</b>\n\n"
+            f"👤 Соперник: <b>Анон [{winner_anon}]</b>\n"
             f"Ты сдался.\n"
             f"💸 Списано: <b>-{game.bet:,} ₪</b>."
         )
@@ -1486,10 +1501,10 @@ async def cancel_ttt_challenge(
             if bot and ch_id:
                 dec_dm = (
                     f"⚔️ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ОТКЛОНЕН</b>\n\n"
-                    f"Анон [ID:{get_anon_id(user_id)}] отклонил твой вызов на партию."
+                    f"Анон [{get_anon_id(user_id)}] отклонил твой вызов на партию."
                 )
                 spawn_task(send_pvp_direct_notification(bot, ch_id, dec_dm), name="pvp_notify_ttt_declined")
-            return True, f"❌ Вызов на партию отклонен Аноном [ID:{get_anon_id(user_id)}]."
+            return True, f"❌ Вызов на партию отклонен Аноном [{get_anon_id(user_id)}]."
 
 
 # ============================================================================
@@ -1670,9 +1685,10 @@ async def cmd_ttt(message: Message, board_id: Optional[str] = None, stream: str 
         try:
             from shared_state import board_data as _board_data
             from banner_manager import broadcast_banner_to_users
-            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
             if target_user_id is not None:
-                active_users = [uid for uid in active_users if uid == target_user_id]
+                active_users = [target_user_id]
+            else:
+                active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
             async def _on_sent(uid, mid):
                 game.broadcast_msgs.append((uid, mid))
             await broadcast_banner_to_users(
@@ -1749,7 +1765,7 @@ async def cb_ttt_lobby_change_bet(callback: CallbackQuery):
 
     bet = max(MIN_TTT_BET, min(MAX_TTT_BET, min(int(balance), bet) if balance >= MIN_TTT_BET else MIN_TTT_BET))
     kb = get_ttt_lobby_keyboard(bet, balance=int(balance), target_user_id=target_user_id)
-    target_str = f"🎯 <b>Цель:</b> Анон <code>[ID:{target_user_id}]</code>\n" if target_user_id else ""
+    target_str = f"🎯 <b>Цель:</b> Анон <code>[{get_anon_id(target_user_id)}]</code>\n" if target_user_id else ""
     caption = (
         f"❌⭕ <b>КРЕСТИКИ-НОЛИКИ НА ШЕКЕЛИ (PvP)</b>\n\n"
         f"💳 Твой баланс: <code>{int(balance):,} ₪</code>\n"
@@ -1819,9 +1835,10 @@ async def cb_ttt_create(callback: CallbackQuery, board_id: Optional[str] = None)
         try:
             from shared_state import board_data as _board_data
             from banner_manager import broadcast_banner_to_users
-            active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
             if target_user_id is not None:
-                active_users = [uid for uid in active_users if uid == target_user_id]
+                active_users = [target_user_id]
+            else:
+                active_users = list(_board_data.get(board_id, {}).get('users', {}).get('active', []))
             async def _on_sent(uid, mid):
                 game.broadcast_msgs.append((uid, mid))
             await broadcast_banner_to_users(
@@ -1914,7 +1931,7 @@ async def cb_ttt_cancel(callback: CallbackQuery):
         return
 
     if is_target:
-        cancel_text = f"❌ <b>Вызов в крестики-нолики отклонен Аноном [ID:{get_anon_id(user_id)}].</b>"
+        cancel_text = f"❌ <b>Вызов в крестики-нолики отклонен Аноном [{get_anon_id(user_id)}].</b>"
     else:
         cancel_text = "❌ <b>Вызов в крестики-нолики отменен создателем.</b>"
     await safe_edit_callback_message(callback, cancel_text, reply_markup=None)
