@@ -65,16 +65,25 @@ def get_shared_http_client() -> httpx.AsyncClient:
             limits=httpx.Limits(max_keepalive_connections=50, max_connections=100)
         )
         setattr(_SHARED_HTTP_CLIENT, "_loop", current_loop)
+        try:
+            from common.task_manager import register_http_client
+            register_http_client(_SHARED_HTTP_CLIENT)
+        except Exception:
+            pass
     return _SHARED_HTTP_CLIENT
 
 async def close_shared_http_client() -> None:
     global _SHARED_HTTP_CLIENT
-    if _SHARED_HTTP_CLIENT is not None and not getattr(_SHARED_HTTP_CLIENT, "is_closed", False):
+    client = _SHARED_HTTP_CLIENT
+    _SHARED_HTTP_CLIENT = None
+    if client is not None and not getattr(client, "is_closed", False):
         try:
-            await _SHARED_HTTP_CLIENT.aclose()
-        except Exception:
-            pass
-        _SHARED_HTTP_CLIENT = None
+            await client.aclose()
+        except Exception as e:
+            logger.debug(f"Exception closing shared HTTP client: {e}")
+        finally:
+            # Yield to event loop on Windows to allow underlying SSL transport to close
+            await asyncio.sleep(0.250)
 
 
 def _load_google_keys() -> list[str]:

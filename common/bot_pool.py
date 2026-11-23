@@ -375,6 +375,8 @@ class MultiStreamBotPool:
                 await bot.session.close()
             except:
                 pass
+        # Windows Proactor loop drain delay for SSL transports
+        await asyncio.sleep(0.250)
 
 # Создаем глобальный экземпляр
 try:
