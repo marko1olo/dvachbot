@@ -1346,11 +1346,12 @@ async def sync_dice_screens(bot: Any, game: Dict[str, Any]):
 async def dice_watchdog_step(bot=None):
     """
     Single iteration step of background watchdog checking expired dice turns,
-    updating live countdowns dynamically, and cleaning expired challenges.
+    updating live countdowns dynamically, cleaning expired/muted challenges, and preventing RAM leaks.
     """
     now = time.time()
     expired_games = []
     expired_pending = []
+    muted_pending = []
     live_tick_games = []
 
     async with dice_engine_lock:
@@ -1361,12 +1362,9 @@ async def dice_watchdog_step(bot=None):
                     game["finished_ts"] = now
                 elif now - fin_ts > 60:
                     active_dice_games.pop(gid, None)
-                    p1 = game.get("player_1")
-                    p2 = game.get("player_2")
-                    if p1 and user_active_dice_game.get(p1) == gid:
-                        user_active_dice_game.pop(p1, None)
-                    if p2 and user_active_dice_game.get(p2) == gid:
-                        user_active_dice_game.pop(p2, None)
+                    for uid in (game.get("player_1"), game.get("player_2"), game.get("target_id")):
+                        if uid and user_active_dice_game.get(uid) == gid:
+                            user_active_dice_game.pop(uid, None)
                 continue
             if game["state"] in ("playing", "rolling"):
                 if now > game["turn_deadline_ts"]:
@@ -1378,16 +1376,35 @@ async def dice_watchdog_step(bot=None):
                         game["last_tick_ts"] = now
                         live_tick_games.append(gid)
             elif game["state"] == "pending":
-                if now > (game["created_ts"] + DICE_CHALLENGE_TIMEOUT_SEC):
+                ch_id = game["player_1"]
+                tgt_id = game.get("target_id")
+                # Check if challenger was muted during waiting
+                try:
+                    db = await get_pool()
+                    from common.database import is_shadow_muted as check_db_shadow_muted
+                    from common.bot_helpers import check_user_is_muted
+                    is_ch_muted = await check_db_shadow_muted(ch_id, game.get("board_id", "b"), db=db) or await check_user_is_muted(db, ch_id, game.get("board_id", "b"))
+                except Exception:
+                    is_ch_muted = False
+
+                if is_ch_muted:
+                    game["finished"] = True
+                    game["state"] = "cancelled"
+                    game["finished_ts"] = now
+                    if user_active_dice_game.get(ch_id) == gid:
+                        user_active_dice_game.pop(ch_id, None)
+                    if tgt_id and user_active_dice_game.get(tgt_id) == gid:
+                        user_active_dice_game.pop(tgt_id, None)
+                    muted_pending.append(gid)
+                elif now > (game["created_ts"] + DICE_CHALLENGE_TIMEOUT_SEC):
                     # Expire unaccepted challenge
                     game["finished"] = True
                     game["state"] = "expired"
                     game["finished_ts"] = now
-                    ch_id = game["player_1"]
                     if user_active_dice_game.get(ch_id) == gid:
                         user_active_dice_game.pop(ch_id, None)
-                    if game.get("target_id") and user_active_dice_game.get(game["target_id"]) == gid:
-                        user_active_dice_game.pop(game["target_id"], None)
+                    if tgt_id and user_active_dice_game.get(tgt_id) == gid:
+                        user_active_dice_game.pop(tgt_id, None)
                     expired_pending.append(gid)
 
     # 1. Live countdown updates (playing)
@@ -1448,6 +1465,32 @@ async def dice_watchdog_step(bot=None):
             )
             for chat_id, msg_id in bcast_list:
                 await safe_edit_dice_message(bot, chat_id, msg_id, exp_text, reply_markup=None)
+
+    # 4. Clean and edit muted pending challenges
+    for gid in muted_pending:
+        async with dice_engine_lock:
+            game = active_dice_games.get(gid)
+            if not game:
+                continue
+            p1 = game.get("player_1")
+            bcast_list = list(game.get("broadcast_msgs", []))
+            if not bcast_list and game.get("chat_id") and game.get("msg_id"):
+                bcast_list = [(game["chat_id"], game["msg_id"])]
+
+        if bot and p1:
+            muted_dm_text = (
+                "🔇 <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ АННУЛИРОВАН</b>\n\n"
+                "Создатель вызова был замучен. Дуэль отменена, ставка не списана."
+            )
+            spawn_task(send_pvp_direct_notification(bot, p1, muted_dm_text), name="pvp_notify_dice_muted")
+
+        if bot and bcast_list:
+            muted_text = (
+                "🔇 <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ АННУЛИРОВАН!</b>\n\n"
+                "Создатель вызова был замучен. Дуэль отменена, ставка не списана."
+            )
+            for chat_id, msg_id in bcast_list:
+                await safe_edit_dice_message(bot, chat_id, msg_id, muted_text, reply_markup=None)
 
 
 async def start_dice_watchdog_loop(bot):

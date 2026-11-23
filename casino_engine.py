@@ -699,6 +699,262 @@ def expire_stale_bj_sessions(timeout_sec: float = 300.0) -> List[Tuple[int, Dict
 
 
 # -----------------------------------------------------------------------------
+# Telegram Mini-Games Models (Dice, Football, Basketball, Darts)
+# -----------------------------------------------------------------------------
+
+def play_dice(
+    bet: int,
+    balance: int = 0,
+    user_id: int = 0,
+    roll_value: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Plays Telegram standard 6-sided dice (🎲).
+    Target RTP: ~93.3% (fair MMORPG 92-95%).
+    Roll 1-3: Loss (0x)
+    Roll 4: Small Win (x1.2)
+    Roll 5: Good Win (x2.0)
+    Roll 6: Jackpot (x2.4)
+    Applies Anti-Streak / High-Roller Tilt if streak >= 5 or balance > 100k.
+    """
+    valid, _, err = validate_casino_bet(bet, balance if balance > 0 else bet)
+    clean_bet = clamp_bet_to_limits(bet, balance if balance > 0 else bet)
+
+    streak = user_win_streaks.get(user_id, 0) if user_id else 0
+    is_tilted = streak >= 5 or balance > 100_000
+
+    roll = roll_value if roll_value is not None and 1 <= roll_value <= 6 else random.randint(1, 6)
+
+    if is_tilted:
+        mult_map = {1: 0.0, 2: 0.0, 3: 0.0, 4: 1.1, 5: 1.9, 6: 2.2}
+    else:
+        mult_map = {1: 0.0, 2: 0.0, 3: 0.0, 4: 1.2, 5: 2.0, 6: 2.4}
+
+    mult = mult_map.get(roll, 0.0)
+    is_win = mult > 0.0
+    if user_id:
+        record_win_streak(user_id, is_win)
+
+    payout = int(clean_bet * mult)
+    net_profit = max(0, payout - clean_bet)
+    tax_amt, actual_profit, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+    actual_payout = (clean_bet + actual_profit) if is_win else 0
+
+    if roll == 6:
+        title = "👑 ДЖЕКПОТ НА КОСТЯХ (6)!"
+        desc = f"🎲 Выпало максимальное значение <b>6</b>! Занос x{mult}!"
+    elif is_win:
+        title = f"🎉 ПОБЕДА (выпало {roll})!"
+        desc = f"🎲 Удачный бросок: <b>{roll}</b>! Множитель x{mult}."
+    else:
+        title = f"💨 МИМО (выпало {roll})"
+        desc = f"🎲 Выпало <b>{roll}</b>. Ставка сгорела."
+
+    return {
+        "value": roll,
+        "is_win": is_win,
+        "multiplier": mult,
+        "bet": clean_bet,
+        "payout": actual_payout,
+        "net_profit": actual_profit if is_win else -clean_bet,
+        "tax_amount": tax_amt,
+        "tax_message": tax_msg,
+        "title": title,
+        "description": desc,
+    }
+
+
+def play_football(
+    bet: int,
+    balance: int = 0,
+    user_id: int = 0,
+    value: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Plays Telegram Football/Penalty shoot (⚽).
+    Values: 1 to 5 (1=miss wide, 2=goalkeeper save, 3,4=goal, 5=top corner swish).
+    Target RTP: ~93.0% (MMORPG target 92-95%).
+    Values 1, 2: Miss / Save (0x)
+    Values 3, 4: Goal (x1.45)
+    Value 5: Top Corner / Гол в девятку (x1.75)
+    """
+    valid, _, err = validate_casino_bet(bet, balance if balance > 0 else bet)
+    clean_bet = clamp_bet_to_limits(bet, balance if balance > 0 else bet)
+
+    streak = user_win_streaks.get(user_id, 0) if user_id else 0
+    is_tilted = streak >= 5 or balance > 100_000
+
+    val = value if value is not None and 1 <= value <= 5 else random.randint(1, 5)
+
+    if is_tilted:
+        mult_map = {1: 0.0, 2: 0.0, 3: 1.35, 4: 1.35, 5: 1.60}
+    else:
+        mult_map = {1: 0.0, 2: 0.0, 3: 1.45, 4: 1.45, 5: 1.75}
+
+    mult = mult_map.get(val, 0.0)
+    is_win = mult > 0.0
+    if user_id:
+        record_win_streak(user_id, is_win)
+
+    payout = int(clean_bet * mult)
+    net_profit = max(0, payout - clean_bet)
+    tax_amt, actual_profit, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+    actual_payout = (clean_bet + actual_profit) if is_win else 0
+
+    if val == 5:
+        title = "🔥 ГОЛ В ДЕВЯТКУ!"
+        desc = "⚽ Безупречный удар прямо в паутину ворот! Вратарь бессилен! Множитель x" + str(mult) + "!"
+    elif val in (3, 4):
+        title = "⚽ ГОООЛ!"
+        desc = f"⚽ Точный удар в угол ворот! Множитель x{mult}."
+    elif val == 2:
+        title = "🧤 СЕЙВ ВРАТАРЯ!"
+        desc = "⚽ Голкипер в красивом прыжке отразил твой пенальти! Ставка сгорела."
+    else:
+        title = "💨 МИМО ВОРОТ!"
+        desc = "⚽ Мяч просвистел мимо штанги на трибуны! Ставка сгорела."
+
+    return {
+        "value": val,
+        "is_win": is_win,
+        "multiplier": mult,
+        "bet": clean_bet,
+        "payout": actual_payout,
+        "net_profit": actual_profit if is_win else -clean_bet,
+        "tax_amount": tax_amt,
+        "tax_message": tax_msg,
+        "title": title,
+        "description": desc,
+    }
+
+
+def play_basketball(
+    bet: int,
+    balance: int = 0,
+    user_id: int = 0,
+    value: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Plays Telegram Basketball (🏀).
+    Values: 1 to 5 (1,2,3=rim miss/bounce out, 4=basket, 5=clean swish).
+    Target RTP: ~93.0% (MMORPG target 92-95%).
+    Values 1, 2, 3: Miss (0x) (60%)
+    Value 4: Normal Basket (x2.0) (20%)
+    Value 5: Clean Swish (x2.65) (20%)
+    """
+    valid, _, err = validate_casino_bet(bet, balance if balance > 0 else bet)
+    clean_bet = clamp_bet_to_limits(bet, balance if balance > 0 else bet)
+
+    streak = user_win_streaks.get(user_id, 0) if user_id else 0
+    is_tilted = streak >= 5 or balance > 100_000
+
+    val = value if value is not None and 1 <= value <= 5 else random.randint(1, 5)
+
+    if is_tilted:
+        mult_map = {1: 0.0, 2: 0.0, 3: 0.0, 4: 1.85, 5: 2.40}
+    else:
+        mult_map = {1: 0.0, 2: 0.0, 3: 0.0, 4: 2.0, 5: 2.65}
+
+    mult = mult_map.get(val, 0.0)
+    is_win = mult > 0.0
+    if user_id:
+        record_win_streak(user_id, is_win)
+
+    payout = int(clean_bet * mult)
+    net_profit = max(0, payout - clean_bet)
+    tax_amt, actual_profit, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+    actual_payout = (clean_bet + actual_profit) if is_win else 0
+
+    if val == 5:
+        title = "🔥 ЧИСТЫЙ БРОСОК В КОРЗИНУ (SWISH)!"
+        desc = "🏀 Мяч идеально влетел сквозь сетку без касания дужки! Занос x" + str(mult) + "!"
+    elif val == 4:
+        title = "🏀 ТОЧНОЕ ПОПАДАНИЕ!"
+        desc = f"🏀 Мяч ударился о щит и залетел в корзину! Множитель x{mult}."
+    else:
+        title = "💨 ПРОМАХ ПО КОЛЬЦУ!"
+        desc = "🏀 Мяч отскочил от дужки мимо корзины! Ставка сгорела."
+
+    return {
+        "value": val,
+        "is_win": is_win,
+        "multiplier": mult,
+        "bet": clean_bet,
+        "payout": actual_payout,
+        "net_profit": actual_profit if is_win else -clean_bet,
+        "tax_amount": tax_amt,
+        "tax_message": tax_msg,
+        "title": title,
+        "description": desc,
+    }
+
+
+def play_darts(
+    bet: int,
+    balance: int = 0,
+    user_id: int = 0,
+    value: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Plays Telegram Darts (🎯).
+    Values: 1 to 6 (1=miss board, 2,3=outer board, 4=inner board, 5=triple ring, 6=bullseye).
+    Target RTP: ~93.3% (MMORPG target 92-95%).
+    Values 1, 2, 3: Miss (0x) (50%)
+    Value 4: Hit (x1.4) (16.67%)
+    Value 5: High Score (x1.8) (16.67%)
+    Value 6: Bullseye / В яблочко! (x2.4) (16.67%)
+    """
+    valid, _, err = validate_casino_bet(bet, balance if balance > 0 else bet)
+    clean_bet = clamp_bet_to_limits(bet, balance if balance > 0 else bet)
+
+    streak = user_win_streaks.get(user_id, 0) if user_id else 0
+    is_tilted = streak >= 5 or balance > 100_000
+
+    val = value if value is not None and 1 <= value <= 6 else random.randint(1, 6)
+
+    if is_tilted:
+        mult_map = {1: 0.0, 2: 0.0, 3: 0.0, 4: 1.25, 5: 1.65, 6: 2.20}
+    else:
+        mult_map = {1: 0.0, 2: 0.0, 3: 0.0, 4: 1.40, 5: 1.80, 6: 2.40}
+
+    mult = mult_map.get(val, 0.0)
+    is_win = mult > 0.0
+    if user_id:
+        record_win_streak(user_id, is_win)
+
+    payout = int(clean_bet * mult)
+    net_profit = max(0, payout - clean_bet)
+    tax_amt, actual_profit, tax_msg = calculate_jackpot_tax(net_profit, multiplier=mult)
+    actual_payout = (clean_bet + actual_profit) if is_win else 0
+
+    if val == 6:
+        title = "🎯 ПРЯМО В ЯБЛОЧКО (BULLSEYE)!"
+        desc = "🎯 Дротик вонзился в самый центр мишени! Максимальный занос x" + str(mult) + "!"
+    elif val == 5:
+        title = "🎯 ТОЧНОЕ ПОПАДАНИЕ В СЕКТОР!"
+        desc = f"🎯 Отличный бросок в утроение очков! Множитель x{mult}."
+    elif val == 4:
+        title = "🎯 ПОПАДАНИЕ В МИШЕНЬ!"
+        desc = f"🎯 Дротик в мишени! Множитель x{mult}."
+    else:
+        title = "💨 ПРОМАХ МИМО МИШЕНИ!"
+        desc = "🎯 Дротик улетел в стену! Ставка сгорела."
+
+    return {
+        "value": val,
+        "is_win": is_win,
+        "multiplier": mult,
+        "bet": clean_bet,
+        "payout": actual_payout,
+        "net_profit": actual_profit if is_win else -clean_bet,
+        "tax_amount": tax_amt,
+        "tax_message": tax_msg,
+        "title": title,
+        "description": desc,
+    }
+
+
+# -----------------------------------------------------------------------------
 # Keyboards & Visuals (Lobbies & In-Game)
 # -----------------------------------------------------------------------------
 

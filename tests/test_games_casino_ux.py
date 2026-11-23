@@ -641,3 +641,324 @@ class TestLootboxCorruptedActiveItemsHealing:
         assert res_items.get("custom_title") == "[Король Помойки]"
         assert res_items.get("equipped_face") == "face_monocle"
         assert final_cash >= 100
+
+
+# =============================================================================
+# 7. WAVE 2 REDTEAM: PVP WATCHDOGS, RAM LEAK RESILIENCE & CASINO MINI-GAMES
+# =============================================================================
+
+class TestPvpWatchdogsAndRAMIntegrity:
+    """
+    Validates background watchdog routines for classic duels, Russian Roulette,
+    Dice duels, and Tic-Tac-Toe:
+    - 100% refund of escrowed bets when challenger is muted or timeout expires.
+    - Zero RAM leaks: all user session mapping dicts are cleanly purged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_classic_duel_watchdog_muted_creator_immediate_refund(self, isolated_test_db):
+        """When a classic duel challenger is muted, watchdog immediately cancels and refunds 100% escrow."""
+        import main
+        from common.database import add_user_global_balance, get_user_global_balance
+
+        db = isolated_test_db
+        user_id = 88001
+        board_id = "b"
+        stake = 500
+
+        # User starts with 500
+        await add_user_global_balance(db, user_id, board_id, 0)
+
+        # Place pending duel
+        main._active_duels[user_id] = {
+            "amount": stake,
+            "board_id": board_id,
+            "created_at": 100.0,
+            "escrowed": True,
+            "chat_id": -1001,
+            "msg_id": 999,
+            "last_tick_ts": 100.0,
+        }
+
+        with patch("common.database.is_shadow_muted", new=AsyncMock(return_value=True)):
+            with patch("common.bot_helpers.check_user_is_muted", new=AsyncMock(return_value=False)):
+                await main.classic_duel_watchdog_step(bot=None)
+
+        # Duel must be cancelled and purged from active duels
+        assert user_id not in main._active_duels
+
+        # Escrow must be 100% refunded to user balance
+        bal = await get_user_global_balance(db, user_id)
+        assert bal == stake
+
+    @pytest.mark.asyncio
+    async def test_russian_roulette_watchdog_muted_creator_cancels_and_cleans_ram(self, isolated_test_db):
+        """When RR challenger is muted while pending, challenge is cancelled and user_active_rr_game cleared."""
+        import russian_roulette_pvp as rr
+        gid = "rr_mute_test_01"
+        ch_id = 88002
+        tgt_id = 88003
+
+        rr.active_rr_games[gid] = {
+            "game_id": gid,
+            "challenger_id": ch_id,
+            "target_id": tgt_id,
+            "bet": 300,
+            "state": "pending",
+            "created_ts": 100.0,
+            "board_id": "b",
+            "chat_id": -1002,
+            "msg_id": 888,
+        }
+        rr.user_active_rr_game[ch_id] = gid
+        rr.user_active_rr_game[tgt_id] = gid
+
+        with patch("common.database.is_shadow_muted", new=AsyncMock(return_value=True)):
+            with patch("common.bot_helpers.check_user_is_muted", new=AsyncMock(return_value=False)):
+                await rr.rr_watchdog_step(bot=None)
+
+        # Challenger and target must be removed from RAM mapping
+        assert ch_id not in rr.user_active_rr_game
+        assert tgt_id not in rr.user_active_rr_game
+
+        # Game must be marked cancelled
+        game = rr.active_rr_games.get(gid)
+        assert game is not None
+        assert game.get("state") == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_dice_duel_watchdog_muted_creator_cancels_and_cleans_ram(self, isolated_test_db):
+        """When dice challenger is muted while pending, challenge is cancelled and user_active_dice_game cleared."""
+        import dice_duel_engine as dd
+        gid = "dice_mute_test_01"
+        ch_id = 88004
+        tgt_id = 88005
+
+        dd.active_dice_games[gid] = {
+            "game_id": gid,
+            "player_1": ch_id,
+            "player_2": None,
+            "target_id": tgt_id,
+            "bet": 400,
+            "state": "pending",
+            "created_ts": 100.0,
+            "board_id": "b",
+            "chat_id": -1003,
+            "msg_id": 777,
+        }
+        dd.user_active_dice_game[ch_id] = gid
+        dd.user_active_dice_game[tgt_id] = gid
+
+        with patch("common.database.is_shadow_muted", new=AsyncMock(return_value=True)):
+            with patch("common.bot_helpers.check_user_is_muted", new=AsyncMock(return_value=False)):
+                await dd.dice_watchdog_step(bot=None)
+
+        # Challenger and target removed from active memory
+        assert ch_id not in dd.user_active_dice_game
+        assert tgt_id not in dd.user_active_dice_game
+
+        # Game cancelled
+        game = dd.active_dice_games.get(gid)
+        assert game is not None
+        assert game.get("state") == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_ttt_watchdog_muted_creator_cancels_and_cleans_ram(self, isolated_test_db):
+        """When TTT challenger is muted while waiting, game is cancelled and user_active_ttt_session cleared."""
+        import ttt_engine as ttt
+        gid = "ttt_mute_test_01"
+        ch_id = 88006
+        tgt_id = 88007
+
+        game = ttt.TicTacToeGame(
+            game_id=gid,
+            board_id="b",
+            chat_id=-1004,
+            challenger_id=ch_id,
+            bet=250,
+            target_user_id=tgt_id,
+            status="waiting",
+            created_at=100.0,
+        )
+        ttt.active_ttt_games[gid] = game
+        ttt.user_active_ttt_session[ch_id] = gid
+        ttt.user_active_ttt_session[tgt_id] = gid
+
+        with patch("common.database.is_shadow_muted", new=AsyncMock(return_value=True)):
+            with patch("common.bot_helpers.check_user_is_muted", new=AsyncMock(return_value=False)):
+                await ttt.ttt_watchdog_step(bot=None)
+
+        # Challenger and target removed from RAM session
+        assert ch_id not in ttt.user_active_ttt_session
+        assert tgt_id not in ttt.user_active_ttt_session
+
+        # Status finished / cancelled
+        assert game.status == "finished"
+        assert game.finish_reason == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_watchdog_ram_leak_cleanup_purges_stale_finished_sessions(self):
+        """Finished games older than 60s are completely pruned from RAM mappings."""
+        import time
+        import russian_roulette_pvp as rr
+        import dice_duel_engine as dd
+        import ttt_engine as ttt
+
+        stale_time = time.time() - 120.0
+
+        # 1. Russian roulette
+        rr_gid = "rr_stale_cleanup_01"
+        rr.active_rr_games[rr_gid] = {
+            "game_id": rr_gid,
+            "finished": True,
+            "state": "finished",
+            "finished_ts": stale_time,
+            "challenger_id": 88010,
+            "acceptor_id": 88011,
+        }
+        rr.user_active_rr_game[88010] = rr_gid
+        rr.user_active_rr_game[88011] = rr_gid
+
+        await rr.rr_watchdog_step(bot=None)
+        assert rr_gid not in rr.active_rr_games
+        assert 88010 not in rr.user_active_rr_game
+        assert 88011 not in rr.user_active_rr_game
+
+        # 2. Dice duel
+        dd_gid = "dice_stale_cleanup_01"
+        dd.active_dice_games[dd_gid] = {
+            "game_id": dd_gid,
+            "finished": True,
+            "state": "finished",
+            "finished_ts": stale_time,
+            "player_1": 88012,
+            "player_2": 88013,
+        }
+        dd.user_active_dice_game[88012] = dd_gid
+        dd.user_active_dice_game[88013] = dd_gid
+
+        await dd.dice_watchdog_step(bot=None)
+        assert dd_gid not in dd.active_dice_games
+        assert 88012 not in dd.user_active_dice_game
+        assert 88013 not in dd.user_active_dice_game
+
+        # 3. TTT
+        ttt_gid = "ttt_stale_cleanup_01"
+        tgame = ttt.TicTacToeGame(
+            game_id=ttt_gid,
+            board_id="b",
+            chat_id=-1005,
+            challenger_id=88014,
+            opponent_id=88015,
+            bet=100,
+            status="finished",
+            finished_at=stale_time,
+        )
+        ttt.active_ttt_games[ttt_gid] = tgame
+        ttt.user_active_ttt_session[88014] = ttt_gid
+        ttt.user_active_ttt_session[88015] = ttt_gid
+
+        await ttt.ttt_watchdog_step(bot=None)
+        assert ttt_gid not in ttt.active_ttt_games
+        assert 88014 not in ttt.user_active_ttt_session
+        assert 88015 not in ttt.user_active_ttt_session
+
+
+class TestSoloCasinoMiniGamesAndInFlight:
+    """
+    Tests Telegram mini-games (Dice, Football, Basketball, Darts) in casino_engine:
+    - Return structure, win/loss mechanics, tax calculation.
+    - Anti-streak / high-roller tilt when balance > 100k or streak >= 5.
+    - Per-user mutual exclusion with casino_in_flight_guard.
+    """
+
+    def test_play_dice_structure_and_outcomes(self):
+        """play_dice returns correct structure for all values 1-6."""
+        for roll in range(1, 7):
+            res = casino_engine.play_dice(bet=100, balance=5000, user_id=9001, roll_value=roll)
+            assert res["value"] == roll
+            assert "is_win" in res
+            assert "multiplier" in res
+            assert "payout" in res
+            assert "title" in res
+            assert "description" in res
+
+            if roll <= 3:
+                assert res["is_win"] is False
+                assert res["multiplier"] == 0.0
+                assert res["payout"] == 0
+            else:
+                assert res["is_win"] is True
+                assert res["multiplier"] > 1.0
+                assert res["payout"] > 100
+
+    def test_play_football_structure_and_outcomes(self):
+        """play_football respects values 1-5 (goals vs saves/misses)."""
+        for val in range(1, 6):
+            res = casino_engine.play_football(bet=200, balance=10000, user_id=9002, value=val)
+            assert res["value"] == val
+            assert res["bet"] == 200
+            if val in (1, 2):
+                assert res["is_win"] is False
+                assert res["multiplier"] == 0.0
+            else:
+                assert res["is_win"] is True
+                assert res["multiplier"] >= 1.45
+
+    def test_play_basketball_structure_and_outcomes(self):
+        """play_basketball handles baskets (4, 5) and misses (1, 2, 3)."""
+        for val in range(1, 6):
+            res = casino_engine.play_basketball(bet=300, balance=15000, user_id=9003, value=val)
+            assert res["value"] == val
+            assert res["bet"] == 300
+            if val <= 3:
+                assert res["is_win"] is False
+                assert res["multiplier"] == 0.0
+            else:
+                assert res["is_win"] is True
+                assert res["multiplier"] >= 2.0
+
+    def test_play_darts_structure_and_outcomes(self):
+        """play_darts handles bullseye (6) and board hits (4, 5) vs misses."""
+        for val in range(1, 7):
+            res = casino_engine.play_darts(bet=400, balance=20000, user_id=9004, value=val)
+            assert res["value"] == val
+            assert res["bet"] == 400
+            if val <= 3:
+                assert res["is_win"] is False
+            elif val == 6:
+                assert res["is_win"] is True
+                assert res["multiplier"] == 2.4
+                assert "ЯБЛОЧКО" in res["title"]
+
+    def test_mini_games_high_roller_tilt(self):
+        """Mini games apply house edge tilt when player balance > 100,000 ₪."""
+        # When balance > 100k, multiplier on dice roll 6 is tilted from 2.4 to 2.2
+        res_tilted = casino_engine.play_dice(bet=100, balance=200_000, user_id=9005, roll_value=6)
+        res_normal = casino_engine.play_dice(bet=100, balance=5_000, user_id=9006, roll_value=6)
+        assert res_tilted["multiplier"] == 2.2
+        assert res_normal["multiplier"] == 2.4
+
+    @pytest.mark.asyncio
+    async def test_casino_in_flight_guard_mutual_exclusion(self):
+        """casino_in_flight_guard prevents simultaneous spins from the same user."""
+        user_id = 99991
+        entered = False
+
+        async def worker1():
+            nonlocal entered
+            async with casino_engine.casino_in_flight_guard(user_id, action_name="test"):
+                entered = True
+                await asyncio.sleep(0.08)
+
+        async def worker2():
+            await asyncio.sleep(0.02)
+            # Must raise CasinoInFlightError because worker1 is in-flight
+            with pytest.raises(casino_engine.CasinoInFlightError):
+                async with casino_engine.casino_in_flight_guard(user_id, action_name="test"):
+                    pass
+
+        await asyncio.gather(worker1(), worker2())
+        assert entered is True
+        assert casino_engine.is_casino_in_flight(user_id) is False
+

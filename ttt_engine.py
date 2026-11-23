@@ -1969,6 +1969,7 @@ async def ttt_watchdog_step(bot=None):
     """
     now = time.time()
     expired_pending = []
+    muted_pending = []
     live_tick_games = []
     timeout_active_games = []
     async with ttt_lock:
@@ -1977,6 +1978,9 @@ async def ttt_watchdog_step(bot=None):
                 fin_ts = getattr(game, 'finished_at', 0.0) or game.created_at
                 if now - fin_ts > 60:
                     active_ttt_games.pop(gid, None)
+                    for uid in (game.challenger_id, getattr(game, 'opponent_id', None), getattr(game, 'target_user_id', None)):
+                        if uid and user_active_ttt_session.get(uid) == gid:
+                            user_active_ttt_session.pop(uid, None)
                 continue
             if game.status == "active":
                 if (now - game.turn_start_time) > TURN_TIMEOUT_SECONDS:
@@ -1986,15 +1990,36 @@ async def ttt_watchdog_step(bot=None):
                     if now - last_tick >= 15.0:
                         game.last_tick_ts = now
                         live_tick_games.append(gid)
-            elif game.status == "waiting" and (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
-                game.status = "finished"
-                game.finished_at = now
-                game.finish_reason = "cancelled"
-                if user_active_ttt_session.get(game.challenger_id) == gid:
-                    user_active_ttt_session.pop(game.challenger_id, None)
-                if game.target_user_id and user_active_ttt_session.get(game.target_user_id) == gid:
-                    user_active_ttt_session.pop(game.target_user_id, None)
-                expired_pending.append(gid)
+            elif game.status == "waiting":
+                ch_id = game.challenger_id
+                tgt_id = getattr(game, 'target_user_id', None)
+                # Check if challenger was muted during waiting
+                try:
+                    db = await get_pool()
+                    from common.database import is_shadow_muted as check_db_shadow_muted
+                    from common.bot_helpers import check_user_is_muted
+                    is_ch_muted = await check_db_shadow_muted(ch_id, game.board_id, db=db) or await check_user_is_muted(db, ch_id, game.board_id)
+                except Exception:
+                    is_ch_muted = False
+
+                if is_ch_muted:
+                    game.status = "finished"
+                    game.finished_at = now
+                    game.finish_reason = "cancelled"
+                    if user_active_ttt_session.get(ch_id) == gid:
+                        user_active_ttt_session.pop(ch_id, None)
+                    if tgt_id and user_active_ttt_session.get(tgt_id) == gid:
+                        user_active_ttt_session.pop(tgt_id, None)
+                    muted_pending.append(gid)
+                elif (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
+                    game.status = "finished"
+                    game.finished_at = now
+                    game.finish_reason = "cancelled"
+                    if user_active_ttt_session.get(ch_id) == gid:
+                        user_active_ttt_session.pop(ch_id, None)
+                    if tgt_id and user_active_ttt_session.get(tgt_id) == gid:
+                        user_active_ttt_session.pop(tgt_id, None)
+                    expired_pending.append(gid)
 
     # 0. Handle timed-out active games (fail-safe watchdog)
     for gid in timeout_active_games:
@@ -2079,6 +2104,37 @@ async def ttt_watchdog_step(bot=None):
                 chat_id=game.chat_id,
                 message_id=game.msg_id,
                 text=exp_board_text,
+                reply_markup=None
+            )
+
+    # 3. Handle muted pending challenges
+    for gid in muted_pending:
+        game = active_ttt_games.get(gid)
+        if not game:
+            continue
+        bot_to_use = bot or game.bot_instance
+        muted_text = (
+            "🔇 <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ АННУЛИРОВАН</b>\n\n"
+            "Создатель вызова был замучен. Игра отменена, ставка не списана."
+        )
+        if bot_to_use and game.challenger_id:
+            spawn_task(send_pvp_direct_notification(bot_to_use, game.challenger_id, muted_text), name="pvp_notify_ttt_muted")
+
+        if bot_to_use and getattr(game, "broadcast_msgs", None):
+            for chat_id, msg_id in list(game.broadcast_msgs):
+                await safe_edit_ttt_message(
+                    bot=bot_to_use,
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=muted_text,
+                    reply_markup=None
+                )
+        elif bot_to_use and game.chat_id and game.msg_id:
+            await safe_edit_ttt_message(
+                bot=bot_to_use,
+                chat_id=game.chat_id,
+                message_id=game.msg_id,
+                text=muted_text,
                 reply_markup=None
             )
 

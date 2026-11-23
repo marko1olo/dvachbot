@@ -1286,11 +1286,12 @@ async def _finish_rr_game(
 async def rr_watchdog_step(bot=None):
     """
     Single iteration step of background watchdog checking expired turns,
-    updating countdowns dynamically, and cleaning expired challenges.
+    updating countdowns dynamically, cleaning expired/muted challenges, and preventing RAM leaks.
     """
     now = time.time()
     expired_games = []
     expired_pending = []
+    muted_pending = []
     live_tick_games = []
 
     async with rr_lock:
@@ -1301,6 +1302,9 @@ async def rr_watchdog_step(bot=None):
                     game["finished_ts"] = now
                 elif now - fin_ts > 60:
                     active_rr_games.pop(gid, None)
+                    for uid in (game.get("challenger_id"), game.get("acceptor_id"), game.get("target_id")):
+                        if uid and user_active_rr_game.get(uid) == gid:
+                            user_active_rr_game.pop(uid, None)
                 continue
             if game["state"] == "playing":
                 if now > game["turn_deadline_ts"]:
@@ -1311,18 +1315,37 @@ async def rr_watchdog_step(bot=None):
                     if now - last_tick >= 15.0:
                         game["last_tick_ts"] = now
                         live_tick_games.append(gid)
-            elif game["state"] == "pending" and now > (game["created_ts"] + RR_CHALLENGE_TIMEOUT_SEC):
-                # Expire unaccepted challenge
-                game["finished"] = True
-                game["state"] = "expired"
-                game["finished_ts"] = now
+            elif game["state"] == "pending":
                 ch_id = game["challenger_id"]
                 tgt_id = game.get("target_id")
-                if user_active_rr_game.get(ch_id) == gid:
-                    user_active_rr_game.pop(ch_id, None)
-                if tgt_id and user_active_rr_game.get(tgt_id) == gid:
-                    user_active_rr_game.pop(tgt_id, None)
-                expired_pending.append(gid)
+                # Check if challenger was muted during waiting
+                try:
+                    db = await get_pool()
+                    from common.database import is_shadow_muted as check_db_shadow_muted
+                    from common.bot_helpers import check_user_is_muted
+                    is_ch_muted = await check_db_shadow_muted(ch_id, game.get("board_id", "b"), db=db) or await check_user_is_muted(db, ch_id, game.get("board_id", "b"))
+                except Exception:
+                    is_ch_muted = False
+
+                if is_ch_muted:
+                    game["finished"] = True
+                    game["state"] = "cancelled"
+                    game["finished_ts"] = now
+                    if user_active_rr_game.get(ch_id) == gid:
+                        user_active_rr_game.pop(ch_id, None)
+                    if tgt_id and user_active_rr_game.get(tgt_id) == gid:
+                        user_active_rr_game.pop(tgt_id, None)
+                    muted_pending.append(gid)
+                elif now > (game["created_ts"] + RR_CHALLENGE_TIMEOUT_SEC):
+                    # Expire unaccepted challenge
+                    game["finished"] = True
+                    game["state"] = "expired"
+                    game["finished_ts"] = now
+                    if user_active_rr_game.get(ch_id) == gid:
+                        user_active_rr_game.pop(ch_id, None)
+                    if tgt_id and user_active_rr_game.get(tgt_id) == gid:
+                        user_active_rr_game.pop(tgt_id, None)
+                    expired_pending.append(gid)
 
     # 1. Update live countdown timer in playing games for BOTH players
     for gid in live_tick_games:
@@ -1369,6 +1392,26 @@ async def rr_watchdog_step(bot=None):
         for chat_id, msg_id in all_msgs:
             if bot:
                 await safe_edit_rr_message(bot, chat_id, msg_id, expired_text, reply_markup=None)
+
+    # 4. Clean and edit muted pending challenges
+    for gid in muted_pending:
+        game = active_rr_games.get(gid)
+        if not game:
+            continue
+        muted_text = (
+            "🔇 <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ АННУЛИРОВАН</b>\n\n"
+            "Создатель вызова был замучен. Дуэль отменена, ставка не списана."
+        )
+        ch_id = game.get("challenger_id")
+        if bot and ch_id:
+            spawn_task(send_pvp_direct_notification(bot, ch_id, muted_text), name="pvp_notify_rr_muted")
+
+        all_msgs = game.get("broadcast_msgs") or []
+        if not all_msgs and game.get("chat_id") and game.get("msg_id"):
+            all_msgs = [(game["chat_id"], game["msg_id"])]
+        for chat_id, msg_id in all_msgs:
+            if bot:
+                await safe_edit_rr_message(bot, chat_id, msg_id, muted_text, reply_markup=None)
 
 
 async def start_rr_watchdog_loop(bot):
