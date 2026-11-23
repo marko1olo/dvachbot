@@ -1565,10 +1565,10 @@ class MessageBroadcaster:
                         if "user_is_blocked" in err_s:
                             self.blocked_users.add(uid)
                             raise TelegramForbiddenError(method=s_err.method, message=s_err.message)
-                        if "photo_invalid_dimensions" in err_s or "webpage_media_empty" in err_s:
+                        if any(k in err_s for k in ("photo_invalid_dimensions", "webpage_media_empty", "webpage_curl_failed", "image_process_failed")):
                             self.media_group_fallback_to_text = True
                             self.media_group_invalid_dimensions = True
-                            return await _send_media_group_text_link_fallback("plain_single_invalid_dimensions")
+                            return await _send_media_group_text_link_fallback("plain_single_invalid_dimensions_or_webpage_failed")
                         return await _send_plain_text_parts(reason, plain_text)
                 elif len(media_group_build) < 1:
                     return await _send_plain_text_parts(reason, plain_text)
@@ -1599,10 +1599,10 @@ class MessageBroadcaster:
                                 if had_caption and media_group_build and can_fit_caption:
                                     media_group_build[0].caption = plain_text
                                 continue
-                        if "photo_invalid_dimensions" in err_mg or "webpage_media_empty" in err_mg:
+                        if any(k in err_mg for k in ("photo_invalid_dimensions", "webpage_media_empty", "webpage_curl_failed", "image_process_failed")):
                             self.media_group_fallback_to_text = True
                             self.media_group_invalid_dimensions = True
-                            return await _send_media_group_text_link_fallback("plain_fallback_invalid_dimensions")
+                            return await _send_media_group_text_link_fallback("plain_fallback_invalid_dimensions_or_webpage_failed")
                         break
                 if not res:
                     return await _send_plain_text_parts("media_group_plain_failed", plain_text)
@@ -1930,10 +1930,10 @@ class MessageBroadcaster:
                                         break
                                     except Exception as doc_err:
                                         runtime_logger.debug(f"Document fallback in single_media_fallback failed: {doc_err}")
-                                if "photo_invalid_dimensions" in err_single or "webpage_media_empty" in err_single:
+                                if any(k in err_single for k in ("photo_invalid_dimensions", "webpage_media_empty", "webpage_curl_failed", "image_process_failed")):
                                     self.media_group_fallback_to_text = True
                                     self.media_group_invalid_dimensions = True
-                                    return await _send_media_group_text_link_fallback("single_media_invalid_dimensions")
+                                    return await _send_media_group_text_link_fallback("single_media_invalid_dimensions_or_webpage_failed")
                                 runtime_logger.warning(f"⚠️ [SINGLE_MEDIA_FALLBACK] Failed to send single media item: {single_err}. Falling back to text.")
                                 self.media_group_fallback_to_text = True
                                 return await _send_text_fallback("single_media_failed_fallback")
@@ -1962,14 +1962,14 @@ class MessageBroadcaster:
                                         item.caption = html.unescape(clean_html_tags(item.caption or ""))
                                         item.parse_mode = None
                                 continue
-                            # Handle MEDIA_INVALID: when file identifiers are rejected, fallback directly to text
-                            if "media_invalid" in err_low:
+                            # Handle MEDIA_INVALID / WEBPAGE failures: when media rejected, fallback directly to text link
+                            if any(k in err_low for k in ("media_invalid", "webpage_media_empty", "webpage_curl_failed", "image_process_failed")):
                                 runtime_logger.warning(
                                     f"⚠️ [MEDIA_GROUP_FAILED] Post #{self.post_num} rejected by Telegram: {mg_err.message}. "
                                     f"Switching to resilient text delivery to protect queue and deliver user post."
                                 )
                                 self.media_group_fallback_to_text = True
-                                return await _send_text_fallback("media_group_rejected_fallback")
+                                return await _send_media_group_text_link_fallback("media_group_rejected_fallback")
                             # Extract failed message index if reported by Telegram: "failed to send message #N"
                             m_bad = re.search(r'failed to send message #(\d+)', mg_err.message, re.IGNORECASE)
                             if m_bad:
@@ -2168,7 +2168,7 @@ class MessageBroadcaster:
                     )
                     current_content['type'] = 'document'
                     continue
-                if "photo_invalid_dimensions" in err_low or "webpage_media_empty" in err_low:
+                if any(k in err_low for k in ("photo_invalid_dimensions", "webpage_media_empty", "webpage_curl_failed", "image_process_failed")):
                     self.media_group_fallback_to_text = True
                     self.media_group_invalid_dimensions = True
                     return await _send_media_group_text_link_fallback("outer_photo_invalid_dimensions_or_webpage_empty")
@@ -2180,6 +2180,9 @@ class MessageBroadcaster:
                         "wrong type of the web page content" in err_low
                         or "failed to get http url content" in err_low
                         or "wrong file identifier/http url specified" in err_low
+                        or "webpage_curl_failed" in err_low
+                        or "webpage_media_empty" in err_low
+                        or "image_process_failed" in err_low
                     )
                 ):
                     self.media_url_text_fallback = True
@@ -2263,7 +2266,8 @@ class MessageBroadcaster:
                     "invalid file_id", "wrong file identifier", "media_file_invalid",
                     "media_empty", "file_parts_invalid", "media_type_invalid",
                     "file_id_invalid", "wrong type of the web page content",
-                    "failed to get http url content", "can't use file of type"
+                    "failed to get http url content", "can't use file of type",
+                    "webpage_media_empty", "webpage_curl_failed", "image_process_failed"
                 ]):
                     runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID/MEDIA_INVALID] Auto-downloading media buffer for user {uid}: {e}")
                     try:

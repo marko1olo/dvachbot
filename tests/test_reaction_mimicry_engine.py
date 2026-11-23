@@ -492,3 +492,95 @@ async def test_run_mimicry_batch_sampling():
     for res in results:
         assert res["post_num"] in state["processed_post_nums"]
         assert res["persona"] in PERSONAS
+
+
+def test_feature_extraction_string_tags_and_split():
+    """_extract_post_features splits string tags and normalizes underscores."""
+    post = {
+        "tags": "1girl, solo, anime; blonde_hair\nwaifu",
+        "board_id": "b",
+        "text": "test post"
+    }
+    text, tags, board, mtype = _extract_post_features(post)
+    assert "1girl" in tags
+    assert "solo" in tags
+    assert "anime" in tags
+    assert "blonde_hair" in tags
+    assert "blonde hair" in tags
+    assert "waifu" in tags
+
+
+def test_feature_extraction_media_desc_cache_resolution():
+    """_extract_post_features resolves file_id from _MEDIA_DESC_CACHE."""
+    from post_helpers import _MEDIA_DESC_CACHE
+    test_fid = "test_vision_fid_999"
+    _MEDIA_DESC_CACHE[test_fid] = {
+        "tags": "ecchi; blue_archive",
+        "description": "Aris in school uniform"
+    }
+    try:
+        post = {
+            "file_id": test_fid,
+            "board_id": "b"
+        }
+        text, tags, board, mtype = _extract_post_features(post)
+        assert "ecchi" in tags
+        assert "blue_archive" in tags
+        assert "blue archive" in tags
+        assert "aris in school uniform" in text
+    finally:
+        _MEDIA_DESC_CACHE.pop(test_fid, None)
+
+
+def test_heuristic_triggers_horny_weeb_by_vision_tags():
+    """Vision tags (1girl, waifu, cosplay) trigger horny_weeb with positive reactions."""
+    post = {
+        "post_num": 55001,
+        "vision_tags": "1girl, cosplay, waifu",
+        "board_id": "b"
+    }
+    persona, reactions = evaluate_post_heuristics(post)
+    assert persona == "horny_weeb"
+    assert any(e in ["❤️", "🔥", "😍", "❤‍🔥", "🥰"] for e in reactions)
+
+
+def test_heuristic_triggers_toxic_oldfag_by_cringe_tags():
+    """Vision tags (cringe, whining, gay, normie) trigger toxic_oldfag with negative reactions."""
+    post = {
+        "post_num": 55002,
+        "tags": "cringe, whining, spam",
+        "board_id": "b"
+    }
+    persona, reactions = evaluate_post_heuristics(post)
+    assert persona == "toxic_oldfag"
+    assert any(e in ["💩", "🤮", "🖕", "🤢"] for e in reactions)
+
+
+@pytest.mark.asyncio
+async def test_router_reaction_mimicry_cycle_uses_llm_probabilistically():
+    """run_reaction_mimicry_cycle invokes decide_post_reactions with use_llm."""
+    import time
+    from handlers.message_router import run_reaction_mimicry_cycle
+
+    candidate = {
+        "post_num": 888123,
+        "board_id": "b",
+        "author_id": 123456,
+        "timestamp": time.time() - 100,
+        "text": "Интересный тред",
+        "content": {"text": "Интересный тред"}
+    }
+
+    mock_decide = AsyncMock(return_value=("based_chad", ["👍"]))
+    mock_apply = AsyncMock(return_value=True)
+
+    with patch("reaction_mimicry_engine.decide_post_reactions", mock_decide), \
+         patch("handlers.message_router.apply_mimic_reaction_to_post", mock_apply), \
+         patch("random.random", return_value=0.10):  # 0.10 < 0.35 -> should trigger use_llm=True
+        results = await run_reaction_mimicry_cycle(candidate_posts=[candidate])
+
+    assert len(results) == 1
+    assert mock_decide.called
+    call_kwargs = mock_decide.call_args.kwargs
+    assert call_kwargs.get("use_llm") is True
+

@@ -325,3 +325,155 @@ class TestMemoryPruningAndCeilings:
 
         assert len(posts_pending_deletion) == 500
         assert min(posts_pending_deletion) == 700
+
+
+class TestTelegramApiMediaFailureFallbacks:
+    @pytest.mark.asyncio
+    async def test_media_group_fallback_on_webpage_curl_failed(self):
+        """
+        When Telegram rejects sendMediaGroup with WEBPAGE_CURL_FAILED, broadcaster must
+        automatically fall back to text link delivery with LinkPreviewOptions(is_disabled=True)
+        and successfully deliver the post without throwing an unhandled exception.
+        """
+        bot = MagicMock()
+        delivered_msg = MagicMock()
+        delivered_msg.message_id = 771122
+
+        bot.send_media_group = AsyncMock(
+            side_effect=TelegramBadRequest(
+                method="sendMediaGroup",
+                message='Bad Request: failed to send message #2 with the error message "WEBPAGE_CURL_FAILED"'
+            )
+        )
+        bot.send_message = AsyncMock(return_value=delivered_msg)
+
+        shared_state.board_data["b"] = {
+            "users": {"banned": set(), "active": {12345}},
+            "user_settings": {},
+        }
+
+        config = BroadcastConfig(
+            bot_instance=bot,
+            board_id="b",
+            recipients={12345},
+            content={
+                "post_num": 99001,
+                "type": "media_group",
+                "text": "Post with external images",
+                "media": [
+                    {"type": "photo", "media": "pic_file_id_1"},
+                    {"type": "photo", "media": "pic_file_id_2"}
+                ]
+            },
+            verbose=False,
+        )
+        broadcaster = MessageBroadcaster(config)
+        broadcaster.post_num = 99001
+        await broadcaster._prepare_content_and_mentions()
+        res = await broadcaster._send_one(12345, 10)
+
+        assert res == delivered_msg or (isinstance(res, list) and delivered_msg in res)
+        assert broadcaster.media_group_fallback_to_text is True
+        assert bot.send_message.called
+        call_kwargs = bot.send_message.call_args.kwargs
+        assert call_kwargs.get("chat_id") == 12345
+        lp = call_kwargs.get("link_preview_options")
+        assert getattr(lp, "is_disabled", False) is True
+
+    @pytest.mark.asyncio
+    async def test_media_group_fallback_on_webpage_media_empty(self):
+        """
+        When Telegram rejects sendMediaGroup with WEBPAGE_MEDIA_EMPTY, broadcaster must
+        fall back to text link delivery with link previews disabled.
+        """
+        bot = MagicMock()
+        delivered_msg = MagicMock()
+        delivered_msg.message_id = 771123
+
+        bot.send_media_group = AsyncMock(
+            side_effect=TelegramBadRequest(
+                method="sendMediaGroup",
+                message='Bad Request: failed to send message #1 with the error message "WEBPAGE_MEDIA_EMPTY"'
+            )
+        )
+        bot.send_message = AsyncMock(return_value=delivered_msg)
+
+        shared_state.board_data["b"] = {
+            "users": {"banned": set(), "active": {12346}},
+            "user_settings": {},
+        }
+
+        config = BroadcastConfig(
+            bot_instance=bot,
+            board_id="b",
+            recipients={12346},
+            content={
+                "post_num": 99002,
+                "type": "media_group",
+                "text": "Post with broken webpage preview",
+                "media": [
+                    {"type": "photo", "media": "empty_file_id_1"},
+                    {"type": "photo", "media": "pic_file_id_2"}
+                ]
+            },
+            verbose=False,
+        )
+        broadcaster = MessageBroadcaster(config)
+        broadcaster.post_num = 99002
+        await broadcaster._prepare_content_and_mentions()
+        res = await broadcaster._send_one(12346, 10)
+
+        assert res == delivered_msg or (isinstance(res, list) and delivered_msg in res)
+        assert broadcaster.media_group_fallback_to_text is True
+        assert bot.send_message.called
+        call_kwargs = bot.send_message.call_args.kwargs
+        lp = call_kwargs.get("link_preview_options")
+        assert getattr(lp, "is_disabled", False) is True
+
+    @pytest.mark.asyncio
+    async def test_single_media_fallback_on_image_process_failed(self):
+        """
+        When Telegram rejects sendPhoto with IMAGE_PROCESS_FAILED, broadcaster must
+        fall back to text delivery with link previews disabled.
+        """
+        bot = MagicMock()
+        delivered_msg = MagicMock()
+        delivered_msg.message_id = 771124
+
+        bot.send_photo = AsyncMock(
+            side_effect=TelegramBadRequest(
+                method="sendPhoto",
+                message="Bad Request: IMAGE_PROCESS_FAILED"
+            )
+        )
+        bot.send_message = AsyncMock(return_value=delivered_msg)
+
+        shared_state.board_data["b"] = {
+            "users": {"banned": set(), "active": {12347}},
+            "user_settings": {},
+        }
+
+        config = BroadcastConfig(
+            bot_instance=bot,
+            board_id="b",
+            recipients={12347},
+            content={
+                "post_num": 99003,
+                "type": "photo",
+                "file_id": "corrupted_img_id",
+                "text": "Post with corrupted photo"
+            },
+            verbose=False,
+        )
+        broadcaster = MessageBroadcaster(config)
+        broadcaster.post_num = 99003
+        await broadcaster._prepare_content_and_mentions()
+        res = await broadcaster._send_one(12347, 10)
+
+        assert res is not None
+        assert bot.send_message.called
+        call_kwargs = bot.send_message.call_args.kwargs
+        assert call_kwargs.get("chat_id") == 12347
+        lp = call_kwargs.get("link_preview_options")
+        assert getattr(lp, "is_disabled", False) is True
+

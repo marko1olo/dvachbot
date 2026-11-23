@@ -53,9 +53,11 @@ PERSONAS: Dict[str, Dict[str, Any]] = {
         ],
         "tags": {
             "anime", "hentai", "1girl", "2girls", "ecchi", "breasts", "cosplay", "nsfw",
-            "blue_archive", "art", "waifu", "manga", "oppai", "cleavage", "bikini",
+            "blue_archive", "blue archive", "art", "waifu", "manga", "oppai", "cleavage", "bikini",
             "swimsuit", "maid", "genshin", "honkai", "vtuber", "catgirl", "foxgirl",
-            "bunnygirl", "illustration", "femdom", "yuri", "succubus"
+            "bunnygirl", "illustration", "femdom", "yuri", "succubus", "nude", "erotic",
+            "lewd", "thighhighs", "panties", "lingerie", "swimwear", "navel", "skirt",
+            "school_uniform", "school uniform"
         },
         "keywords": [
             "хентай", "аниме", "вайфу", "тян", "тяночк", "сиськи", "кун", "лоли",
@@ -74,7 +76,8 @@ PERSONAS: Dict[str, Dict[str, Any]] = {
             ["🤢"],
         ],
         "tags": {
-            "cringe", "gross", "ugly", "spam", "shitpost", "normie", "fail"
+            "cringe", "gross", "ugly", "spam", "shitpost", "normie", "fail", "whining",
+            "gay", "fag", "homo", "crying", "trash"
         },
         "keywords": [
             "кринж", "нытье", "ныть", "плак", "помогите", "нормис", "зумер", "тикток",
@@ -331,32 +334,117 @@ def _extract_post_features(post_data: Dict[str, Any]) -> Tuple[str, List[str], s
         post_data.get("content", {}).get("text") if isinstance(post_data.get("content"), dict) else None,
         post_data.get("caption"),
         post_data.get("content", {}).get("caption") if isinstance(post_data.get("content"), dict) else None,
+        post_data.get("media", {}).get("caption") if isinstance(post_data.get("media"), dict) else None,
     ]:
         if candidate and isinstance(candidate, str):
             text = candidate
             break
 
-    # 2. Tags extraction
-    raw_tags = []
-    if "tags" in post_data and isinstance(post_data["tags"], (list, set, tuple)):
-        raw_tags.extend(post_data["tags"])
+    # 2. File IDs collection (for _MEDIA_DESC_CACHE lookup)
+    file_ids: List[str] = []
+    for fid_candidate in [
+        post_data.get("file_id"),
+        post_data.get("media_id"),
+        post_data.get("content", {}).get("file_id") if isinstance(post_data.get("content"), dict) else None,
+        post_data.get("content", {}).get("media_id") if isinstance(post_data.get("content"), dict) else None,
+        post_data.get("media", {}).get("file_id") if isinstance(post_data.get("media"), dict) else None,
+    ]:
+        if fid_candidate and isinstance(fid_candidate, str) and fid_candidate not in file_ids:
+            file_ids.append(fid_candidate)
+
+    # Check files / media_files lists
+    for flist_key in ("files", "media_files"):
+        for source_dict in (post_data, post_data.get("content")):
+            if isinstance(source_dict, dict) and isinstance(source_dict.get(flist_key), (list, tuple, set)):
+                for fitem in source_dict[flist_key]:
+                    if isinstance(fitem, str) and fitem not in file_ids:
+                        file_ids.append(fitem)
+                    elif isinstance(fitem, dict):
+                        f_id = fitem.get("file_id") or fitem.get("id")
+                        if f_id and isinstance(f_id, str) and f_id not in file_ids:
+                            file_ids.append(f_id)
+
+    # 3. Tags extraction
+    raw_tag_inputs: List[Any] = []
+
+    def _collect_tag_source(src: Any):
+        if not src:
+            return
+        if isinstance(src, (list, set, tuple)):
+            raw_tag_inputs.extend(src)
+        elif isinstance(src, str):
+            raw_tag_inputs.append(src)
+
+    _collect_tag_source(post_data.get("tags"))
+    _collect_tag_source(post_data.get("vision_tags"))
+    _collect_tag_source(post_data.get("media_tags"))
+
     if isinstance(post_data.get("content"), dict):
         cnt = post_data["content"]
-        if "tags" in cnt and isinstance(cnt["tags"], (list, set, tuple)):
-            raw_tags.extend(cnt["tags"])
-        if "vision_tags" in cnt and isinstance(cnt["vision_tags"], (list, set, tuple)):
-            raw_tags.extend(cnt["vision_tags"])
-    if "media" in post_data and isinstance(post_data["media"], dict):
-        mtags = post_data["media"].get("tags")
-        if isinstance(mtags, (list, set, tuple)):
-            raw_tags.extend(mtags)
+        _collect_tag_source(cnt.get("tags"))
+        _collect_tag_source(cnt.get("vision_tags"))
+        _collect_tag_source(cnt.get("media_tags"))
 
-    cleaned_tags = [str(t).strip().lower() for t in raw_tags if str(t).strip()]
+    if isinstance(post_data.get("media"), dict):
+        m = post_data["media"]
+        _collect_tag_source(m.get("tags"))
+        _collect_tag_source(m.get("vision_tags"))
+        _collect_tag_source(m.get("media_tags"))
 
-    # 3. Board ID
+    # Check files / media_files list item dicts
+    for flist_key in ("files", "media_files"):
+        for source_dict in (post_data, post_data.get("content")):
+            if isinstance(source_dict, dict) and isinstance(source_dict.get(flist_key), (list, tuple, set)):
+                for fitem in source_dict[flist_key]:
+                    if isinstance(fitem, dict):
+                        _collect_tag_source(fitem.get("tags"))
+                        _collect_tag_source(fitem.get("vision_tags"))
+                        _collect_tag_source(fitem.get("media_tags"))
+
+    # Resolve from _MEDIA_DESC_CACHE
+    try:
+        from post_helpers import _MEDIA_DESC_CACHE
+        for fid in file_ids:
+            if fid in _MEDIA_DESC_CACHE:
+                cached_meta = _MEDIA_DESC_CACHE[fid]
+                if isinstance(cached_meta, dict):
+                    _collect_tag_source(cached_meta.get("tags"))
+                    _collect_tag_source(cached_meta.get("vision_tags"))
+                    if not text:
+                        desc = cached_meta.get("description")
+                        if desc and isinstance(desc, str):
+                            text = desc
+    except ImportError:
+        pass
+
+    # Clean & normalize tags
+    cleaned_tags: List[str] = []
+    error_tags = frozenset({
+        'error', 'download_failed', 'dead', 'no_tags', 'format_unsupported',
+        'error_no_tags', 'error_too_large', 'unknown', 'none', 'null'
+    })
+
+    for item in raw_tag_inputs:
+        if isinstance(item, str):
+            parts = re.split(r'[,;\n\r/]+', item)
+            for part in parts:
+                p = part.strip().lower()
+                if p and p not in error_tags:
+                    if p not in cleaned_tags:
+                        cleaned_tags.append(p)
+                    if "_" in p:
+                        space_p = p.replace("_", " ")
+                        if space_p not in cleaned_tags:
+                            cleaned_tags.append(space_p)
+        elif item:
+            p = str(item).strip().lower()
+            if p and p not in error_tags and p not in cleaned_tags:
+                cleaned_tags.append(p)
+
+    # 4. Board ID
     board_id = str(post_data.get("board_id") or "b").lower()
 
-    # 4. Media type
+    # 5. Media type
     media_type = "text"
     if isinstance(post_data.get("content"), dict):
         media_type = str(post_data["content"].get("type", "text")).lower()
@@ -413,19 +501,19 @@ def evaluate_post_heuristics(
         scores["based_chad"] += 3.5
 
     # Anime media with tags / captions
-    if any(t in tag_set for t in ["anime", "hentai", "1girl", "ecchi", "waifu"]):
+    if any(t in tag_set for t in ["anime", "hentai", "1girl", "2girls", "ecchi", "waifu", "oppai", "cleavage", "bikini", "cosplay", "maid", "vtuber"]):
         scores["horny_weeb"] += 5.0
 
     # Strong hate/cringe signals
-    if any(w in text for w in ["кринж", "соя", "пидор", "говно", "параша", "удали нахуй"]):
+    if any(w in text for w in ["кринж", "соя", "пидор", "говно", "параша", "удали нахуй"]) or any(t in tag_set for t in ["cringe", "ugly", "gross", "spam", "whining", "gay", "fag"]):
         scores["toxic_oldfag"] += 4.0
 
     # Strong troll/clown signals
-    if any(w in text for w in ["клоун", "цирк", "обосрался", "орнул", "кек"]):
+    if any(w in text for w in ["клоун", "цирк", "обосрался", "орнул", "кек"]) or any(t in tag_set for t in ["clown", "meme", "joke", "funny"]):
         scores["clown_troll"] += 3.5
 
     # Strong sadness/doomer signals
-    if any(w in text for w in ["одиноко", "тоска", "пустота", "смысла нет", "безысходность"]):
+    if any(w in text for w in ["одиноко", "тоска", "пустота", "смысла нет", "безысходность"]) or any(t in tag_set for t in ["doomer", "lonely", "sad", "alone"]):
         scores["deep_sych"] += 3.5
 
     # 4. Mood Bias (+1.2 bonus to persona matching current mood)

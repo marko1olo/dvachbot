@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 import aiohttp
 from aiogram import Bot
+from aiogram.types import LinkPreviewOptions
 from aiogram.exceptions import TelegramRetryAfter, TelegramNetworkError, TelegramBadRequest, TelegramForbiddenError
 import io
 from typing import *
@@ -320,12 +321,24 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
     async def _send_text_fallback():
         safe_msg = prepare_telegram_text(f"{header_text}\n\n{sanitize_html(converted_cap)}".strip(), max_len=4096)
         try:
-            return await sender_bot.send_message(channel_id, safe_msg, parse_mode="HTML", request_timeout=30)
+            return await sender_bot.send_message(
+                channel_id,
+                safe_msg,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                request_timeout=30
+            )
         except TelegramBadRequest as tbe:
             logger.warning(f"Media group text fallback HTML error ({tbe}), trying plain text...")
             plain_txt = clean_html_tags(f"{header_text}\n\n{converted_cap}")[:4090]
             try:
-                return await sender_bot.send_message(channel_id, plain_txt, parse_mode=None, request_timeout=30)
+                return await sender_bot.send_message(
+                    channel_id,
+                    plain_txt,
+                    parse_mode=None,
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                    request_timeout=30
+                )
             except Exception:
                 return None
         except Exception:

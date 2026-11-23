@@ -1495,7 +1495,8 @@ async def run_reaction_mimicry_cycle(
         p_num = post.get("post_num") or post.get("num")
         b_id = post.get("board_id", "b")
 
-        persona, emojis = await decide_post_reactions(post, use_llm=False)
+        should_use_llm = random.random() < 0.35
+        persona, emojis = await decide_post_reactions(post, use_llm=should_use_llm)
         virtual_user_id = get_or_assign_virtual_reactor(p_num, persona)
 
         ok = await apply_mimic_reaction_to_post(
