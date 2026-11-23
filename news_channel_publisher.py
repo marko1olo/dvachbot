@@ -204,7 +204,7 @@ async def publish_to_best_channel(
     bot_uname = bot_info.username or "tgach_bot"
 
     author_id = post_data.get('author_id', 0)
-    anon_tag = f"<code>[ID:{get_anon_id(author_id)}]</code>" if author_id > 0 else "Аноним"
+    anon_tag = f"<code>[{get_anon_id(author_id)}]</code>" if author_id > 0 else "Аноним"
 
     header_text = (
         f"🔥 <b>ГОДНОТА С /{board_id}/ — {board_name}</b> (Пост #{post_num})\n"
@@ -261,7 +261,7 @@ async def publish_post_numeral_milestone(
 
     bot_info = await bot.get_me()
     bot_uname = bot_info.username or "tgach_bot"
-    anon_tag = f"<code>[ID:{get_anon_id(author_id)}]</code>" if author_id > 0 else "Аноним"
+    anon_tag = f"<code>[{get_anon_id(author_id)}]</code>" if author_id > 0 else "Аноним"
 
     header_text = (
         f"🎰 {emoji} <b>{label} ПОЙМАН! Пост #{post_num} на /{board_id}/</b> {emoji}\n"
@@ -308,7 +308,7 @@ async def publish_casino_jackpot_news(
 
     bot_info = await bot.get_me()
     bot_uname = bot_info.username or "tgach_bot"
-    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+    anon_tag = f"<code>[{get_anon_id(user_id)}]</code>"
 
     header_text = "🎰🔥 <b>МЕГА-ЗАНОС В КАЗИНО ТГАЧА!</b> 🔥🎰"
 
@@ -426,7 +426,7 @@ async def publish_oligarch_raid_news(
 
     bot_info = await bot.get_me()
     bot_uname = bot_info.username or "tgach_bot"
-    anon_tag = f"<code>[ID:{get_anon_id(user_id)}]</code>"
+    anon_tag = f"<code>[{get_anon_id(user_id)}]</code>"
 
     header_text = "🚨⚖️ <b>СПЕЦОПЕРАЦИЯ ОБЭП: РАСКУЛАЧИВАНИЕ ОЛИГАРХА!</b> ⚖️🚨"
 
@@ -450,3 +450,49 @@ async def publish_oligarch_raid_news(
     )
 
     return bool(msg_id)
+
+async def publish_whale_safe_rare_drop(
+    bot: Bot,
+    user_id: int,
+    tier_name: str,
+    item_title: str,
+    burned_to_abu: int | float,
+    desc: str = ""
+) -> bool:
+    """
+    Публикует новость о редком/престижном дропе из Сейфа Олигарха в «Тгач Новости».
+    """
+    news_channel_id, _ = get_target_channels()
+    if not news_channel_id or news_channel_id == 0:
+        return False
+
+    bot_info = await bot.get_me()
+    bot_uname = bot_info.username or "tgach_bot"
+    anon_tag = f"<code>[{get_anon_id(user_id)}]</code>"
+
+    header_text = "🐋💎 <b>ЛЕГЕНДАРНЫЙ ДРОП ИЗ СЕЙФА ОЛИГАРХА!</b> 💎🐋"
+
+    lines = [
+        f"👤 <b>Счастливчик:</b> {anon_tag}",
+        f"🌟 <b>Тир:</b> {tier_name}",
+        f"🎁 <b>Полученный трофей:</b> <b>{item_title}</b>",
+        f"🔥 <b>Сожжено в Фонд Яхты Абу (70%):</b> <code>{int(burned_to_abu):,} ₪</code>",
+    ]
+    if desc:
+        lines.append(f"📝 <i>«{desc}»</i>")
+    lines.append("\n💬 <i>«Падишах выражает благодарность за щедрый вклад в офшорный фонд!»</i>")
+
+    body_text = "\n".join(lines)
+    footer_text = f"👉 <a href=\"https://t.me/{bot_uname}?start=whale_safe\">Испытать удачу в Сейфе Китов</a>"
+
+    msg_id = await send_channel_content(
+        bot=bot,
+        channel_id=news_channel_id,
+        content={"type": "text"},
+        header_text=header_text,
+        body_text=body_text,
+        footer_text=footer_text
+    )
+
+    return bool(msg_id)
+

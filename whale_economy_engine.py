@@ -506,7 +506,9 @@ async def place_auction_bid(
         "bid_amount": bid_amount,
         "ends_at": new_ends_at,
         "extended": (new_ends_at > ends_at),
-        "previous_winner": cur_winner
+        "previous_winner": cur_winner,
+        "previous_bid": (cur_bid if cur_winner is not None else 0.0),
+        "title": title,
     }
 
 
@@ -1170,11 +1172,13 @@ async def execute_oligarch_raid(
             await add_to_abu_fund(db, burn_to_abu)
 
             # 30% Distribute equally to the 5 workers
+            from common.anon_identity import generate_anon_name
+            oligarch_anon = generate_anon_name(target_id)
             for vid in selected_5_workers:
                 await add_user_global_balance(db, vid, board_id, per_worker)
                 await record_user_transaction(
                     db, vid, per_worker, 'raid_reward',
-                    f'Доля от раскулачивания олигарха #{target_id} (/raid_oligarch)'
+                    f'Доля от раскулачивания олигарха {oligarch_anon} (/raid_oligarch)'
                 )
 
     return {
@@ -1184,5 +1188,7 @@ async def execute_oligarch_raid(
         "burned_to_abu": burn_to_abu,
         "distributed_total": distribute_total,
         "per_voter": per_worker,
-        "voters": selected_5_workers
+        "voters": selected_5_workers,
+        "old_balance": total_oligarch_wealth,
+        "new_balance": max(0.0, round(total_oligarch_wealth - confiscated, 2)),
     }

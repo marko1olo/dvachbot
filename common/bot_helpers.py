@@ -664,6 +664,21 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             except Exception:
                 pass
 
+    # Уведомление участникам дуэли в ЛС об исходе битвы
+    if bot:
+        for uid, is_win, amt_change in [(winner_id, True, net_win), (loser_id, False, amount)]:
+            try:
+                dm_res = (
+                    f"⚔️ <b>ИТОГ ДУЭЛИ В /{board_id}/!</b>\n\n"
+                    f"🏆 <b>Победа!</b> Ты выиграл <code>+{amt_change:,} ₪</code> в дуэли против {l_tag}!"
+                    if is_win else
+                    f"⚔️ <b>ИТОГ ДУЭЛИ В /{board_id}/!</b>\n\n"
+                    f"💀 <b>Поражение!</b> Ты потерял <code>-{amt_change:,} ₪</code> в дуэли против {w_tag}."
+                )
+                await bot.send_message(chat_id=uid, text=dm_res, parse_mode="HTML")
+            except Exception:
+                pass
+
     if net_win >= 300000 and bot:
         try:
             from news_channel_publisher import publish_casino_jackpot_news
@@ -802,6 +817,7 @@ async def decline_duel_logic(message: types.Message, challenger_id: int, user_id
                 )
             except Exception:
                 pass
+
 
     if user_id == challenger_id:
         await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")

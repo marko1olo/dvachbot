@@ -356,7 +356,7 @@ def _format_thread_mirror(text: str) -> str:
 
     return (
         f"🌐 <b>[2CH.HK THREAD MIRROR // {board}]</b>\n\n"
-        f"<b>Аноним</b> <i>(ОП-ХУЙ)</i> <code>#{op_id}</code> [ID: {get_anon_id(op_id)}]:\n"
+        f"<b>Аноним</b> <i>(ОП-ХУЙ)</i> <code>#{op_id}</code> [{get_anon_id(op_id)}]:\n"
         f"<blockquote>{mutated}</blockquote>\n"
         f"<code>— Ответы на пост:</code>\n"
         f"↳ <b>Аноним</b> <code>#{r1_id}</code>: &gt;&gt;{op_id}\n"
@@ -524,7 +524,7 @@ def _format_opushchenie(text: str) -> str:
     ]
     return (
         f"🐓 <b>[АКТ ПРИНУДИТЕЛЬНОГО ОПУСКАНИЯ У ПАРАШИ // {board}]</b>\n\n"
-        f"<b>Осуждённый:</b> <code>Аноним #{op_id}</code> [ID: {get_anon_id(op_id)}]\n"
+        f"<b>Осуждённый:</b> <code>Аноним #{op_id}</code> [{get_anon_id(op_id)}]\n"
         f"<b>Признательные показания выблядка:</b>\n"
         f"<blockquote>«{mutated}»</blockquote>\n\n"
         f"⚖️ <b>Приговор палачей борды:</b>\n"
@@ -546,7 +546,7 @@ def _format_punitive_deanon(text: str) -> str:
     city = random.choice(["Бирюлёво Западное", "Дно", "Мурино", "Кудрово", "Зажопинск", "Копейск", "Шатура"])
     return (
         f"🔥 <b>[КАРАТЕЛЬНЫЙ ДЕАНОН И СВАТТИНГ // 2CH.HK{board}]</b>\n\n"
-        f"🎯 <b>Цель:</b> <code>Аноним #{op_id}</code> | <i>«{preview}...»</i>\n\n"
+        f"🎯 <b>Цель:</b> <code>Аноним #{op_id}</code> [{get_anon_id(op_id)}] | <i>«{preview}...»</i>\n\n"
         f"📁 <b>Материалы пробива по отражению в дверной ручке:</b>\n"
         f"• <b>ФИО:</b> <code>{random.choice(surnames)} {random.choice(names)} Аркадьевич</code> ({age} лвл)\n"
         f"• <b>Адрес конуры:</b> <code>г. {city}, панелька №{random.randint(1, 140)}, кв. {random.randint(1, 90)}</code>\n"

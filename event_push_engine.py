@@ -106,6 +106,8 @@ async def push_event_to_board(
         "market_event":  "🛒 В чёрный рынок (/shop)",
         "wealth_tax":    "🏛 Посмотреть итоги",
         "votemute_open": "⚖️ Участвовать в голосовании",
+        "whale_drop":    "🐋 Сейфы Олигарха",
+        "raid_success":  "☭ К рейдам ОБЭП",
     }
     btn_text = button_labels.get(event_type, "🎮 Перейти в бот")
 
@@ -290,3 +292,56 @@ async def push_votemute_open(
         ],
         exclude_uid=exclude_uid,
     )
+
+async def push_whale_drop(
+    bot: Any,
+    board_id: str,
+    winner_anon_id: str,
+    tier_name: str,
+    item_title: str,
+    burned_to_abu: int | float,
+    exclude_uid: Optional[int] = None,
+) -> int:
+    """Пуш при выпадении редкого/элитного дропа из Сейфа Китов."""
+    return await push_event_to_board(
+        bot=bot,
+        board_id=board_id,
+        event_type="whale_drop",
+        headline="🐋💎 РЕДКИЙ ДРОП ИЗ СЕЙФА КИТОВ!",
+        body_lines=[
+            f"👤 Счастливчик: Анон <b>[{winner_anon_id}]</b>",
+            f"🌟 Категория: <b>{tier_name}</b>",
+            f"🎁 Награда: <b>{item_title}</b>",
+            f"🔥 Сожжено в Фонд Яхты Абу: <code>{int(burned_to_abu):,} ₪</code>",
+            "",
+            "<i>Олигархи продолжают финансировать яхту Падишаха!</i>",
+        ],
+        exclude_uid=exclude_uid,
+    )
+
+
+async def push_raid_success(
+    bot: Any,
+    board_id: str,
+    target_anon_id: str,
+    confiscated: int | float,
+    per_voter: int | float,
+    exclude_uid: Optional[int] = None,
+) -> int:
+    """Пуш при успешном раскулачивании олигарха рабочим рейдом ОБЭП."""
+    return await push_event_to_board(
+        bot=bot,
+        board_id=board_id,
+        event_type="raid_success",
+        headline="☭ РАСКУЛАЧИВАНИЕ ОЛИГАРХА ЗАВЕРШЕНО!",
+        body_lines=[
+            f"🎯 Экспроприирован капитал: Анон <b>[{target_anon_id}]</b>",
+            f"💰 Всего конфисковано: <code>{int(confiscated):,} ₪</code>",
+            f"🛠 5 рабочих получили по: <code>+{int(per_voter):,} ₪</code>",
+            f"🔥 70% ушло в Фонд Яхты Абу!",
+            "",
+            "<i>Рабочий класс одержал победу над капиталом!</i>",
+        ],
+        exclude_uid=exclude_uid,
+    )
+

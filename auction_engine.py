@@ -22,6 +22,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from common.db_pool import get_pool
 from common.database import get_user_global_balance
+from common.anon_identity import get_anon_id, generate_anon_name
 from whale_economy_engine import (
     ensure_auction_schema,
     create_auction,
@@ -305,7 +306,7 @@ async def cmd_auction(message: types.Message, board_id: str | None = None, **kwa
         if not res.get("ok"):
             await message.reply(f"❌ Ошибка отмены аукциона: {res.get('error')}")
             return
-        ref_txt = f"\nЛидеру #{res.get('refunded_to')} возвращено {res.get('refunded_amount'):,.0f} ₪ из эскроу." if res.get("refunded_to") else ""
+        ref_txt = f"\nЛидеру <b>{generate_anon_name(res.get('refunded_to'))}</b> возвращено {res.get('refunded_amount'):,.0f} ₪ из эскроу." if res.get("refunded_to") else ""
         await message.reply(f"🛑 <b>Аукцион #{auc_id} успешно отменен!</b>{ref_txt}")
         return
 
@@ -476,7 +477,8 @@ async def cmd_bid(message: types.Message):
     """
     board_id = message.board_id if isinstance(getattr(message, "board_id", None), str) else "b"
     user_id = message.from_user.id
-    user_name = message.from_user.full_name or f"Анон #{user_id}"
+    from common.anon_identity import generate_anon_name
+    user_name = generate_anon_name(user_id)
     parts = (message.text or "").split()
 
     db = await get_pool()
@@ -550,10 +552,27 @@ async def cmd_bid(message: types.Message):
         if res.get("extended") else ""
     )
     prev_txt = (
-        f"\n\n🔄 <b>Авто-возврат депозита:</b> Предыдущему лидеру #{res.get('previous_winner')} "
+        f"\n\n🔄 <b>Авто-возврат депозита:</b> Предыдущему лидеру <b>{generate_anon_name(res.get('previous_winner'))}</b> "
         f"100% заблокированного депозита немедленно и автоматически возвращено на баланс!"
         if res.get("previous_winner") else ""
     )
+
+    # Уведомление предыдущему лидеру о перебитии ставки и 100% эскроу-возврате
+    if res.get("previous_winner"):
+        prev_winner_id = res["previous_winner"]
+        refunded_amt = res.get("previous_bid", 0.0)
+        lot_title = res.get("title", f"Лот #{auction_id}")
+        outbid_text = format_outbid_notification(
+            auction_id=auction_id,
+            lot_title=lot_title,
+            refunded_amount=refunded_amt,
+            new_bid=bid_amount,
+            new_leader_name=user_name,
+        )
+        try:
+            await message.bot.send_message(chat_id=prev_winner_id, text=outbid_text, parse_mode="HTML")
+        except Exception as e_outbid:
+            logger.debug(f"Failed to dispatch outbid notification to {prev_winner_id}: {e_outbid}")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")],
@@ -605,6 +624,36 @@ async def cmd_whale_safe(message: types.Message, board_id: str | None = None, **
     ])
     await message.reply(text, reply_markup=kb, parse_mode="HTML")
 
+    # Рассылка редких дропов на доску и в новостной канал «Тгач Новости»
+    tier_upper = str(res.get('tier', '')).upper()
+    if "ЛОХ" not in tier_upper and "ТРОЛЛИНГ" not in tier_upper:
+        try:
+            from event_push_engine import push_whale_drop
+            asyncio.create_task(push_whale_drop(
+                bot=message.bot,
+                board_id=board_id,
+                winner_anon_id=get_anon_id(user_id),
+                tier_name=res['tier'],
+                item_title=res.get('title', 'Сейф Китов'),
+                burned_to_abu=res.get('burned_to_abu', 0),
+                exclude_uid=user_id,
+            ))
+        except Exception as e_push:
+            logger.debug(f"Whale drop push failed: {e_push}")
+
+        try:
+            from news_channel_publisher import publish_whale_safe_rare_drop
+            asyncio.create_task(publish_whale_safe_rare_drop(
+                bot=message.bot,
+                user_id=user_id,
+                tier_name=res['tier'],
+                item_title=res.get('title', 'Сейф Китов'),
+                burned_to_abu=res.get('burned_to_abu', 0),
+                desc=res.get('desc', ''),
+            ))
+        except Exception as e_news:
+            logger.debug(f"Whale drop news publish failed: {e_news}")
+
 
 # =============================================================================
 # 4. /raid_oligarch & LOBBY HANDLERS
@@ -654,8 +703,10 @@ async def cmd_raid_oligarch(message: types.Message, board_id: str | None = None,
             await message.reply(f"❌ <b>Рейд не удался:</b> {res.get('error')}")
             return
 
+        from common.anon_identity import generate_anon_name
+        oligarch_name = generate_anon_name(res['target_id'])
         await message.reply(
-            f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА #{res['target_id']} ЗАВЕРШЕНО!</b>\n\n"
+            f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА {oligarch_name} ЗАВЕРШЕНО!</b>\n\n"
             f"💰 Конфисковано: <b>{res['confiscated']:,.0f} ₪</b> (10% капитала)\n"
             f"🔥 Сожжено в Фонд Яхты Абу (70%): <b>{res['burned_to_abu']:,.0f} ₪</b>\n"
             f"🛠️ Распределено 5 работягам (30%): <b>{res['distributed_total']:,.0f} ₪</b>\n"
@@ -698,7 +749,8 @@ async def cmd_raid_oligarch(message: types.Message, board_id: str | None = None,
         [InlineKeyboardButton(text="🚩 Вступить в рейд ОБЭП (1/5)", callback_data=f"raid_join_{raid_id}")]
     ])
 
-    tgt_str = f"Олигарх: <code>{target_id}</code>" if target_id else "Самый богатый олигарх борды"
+    from common.anon_identity import generate_anon_name
+    tgt_str = f"Олигарх: <b>{generate_anon_name(target_id)}</b>" if target_id else "Самый богатый олигарх борды"
     await message.reply(
         f"☭ <b>ОБЪЯВЛЕН НАРОДНЫЙ РЕЙД ОБЭП (/raid_oligarch)!</b>\n\n"
         f"🎯 <b>Цель:</b> {tgt_str}\n"
@@ -795,7 +847,8 @@ async def cb_raid_join(callback: types.CallbackQuery):
                     InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main"),
                 ],
             ])
-            tgt_str = f"Олигарх: <code>{raid['target_id']}</code>" if raid['target_id'] else "Самый богатый олигарх борды"
+            from common.anon_identity import generate_anon_name
+            tgt_str = f"Олигарх: <b>{generate_anon_name(raid['target_id'])}</b>" if raid['target_id'] else "Самый богатый олигарх борды"
             new_text = (
                 f"☭ <b>ОБЪЯВЛЕН НАРОДНЫЙ РЕЙД ОБЭП (/raid_oligarch)!</b>\n\n"
                 f"🎯 <b>Цель:</b> {tgt_str}\n"
@@ -843,8 +896,10 @@ async def cb_raid_join(callback: types.CallbackQuery):
             await callback.answer("Рейд провален!", show_alert=True)
             return
 
+        from common.anon_identity import generate_anon_name
+        oligarch_name = generate_anon_name(res['target_id'])
         win_text = (
-            f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА #{res['target_id']} ЗАВЕРШЕНО!</b>\n\n"
+            f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА {oligarch_name} ЗАВЕРШЕНО!</b>\n\n"
             f"💰 Конфисковано: <b>{res['confiscated']:,.0f} ₪</b> (10% капитала)\n"
             f"🔥 Сожжено в Фонд Яхты Абу (70%): <b>{res['burned_to_abu']:,.0f} ₪</b>\n"
             f"🛠️ Распределено 5 работягам (30%): <b>{res['distributed_total']:,.0f} ₪</b>\n"
@@ -865,6 +920,66 @@ async def cb_raid_join(callback: types.CallbackQuery):
                     await callback.message.edit_text(text=win_text, reply_markup=win_kb, parse_mode="HTML")
         except Exception:
             pass
+
+        # Уведомление олигарху в ЛС о раскулачивании
+        try:
+            await callback.bot.send_message(
+                res["target_id"],
+                f"☭ <b>ТЕБЯ РАСКУЛАЧИЛ РАБОЧИЙ РЕЙД ОБЭП В /{raid['board_id']}/!</b>\n\n"
+                f"5 бдительных пролетариев объединились и экспроприировали твой капитал:\n"
+                f"💸 Конфисковано: <b>{res['confiscated']:,.0f} ₪</b>\n"
+                f"🔥 70% ушло в Фонд Яхты Абу, 30% роздано работягам.\n\n"
+                f"<i>Защищайся дипломатическим паспортом или огнетушителем ОБЭП (/shop)!</i>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+        # Уведомление всем участникам рейда в ЛС
+        voter_pm_text = (
+            f"☭ <b>РАСКУЛАЧИВАНИЕ ОЛИГАРХА {oligarch_name} ЗАВЕРШЕНО!</b>\n\n"
+            f"Ты принял участие в победоносном рейде ОБЭП в /{raid['board_id']}!\n"
+            f"💰 Всего конфисковано: <b>{res['confiscated']:,.0f} ₪</b>\n"
+            f"💵 Твоя доля перечислена на баланс: <b>+{res['per_voter']:,.0f} ₪</b>\n"
+            f"🔥 70% сожжено в Фонд Яхты Абу.\n\n"
+            f"<i>«Слава трудовому народу Тгача!»</i>"
+        )
+        for vid in raid["voters"]:
+            if vid != user_id:
+                try:
+                    await callback.bot.send_message(vid, voter_pm_text, parse_mode="HTML")
+                except Exception as e_pm:
+                    logger.debug(f"Failed to send raid completion PM to voter {vid}: {e_pm}")
+
+        # Рассылка пуша активным пользователям борды
+        try:
+            from event_push_engine import push_raid_success
+            from common.anon_identity import get_anon_id
+            target_anon = get_anon_id(res["target_id"])
+            asyncio.create_task(push_raid_success(
+                bot=callback.bot,
+                board_id=raid["board_id"],
+                target_anon_id=target_anon,
+                confiscated=res["confiscated"],
+                per_voter=res["per_voter"],
+            ))
+        except Exception as e_push:
+            logger.debug(f"Raid success board push failed: {e_push}")
+
+        # Публикация новости о раскулачивании в «Тгач Новости»
+        try:
+            from news_channel_publisher import publish_oligarch_raid_news
+            asyncio.create_task(publish_oligarch_raid_news(
+                bot=callback.bot,
+                user_id=res["target_id"],
+                tax_amount=int(res["confiscated"]),
+                old_balance=int(res.get("old_balance", 0)),
+                new_balance=int(res.get("new_balance", 0)),
+                category="raid_oligarch",
+                reason=f"Коллективный рейд 5 пролетариев ОБЭП в /{raid['board_id']}/"
+            ))
+        except Exception as e_news:
+            logger.debug(f"Raid success news publish failed: {e_news}")
         await callback.answer("☭ Рейд успешно завершен!")
     finally:
         await safe_callback_answer(callback)
