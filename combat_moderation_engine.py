@@ -615,7 +615,7 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
         from common.database import record_user_transaction, add_to_abu_fund
         await record_user_transaction(
             db, sess.attacker_id, -fine_amount, 'fine',
-            f'Штраф за сорванный донос на анона [ID:{sess.target_id}]'
+            f'Штраф за сорванный донос на Анона [{get_anon_id(sess.target_id)}]'
         )
         await add_to_abu_fund(db, int(fine_amount))
     except Exception as e:
@@ -626,9 +626,9 @@ async def callback_combat_appeal(callback: types.CallbackQuery):
     overturn_text = (
         f"⚖️ <b>МУТ АННУЛИРОВАН ОБЩЕСТВОМ!</b> ⚖️\n\n"
         f"Аноны треда признали применение оружия <b>необоснованной истерикой</b> ({APPEAL_VOTES_REQUIRED}/{APPEAL_VOTES_REQUIRED} голосов).\n"
-        f"• С жертвы <b>[ID:{sess.target_id}]</b> немедленно сняты все наручники и ограничения!\n"
+        f"• С жертвы <b>Анон [{get_anon_id(sess.target_id)}]</b> немедленно сняты все наручники и ограничения!\n"
         f"• Выдан полный иммунитет от повторных атак на 1 час.\n"
-        f"• С доносчика <b>[ID:{sess.attacker_id}]</b> удержан штраф <code>-{int(fine_amount)} ₪</code> за клевету и телефонный терроризм!"
+        f"• С доносчика <b>Анон [{get_anon_id(sess.attacker_id)}]</b> удержан штраф <code>-{int(fine_amount)} ₪</code> за клевету и телефонный терроризм!"
     )
     kb = get_combat_appeal_keyboard(session_id, current_votes, APPEAL_VOTES_REQUIRED, is_appealed=True)
     try:
@@ -759,13 +759,13 @@ async def callback_combat_bail(callback: types.CallbackQuery):
     from shared_state import set_partyvan_victim_immunity
     set_partyvan_victim_immunity(sess.target_id, int(time.time()) + 3600)
 
-    payer_tag = "Жертва лично внесла" if payer_id == sess.target_id else f"Благородный анон [ID:{payer_id}] внес"
+    payer_tag = "Жертва лично внесла" if payer_id == sess.target_id else f"Благородный Анон [{get_anon_id(payer_id)}] внёс"
     await callback.answer("💸 Залог успешно принят! Анон освобожден из-под ареста!", show_alert=True)
 
     bail_text = (
         f"💸 <b>ВЫКУП ИЗ-ПОД АРЕСТА!</b> 💸\n\n"
         f"{payer_tag} залог майору в размере <code>{int(bail_cost)} ₪</code>.\n"
-        f"С анона <b>[ID:{sess.target_id}]</b> сняты все ограничения, выдан иммунитет на 1 час!"
+        f"С <b>Анона [{get_anon_id(sess.target_id)}]</b> сняты все ограничения, выдан иммунитет на 1 час!"
     )
     kb = get_combat_appeal_keyboard(session_id, is_bailed=True)
     try:

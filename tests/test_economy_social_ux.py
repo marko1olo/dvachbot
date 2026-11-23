@@ -768,3 +768,185 @@ async def test_market_cas_double_buy_prevention(isolated_test_db):
     assert bal_buyer2 == 500.0
 
 
+# =============================================================================
+# PART 8: IDENTITY MASKING & VICTIM PM DISPATCH IN COMBAT & AUCTION/MARKET
+# =============================================================================
+
+from common.anon_identity import get_anon_id, generate_anon_name
+
+
+def test_anon_identity_masking_combat_and_market():
+    """Verify player IDs are masked with hash/names and never leak raw numeric IDs."""
+    test_uid = 99887766
+    anon_id = get_anon_id(test_uid)
+    anon_name = generate_anon_name(test_uid)
+
+    assert isinstance(anon_id, str) and len(anon_id) > 0
+    assert isinstance(anon_name, str) and len(anon_name) > 0
+    # Must not contain raw numeric string
+    assert str(test_uid) not in anon_id
+    assert str(test_uid) not in anon_name
+    assert "Анон" in anon_name
+
+
+@pytest.mark.asyncio
+async def test_partyvan_victim_pm_and_backfire_masking():
+    """Verify cmd_partyvan sends PM to victim with masked attacker name, and backfire masks caller ID."""
+    from tests.economy_live import live_economy, live_handler
+    from unittest.mock import patch
+    import combat_moderation_engine as cme
+    import shared_state
+
+    snitch_id = 9101
+    victim_id = 9102
+
+    async with live_economy() as live:
+        cme.reset_combat_moderation_state()
+        shared_state.reset_combat_state()
+        await live.seed_user(snitch_id, 1000.0, {"partyvan_gun": True}, posts_count=100)
+        await live.seed_user(victim_id, 1000.0, {}, posts_count=100)
+        live.aim_at(victim_id)
+        msg = live.message(snitch_id)
+
+        # 1. Normal successful arrest
+        with patch("combat_moderation_engine.calculate_combat_duration_and_backfire", return_value=(3600, False, 0.1)):
+            await live_handler("partyvan")(msg, "b")
+
+            # Check that msg.bot.send_message was called to notify victim_id in PM
+            pm_calls = [
+                c for c in msg.bot.send_message.call_args_list
+                if (c.args and c.args[0] == victim_id) or (c.kwargs.get("chat_id") == victim_id)
+            ]
+            assert len(pm_calls) >= 1
+            pm_text = pm_calls[0].args[1] if len(pm_calls[0].args) > 1 else pm_calls[0].kwargs.get("text", "")
+            assert "НА ТЕБЯ ВЫЗВАЛИ ПАТИВЭН В /b/!" in pm_text
+            assert generate_anon_name(snitch_id) in pm_text
+            assert str(snitch_id) not in pm_text
+
+        # 2. Backfire case (caller arrested by their own false alarm)
+        cme.reset_combat_moderation_state()
+        shared_state.reset_combat_state()
+        snitch_bf = 9103
+        victim_bf = 9104
+        await live.seed_user(snitch_bf, 1000.0, {"partyvan_gun": True}, posts_count=100)
+        await live.seed_user(victim_bf, 1000.0, {}, posts_count=100)
+        live.aim_at(victim_bf)
+        msg_bf = live.message(snitch_bf)
+
+        with patch("combat_moderation_engine.calculate_combat_duration_and_backfire", return_value=(7200, True, 0.5)):
+            await live_handler("partyvan")(msg_bf, "b")
+
+            # Check chat message sent for backfire
+            chat_calls = [
+                c for c in msg_bf.bot.send_message.call_args_list
+                if "ОБЛАВА ПО ЛОЖНОМУ ДОНОСУ!" in (c.args[1] if len(c.args) > 1 else c.kwargs.get("text", ""))
+            ]
+            assert len(chat_calls) >= 1
+            bf_text = chat_calls[0].args[1] if len(chat_calls[0].args) > 1 else chat_calls[0].kwargs.get("text", "")
+            # Must NOT contain [ID:9103]
+            assert f"[ID:{snitch_bf}]" not in bf_text
+            assert str(snitch_bf) not in bf_text
+            assert generate_anon_name(snitch_bf) in bf_text
+
+
+@pytest.mark.asyncio
+async def test_curse_and_shoot_victim_pm_notifications():
+    """Verify /curse and /shoot send PM notifications with masked attacker identities."""
+    from tests.economy_live import live_economy, live_handler
+    from unittest.mock import patch
+    import combat_moderation_engine as cme
+    import shared_state
+
+    attacker_id = 9201
+    victim_id = 9202
+
+    async with live_economy() as live:
+        cme.reset_combat_moderation_state()
+        shared_state.reset_combat_state()
+        await live.seed_user(attacker_id, 1000.0, {"laxative_gun": True, "mute_gun": True}, posts_count=100)
+        await live.seed_user(victim_id, 1000.0, {}, posts_count=100)
+
+        # 1. Curse
+        live.aim_at(victim_id)
+        msg_curse = live.message(attacker_id)
+        with patch("combat_moderation_engine.calculate_combat_duration_and_backfire", return_value=(3600, False, 0.05)):
+            await live_handler("curse")(msg_curse, "b")
+
+            curse_pm_calls = [
+                c for c in msg_curse.bot.send_message.call_args_list
+                if (c.args and c.args[0] == victim_id) or (c.kwargs.get("chat_id") == victim_id)
+            ]
+            assert len(curse_pm_calls) >= 1
+            c_text = curse_pm_calls[0].args[1] if len(curse_pm_calls[0].args) > 1 else curse_pm_calls[0].kwargs.get("text", "")
+            assert "ТЕБЕ ПОДСЫПАЛИ СЛАБИТЕЛЬНОЕ" in c_text
+            assert generate_anon_name(attacker_id) in c_text
+            assert str(attacker_id) not in c_text
+
+        # 2. Shoot (mutegun)
+        cme.reset_combat_moderation_state()
+        shared_state.reset_combat_state()
+        victim_shoot_id = 9203
+        await live.seed_user(victim_shoot_id, 1000.0, {}, posts_count=100)
+
+        live.aim_at(victim_shoot_id)
+        msg_shoot = live.message(attacker_id)
+        with patch("combat_moderation_engine.calculate_combat_duration_and_backfire", return_value=(1800, False, 0.05)):
+            await live_handler("shoot")(msg_shoot, "b")
+
+            shoot_pm_calls = [
+                c for c in msg_shoot.bot.send_message.call_args_list
+                if (c.args and c.args[0] == victim_shoot_id) or (c.kwargs.get("chat_id") == victim_shoot_id)
+            ]
+            assert len(shoot_pm_calls) >= 1
+            s_text = shoot_pm_calls[0].args[1] if len(shoot_pm_calls[0].args) > 1 else shoot_pm_calls[0].kwargs.get("text", "")
+            assert "В тебя выстрелил" in s_text
+            assert generate_anon_name(attacker_id) in s_text
+            assert str(attacker_id) not in s_text
+
+
+@pytest.mark.asyncio
+async def test_rob_victim_pm_and_ledger_masking():
+    """Verify /rob notifies victim in PM with masked robber identity and UserTransactions ledger is masked."""
+    from tests.economy_live import live_economy, live_handler
+    from unittest.mock import patch
+    import combat_moderation_engine as cme
+    import shared_state
+
+    robber_id = 9301
+    victim_id = 9302
+
+    async with live_economy() as live:
+        cme.reset_combat_moderation_state()
+        shared_state.reset_combat_state()
+        await live.seed_user(robber_id, 1000.0, {"knife_gun": True}, posts_count=100)
+        await live.seed_user(victim_id, 2000.0, {}, posts_count=100)
+        live.aim_at(victim_id)
+        msg_rob = live.message(robber_id)
+
+        # Force successful robbery (roll < 0.6)
+        with patch("random.random", return_value=0.1):
+            await live_handler("rob")(msg_rob, "b")
+
+            # Verify PM sent to victim
+            rob_pm_calls = [
+                c for c in msg_rob.bot.send_message.call_args_list
+                if (c.args and c.args[0] == victim_id) or (c.kwargs.get("chat_id") == victim_id)
+            ]
+            assert len(rob_pm_calls) >= 1
+            r_text = rob_pm_calls[0].args[1] if len(rob_pm_calls[0].args) > 1 else rob_pm_calls[0].kwargs.get("text", "")
+            assert "ТЕБЯ ОГРАБИЛ" in r_text
+            assert generate_anon_name(robber_id) in r_text
+            assert str(robber_id) not in r_text
+
+            # Check ledger description in UserTransactions
+            async with live.db.execute("SELECT description FROM UserTransactions WHERE user_id = ?", (victim_id,)) as cur:
+                rows = await cur.fetchall()
+                assert len(rows) > 0
+                for row in rows:
+                    desc = row[0]
+                    # Ledger must NOT leak raw robber ID
+                    assert str(robber_id) not in desc
+                    assert generate_anon_name(robber_id) in desc
+
+
+

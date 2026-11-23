@@ -738,11 +738,24 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
                         if ok:
                             active_items["knife_gun"] = False
                             await add_user_global_balance(db, user_id, board_id, stolen)
-                            await record_user_transaction(db, target_id, -stolen, 'heist', f'Теневое ограбление аноном {user_id}')
-                            await record_user_transaction(db, user_id, stolen, 'heist', f'Успешный heist анона {target_id}')
+                            from common.anon_identity import generate_anon_name
+                            robber_anon = generate_anon_name(user_id)
+                            victim_anon = generate_anon_name(target_id)
+                            await record_user_transaction(db, target_id, -stolen, 'heist', f'Теневое ограбление аноном {robber_anon}')
+                            await record_user_transaction(db, user_id, stolen, 'heist', f'Успешный heist у анона {victim_anon}')
                             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
                             await db.commit()
                             set_victim_rob_cooldown(target_id, 1800)
+                            try:
+                                await message.bot.send_message(
+                                    target_id,
+                                    f"🔪 <b>НА ТЕБЯ СОВЕРШЕНО AI-ОГРАБЛЕНИЕ В /{board_id}/!</b>\n"
+                                    f"Анон {robber_anon} обчистил твои карманы на <b>{stolen} ₪</b> через <code>/ai_heist</code>!\n"
+                                    f"🛡️ Купи перцовый баллончик или броню в <code>/shop</code> для защиты.",
+                                    parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
                         else:
                             stolen = 0
 

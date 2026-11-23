@@ -1216,7 +1216,7 @@ async def execute_scout(
         return False, "❌ Ошибка списания средств на разведку.", {}
 
     await record_user_transaction(
-        db, thief_id, -scout_cost, "scout_cost", f"Оплата шмона карманов анона {target_id}"
+        db, thief_id, -scout_cost, "scout_cost", f"Оплата шмона карманов анона [{target_tag}]"
     )
 
     # Target state inspection
@@ -1384,10 +1384,10 @@ async def execute_pickpocket(
         await save_user_active_items(db, thief_id, board_id, thief_items)
         await save_user_active_items(db, victim_id, board_id, victim_items)
         await record_user_transaction(
-            db, thief_id, -penalty, "pickpocket_penalty", f"Штраф за попадание под перцовку жертвы {victim_id}"
+            db, thief_id, -penalty, "pickpocket_penalty", f"Штраф за попадание под перцовку жертвы [{victim_tag}]"
         )
         await record_user_transaction(
-            db, victim_id, penalty, "pickpocket_compensation", f"Компенсация от карманника {thief_id} за перцовку"
+            db, victim_id, penalty, "pickpocket_compensation", f"Компенсация от карманника [{thief_tag}] за перцовку"
         )
 
         pepper_text = (
@@ -1435,10 +1435,10 @@ async def execute_pickpocket(
             await save_user_active_items(db, thief_id, board_id, thief_items)
             await sync_user_criminal_status(db, thief_id, thief_items)
             await record_user_transaction(
-                db, victim_id, -stolen, "theft_victim", f"Срез кошелька карманником {thief_id}"
+                db, victim_id, -stolen, "theft_victim", f"Срез кошелька карманником [{thief_tag}]"
             )
             await record_user_transaction(
-                db, thief_id, stolen, "theft_dirty", f"Успешный карманный срез у анона {victim_id}"
+                db, thief_id, stolen, "theft_dirty", f"Успешный карманный срез у анона [{victim_tag}]"
             )
 
             silent_phrase = random.choice(PICKPOCKET_SILENT_SUCCESS_PHRASES)
@@ -1477,10 +1477,10 @@ async def execute_pickpocket(
 
         await save_user_active_items(db, thief_id, board_id, thief_items)
         await record_user_transaction(
-            db, thief_id, -penalty, "pickpocket_penalty", f"Штраф за провал карманной кражи у {victim_id}"
+            db, thief_id, -penalty, "pickpocket_penalty", f"Штраф за провал карманной кражи у [{victim_tag}]"
         )
         await record_user_transaction(
-            db, victim_id, penalty, "pickpocket_compensation", f"Компенсация от пойманного карманника {thief_id}"
+            db, victim_id, penalty, "pickpocket_compensation", f"Компенсация от пойманного карманника [{thief_tag}]"
         )
 
         fail_phrase = random.choice(PICKPOCKET_LOUD_FAIL_PHRASES)
@@ -1629,7 +1629,7 @@ async def execute_arrest(
     if officer_payout > 0:
         await add_user_global_balance(db, officer_id, board_id, officer_payout)
         await record_user_transaction(
-            db, officer_id, officer_payout, "bounty_reward", f"Награда за поимку преступника {criminal_id} ({stars}★)"
+            db, officer_id, officer_payout, "bounty_reward", f"Награда за поимку преступника [{criminal_tag}] ({stars}★)"
         )
     if abu_burn > 0:
         await add_to_abu_fund(db, abu_burn, donor_id=criminal_id, reason=f"bounty_burn_{criminal_id}")
@@ -1907,6 +1907,30 @@ async def cmd_pickpocket(message: types.Message, board_id: Optional[str] = None)
     else:
         # Loud public failure or validation warning
         await message.answer(reply_text, parse_mode="HTML")
+        if meta.get("peppersprayed"):
+            try:
+                thief_name = format_anon_id(user_id)
+                await message.bot.send_message(
+                    target_id,
+                    f"🧯 <b>ТВОЙ ПЕРЦОВЫЙ БАЛЛОНЧИК СРАБОТАЛ В /{board_id}/!</b>\n"
+                    f"Карманник [<code>{thief_name}</code>] пытался срезать твой кошелек, но получил струю в лицо!\n"
+                    f"💰 Тебе выплачена компенсация: <b>+{meta.get('penalty', 0):,.0f} ₪</b> с кармана вора!",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        elif meta.get("caught"):
+            try:
+                thief_name = format_anon_id(user_id)
+                await message.bot.send_message(
+                    target_id,
+                    f"🐀 <b>ТЫ ПОЙМАЛ КАРМАННИКА С ПОЛИЧНЫМ В /{board_id}/!</b>\n"
+                    f"Вор [<code>{thief_name}</code>] пытался срезать твой кошелек, но спалился!\n"
+                    f"💰 Тебе выплачена компенсация: <b>+{meta.get('penalty', 0):,.0f} ₪</b>!",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
 
 @criminal_router.message(Command("arrest", "принять", "задержать", ignore_case=True, ignore_mention=True))
@@ -1940,8 +1964,23 @@ async def cmd_arrest(message: types.Message, board_id: Optional[str] = None):
     from common.db_pool import get_pool
     db = await get_pool()
 
-    _, result_text, _ = await execute_arrest(db, user_id, target_id, board_id)
+    ok_arrest, result_text, res_arrest = await execute_arrest(db, user_id, target_id, board_id)
     await message.answer(result_text, parse_mode="HTML")
+    if ok_arrest:
+        try:
+            officer_name = format_anon_id(user_id)
+            jail_min = res_arrest.get("jail_minutes", 15)
+            await message.bot.send_message(
+                target_id,
+                f"👮‍♂️ <b>ТЕБЯ АРЕСТОВАЛА ДРУЖИНА В /{board_id}/!</b>\n"
+                f"Офицер [<code>{officer_name}</code>] задержал тебя по ориентировке.\n"
+                f"🔒 Срок в КПЗ: <b>{jail_min} минут</b>.\n"
+                f"Все заточки и отмычки конфискованы!\n"
+                f"💡 Ты можешь дать взятку (<code>/bribe</code>) для досрочного освобождения.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 def build_darknet_keyboard(balance: float) -> InlineKeyboardMarkup:
@@ -2765,7 +2804,7 @@ async def execute_chloroform(
 
     from common.database import record_user_transaction
     await record_user_transaction(
-        db, thief_id, 0.0, "chloroform_use", f"Применение хлороформа на анона {victim_id}"
+        db, thief_id, 0.0, "chloroform_use", f"Применение хлороформа на анона [{victim_tag}]"
     )
 
     msg = (
@@ -2814,8 +2853,20 @@ async def cmd_chloroform(message: types.Message, board_id: Optional[str] = None)
     from common.db_pool import get_pool
     db = await get_pool()
 
-    _, reply_text, _ = await execute_chloroform(db, user_id, target_id, board_id)
+    ok_chlor, reply_text, _ = await execute_chloroform(db, user_id, target_id, board_id)
     await message.answer(reply_text, parse_mode="HTML")
+    if ok_chlor:
+        try:
+            thief_name = format_anon_id(user_id)
+            await message.bot.send_message(
+                target_id,
+                f"🧪 <b>ТЕБЯ УСЫПИЛИ ХЛОРОФОРМОМ В /{board_id}/!</b>\n"
+                f"Анон [<code>{thief_name}</code>] подкрался сзади и прижал смоченную хлороформом тряпку к твоему лицу.\n"
+                f"Ты крепко спишь на 30 минут — твой перцовый баллончик временно отключен!",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 @criminal_router.message(

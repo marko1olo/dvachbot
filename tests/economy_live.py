@@ -197,6 +197,8 @@ class LiveEconomy:
         else:
             msg.reply_to_message = None
         msg.answer = mock.AsyncMock()
+        msg.reply = mock.AsyncMock()
+        msg.delete = mock.AsyncMock()
         msg.bot = mock.MagicMock()
         msg.bot.send_message = mock.AsyncMock()
         return msg
@@ -214,7 +216,9 @@ async def live_economy():
     db_path = os.path.join(work, "fresh.db")
     db = await _build_schema(db_path)
     import shared_state
+    import combat_moderation_engine as cme
     shared_state.reset_combat_state()
+    cme.reset_combat_moderation_state()
 
     saved_storage = dict(main.messages_storage)
     saved_map = dict(main.message_to_post)
@@ -224,10 +228,12 @@ async def live_economy():
     patches = [
         mock.patch.object(common.db_pool, "get_pool", pool_stub),
         mock.patch.object(common.database, "get_pool", pool_stub),
+        mock.patch.object(main, "get_pool", pool_stub),
         mock.patch.object(common.db_pool, "DB_NAME", db_path),
         mock.patch.object(common.database, "DB_NAME", db_path),
         mock.patch.object(common.config, "DB_NAME", db_path),
-        mock.patch.object(common.db_pool, "db_lock", asyncio.Lock()),
+        mock.patch.object(common.db_pool, "db_lock", common.db_pool.LazyLock()),
+        mock.patch.object(main, "db_lock", common.db_pool.LazyLock()),
     ]
     for p in patches:
         p.start()
@@ -242,5 +248,6 @@ async def live_economy():
         main.message_to_post.clear()
         main.message_to_post.update(saved_map)
         shared_state.reset_combat_state()
+        cme.reset_combat_moderation_state()
         await db.close()
         shutil.rmtree(work, ignore_errors=True)
