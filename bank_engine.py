@@ -1009,7 +1009,10 @@ def build_bank_dashboard_view(
     ]
 
     if not deposits:
-        lines.append("<i>У тебя нет активных вкладов. Шекели в кошельке не приносят доход и могут быть украдены!</i>")
+        if wallet_balance <= 0:
+            lines.append("<i>Твой кошелек и сейф пусты. Заработай шекели на Бирже труда (/work)!</i>")
+        else:
+            lines.append("<i>У тебя нет активных вкладов. Шекели в кошельке не приносят доход и могут быть украдены!</i>")
     else:
         tier_counts: Dict[str, Dict[str, Any]] = {}
         for d in deposits:
@@ -1071,6 +1074,7 @@ def build_bank_hub_kb(dirty_balance: float = 0.0) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🔄 Обновить проценты", callback_data="bank_refresh"),
+            InlineKeyboardButton(text="💼 Биржа труда (/work)", callback_data="work_hub"),
         ],
     ]
     if dirty_balance > 0:

@@ -903,10 +903,12 @@ async def buy_market_listing(
         buyer_items = restore_item_to_active_items(buyer_items, item_id, item_type, item_data)
         await _save_user_active_items(db, buyer_id, b_id, buyer_items)
 
-        await db.execute(
-            "UPDATE MarketListings SET status = 'sold', buyer_id = ?, buyer_board_id = ?, sold_at = ? WHERE id = ?",
+        async with db.execute(
+            "UPDATE MarketListings SET status = 'sold', buyer_id = ?, buyer_board_id = ?, sold_at = ? WHERE id = ? AND status = 'active'",
             (buyer_id, b_id, now, lot_id)
-        )
+        ) as cur_upd:
+            if getattr(cur_upd, "rowcount", 0) == 0:
+                return False, 0, 0.0, 0.0, 0.0, None, "Этот лот уже продан или снят с продажи."
 
         await record_user_transaction(db, buyer_id, -price, "shop", f"Покупка на Базаре: {item_name} (лот #{lot_id})")
         await record_user_transaction(db, seller_id, payout, "market", f"Продажа на Базаре: {item_name} (лот #{lot_id}, -5% налог Абу)")

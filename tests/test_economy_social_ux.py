@@ -15,10 +15,13 @@ Covers:
 
 import math
 import time
+from unittest.mock import AsyncMock, patch
 import pytest
 
 from bank_engine import (
     BANK_TIERS,
+    build_bank_dashboard_view,
+    build_bank_hub_kb,
     calculate_deposit_state,
     create_bank_deposit,
     format_remaining_time,
@@ -642,4 +645,126 @@ async def test_bank_continuous_accrual_and_early_break_penalty(isolated_test_db)
     wallet_after = await get_user_global_balance(db, user_id)
     # Started with 1000, deposited 500 (balance was 500), received 485 payout = 985
     assert wallet_after == 985.0
+
+
+def test_bank_dashboard_zero_balance_guidance_and_work_hub_button():
+    """Verify bank dashboard guides bankrupt users to /work and includes work_hub button in keyboard."""
+    # Broke user view
+    text_broke, kb_broke = build_bank_dashboard_view(
+        wallet_balance=0.0,
+        total_principal=0.0,
+        total_accrued=0.0,
+        deposits=[],
+        dirty_balance=0.0
+    )
+    assert "Твой кошелек и сейф пусты. Заработай шекели на Бирже труда (/work)!" in text_broke
+
+    # All buttons in the bank hub keyboard
+    all_callbacks = [
+        btn.callback_data
+        for row in kb_broke.inline_keyboard
+        for btn in row
+    ]
+    assert "work_hub" in all_callbacks
+    assert "bank_refresh" in all_callbacks
+
+    # Non-broke user view
+    text_funded, _ = build_bank_dashboard_view(
+        wallet_balance=5000.0,
+        total_principal=0.0,
+        total_accrued=0.0,
+        deposits=[],
+        dirty_balance=0.0
+    )
+    assert "У тебя нет активных вкладов. Шекели в кошельке не приносят доход" in text_funded
+
+
+def test_work_energy_and_health_depleted_guards():
+    """Verify execute_job_action rejects shifts with informative advice when energy or health is <= 0."""
+    # 0 Energy
+    res_e0 = execute_job_action("bottles", {"energy": 0})
+    assert res_e0[0] is False
+    assert "закончилась энергия (0⚡)" in res_e0[2]
+    assert "Flash Ultra" in res_e0[2]
+
+    # Negative Energy
+    res_en = execute_job_action("bottles", {"energy": -10})
+    assert res_en[0] is False
+    assert "закончилась энергия" in res_en[2]
+
+    # 0 Health
+    res_h0 = execute_job_action("bottles", {"health": 0})
+    assert res_h0[0] is False
+    assert "здоровье на нуле (0 HP)" in res_h0[2]
+    assert "/cure" in res_h0[2]
+
+    # Negative Health
+    res_hn = execute_job_action("bottles", {"health": -5})
+    assert res_hn[0] is False
+    assert "здоровье на нуле" in res_hn[2]
+
+
+@pytest.mark.asyncio
+async def test_side_hustles_callback_with_none_board_id(isolated_test_db):
+    """Verify cb_work_action handles board_id=None without dropping or silently returning."""
+    from economy_extension import cb_work_action
+    db = isolated_test_db
+    user_id = 70001
+    await add_user_global_balance(db, user_id, "b", 500.0)
+
+    mock_cb = AsyncMock()
+    mock_cb.from_user.id = user_id
+    mock_cb.data = "work_bottles"
+    mock_cb.answer = AsyncMock()
+    mock_cb.message.photo = None
+    mock_cb.message.edit_text = AsyncMock()
+
+    with patch("economy_extension.get_pool", return_value=db), \
+         patch("main._build_work_card", return_value=("mock_card", None)):
+        await cb_work_action(mock_cb, board_id=None)
+
+    # Callback answered and processed (did not abort on if not board_id)
+    assert mock_cb.answer.called
+
+
+@pytest.mark.asyncio
+async def test_market_cas_double_buy_prevention(isolated_test_db):
+    """Verify atomic CAS in buy_market_listing prevents double spending and concurrent race buys."""
+    db = isolated_test_db
+    seller_id = 80001
+    buyer1_id = 80002
+    buyer2_id = 80003
+
+    # Setup seller inventory with an item
+    from market_engine import _save_user_active_items
+    await _save_user_active_items(db, seller_id, "b", {"knife_gun": True})
+
+    # Setup buyers with balance
+    await add_user_global_balance(db, buyer1_id, "b", 500.0)
+    await add_user_global_balance(db, buyer2_id, "b", 500.0)
+
+    # Create listing
+    ok_list, lot_dict, err_list = await create_market_listing(
+        db, seller_id, "b", "knife", 200.0
+    )
+    assert ok_list
+    lot_id = lot_dict["id"]
+
+    # First buyer buys lot
+    ok1, s1, p1, pay1, fee1, item1, err1 = await buy_market_listing(db, lot_id, buyer1_id, "b")
+    assert ok1 is True
+    assert p1 == 200.0
+
+    bal_buyer1 = await get_user_global_balance(db, buyer1_id)
+    assert bal_buyer1 == 300.0
+
+    # Second buyer attempts to buy the same lot
+    ok2, s2, p2, pay2, fee2, item2, err2 = await buy_market_listing(db, lot_id, buyer2_id, "b")
+    assert ok2 is False
+    assert "уже продан или снят с продажи" in err2
+
+    # Second buyer's balance must remain completely untouched
+    bal_buyer2 = await get_user_global_balance(db, buyer2_id)
+    assert bal_buyer2 == 500.0
+
 

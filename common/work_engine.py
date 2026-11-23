@@ -2065,6 +2065,31 @@ def execute_job_action(
         job = WORK_VACANCIES[job_id]
         now = int(time.time())
 
+        # Energy & Health checks: prevent silent hangs or invalid shifts when depleted
+        if "energy" in current_items:
+            try:
+                cur_energy = float(current_items["energy"])
+                if cur_energy <= 0:
+                    return JobResult(
+                        False, 0,
+                        "⚡ У тебя закончилась энергия (0⚡)! Выпей Flash Ultra (/work overtime) или отдохни, чтобы восстановить силы.",
+                        None
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if "health" in current_items:
+            try:
+                cur_health = float(current_items["health"])
+                if cur_health <= 0:
+                    return JobResult(
+                        False, 0,
+                        "❤️ Твое здоровье на нуле (0 HP)! Ты не можешь работать в таком состоянии. Подлечись в аптечке (/cure)!",
+                        None
+                    )
+            except (ValueError, TypeError):
+                pass
+
         # Resolve user_id if passed or stored inside current_items
         effective_uid = user_id
         if effective_uid is None:

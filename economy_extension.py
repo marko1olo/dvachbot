@@ -156,7 +156,7 @@ async def cmd_work_menu(message: types.Message, board_id: str | None = None):
     Primary command routing is handled by main.py:cmd_work (@dp.message(Command(...))).
     """
     if not board_id:
-        return
+        board_id = "b"
     try:
         from main import cmd_work
         await cmd_work(message, board_id=board_id)
@@ -239,7 +239,7 @@ def record_flash_ultra_use(active_items: dict, now: float = None, user_id: int |
     "work_bottles", "work_dumpster", "work_flyers", "work_overtime", "work_sell_mother"
 }))
 async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = callback.from_user.id
     action = callback.data.replace("work_", "")
 
@@ -486,7 +486,7 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
 
 @economy_router.callback_query(F.data == "work_quests")
 async def cb_work_quests(callback: types.CallbackQuery, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = callback.from_user.id
     db = await get_pool()
     async with db_transaction(db):
@@ -513,7 +513,7 @@ async def cb_work_quests(callback: types.CallbackQuery, board_id: str | None = N
 
 @economy_router.callback_query(F.data == "work_claim_quests")
 async def cb_work_claim_quests(callback: types.CallbackQuery, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = callback.from_user.id
     db = await get_pool()
     ans_text = ""
@@ -763,7 +763,7 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
 
 # Note: Active /partyvan handler is registered on main.dp with full board announcements & protections
 async def cmd_partyvan(message: types.Message, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = message.from_user.id
     target_id = await get_reply_target(message)
     if not target_id:
@@ -886,7 +886,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
 
 # Note: Active /shit handler is registered on main.dp with tinfoil bounce & debuff phrases
 async def cmd_shit(message: types.Message, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = message.from_user.id
     target_id = await get_reply_target(message)
     if not target_id:
@@ -998,7 +998,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
 
 # Note: Active /rob handler is registered on main.dp with knife item & Wasserman vest protection
 async def cmd_rob(message: types.Message, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = message.from_user.id
     target_id = await get_reply_target(message)
     if not target_id:
@@ -1122,7 +1122,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
 
 # Note: Active /curse handler is registered on main.dp with laxative diarrhea AI rewrite & debuff phrases
 async def cmd_curse(message: types.Message, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = message.from_user.id
     target_id = await get_reply_target(message)
     if not target_id:
@@ -1221,7 +1221,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
 
 # Note: Active /schizopill handler is registered on main.dp with paranoid schizo AI rewrite & suit immunity
 async def cmd_schizopill(message: types.Message, board_id: str | None = None):
-    if not board_id: return
+    board_id = board_id or "b"
     user_id = message.from_user.id
     target_id = await get_reply_target(message)
     if not target_id:
@@ -1323,7 +1323,7 @@ async def cmd_schizopill(message: types.Message, board_id: str | None = None):
 # Note: Active /mega handler is registered on main.dp with persistent board pin settings
 async def cmd_mega(message: types.Message, board_id: str | None = None, stream: str = 'ru', bot: Bot | None = None):
     if not board_id:
-        return
+        board_id = "b"
     user_id = message.from_user.id if message.from_user else 0
     target_id = await get_reply_target(message)
     if not target_id:
