@@ -51,6 +51,7 @@ from common.database import (
     register_file_owner,
     add_to_mirror_queue,
     add_to_hf_queue,
+    get_file_mirrors,
     create_post,
     create_thread_entry,
     get_post_for_broadcast,
@@ -1101,7 +1102,12 @@ class ThreadImporter:
 
                 if all_files_for_queue:
                     for fid in all_files_for_queue:
-                        await add_to_mirror_queue(fid, "catbox")
+                        try:
+                            existing = await get_file_mirrors(fid)
+                        except Exception:
+                            existing = {}
+                        if not existing or "catbox" not in existing:
+                            await add_to_mirror_queue(fid, "catbox")
                         await add_to_hf_queue(fid)
 
             except Exception as e:

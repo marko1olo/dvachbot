@@ -50,7 +50,8 @@ GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
 _VISION_SEMAPHORE_LOOP = None
 BANNED_GEMINI_KEYS = set()
-_LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
+_LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp (global pacing/TPD)
+_LAST_VISION_MODEL_CALL: dict[tuple[str, str], float] = {}  # (api_key, model_name) -> cooldown timestamp
 _GLOBAL_GEMINI_LAST_CALL = 0.0
 _GLOBAL_GROQ_LAST_CALL = 0.0
 _LAST_EXHAUSTED_LOG_TIME = 0.0
@@ -475,10 +476,16 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             prompt_text = system_prompt + "\nDo NOT generate thinking tags or reasoning. Output only JSON immediately."
 
             async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as http_client:
+                provider_model_counts: dict[str, int] = {}
+                for _rm, _pv in models_cascade:
+                    provider_model_counts[_pv] = provider_model_counts.get(_pv, 0) + 1
+                provider_exhausted_models: dict[str, set[str]] = {}
+
                 for raw_model_name, provider in models_cascade:
                     model_name = VISION_MODEL_FALLBACKS.get(raw_model_name, raw_model_name)
                     if time.time() < _MODEL_503_COOLDOWN.get(model_name, 0.0) or time.time() < _MODEL_404_COOLDOWN.get(model_name, 0.0):
                         logger.debug(f"ℹ️ [VISION] [{source}] Model {model_name} in cooldown, skipping.")
+                        provider_exhausted_models.setdefault(provider, set()).add(model_name)
                         continue
                     if provider == "gemini" and skip_gemini_models:
                         continue
@@ -502,18 +509,32 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     if not keys:
                         continue
 
-                    # Fast pre-check: if ALL keys for provider have cooldown > now + 15.0,
-                    # skip provider immediately to allow seamless fallback without delays.
+                    # Fast pre-check: if ALL keys for this (provider, model_name) have cooldown > now + 15.0,
+                    # skip this model (and halt provider only if all its cascade models are exhausted).
+                    pool_cd_map = getattr(pool, "_cooldown_until", None)
+                    pool_model_cd_map = getattr(pool, "_model_cooldown_until", None)
+                    if not isinstance(pool_cd_map, dict):
+                        pool_cd_map = {}
+                    if not isinstance(pool_model_cd_map, dict):
+                        pool_model_cd_map = {}
+
                     all_penalized = all(
-                        max(_LAST_VISION_CALL_TIME.get(k, 0.0), getattr(pool, "_cooldown_until", {}).get(k, 0.0)) > now + 15.0
+                        max(
+                            _LAST_VISION_CALL_TIME.get(k, 0.0),
+                            _LAST_VISION_MODEL_CALL.get((k, model_name), 0.0),
+                            float(pool_cd_map.get(k, 0.0) or 0.0),
+                            float(pool_model_cd_map.get((k, model_name), 0.0) or 0.0),
+                        ) > now + 15.0
                         for k in keys
                     )
                     if all_penalized:
-                        logger.info(f"ℹ️ [VISION] [{source}] All keys for {provider} ({model_name}) are in cooldown. Skipping {provider} models.")
-                        if provider == "groq":
-                            skip_groq_models = True
-                        else:
-                            skip_gemini_models = True
+                        logger.info(f"ℹ️ [VISION] [{source}] All keys for {provider} ({model_name}) are in cooldown. Skipping model.")
+                        provider_exhausted_models.setdefault(provider, set()).add(model_name)
+                        if len(provider_exhausted_models[provider]) >= provider_model_counts.get(provider, 1):
+                            if provider == "groq":
+                                skip_groq_models = True
+                            else:
+                                skip_gemini_models = True
                         continue
 
                     available_keys = list(keys)
@@ -539,8 +560,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                             # PASS 1: Try to find a completely free key (no sleep beyond global_wait)
                             for api_key in available_keys:
-                                pool_cd = getattr(pool, "_cooldown_until", {}).get(api_key, 0.0)
-                                last_call = max(_LAST_VISION_CALL_TIME.get(api_key, 0.0), pool_cd)
+                                pool_cd = max(
+                                    float(pool_cd_map.get(api_key, 0.0) or 0.0),
+                                    float(pool_model_cd_map.get((api_key, model_name), 0.0) or 0.0),
+                                )
+                                last_call = max(
+                                    _LAST_VISION_CALL_TIME.get(api_key, 0.0),
+                                    _LAST_VISION_MODEL_CALL.get((api_key, model_name), 0.0),
+                                    pool_cd,
+                                )
                                 if last_call > eff_now + 15.0:
                                     continue
                                 if eff_now >= last_call:
@@ -558,8 +586,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 best_key = None
                                 min_wait = float('inf')
                                 for api_key in available_keys:
-                                    pool_cd = getattr(pool, "_cooldown_until", {}).get(api_key, 0.0)
-                                    last_call = max(_LAST_VISION_CALL_TIME.get(api_key, 0.0), pool_cd)
+                                    pool_cd = max(
+                                        float(pool_cd_map.get(api_key, 0.0) or 0.0),
+                                        float(pool_model_cd_map.get((api_key, model_name), 0.0) or 0.0),
+                                    )
+                                    last_call = max(
+                                        _LAST_VISION_CALL_TIME.get(api_key, 0.0),
+                                        _LAST_VISION_MODEL_CALL.get((api_key, model_name), 0.0),
+                                        pool_cd,
+                                    )
                                     if last_call > eff_now + 15.0:
                                         continue
                                     wait_time = last_call - eff_now
@@ -578,10 +613,12 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                         if not selected_key:
                             logger.warning(f"⚠️ [VISION] [{source}] All keys for {model_name} are penalized. Skipping model.")
-                            if provider == "groq":
-                                skip_groq_models = True
-                            else:
-                                skip_gemini_models = True
+                            provider_exhausted_models.setdefault(provider, set()).add(model_name)
+                            if len(provider_exhausted_models[provider]) >= provider_model_counts.get(provider, 1):
+                                if provider == "groq":
+                                    skip_groq_models = True
+                                else:
+                                    skip_gemini_models = True
                             break
 
                         if sleep_time > 0:
@@ -783,10 +820,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         default_sec=min(180.0, 45.0 * (1.5 ** (consecutive_429 - 1)))
                                     ) + jitter
 
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} rate limited (429). Penalizing for {cd_duration:.0f}s.")
-                                pool.penalize_token(selected_key, cd_duration)
+                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key ...{selected_key[-6:]} rate limited (429) on {model_name}. Penalizing for {cd_duration:.0f}s.")
+                                pool.penalize_token(selected_key, cd_duration, model=model_name)
                                 async with _get_key_rate_lock():
-                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + cd_duration
+                                    _LAST_VISION_MODEL_CALL[(selected_key, model_name)] = time.time() + cd_duration
                                     if provider == "gemini":
                                         _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0 + jitter)
                                     else:
@@ -795,16 +832,19 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 available_keys.remove(selected_key)
 
                                 if len(available_keys) == 0:
-                                    # All keys exhausted on rate limits — back off for 30 min (Groq) or 5 min (Gemini) with jitter
-                                    halt_sec = (1800.0 if provider == "groq" else 300.0) + random.uniform(5.0, 30.0)
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit rate limits and no keys remain. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
-                                    async with _get_key_rate_lock():
-                                        if provider == "gemini":
-                                            _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
-                                            skip_gemini_models = True
-                                        else:
-                                            _GLOBAL_GROQ_LAST_CALL = time.time() + halt_sec
-                                            skip_groq_models = True
+                                    provider_exhausted_models.setdefault(provider, set()).add(model_name)
+                                    if len(provider_exhausted_models[provider]) >= provider_model_counts.get(provider, 1):
+                                        halt_sec = (1800.0 if provider == "groq" else 300.0) + random.uniform(5.0, 30.0)
+                                        logger.warning(f"⚠️ [VISION] [{source}] {provider} exhausted all models on rate limits. Halting {provider} for {int(halt_sec//60)}m to protect keys.")
+                                        async with _get_key_rate_lock():
+                                            if provider == "gemini":
+                                                _GLOBAL_GEMINI_LAST_CALL = time.time() + halt_sec
+                                                skip_gemini_models = True
+                                            else:
+                                                _GLOBAL_GROQ_LAST_CALL = time.time() + halt_sec
+                                                skip_groq_models = True
+                                    else:
+                                        logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} exhausted keys on 429; switching to next {provider} model.")
                                     break
 
                                 sleep_sec = groq_backoff if provider == "groq" else (3.0 + jitter)

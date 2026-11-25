@@ -105,8 +105,222 @@ def _load_google_keys() -> list[str]:
 
 
 _key_cooldowns: dict[tuple[str, str], float] = {}
+_key_model_cooldowns: dict[tuple[str, str, str], float] = {}
+_key_global_cooldowns: dict[tuple[str, str], float] = {}
 _provider_cooldowns: dict[str, float] = {}
 _model_cooldowns: dict[str, float] = {}
+
+
+def _filter_keys_for_model(provider: str, model_name: str, keys: list[str], now_ts: float) -> list[str]:
+    """
+    Filters active keys for a specific (provider, model_name) pair.
+    - Key-wide errors (401/403) live in _key_global_cooldowns and block all models for that key.
+    - Per-model 429s live in _key_model_cooldowns and only cool down (provider, model_name, key),
+      allowing the same key to still serve higher-RPM models (e.g. gemini-3.1-flash-lite).
+    - If a test fixture clears _key_cooldowns, stale entries for cleared keys are pruned automatically.
+    """
+    if not _key_cooldowns:
+        _key_global_cooldowns.clear()
+        _key_model_cooldowns.clear()
+    else:
+        stale_global = [pk for pk in _key_global_cooldowns if pk not in _key_cooldowns]
+        for pk in stale_global:
+            _key_global_cooldowns.pop(pk, None)
+        stale_model = [pmk for pmk in _key_model_cooldowns if (pmk[0], pmk[2]) not in _key_cooldowns]
+        for pmk in stale_model:
+            _key_model_cooldowns.pop(pmk, None)
+
+    active: list[str] = []
+    for k in keys:
+        if _key_global_cooldowns.get((provider, k), 0.0) > now_ts:
+            continue
+        if _key_model_cooldowns.get((provider, model_name, k), 0.0) > now_ts:
+            continue
+        active.append(k)
+    return active
+
+
+_MEDIA_ONLY_LINE_RE = re.compile(
+    r'^(?:[^:\n]{1,60}(?:\([^)]*\))?\s*:\s*)?'
+    r'(?:\[(?:photo|sticker|video|animation|gif|voice|audio|document|media_group|video_note|'
+    r'фото|стикер|видео|анимация|гифка|голосовое|аудио|документ|кружок|медиа)\]\s*)+$',
+    re.IGNORECASE,
+)
+
+_MEDIA_TOKEN_RE = re.compile(
+    r'\[(photo|sticker|video|animation|gif|voice|audio|document|media_group|video_note|'
+    r'фото|стикер|видео|анимация|гифка|голосовое|аудио|документ|кружок|медиа)\]',
+    re.IGNORECASE,
+)
+
+
+def is_media_only_dump(text_dump: str) -> bool:
+    """Returns True when all non-empty lines in text_dump are bare media placeholders without discussion text."""
+    if not text_dump or not text_dump.strip():
+        return False
+    lines = [ln.strip() for ln in text_dump.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    return all(_MEDIA_ONLY_LINE_RE.match(ln) for ln in lines)
+
+
+def summarize_media_only_dump(text_dump: str) -> str:
+    """Generates an accurate, non-hallucinated summary for media-only threads/dumps."""
+    counts: dict[str, int] = {}
+    label_map = {
+        "photo": "фото", "фото": "фото",
+        "sticker": "стикеров", "стикер": "стикеров",
+        "video": "видео", "видео": "видео", "video_note": "кружков", "кружок": "кружков",
+        "animation": "гифок", "gif": "гифок", "гифка": "гифок", "анимация": "гифок",
+        "voice": "голосовых", "голосовое": "голосовых",
+        "audio": "аудио", "аудио": "аудио",
+        "document": "файлов", "документ": "файлов",
+        "media_group": "альбомов", "медиа": "медиа",
+    }
+    for m in _MEDIA_TOKEN_RE.finditer(text_dump or ""):
+        lbl = label_map.get(m.group(1).lower(), "медиа")
+        counts[lbl] = counts.get(lbl, 0) + 1
+    if not counts:
+        return "🖼 <b>Медиа-тред:</b> текстовых сообщений нет, только вложения."
+    parts = ", ".join(f"{k}: {v}" for k, v in counts.items())
+    return f"🖼 <b>Медиа-тред без текста:</b> в подборке только вложения ({parts})."
+
+
+def compress_thread_dump(text_dump: str, max_chars: int) -> str:
+    """
+    Compresses long thread/chat dumps to fit within max_chars while preserving:
+    1) The head / OP post (~22% of budget),
+    2) Salient middle posts (prioritizing posts with >>post_num / #post_num references, ~23% of budget),
+    3) The newest tail discussion (~50% of budget) on clean line boundaries.
+    """
+    if not text_dump or max_chars <= 0 or len(text_dump) <= max_chars:
+        return text_dump
+
+    lines = [ln for ln in text_dump.splitlines() if ln.strip()]
+    if len(lines) <= 2:
+        if max_chars <= 64:
+            return text_dump[-max_chars:]
+        head_len = max(1, int(max_chars * 0.3))
+        marker = "\n[...]\n"
+        tail_len = max(1, max_chars - head_len - len(marker))
+        return text_dump[:head_len] + marker + text_dump[-tail_len:]
+
+    marker_mid = "\n\n[...часть середины треда сжата...]\n\n"
+    marker_end = "\n\n[...переход к последним постам...]\n\n"
+    reserve = len(marker_mid) + len(marker_end) + 16
+    if max_chars <= reserve + 120:
+        return text_dump[-max_chars:]
+
+    budget = max_chars - reserve
+    head_budget = int(budget * 0.22)
+    mid_budget = int(budget * 0.23)
+    tail_budget = budget - head_budget - mid_budget
+
+    head_lines: list[str] = []
+    head_chars = 0
+    head_end_idx = 0
+    for idx, ln in enumerate(lines):
+        cost = len(ln) + (1 if head_lines else 0)
+        if head_chars + cost > head_budget and head_lines:
+            break
+        if cost > head_budget and not head_lines:
+            head_lines.append(ln[:head_budget])
+            head_chars = len(head_lines[0])
+            head_end_idx = idx + 1
+            break
+        head_lines.append(ln)
+        head_chars += cost
+        head_end_idx = idx + 1
+
+    tail_lines: list[str] = []
+    tail_chars = 0
+    tail_start_idx = len(lines)
+    for idx in range(len(lines) - 1, head_end_idx - 1, -1):
+        ln = lines[idx]
+        cost = len(ln) + (1 if tail_lines else 0)
+        if tail_chars + cost > tail_budget and tail_lines:
+            break
+        if cost > tail_budget and not tail_lines:
+            tail_lines.append(ln[-tail_budget:])
+            tail_chars = len(tail_lines[0])
+            tail_start_idx = idx
+            break
+        tail_lines.append(ln)
+        tail_chars += cost
+        tail_start_idx = idx
+    tail_lines.reverse()
+
+    mid_candidates = list(enumerate(lines[head_end_idx:tail_start_idx], start=head_end_idx))
+    if not mid_candidates or mid_budget < 80:
+        combined = "\n".join(head_lines) + marker_end + "\n".join(tail_lines)
+        return combined[:max_chars]
+
+    # Score middle posts: prioritize >>refs, replies, and substantive text; deprioritize bare media tags
+    def _mid_score(item: tuple[int, str]) -> tuple[int, int]:
+        _, ln = item
+        if _MEDIA_ONLY_LINE_RE.match(ln.strip()):
+            return (0, 0)
+        has_ref = 1 if re.search(r'(?:>>|#)\d{3,}', ln) else 0
+        has_reply = 1 if ("Ответ на" in ln or "reply to" in ln.lower()) else 0
+        return (has_ref * 3 + has_reply * 2 + (1 if len(ln) >= 60 else 0), min(len(ln), 400))
+
+    ranked = sorted(mid_candidates, key=_mid_score, reverse=True)
+    picked: list[tuple[int, str]] = []
+    mid_chars = 0
+    for idx, ln in ranked:
+        if len(ln) > mid_budget and not picked:
+            picked.append((idx, ln[:mid_budget]))
+            mid_chars = len(picked[0][1])
+            break
+        cost = len(ln) + (1 if picked else 0)
+        if mid_chars + cost <= mid_budget:
+            picked.append((idx, ln))
+            mid_chars += cost
+
+    picked.sort(key=lambda x: x[0])
+    mid_block = "\n".join(ln for _, ln in picked)
+    if mid_block:
+        result = "\n".join(head_lines) + marker_mid + mid_block + marker_end + "\n".join(tail_lines)
+    else:
+        result = "\n".join(head_lines) + marker_end + "\n".join(tail_lines)
+    if len(result) > max_chars:
+        return result[:max_chars]
+    return result
+
+
+def safe_truncate_telegram_html(text: str, max_utf16: int = 4000, suffix: str = "…") -> str:
+    """
+    Safely truncates HTML text to Telegram UTF-16 code unit limits without ever cutting inside tags/entities
+    or leaving unclosed <b>, <i>, <blockquote expandable>, <tg-spoiler>, <a> tags.
+    """
+    if not text:
+        return ""
+    from common.text_chunker import safe_html_truncate
+    from common.html_utils import balance_html_tags
+    return balance_html_tags(safe_html_truncate(text, max_units=max_utf16, suffix=suffix))
+
+
+def sanitize_summary_html(text: str, max_utf16: int | None = None) -> str:
+    """
+    Normalizes LLM summary output into Telegram-parseable HTML while preserving
+    <blockquote>, <blockquote expandable>, <tg-spoiler>, <b>, <i>, <u>, <s>, <code>, <pre>, <a>.
+    """
+    if not text:
+        return ""
+    from common.html_utils import balance_html_tags
+    # Preserve tg-spoiler across clean_html_for_tg (which uses [a-zA-Z]+ in its tag balancer)
+    placeholder_open = "\u2063TGSPOILEROPEN\u2063"
+    placeholder_close = "\u2063TGSPOILERCLOSE\u2063"
+    prepared = re.sub(r'<tg-spoiler\b[^>]*>', placeholder_open, text, flags=re.IGNORECASE)
+    prepared = re.sub(r'</tg-spoiler\s*>', placeholder_close, prepared, flags=re.IGNORECASE)
+
+    from common.text_utils import clean_html_for_tg
+    cleaned = clean_html_for_tg(prepared)
+    cleaned = cleaned.replace(placeholder_open, "<tg-spoiler>").replace(placeholder_close, "</tg-spoiler>")
+    cleaned = balance_html_tags(cleaned)
+    if max_utf16 is not None:
+        cleaned = safe_truncate_telegram_html(cleaned, max_utf16=max_utf16)
+    return cleaned
 
 _CANNED_REFUSAL_MARKERS = (
     "я не могу предоставить информацию",
@@ -354,6 +568,10 @@ async def dispatch_llm_completion(prompt: str, text_dump: str, model_preference:
         logger.warning("⚠️ dispatch_llm_completion received empty text_dump. Skipping LLM call.")
         return ""
 
+    if model_preference not in ("persona", "persona_gemini") and is_media_only_dump(text_dump):
+        logger.info("🖼️ dispatch_llm_completion detected media-only dump without text. Returning concise media summary.")
+        return summarize_media_only_dump(text_dump)
+
     in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
     cache_key = None
     if not in_test:
@@ -583,16 +801,39 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gpt-4o-mini", "openai"),
         ])
 
-    if model_preference not in ("persona", "persona_gemini"):
-        system_instruction = prompt + (
+    prompt_lower = (prompt or "").lower()
+    is_json_prompt = (
+        "json" in prompt_lower
+        or '"persona"' in prompt_lower
+        or '"reply"' in prompt_lower
+    )
+    is_summary_prompt = any(
+        kw in prompt_lower
+        for kw in (
+            "саммари", "сводк", "пересказ", "summary", "digest", "дайджест",
+            "прожарк", "roast", "разбор", "летопис", "хроник", "маляв", "досье",
+            "обзор", "суть треда", "summarize", "chronicler", "要約", "まとめ",
+        )
+    )
+
+    if model_preference not in ("persona", "persona_gemini") and not is_json_prompt:
+        extra_rules = (
             "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
-            "ALLOWED tags (ONLY these): <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">.\n"
+            "ALLOWED tags (ONLY these): <b>, <i>, <u>, <s>, <code>, <pre>, <blockquote>, <blockquote expandable>, <tg-spoiler>, <a href=\"...\">.\n"
             "FORBIDDEN tags (NEVER use): <p>, <div>, <span>, <br>, <hr>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <em>, <strong>, <section>, <article>, and ANY other HTML tag not listed above.\n"
             "FORBIDDEN formatting: Never use Markdown (no **bold**, no *italic*, no # headings, no - lists, no * lists).\n"
             "Separate paragraphs with a blank line (two newlines), NOT with <p> tags.\n"
             "For bullet lists use • character with a newline, NOT <ul>/<li> tags.\n"
-            "Output must be parseable by Telegram Bot API HTML parser."
+            "Always close every HTML tag you open. Output must be parseable by Telegram Bot API HTML parser."
         )
+        if is_summary_prompt:
+            extra_rules += (
+                "\n\nCONTENT & GROUNDING RULES:\n"
+                "- Cut the robotic/bureaucratic filler: NEVER start with phrases like 'В этом треде участники обсудили...', 'В данном обсуждении...', 'Подводя итоги...', 'Можно выделить следующие темы...'. Jump straight into the substance.\n"
+                "- Anchor claims to concrete facts, positions, conflicts, and short real quotes from the log. When post numbers (#123456 or >>123456) appear in the log, cite key posts explicitly as >>123456 (never invent fake post numbers).\n"
+                "- Keep the tone sharp, lively, and concrete rather than generic."
+            )
+        system_instruction = prompt + extra_rules
     else:
         system_instruction = prompt
 
@@ -600,16 +841,22 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     now_ts = time.time()
     skip_providers: set[str] = set()
     provider_safety_count: dict[str, int] = {}
+    provider_model_counts: dict[str, int] = {}
+    for _, _prov in models_cascade:
+        provider_model_counts[_prov] = provider_model_counts.get(_prov, 0) + 1
+    provider_429_models: dict[str, set[str]] = {}
+    provider_exhausted_models: dict[str, set[str]] = {}
     persona_temperature = round(random.uniform(0.76, 0.84), 2)
 
     for model_name, provider in models_cascade:
         if provider in skip_providers:
             continue
         if _provider_cooldowns.get(provider, 0) > now_ts:
-            logger.info(f"{provider} is in TPD cooldown ({_provider_cooldowns[provider] - now_ts:.1f}s remaining). Skipping model {model_name}.")
+            logger.info(f"{provider} is in provider cooldown ({_provider_cooldowns[provider] - now_ts:.1f}s remaining). Skipping model {model_name}.")
             continue
         if _model_cooldowns.get(model_name, 0) > now_ts:
-            logger.info(f"Model {model_name} is in 503/high-demand cooldown ({_model_cooldowns[model_name] - now_ts:.1f}s remaining). Skipping.")
+            logger.info(f"Model {model_name} is in cooldown ({_model_cooldowns[model_name] - now_ts:.1f}s remaining). Skipping.")
+            provider_exhausted_models.setdefault(provider, set()).add(model_name)
             continue
 
         if provider == "gemini":
@@ -636,10 +883,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             logger.warning(f"No keys for provider {provider}. Skipping model {model_name}.")
             continue
             
-        # Filter out keys that are currently in 429 cooldown
-        active_keys = [k for k in keys if _key_cooldowns.get((provider, k), 0) <= now_ts]
+        # Filter out keys that are globally banned or cooling down for THIS specific (provider, model_name)
+        active_keys = _filter_keys_for_model(provider, model_name, keys, now_ts)
         if not active_keys:
-            logger.info(f"All keys for {provider} are in cooldown. Skipping model {model_name}.")
+            logger.info(f"All keys for {provider} ({model_name}) are in cooldown. Skipping model {model_name}.")
+            provider_exhausted_models.setdefault(provider, set()).add(model_name)
             continue
 
         # Cap keys tried per model to max 8 healthy keys to ensure full pool utilization
@@ -658,37 +906,31 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         else:
             model_max_tokens = 3500
 
-        # Защита от 413 Payload Too Large и избыточного сжигания токенов
+        # Защита от 413 Payload Too Large и избыточного сжигания токенов при сохранении начала (ОП-поста), середины и хвоста треда
         if len(text_dump) > 80000:
-            text_dump = text_dump[:10000] + "\n\n[...часть гигантского треда сокращена во избежание 413...]\n\n" + text_dump[-50000:]
+            text_dump = compress_thread_dump(text_dump, 60000)
 
         effective_sys = system_instruction
         effective_dump = text_dump
         if provider == "groq":
             if is_persona:
                 if len(effective_dump) > 10000:
-                    # Preserving Block 1 & Block 2 at start and newest chat history at end
-                    effective_dump = effective_dump[:3500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-6000:]
+                    effective_dump = compress_thread_dump(effective_dump, 10000)
             else:
                 if len(effective_sys) > 8000:
                     effective_sys = effective_sys[:8000]
                 if len(effective_dump) > 15000:
-                    cut_idx = effective_dump.find("\n", len(effective_dump) - 15000)
-                    if cut_idx != -1:
-                        effective_dump = effective_dump[cut_idx + 1:]
-                    else:
-                        effective_dump = effective_dump[-15000:]
+                    effective_dump = compress_thread_dump(effective_dump, 15000)
         elif provider == "gemini":
             if not is_persona and len(effective_dump) > 35000:
-                # Ограничиваем простыню контекста для Gemini 35k символов во избежание сжигания токенов и задержек
-                effective_dump = effective_dump[-35000:]
+                effective_dump = compress_thread_dump(effective_dump, 35000)
             elif is_persona and len(effective_dump) > 10000:
-                effective_dump = effective_dump[:3500] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-6000:]
+                effective_dump = compress_thread_dump(effective_dump, 10000)
         else:
             if is_persona and len(effective_dump) > 8000:
-                effective_dump = effective_dump[:3000] + "\n\n[...часть старой истории чата пропущена...]\n\n" + effective_dump[-4500:]
+                effective_dump = compress_thread_dump(effective_dump, 8000)
             elif not is_persona and len(effective_dump) > 35000:
-                effective_dump = effective_dump[-35000:]
+                effective_dump = compress_thread_dump(effective_dump, 35000)
 
         messages = [
             {"role": "system", "content": effective_sys},
@@ -709,7 +951,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
 
                 if provider == "gemini" and not is_mock_env:
                     is_persona = model_preference in ("persona", "persona_gemini")
-                    gemini_timeout = httpx.Timeout(connect=10.0, read=45.0 if is_persona else 30.0, write=10.0, pool=10.0)
+                    gemini_timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
                     raw_text, finish_reason = await _call_gemini_native_rest(
                         http_client=http_client,
                         model_name=model_name,
@@ -895,7 +1137,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     break
                 if (re.search(r'\b401\b', err_str) or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()) and "413" not in err_str:
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} returned 401 unauthorized. Removing from pool and setting cooldown.")
-                    _key_cooldowns[(provider, api_key)] = time.time() + 900.0
+                    until_401 = time.time() + 900.0
+                    _key_global_cooldowns[(provider, api_key)] = until_401
+                    _key_cooldowns[(provider, api_key)] = until_401
                     if provider == "gemini":
                         google_pool.penalize_token(api_key, 900.0)
                         if hasattr(google_pool, "remove_token"):
@@ -913,7 +1157,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     continue  # try next key
                 if "403" in err_str:
                     # 403 = this specific key/project is banned. Cooldown it and try the NEXT KEY.
-                    _key_cooldowns[(provider, api_key)] = time.time() + 3600.0  # 1h cooldown for banned keys
+                    until_403 = time.time() + 3600.0
+                    _key_global_cooldowns[(provider, api_key)] = until_403
+                    _key_cooldowns[(provider, api_key)] = until_403  # 1h cooldown for banned keys
                     if provider == "gemini":
                         google_pool.ban_token(api_key)
                     elif provider == "agentrouter":
@@ -931,32 +1177,52 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     break
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
                     consecutive_429 += 1
-                    _key_cooldowns[(provider, api_key)] = time.time() + 120.0
+                    cd_sec = 90.0 if provider == "gemini" else 120.0
+                    cd_until = time.time() + cd_sec
+                    _key_model_cooldowns[(provider, model_name, api_key)] = cd_until
+                    _key_cooldowns[(provider, api_key)] = cd_until
                     if provider == "gemini":
-                        google_pool.penalize_token(api_key, 120.0)
+                        google_pool.penalize_token(api_key, cd_sec, model=model_name)
                     elif provider == "agentrouter":
-                        agentrouter_pool.penalize_token(api_key, 120.0)
+                        agentrouter_pool.penalize_token(api_key, cd_sec, model=model_name)
                     else:
-                        groq_pool.penalize_token(api_key, 120.0)
+                        groq_pool.penalize_token(api_key, cd_sec, model=model_name)
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}.")
-                    if consecutive_429 >= 2:
-                        # 60s was causing spam loops — 30min for Groq, 5min for Gemini
-                        halt_sec = 1800.0 if provider == "groq" else 300.0
-                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}). Halting {provider} for {int(halt_sec//60)}m.")
-                        _provider_cooldowns[provider] = time.time() + halt_sec
-                        skip_providers.add(provider)
+
+                    all_keys_tried = (consecutive_429 >= len(active_keys))
+                    if consecutive_429 >= 2 or all_keys_tried:
+                        provider_429_models.setdefault(provider, set()).add(model_name)
+                        provider_exhausted_models.setdefault(provider, set()).add(model_name)
+                        _model_cooldowns[model_name] = time.time() + (90.0 if provider == "gemini" else 120.0)
+                        skip_model = True
+                        total_prov_models = provider_model_counts.get(provider, 1)
+                        if len(provider_exhausted_models[provider]) >= total_prov_models and len(provider_429_models[provider]) >= 1:
+                            halt_sec = 1800.0 if provider == "groq" else 300.0
+                            logger.warning(
+                                f"⚠️ {provider} exhausted all {total_prov_models} cascade model(s) on 429/errors. "
+                                f"Halting {provider} for {int(halt_sec//60)}m."
+                            )
+                            _provider_cooldowns[provider] = time.time() + halt_sec
+                            skip_providers.add(provider)
+                        else:
+                            logger.warning(
+                                f"⚠️ {provider} model {model_name} hit {consecutive_429} consecutive 429s. "
+                                f"Cooling down {model_name} only and switching to next model..."
+                            )
                         break
                     in_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
                     await asyncio.sleep(0.01 if in_test else 3.0)
                     continue  # try next key
-                if "timeout" in err_str.lower() or "timed out" in err_str.lower():
+                if isinstance(e, (httpx.TimeoutException, asyncio.TimeoutError, TimeoutError)) or "timeout" in err_str.lower() or "timed out" in err_str.lower():
                     logger.warning(f"⚠️ {provider} request timed out for {model_name}. Setting 60s cooldown on {model_name} and switching to next candidate...")
                     _model_cooldowns[model_name] = time.time() + 60.0
+                    provider_exhausted_models.setdefault(provider, set()).add(model_name)
                     skip_model = True
                     break
                 if "503" in err_str or "high demand" in err_str.lower() or "service unavailable" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} returned 503 (high demand). Setting 45s cooldown on model.")
                     _model_cooldowns[model_name] = time.time() + 45.0
+                    provider_exhausted_models.setdefault(provider, set()).add(model_name)
                     skip_model = True
                     break
                 # Any other error: skip model entirely
@@ -1120,7 +1386,7 @@ class TelegraphHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.stack = [{"tag": "p", "children": []}]
-        self.allowed_tags = {"b", "i", "u", "s", "code", "pre", "a", "p", "br", "h3", "h4"}
+        self.allowed_tags = {"b", "i", "u", "s", "code", "pre", "a", "p", "br", "h3", "h4", "blockquote"}
 
     def handle_starttag(self, tag, attrs):  # noqa
         tag = tag.lower()
@@ -1272,13 +1538,8 @@ def _create_telegraph_page_blocking(title: str, html_content: str, author: str =
         
     # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload, AST nodes take ~3x size)
     if len(html_content) > 18000:
-        logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating to 18000...")
-        truncated = html_content[:18000]
-        last_lt = truncated.rfind('<')
-        last_gt = truncated.rfind('>')
-        if last_lt > last_gt:
-            # We cut right in the middle of a tag, truncate before the tag
-            truncated = truncated[:last_lt]
+        logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating safely to 18000...")
+        truncated = safe_truncate_telegram_html(html_content, max_utf16=18000, suffix="")
         html_content = truncated + "\n\n<i>... (Саммари сокращено по лимиту Telegraph)</i>"
         
     nodes = _text_to_telegraph_nodes(html_content)

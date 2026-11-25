@@ -718,6 +718,16 @@ RANDOM_AVAILABILITY_TIMEOUT_SEC = float(
 RANDOM_DEAD_FILE_IDS: dict[str, float] = {}
 
 
+def _get_cache_backend_safe():
+    """Returns FastAPICache backend if initialized, else None."""
+    if getattr(FastAPICache, "_backend", None) is None:
+        return None
+    try:
+        return FastAPICache.get_backend()
+    except AssertionError:
+        return None
+
+
 def _mark_random_dead_file(file_id: str | None):
     if not file_id:
         return
@@ -4635,8 +4645,6 @@ async def search_page(
     query = (query or "").strip()[:200]
     archive = 1 if archive else 0
     clean_query = query
-    if clean_query:
-        clean_query = clean_query.replace('"', '""')
 
     observer_id = user["id"] if user else getattr(request.state, "guest_id", 0)
 
@@ -6058,6 +6066,9 @@ async def api_captcha_generate(request: Request):
 
 @app.get("/api/updates/{board_id}")
 async def api_get_updates(board_id: str, since: float):
+    board_id = board_id.lower()
+    if board_id != "overboard" and board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404, detail="Board not found")
     safe_since = max(since, time.time() - 86400)
     raw_posts = await get_updates_since(board_id, safe_since)
     posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
@@ -7209,6 +7220,8 @@ async def api_get_meta(url: str):
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
+        if not hostname:
+            return JSONResponse({}, status_code=400)
         port = parsed.port or (80 if parsed.scheme == "http" else 443)
 
         # 2. Ограничение портов (только стандартные для веба)
@@ -7245,9 +7258,8 @@ async def api_get_meta(url: str):
         logger.error(f"Meta validation error for {url}: {e}", exc_info=True)
         return JSONResponse({}, status_code=400)
 
-    # Дальнейшая логика запросов (strategies) остается без изменений
-    strategies = [
-        {"proxy": PROXY_URL, "name": "Proxy"},
+    # Дальнейшая логика запросов (strategies): не дублируем Direct если PROXY_URL не задан
+    strategies = ([{"proxy": PROXY_URL, "name": "Proxy"}] if PROXY_URL else []) + [
         {"proxy": None, "name": "Direct"},
     ]
 
@@ -7282,14 +7294,17 @@ async def api_get_meta(url: str):
                 title = soup.find("meta", property="og:title")
                 image = soup.find("meta", property="og:image")
                 desc = soup.find("meta", property="og:description")
+                title_val = title.get("content") if title else None
+                image_val = image.get("content") if image else None
+                desc_val = desc.get("content") if desc else None
                 return {
                     "title": (
-                        title["content"]
-                        if title
-                        else soup.title.string if soup.title else url
+                        title_val
+                        if title_val
+                        else (soup.title.string if soup.title and soup.title.string else url)
                     ),
-                    "image": image["content"] if image else None,
-                    "description": desc["content"][:100] + "..." if desc else None,
+                    "image": image_val,
+                    "description": (desc_val[:100] + "...") if desc_val else None,
                     "url": url,
                 }
         except Exception:
@@ -9678,8 +9693,8 @@ async def api_get_thread(
     # Кэш общий для всех (без shadow-постов)
     cache_key = f"api_thread_full_v2:{board_id}:{thread_id}:{stream}:{current_version}"
 
-    backend = FastAPICache.get_backend()
-    cached_data = await backend.get(cache_key)
+    backend = _get_cache_backend_safe()
+    cached_data = await backend.get(cache_key) if backend else None
 
     posts_flat = []
 
@@ -9706,7 +9721,7 @@ async def api_get_thread(
         posts_flat = _convert_and_enrich_posts(raw_list)
         await enrich_heavy_data(posts_flat)
 
-        if posts_flat:
+        if posts_flat and backend:
             await backend.set(cache_key, orjson.dumps(posts_flat), expire=600)
 
     if cached_data:
@@ -9741,12 +9756,12 @@ async def api_get_catalog(
     board_id = board_id.lower()
     if board_id not in BOARD_CONFIG:
         raise HTTPException(404)
-    current_version = BOARD_VERSIONS[board_id]
+    current_version = BOARD_VERSIONS.get(board_id, 0)
     stream = getattr(request.state, "stream", "ru")
     selected_boards_str = ",".join(sorted(request.query_params.getlist("boards")))
     cache_key = f"api_catalog_v4:{board_id}:{sort}:{stream}:{current_version}:{selected_boards_str}"
-    backend = FastAPICache.get_backend()
-    cached = await backend.get(cache_key)
+    backend = _get_cache_backend_safe()
+    cached = await backend.get(cache_key) if backend else None
     if cached:
         posts = orjson.loads(cached)
     else:
@@ -9755,7 +9770,7 @@ async def api_get_catalog(
         )
         posts = _convert_and_enrich_posts(raw)
         await enrich_heavy_data(posts)
-        if posts:
+        if posts and backend:
             await backend.set(cache_key, orjson.dumps(posts), expire=600)
     import copy
 
@@ -9775,8 +9790,8 @@ async def api_thread_summary(thread_id: int, request: Request):
     current_count = await get_post_count_in_thread(thread_id)
     stream = getattr(request.state, "stream", "ru")
     cache_key = f"summary_v3_{stream}_{thread_id}"
-    backend = FastAPICache.get_backend()
-    cached_data_raw = await backend.get(cache_key)
+    backend = _get_cache_backend_safe()
+    cached_data_raw = await backend.get(cache_key) if backend else None
     if cached_data_raw:
         try:
             cached_data = json.loads(cached_data_raw)
@@ -9793,13 +9808,24 @@ async def api_thread_summary(thread_id: int, request: Request):
     if len(optimized_text) < 50:
         return {"summary": "Тред слишком короткий, тут нехуй анализировать."}
     stream = getattr(request.state, "stream", "ru")
-    summary = await request.app.state.neuro_manager.generate_summary(
-        optimized_text, stream
+    try:
+        summary = await request.app.state.neuro_manager.generate_summary(
+            optimized_text, stream
+        )
+    except Exception as e:
+        logger.warning(f"Thread summary generation failed for #{thread_id}: {e}")
+        raise HTTPException(status_code=503, detail="Summary service temporarily unavailable")
+
+    is_failure_summary = (
+        not summary
+        or "API Error" in summary
+        or summary.startswith("Нейронка сдохла")
+        or summary.startswith("Не удалось сгенерировать")
     )
-    if summary and "API Error" not in summary:
+    if not is_failure_summary and backend:
         to_cache = json.dumps({"count": current_count, "text": summary})
         await backend.set(cache_key, to_cache, expire=86400)
-    return {"summary": summary}
+    return {"summary": summary or "Не удалось сгенерировать саммари."}
 
 
 @app.get("/api/voice/{file_id:path}/transcribe")
@@ -9897,7 +9923,8 @@ async def api_transcribe_voice(file_id: str, request: Request):
         if not key:
             break
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={key}"
-        for proxy in [None, PROXY_URL]:
+        proxies_to_try = [None] + ([PROXY_URL] if PROXY_URL else [])
+        for proxy in proxies_to_try:
             try:
                 async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=30.0) as client:
                     resp = await client.post(url, json=payload)
@@ -9954,8 +9981,8 @@ async def api_thread_vibe(thread_id: int, request: Request):
     current_count = await get_post_count_in_thread(thread_id)
     stream = getattr(request.state, "stream", "ru")
     cache_key = f"vibe_v3_{stream}_{thread_id}"
-    backend = FastAPICache.get_backend()
-    cached_data_raw = await backend.get(cache_key)
+    backend = _get_cache_backend_safe()
+    cached_data_raw = await backend.get(cache_key) if backend else None
 
     if cached_data_raw:
         try:
@@ -9974,11 +10001,15 @@ async def api_thread_vibe(thread_id: int, request: Request):
     op_post, replies = thread_data
     optimized_text = optimize_thread_context(op_post, replies, max_posts=50)
     stream = getattr(request.state, "stream", "ru")
-    vibe_raw = await request.app.state.neuro_manager.analyze_vibe(
-        optimized_text, stream
-    )
+    try:
+        vibe_raw = await request.app.state.neuro_manager.analyze_vibe(
+            optimized_text, stream
+        )
+    except Exception as e:
+        logger.warning(f"Thread vibe analysis failed for #{thread_id}: {e}")
+        vibe_raw = "Neutral"
     icon_text = vibe_to_icon(vibe_raw)
-    if vibe_raw and "API Error" not in vibe_raw:
+    if vibe_raw and "API Error" not in vibe_raw and not str(vibe_raw).startswith("Нейронка сдохла") and backend:
         to_cache = json.dumps(
             {"count": current_count, "vibe": vibe_raw, "icon": icon_text}
         )
@@ -9987,7 +10018,7 @@ async def api_thread_vibe(thread_id: int, request: Request):
 
 
 def vibe_to_icon(vibe_text):
-    v = vibe_text.lower().strip()
+    v = (vibe_text or "").lower().strip()
     mapping = {
         "toxic": "🔥 (Токсично)",
         "cozy": "🍵 (Лампово)",
@@ -10018,7 +10049,7 @@ def vibe_to_icon(vibe_text):
 async def api_get_chat_posts(
     board_id: str,
     request: Request,
-    page: int = 0,
+    page: int = Query(0, ge=0, le=1000),
     user: dict = Depends(get_current_user_or_guest),
 ):
     if board_id not in BOARD_CONFIG:
@@ -10060,8 +10091,8 @@ async def api_get_threads(
     # Ключ кэша теперь учитывает режим отображения (view_mode)
     cache_key = f"api_threads_v3:{board_id}:{view_mode}:{sort}:{page}:{stream}:{current_version}:{selected_boards_str}"
 
-    backend = FastAPICache.get_backend()
-    cached_data = await backend.get(cache_key)
+    backend = _get_cache_backend_safe()
+    cached_data = await backend.get(cache_key) if backend else None
 
     posts_container = []
 
@@ -10108,7 +10139,7 @@ async def api_get_threads(
 
         await enrich_heavy_data(posts_container)
 
-        if posts_container:
+        if posts_container and backend:
             await backend.set(cache_key, orjson.dumps(posts_container), expire=600)
 
     # Создаем копию для персонализации (You маркеры и зеркала)
@@ -10572,7 +10603,10 @@ async def auth_by_token(data: TokenAuth, request: Request):
 async def api_get_my_posts(
     post_nums: List[int] = Body(...), user: dict = Depends(get_current_user_or_guest)
 ):
-    return await get_user_posts_from_list(int(user["id"]), post_nums)
+    if not post_nums:
+        return []
+    clean_nums = list(dict.fromkeys(post_nums))[:200]
+    return await get_user_posts_from_list(int(user["id"]), clean_nums)
 
 
 GLOBAL_HTTP_SESSION: Optional[aiohttp.ClientSession] = None
@@ -10890,9 +10924,11 @@ async def _proxy_protected_telegram_file(
     request: Request | None = None,
 ):
     try:
-        await add_to_mirror_queue(file_id, "catbox")
-    except Exception:
-        import traceback; traceback.print_exc()
+        existing_mirrors = await get_file_mirrors(file_id)
+        if not existing_mirrors or "catbox" not in existing_mirrors:
+            await add_to_mirror_queue(file_id, "catbox")
+    except Exception as mq_err:
+        logger.debug(f"Mirror queue skip/check failed for {file_id[:10]}: {mq_err}")
 
     session = _get_shared_aiohttp_session()
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"

@@ -85,6 +85,7 @@ class TokenRotator:
         self._index: int = 0
         self._last_used: dict[str, float] = {}
         self._cooldown_until: dict[str, float] = {}
+        self._model_cooldown_until: dict[tuple[str, str], float] = {}
         self._banned: set[str] = set()
         self._banned_until: dict[str, float] = {}
 
@@ -104,6 +105,9 @@ class TokenRotator:
             # Очистка устаревших кулдаунов токенов, которых больше нет в пуле
             valid_set = set(self.tokens)
             self._cooldown_until = {k: v for k, v in self._cooldown_until.items() if k in valid_set}
+            self._model_cooldown_until = {
+                (k, m): v for (k, m), v in self._model_cooldown_until.items() if k in valid_set
+            }
             self._last_used = {k: v for k, v in self._last_used.items() if k in valid_set}
 
     def add_token(self, token: str):
@@ -119,6 +123,8 @@ class TokenRotator:
                 self.tokens.remove(clean)
             self._banned.add(clean)
             self._cooldown_until.pop(clean, None)
+            for km in [k for k in self._model_cooldown_until if k[0] == clean]:
+                self._model_cooldown_until.pop(km, None)
             self._last_used.pop(clean, None)
             if self._index >= len(self.tokens):
                 self._index = 0
@@ -143,6 +149,8 @@ class TokenRotator:
             self._banned.add(clean)
             self._banned_until[clean] = time.time() + float(duration)
             self._cooldown_until.pop(clean, None)
+            for km in [k for k in self._model_cooldown_until if k[0] == clean]:
+                self._model_cooldown_until.pop(km, None)
             self._last_used.pop(clean, None)
             if self._index >= len(self.tokens):
                 self._index = 0
@@ -155,6 +163,8 @@ class TokenRotator:
             self._banned.discard(clean)
             self._banned_until.pop(clean, None)
             self._cooldown_until.pop(clean, None)
+            for km in [k for k in self._model_cooldown_until if k[0] == clean]:
+                self._model_cooldown_until.pop(km, None)
             if clean and clean not in self.tokens:
                 self.tokens.append(clean)
             return was_banned
@@ -163,15 +173,35 @@ class TokenRotator:
         with self._lock:
             return set(self._banned)
 
-    def penalize_token(self, token: str, duration: float = 60.0):
-        """Накладывает штрафной кулдаун на ключ (например, при 429)."""
+    def _effective_cooldown_until_locked(self, token: str, model: str | None = None) -> float:
+        cd = self._cooldown_until.get(token, 0.0)
+        if model:
+            cd = max(cd, self._model_cooldown_until.get((token, str(model)), 0.0))
+        return cd
+
+    def get_token_cooldown_until(self, token: str, model: str | None = None) -> float:
+        clean = self._clean_token_str(token)
+        if not clean:
+            return 0.0
+        with self._lock:
+            return self._effective_cooldown_until_locked(clean, model=model)
+
+    def is_token_on_cooldown(self, token: str, model: str | None = None) -> bool:
+        return self.get_token_cooldown_until(token, model=model) > time.time()
+
+    def penalize_token(self, token: str, duration: float = 60.0, model: str | None = None):
+        """Накладывает штрафной кулдаун на ключ (глобально или гранулярно для конкретной модели)."""
         clean = self._clean_token_str(token)
         if not clean:
             return
+        until = time.time() + float(duration)
         with self._lock:
-            self._cooldown_until[clean] = time.time() + float(duration)
+            if model:
+                self._model_cooldown_until[(clean, str(model))] = until
+            else:
+                self._cooldown_until[clean] = until
 
-    def get_token(self) -> str | None:
+    def get_token(self, model: str | None = None) -> str | None:
         """
         Классический честный Round-Robin выбор ключа.
         Пропускает забаненные токены и приоритезирует токены, не находящиеся на штрафном кулдауне.
@@ -182,24 +212,24 @@ class TokenRotator:
             if not active:
                 return None
             now = time.time()
-            ready = [t for t in active if self._cooldown_until.get(t, 0.0) <= now]
+            ready = [t for t in active if self._effective_cooldown_until_locked(t, model) <= now]
             candidates = ready if ready else active
             token = candidates[self._index % len(candidates)]
             self._index = (self._index + 1) % len(candidates)
             self._last_used[token] = now
             return token
 
-    def get_random(self) -> str | None:
+    def get_random(self, model: str | None = None) -> str | None:
         with self._lock:
             active = [t for t in self.tokens if t not in self._banned]
             if not active:
                 return None
             now = time.time()
-            ready = [t for t in active if self._cooldown_until.get(t, 0.0) <= now]
+            ready = [t for t in active if self._effective_cooldown_until_locked(t, model) <= now]
             candidates = ready if ready else active
             return random.choice(candidates)
 
-    def get_all_active_tokens(self) -> list[str]:
+    def get_all_active_tokens(self, model: str | None = None) -> list[str]:
         """
         Возвращает все активные дедуплицированные токены в порядке очереди.
         Автоматически сдвигает указатель (Round-Robin ротация) на каждом вызове,
@@ -212,20 +242,20 @@ class TokenRotator:
             if not active:
                 return []
             now = time.time()
-            ready = [t for t in active if self._cooldown_until.get(t, 0.0) <= now]
-            cooling = [t for t in active if self._cooldown_until.get(t, 0.0) > now]
+            ready = [t for t in active if self._effective_cooldown_until_locked(t, model) <= now]
+            cooling = [t for t in active if self._effective_cooldown_until_locked(t, model) > now]
 
             if ready:
                 idx = self._index % len(ready)
                 self._index = (self._index + 1) % len(ready)
                 # Остывающие токены сортируем по времени до окончания кулдауна (скорейшие первыми)
-                sorted_cooling = sorted(cooling, key=lambda t: self._cooldown_until.get(t, 0.0))
+                sorted_cooling = sorted(cooling, key=lambda t: self._effective_cooldown_until_locked(t, model))
                 return ready[idx:] + ready[:idx] + sorted_cooling
             else:
                 # Если все в кулдауне, сортируем по времени скорейшего выхода
-                return sorted(active, key=lambda t: self._cooldown_until.get(t, 0.0))
+                return sorted(active, key=lambda t: self._effective_cooldown_until_locked(t, model))
 
-    async def acquire_token_async(self, min_interval: float | None = None, max_wait: float = 15.0) -> tuple[str | None, float]:
+    async def acquire_token_async(self, min_interval: float | None = None, max_wait: float = 15.0, model: str | None = None) -> tuple[str | None, float]:
         """
         Асинхронный умный выбор токена:
         1. Ищет токен, у которого истек штраф (429) и прошло не менее min_interval секунд с последнего запроса.
@@ -248,7 +278,7 @@ class TokenRotator:
             for i in range(len(active)):
                 idx = (self._index + i) % len(active)
                 tok = active[idx]
-                cd = self._cooldown_until.get(tok, 0.0)
+                cd = self._effective_cooldown_until_locked(tok, model)
                 last_u = self._last_used.get(tok, 0.0)
 
                 if now >= cd and (now - last_u) >= interval:
@@ -265,7 +295,7 @@ class TokenRotator:
                 for i in range(len(active)):
                     idx = (self._index + i) % len(active)
                     tok = active[idx]
-                    cd = self._cooldown_until.get(tok, 0.0)
+                    cd = self._effective_cooldown_until_locked(tok, model)
                     last_u = self._last_used.get(tok, 0.0)
 
                     delay_cd = max(0.0, cd - now)

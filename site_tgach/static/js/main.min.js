@@ -2516,13 +2516,17 @@ const ScrollManager = {
     async loadThreadSkeleton() {
         if (this.loading) return;
         this.loading = true;
-        
+
         const loader = document.getElementById('threads-loading-indicator');
         if (loader) loader.style.display = 'block';
 
         const boardId = document.body.dataset.currentBoard;
         const threadIdMatch = location.pathname.match(/\/res\/(\d+)\.html/);
-        if (!boardId || !threadIdMatch) return;
+        if (!boardId || !threadIdMatch) {
+            if (loader) loader.style.display = 'none';
+            this.loading = false;
+            return;
+        }
         const threadId = threadIdMatch[1];
 
         try {
@@ -2894,69 +2898,92 @@ const UIManager = {
         if (btn.dataset.listening) return;
         btn.dataset.listening = "true";
         let selectedText = '';
-        document.addEventListener('mouseup', (e) => {
-            if (e.target === btn) return;
-            setTimeout(() => {
-                const sel = window.getSelection();
-                const text = sel.toString().trim();
-                const anchor = sel.anchorNode;
-                const post = anchor ? (anchor.nodeType === 1 ? anchor : anchor.parentElement).closest('.post') : null;
-                if (text.length > 0 && post) {
-                    selectedText = text;
-                    const range = sel.getRangeAt(0);
-                    const rect = range.getBoundingClientRect();
-                    btn.style.top = `${rect.top + window.scrollY - 40}px`;
-                    btn.style.left = `${rect.left + window.scrollX}px`;
-                    btn.style.display = 'block';
-                    btn.dataset.postNum = post.id.replace('post-', '');
-                    btn.style.animation = 'none';
-                    btn.offsetHeight;
-                    btn.style.animation = 'popIn 0.2s forwards';
-                } else {
-                    btn.style.display = 'none';
-                }
-            }, 10);
-        });
+        let selDebounce = null;
+        const updateQuickQuotePosition = () => {
+            const sel = window.getSelection ? window.getSelection() : null;
+            const text = sel ? sel.toString().trim() : '';
+            const anchor = sel ? sel.anchorNode : null;
+            const anchorEl = anchor ? (anchor.nodeType === 1 ? anchor : anchor.parentElement) : null;
+            const post = anchorEl && typeof anchorEl.closest === 'function' ? anchorEl.closest('.post') : null;
+            if (text.length > 0 && post && sel.rangeCount > 0) {
+                selectedText = text;
+                const range = sel.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                if (!rect || (rect.width === 0 && rect.height === 0)) return;
+                const topPos = Math.max(8, rect.top + window.scrollY - 42);
+                const leftPos = Math.max(8, Math.min(window.innerWidth - 110, rect.left + window.scrollX));
+                btn.style.top = `${topPos}px`;
+                btn.style.left = `${leftPos}px`;
+                btn.style.display = 'block';
+                btn.dataset.postNum = post.id.replace('post-', '');
+                btn.style.animation = 'none';
+                btn.offsetHeight;
+                btn.style.animation = 'popIn 0.2s forwards';
+            } else {
+                btn.style.display = 'none';
+            }
+        };
+        const scheduleSelectionCheck = (e) => {
+            if (e && e.target === btn) return;
+            setTimeout(updateQuickQuotePosition, 20);
+        };
+        document.addEventListener('mouseup', scheduleSelectionCheck);
+        document.addEventListener('touchend', scheduleSelectionCheck, { passive: true });
         document.addEventListener('mousedown', (e) => {
             if (e.target !== btn) {
                 btn.style.display = 'none';
             }
         });
         document.addEventListener('selectionchange', () => {
-            const sel = window.getSelection();
+            const sel = window.getSelection ? window.getSelection() : null;
             if (!sel || sel.toString().trim().length === 0) {
                 btn.style.display = 'none';
+                return;
             }
+            if (selDebounce) clearTimeout(selDebounce);
+            selDebounce = setTimeout(updateQuickQuotePosition, 150);
         });
         window.addEventListener('scroll', () => {
             if (btn.style.display !== 'none') {
                 btn.style.display = 'none';
-                window.getSelection().removeAllRanges();
             }
         }, { passive: true });
-        btn.addEventListener('mousedown', (e) => {
-            e.preventDefault(); e.stopPropagation();
+        let quoteTriggerLock = 0;
+        const applyQuickQuote = (e) => {
+            const now = Date.now();
+            if (now - quoteTriggerLock < 250) return;
+            quoteTriggerLock = now;
+            e.preventDefault();
+            e.stopPropagation();
             const num = btn.dataset.postNum;
-            const txt = selectedText; 
+            const txt = selectedText;
             const main = document.getElementById('post-form');
             const floatBox = document.getElementById('floating-reply-box');
-            const rect = main.getBoundingClientRect();
-            
-            const isVisible = (
+            const rect = main ? main.getBoundingClientRect() : null;
+
+            const isVisible = !!(rect && (
                 rect.top >= 0 && rect.left >= 0 &&
                 rect.bottom <= (window.innerHeight || document.documentElement.clientHeight)
-            );
-            
-            if (isVisible && floatBox.style.display === 'none') {
+            ));
+
+            if (isVisible && main && (!floatBox || floatBox.style.display === 'none')) {
                 const ta = main.querySelector('textarea');
-                FormManager.appendToTextarea(ta, num, txt);
-            } else {
+                if (ta) FormManager.appendToTextarea(ta, num, txt);
+            } else if (floatBox) {
                 const isOpen = floatBox.style.display !== 'none';
                 FormManager.showFloating(isOpen ? null : e, num, txt);
+            } else if (main) {
+                const ta = main.querySelector('textarea');
+                if (ta) FormManager.appendToTextarea(ta, num, txt);
             }
             btn.style.display = 'none';
-            setTimeout(() => window.getSelection().removeAllRanges(), 10);
-        });
+            setTimeout(() => {
+                try { window.getSelection()?.removeAllRanges(); } catch (_) {}
+            }, 10);
+        };
+        btn.addEventListener('mousedown', applyQuickQuote);
+        btn.addEventListener('touchend', applyQuickQuote);
+        btn.addEventListener('click', applyQuickQuote);
     },
     initStickyVideo() {
         const stickyObs = new IntersectionObserver((entries) => {
@@ -4101,37 +4128,51 @@ window.startSpankGame = function() {
 };
 window.showThreadSummary = async (threadId) => {
     const btn = document.querySelector(`.summary-btn[onclick*="${threadId}"]`);
-    const originalText = btn.textContent;
+    const originalText = btn ? btn.textContent : '🧠';
     try {
-        btn.textContent = '⏳';
-        btn.style.cursor = 'wait';
+        if (btn) {
+            btn.textContent = '⏳';
+            btn.style.cursor = 'wait';
+        }
         const res = await fetch(`/api/summary/${threadId}`);
         if (!res.ok) throw new Error('Failed');
         const data = await res.json();
-        
+        const summaryText = (data && data.summary) ? data.summary : t('network_error', 'Не удалось получить сводку.');
+
         if (typeof showToast === 'function') {
-            
             const modal = document.createElement('div');
             modal.className = 'modal active';
-            modal.style.display = 'block';
-            modal.style.zIndex = '20000';
+            modal.style.cssText = 'display:block; z-index:20000; position:fixed; inset:0; background:rgba(0,0,0,0.55); overflow:auto; padding:16px;';
             modal.innerHTML = `
-                <div style="background:var(--bg-main); padding:20px; border-radius:8px; border:1px solid var(--accent-primary); max-width:500px; margin: 10% auto; position:relative; box-shadow:0 10px 40px rgba(0,0,0,0.5);">
+                <div style="background:var(--bg-main); padding:20px; border-radius:8px; border:1px solid var(--accent-primary); max-width:560px; margin: 8% auto; position:relative; box-shadow:0 10px 40px rgba(0,0,0,0.5);">
                     <h3 style="margin-top:0;">${t('summary_title', 'Summary:')}</h3>
                     <!-- Использование formatTextGlobal для защиты от XSS в ответе нейросети -->
-                    <div style="font-size:1.1em; line-height:1.6; margin-bottom:20px;">${window.formatTextGlobal(data.summary)}</div>
-                    <button class="btn btn-primary" onclick="this.closest('.modal').remove()" style="width:100%">${t('btn_understood', 'OK')}</button>
+                    <div style="font-size:1.05em; line-height:1.6; margin-bottom:20px;">${window.formatTextGlobal(summaryText)}</div>
+                    <button class="btn btn-primary summary-close-btn" style="width:100%">${t('btn_understood', 'OK')}</button>
                 </div>
             `;
+            const closeSummary = () => {
+                document.removeEventListener('keydown', onEsc);
+                modal.remove();
+            };
+            const onEsc = (ev) => {
+                if (ev.key === 'Escape') closeSummary();
+            };
+            modal.addEventListener('click', (ev) => {
+                if (ev.target === modal || ev.target.closest('.summary-close-btn')) closeSummary();
+            });
+            document.addEventListener('keydown', onEsc);
             document.body.appendChild(modal);
         } else {
-            alert(`🧠 Суть треда:\n\n${data.summary}`);
+            alert(`🧠 Суть треда:\n\n${summaryText}`);
         }
     } catch (e) {
         if (typeof showToast === 'function') showToast(t('network_error'));
     } finally {
-        btn.textContent = originalText;
-        btn.style.cursor = 'pointer';
+        if (btn) {
+            btn.textContent = originalText;
+            btn.style.cursor = 'pointer';
+        }
     }
 };
 const PoW = {
@@ -9617,20 +9658,19 @@ const VideoPopupManager = {
             BackButtonManager.push('videopopup');
         }
         this.scale = 1;
+        this.dragState = { active: false, shiftX: 0, shiftY: 0, hasMoved: false };
         this.overlay = document.createElement('div');
         this.overlay.className = 'video-popup-overlay';
         this.overlay.innerHTML = `
             <div class="video-popup-wrapper" style="transform-origin: center center;">
-                <video class="video-popup-content" controls autoplay playsinline loop style="max-width: 90vw; max-height: 90vh;">
-                    <source src="${src}">
-                </video>
+                <video class="video-popup-content" controls autoplay playsinline webkit-playsinline loop style="max-width: 90vw; max-height: 90vh;"></video>
                 <div class="video-popup-close" title="${t('vid_popup_close')}">&times;</div>
             </div>
-
         `;
         document.body.appendChild(this.overlay);
         this.wrapper = this.overlay.querySelector('.video-popup-wrapper');
         this.video = this.overlay.querySelector('video');
+        this.video.src = src || '';
         if (poster) this.video.poster = poster;
         this.video.volume = window.globalVideoVolume !== undefined ? window.globalVideoVolume : 0.5;
         this.video.onplay = () => {
@@ -9657,6 +9697,13 @@ const VideoPopupManager = {
     close(fromHistory = false) {
         if (!this.overlay) return;
         this._unbindEvents();
+        if (this.video) {
+            try {
+                this.video.pause();
+                this.video.removeAttribute('src');
+                this.video.load();
+            } catch (_) {}
+        }
         if (this.overlay.parentNode) {
             this.overlay.parentNode.removeChild(this.overlay);
         }
@@ -9676,6 +9723,7 @@ const VideoPopupManager = {
             const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
 
             this.dragState.active = true;
+            this.dragState.hasMoved = false;
             this.wrapper.style.transition = 'none';
             const rect = this.wrapper.getBoundingClientRect();
             this.wrapper.style.transformOrigin = '0 0';
@@ -9689,7 +9737,8 @@ const VideoPopupManager = {
             if (this.video) this.video.style.pointerEvents = 'none';
         };
         const move = (e) => {
-            if (!this.dragState.active) return;
+            if (!this.dragState.active || !this.wrapper) return;
+            this.dragState.hasMoved = true;
             const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
             const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
             this.wrapper.style.left = (clientX - this.dragState.shiftX) + 'px';
@@ -9699,12 +9748,14 @@ const VideoPopupManager = {
             this.dragState.active = false;
             if (this.video) this.video.style.pointerEvents = 'auto';
         };
+        this._dragMove = move;
+        this._dragEnd = end;
         this.wrapper.addEventListener('mousedown', start);
         this.wrapper.addEventListener('touchstart', start, {passive: false});
-        window.addEventListener('mousemove', move);
-        window.addEventListener('touchmove', move, {passive: false});
-        window.addEventListener('mouseup', end);
-        window.addEventListener('touchend', end);
+        window.addEventListener('mousemove', this._dragMove);
+        window.addEventListener('touchmove', this._dragMove, {passive: false});
+        window.addEventListener('mouseup', this._dragEnd);
+        window.addEventListener('touchend', this._dragEnd);
     },
     _initZoom() {
         if (!this.wrapper) return;
@@ -9757,6 +9808,16 @@ const VideoPopupManager = {
         if (this._boundEsc) document.removeEventListener('keydown', this._boundEsc);
         if (this._boundClick && this.overlay) this.overlay.removeEventListener('click', this._boundClick);
         if (this._boundTouch && this.overlay) this.overlay.removeEventListener('touchend', this._boundTouch);
+        if (this._dragMove) {
+            window.removeEventListener('mousemove', this._dragMove);
+            window.removeEventListener('touchmove', this._dragMove);
+        }
+        if (this._dragEnd) {
+            window.removeEventListener('mouseup', this._dragEnd);
+            window.removeEventListener('touchend', this._dragEnd);
+        }
+        this._dragMove = null;
+        this._dragEnd = null;
     }
 };
 const GalleryManager = {
@@ -10296,6 +10357,7 @@ const GalleryManager = {
     },
     toggleUI() {
         const uiElements = document.querySelectorAll('.iv-tools, .iv-info-bar, .iv-button');
+        if (!uiElements || uiElements.length === 0) return;
         const isVisible = uiElements[0].style.opacity !== '0';
         uiElements.forEach(el => {
             el.style.opacity = isVisible ? '0' : '1';
@@ -10946,17 +11008,20 @@ const WSManager = {
                     if (hasAdditions) {
                         const target = document.querySelector('.chat-list') || document.querySelector('.thread-list') || document.querySelector('.replies-list');
                         if (target) {
+                            const addedNodes = Array.from(fragment.children);
                             if (target.classList.contains('chat-list')) {
                                 target.prepend(fragment);
                             } else {
                                 target.appendChild(fragment);
                             }
-                            
+
                             requestAnimationFrame(() => {
-                                const newElements = target.querySelectorAll('.new-post-animation:not([data-ws-init])');
-                                newElements.forEach(el => {
-                                    el.dataset.wsInit = "true";
-                                    window.initializePostFeatures(el);
+                                addedNodes.forEach(el => {
+                                    if (!el.dataset.wsInit) {
+                                        el.dataset.wsInit = "true";
+                                        window.initializePostFeatures(el);
+                                        if (typeof GalleryManager !== 'undefined') GalleryManager.addFromPost(el);
+                                    }
                                 });
                             });
                         }
@@ -11066,11 +11131,18 @@ const WSManager = {
                             if (hasUpdates) {
                                 const list = document.querySelector('.chat-list') || document.querySelector('.thread-list') || document.querySelector('.replies-list');
                                 if (list) {
+                                    const addedNodes = Array.from(fragment.children);
                                     if (list.classList.contains('chat-list')) list.prepend(fragment);
                                     else list.appendChild(fragment);
-                                    
+
                                     requestAnimationFrame(() => {
-                                        fragment.querySelectorAll('.new-post-animation').forEach(el => window.initializePostFeatures(el));
+                                        addedNodes.forEach(el => {
+                                            if (!el.dataset.wsInit) {
+                                                el.dataset.wsInit = "true";
+                                                window.initializePostFeatures(el);
+                                                if (typeof GalleryManager !== 'undefined') GalleryManager.addFromPost(el);
+                                            }
+                                        });
                                     });
                                 }
                             }
@@ -11179,11 +11251,11 @@ const WSManager = {
                         posts.sort((a, b) => a.timestamp - b.timestamp);
                         
                         posts.forEach(p => {
+                            this.lastUpdateTs = Math.max(this.lastUpdateTs, p.timestamp || 0);
                             if (!document.getElementById(`post-${p.id}`)) {
                                 this.handleData(p);
                             }
                         });
-                        this.lastUpdateTs = posts[posts.length - 1].timestamp;
                     }
                 }
             } catch(e) { 
@@ -11392,6 +11464,7 @@ const WSManager = {
             window.parseTextEffects(el);
             const isScrolledToBottom = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 300;
             if (batchFragment) {
+                el.classList.add('new-post-animation');
                 batchFragment.appendChild(el);
                 
                 if (data.reply_to_post_num) {
@@ -15173,19 +15246,25 @@ const SmartLoader = {
                 loadedHandled = true;
                 this.onLoadFinished(img, parent, true);
             };
-            img.onloadeddata = onVideoLoaded;
-            img.onloadedmetadata = onVideoLoaded;
-            img.oncanplay = onVideoLoaded;
-            img.onerror = () => {
+            const videoFallbackTimer = setTimeout(() => {
+                if (!loadedHandled) {
+                    loadedHandled = true;
+                    this.onLoadFinished(img, parent, true);
+                }
+            }, 8000);
+            const clearAndFinish = (ok) => {
                 if (loadedHandled) return;
                 loadedHandled = true;
-                this.onLoadFinished(img, parent, false);
+                clearTimeout(videoFallbackTimer);
+                this.onLoadFinished(img, parent, ok);
             };
+            img.onloadeddata = () => clearAndFinish(true);
+            img.onloadedmetadata = onVideoLoaded;
+            img.oncanplay = onVideoLoaded;
+            img.onerror = () => clearAndFinish(false);
 
             img.src = targetSrc;
             img.load();
-            this.activeCount = Math.max(0, this.activeCount - 1);
-            this.process();
         }
     },
     onLoadFinished(img, parent, success) {
@@ -15227,6 +15306,8 @@ const SmartLoader = {
                 vid.className = img.className; 
                 vid.classList.add('loaded'); 
                 vid.src = img.dataset.src || img.src;
+                vid.referrerPolicy = 'no-referrer';
+                if (img.dataset.fileId) vid.dataset.fileId = img.dataset.fileId;
                 vid.autoplay = true;
                 vid.loop = true;
                 vid.muted = true;
