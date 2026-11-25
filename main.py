@@ -951,12 +951,12 @@ DURABLE_DELIVERY_QUEUE_ENABLED = BOT_DURABLE_DELIVERY_QUEUE
 durable_delivery_stats: dict = shared_state.durable_delivery_stats
 B_MAX_STACKED_ANIME_IMAGES = max(1, BOT_B_MAX_STACKED_ANIME_IMAGES)
 ANIME_MEDIA_CONCURRENCY = max(1, BOT_ANIME_MEDIA_CONCURRENCY)
-ANIME_URL_FETCH_TIMEOUT_SEC = max(3.0, float(BOT_ANIME_URL_FETCH_TIMEOUT_SEC))
-ANIME_URL_FETCH_TOTAL_SEC = max(ANIME_URL_FETCH_TIMEOUT_SEC, float(BOT_ANIME_URL_FETCH_TOTAL_SEC))
-ANIME_URL_FETCH_PARALLEL = max(1, int(BOT_ANIME_URL_FETCH_PARALLEL))
-ANIME_DOWNLOAD_TIMEOUT_SEC = max(5.0, float(BOT_ANIME_DOWNLOAD_TIMEOUT_SEC))
-ANIME_DOWNLOAD_TOTAL_SEC = max(ANIME_DOWNLOAD_TIMEOUT_SEC, float(BOT_ANIME_DOWNLOAD_TOTAL_SEC))
-ANIME_DOWNLOAD_PARALLEL = max(1, int(BOT_ANIME_DOWNLOAD_PARALLEL))
+ANIME_URL_FETCH_TIMEOUT_SEC = min(6.0, max(3.0, float(BOT_ANIME_URL_FETCH_TIMEOUT_SEC)))
+ANIME_URL_FETCH_TOTAL_SEC = min(10.0, max(ANIME_URL_FETCH_TIMEOUT_SEC + 2.0, float(BOT_ANIME_URL_FETCH_TOTAL_SEC)))
+ANIME_URL_FETCH_PARALLEL = max(5, int(BOT_ANIME_URL_FETCH_PARALLEL))
+ANIME_DOWNLOAD_TIMEOUT_SEC = min(8.0, max(5.0, float(BOT_ANIME_DOWNLOAD_TIMEOUT_SEC)))
+ANIME_DOWNLOAD_TOTAL_SEC = min(14.0, max(ANIME_DOWNLOAD_TIMEOUT_SEC + 2.0, float(BOT_ANIME_DOWNLOAD_TOTAL_SEC)))
+ANIME_DOWNLOAD_PARALLEL = max(5, int(BOT_ANIME_DOWNLOAD_PARALLEL))
 # anime_media_gate, POSITIVE_REACTIONS, etc. are canonical in shared_state.py
 MODE_PUNCHUP_ENABLED = BOT_MODE_PUNCHUP_ENABLED
 MODE_PUNCHUP_QUEUE_SHED_SEC = max(0.0, BOT_MODE_PUNCHUP_QUEUE_SHED_SEC)
@@ -3753,7 +3753,7 @@ async def help_broadcaster():
     print(f"✅ Менеджер [help_broadcaster] запустил {len(tasks)} воркеров "
           f"(primary={PRIMARY_HELP_BOARDS}, secondary={SECONDARY_HELP_BOARDS}).")
     await asyncio.gather(*tasks)
-async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: str = 'ru'):
+async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: str = 'ru') -> bool:
     """
     Отправляет новому пользователю структурированную приветственную последовательность:
     1. Баннер + Манифест анонимной борды + Как общаться (постинг, реплаи, реакции) + Инлайн-кнопки меню.
@@ -3811,7 +3811,7 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
         )
     except Exception as e:
         logger.warning(f"[welcome] Не удалось отправить приветствие {chat_id}: {e}")
-        return
+        return False
 
     await asyncio.sleep(1.5)
 
@@ -3826,6 +3826,7 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
         )
     except Exception as e:
         logger.warning(f"[welcome] Не удалось отправить второе сообщение {chat_id}: {e}")
+    return True
 async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
     """
     Проверяет, есть ли на доске активный глобальный закреп.
@@ -3977,10 +3978,16 @@ async def cmd_random_media(message: types.Message):
             await message.answer("❌ Ошибка при отправке альбома.")
 
 @dp.message(Command("getid"))
-async def cmd_get_file_id(message: types.Message):
-    # Проверяем, есть ли реплай
+async def cmd_get_file_id(message: types.Message, stream: str = 'ru'):
+    # Если без реплая — показываем анонимный хэш без утечки сырого Telegram ID
     if not message.reply_to_message:
-        await message.answer("⚠️ Чтобы получить ID, ответь этой командой на гифку, фото или кружок.")
+        uid = message.from_user.id if getattr(message, "from_user", None) else 0
+        anon_tag = get_anon_id(uid, stream=stream) if uid else "anon"
+        await message.answer(
+            f"🆔 <b>Твой Анон-ID:</b> <code>[{anon_tag}]</code>\n"
+            "<i>Чтобы получить file_id медиафайла, ответь этой командой на фото, гифку, видео или стикер.</i>",
+            parse_mode="HTML",
+        )
         return
 
     rep = message.reply_to_message
@@ -4464,6 +4471,9 @@ def _build_main_shop_hub(user_id: int, balance: float):
         [
             InlineKeyboardButton(text="💰 Мой Кошелек", callback_data="prof_wallet"),
             InlineKeyboardButton(text="📊 Котировки биржи", callback_data="scam_rates")
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_main")
         ]
     ])
     return text, kb
@@ -5979,7 +5989,7 @@ async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None)
 
 
 
-@dp.callback_query(F.data == "shop_main_hub")
+@dp.callback_query(F.data.in_(["shop_main_hub", "shop_main"]))
 async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
     board_id = board_id or "b"
     if not _check_menu_owner(callback):
@@ -6129,7 +6139,7 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
 
 
 
-@dp.callback_query(F.data == "wardrobe_dressing_room")
+@dp.callback_query(F.data.in_(["wardrobe_dressing_room", "wardrobe_main"]))
 async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str | None):
     if not _check_menu_owner(callback):
         await callback.answer("⛔ Это чужое меню! Открой своё через команду", show_alert=True)
@@ -8865,14 +8875,13 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="👽 Купить Шапочку из фольги (800 ₪)", callback_data="fast_rescue:buy_tinfoil")],
             [InlineKeyboardButton(text="🔪 Купить Заточку для мести (400 ₪)", callback_data="fast_rescue:buy_knife")],
-            [InlineKeyboardButton(text="🏪 Теневой магазин (/shop)", callback_data="shop_main")]
+            [InlineKeyboardButton(text="🏪 Теневой магазин (/shop)", callback_data="shop_main_hub")]
         ])
         from common.anon_identity import generate_anon_name
         robber_name = generate_anon_name(user_id)
-        robber_hash = get_anon_id(user_id)
         await message.bot.send_message(
             target_id,
-            f"🔪 <b>ТЕБЯ ОГРАБИЛ АНОН [<code>{robber_hash}</code>] В /{board_id}/!</b>\n\n"
+            f"🔪 <b>ТЕБЯ ОГРАБИЛ АНОН — {robber_name} В /{board_id}/!</b>\n\n"
             f"Наглый грабитель с заточкой украл у тебя <b>{stolen:,} ₪</b>!\n\n"
             f"🛡️ <b>Совет по самообороне:</b> загляни в <b>/shop</b> и купи средства защиты (Шапочку из фольги, бронежилет), чтобы обезопасить свои шекели, или заточку для мести:",
             reply_markup=kb_rescue,
@@ -11547,7 +11556,7 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="💼 Заработать (/work)", callback_data="work_main_hub"),
-                    InlineKeyboardButton(text="💳 Проверить баланс (/wallet)", callback_data="wallet_view")
+                    InlineKeyboardButton(text="💳 Проверить баланс (/wallet)", callback_data="prof_wallet")
                 ]
             ])
             await message.reply(
@@ -12296,9 +12305,8 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
     for ch_id, duel in muted_duels:
         if duel.get("escrowed"):
             try:
-                async with db_transaction(db):
-                    await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
-                    await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: создатель замучен')
+                await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
+                await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: создатель замучен')
             except Exception as ex:
                 logger.error(f"Failed to refund muted duel bet to {ch_id}: {ex}")
 
@@ -12326,9 +12334,8 @@ async def classic_duel_watchdog_step(bot: Bot | None = None):
         if duel.get("escrowed"):
             try:
                 db = await get_pool()
-                async with db_transaction(db):
-                    await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
-                    await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: таймаут дуэли')
+                await add_user_global_balance(db, ch_id, duel.get("board_id", "b"), duel.get("amount", 0))
+                await record_user_transaction(db, ch_id, duel.get("amount", 0), 'duel', 'Возврат ставки: таймаут дуэли')
             except Exception as ex:
                 logger.error(f"Failed to refund expired duel bet to {ch_id}: {ex}")
 
@@ -12687,6 +12694,11 @@ async def cb_select_method(callback: types.CallbackQuery, state: FSMContext):
 
     req_text = f"✍️ Введите <b>{req_name}</b> для вывода:"
     await _render_shop_subview(callback, req_text, None, category="wallet")
+
+
+@dp.callback_query(F.data.startswith("wd_method_"))
+async def cb_select_method_expired(callback: types.CallbackQuery):
+    await safe_callback_answer(callback, "⏳ Сессия вывода устарела. Открой кошелёк (/wallet) и начни заново.", show_alert=True)
 
 
 
@@ -16022,6 +16034,9 @@ async def cmd_anon(message: types.Message, board_id: str | None = None, stream: 
         [
             InlineKeyboardButton(text="💼 Биржа труда (/work)", callback_data="work_main_hub"),
             InlineKeyboardButton(text="👔 Гардероб (/wardrobe)", callback_data="wardrobe_main"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_main"),
         ]
     ])
 
@@ -16070,6 +16085,9 @@ async def cmd_passport(message: types.Message, board_id: str | None = None, stre
         [
             InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
             InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_main"),
         ],
     ])
 
@@ -16206,6 +16224,9 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
             InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
             InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
         ],
+        [
+            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_main"),
+        ],
     ])
 
     try:
@@ -16319,7 +16340,7 @@ async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
 
 
 
-@dp.callback_query(F.data == "prof_wallet")
+@dp.callback_query(F.data.in_(["prof_wallet", "wallet_view"]))
 async def cb_prof_wallet(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     board_id = board_id or 'b'
     await safe_callback_answer(callback)
@@ -16334,6 +16355,12 @@ async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stre
     await safe_callback_answer(callback)
     fake_msg = SafeMessageProxy(callback.message, callback.from_user, bot=callback.bot)
     await cmd_shop(fake_msg, board_id=board_id, stream=stream)
+
+
+@dp.callback_query(F.data == "bank_main")
+async def cb_bank_main_alias(callback: types.CallbackQuery, board_id: str | None = None):
+    from bank_engine import cb_bank_hub
+    await cb_bank_hub(callback, board_id=board_id)
 
 
 
@@ -19076,12 +19103,41 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
             except Exception as e:
                 logger.warning(f"[referral] Ошибка обработки реферала: {e}")
 
+    async def _send_group_dm_fallback():
+        if getattr(getattr(message, "chat", None), "type", "private") == "private":
+            return
+        try:
+            bot_username = None
+            try:
+                me = await message.bot.get_me()
+                bot_username = getattr(me, "username", None)
+            except Exception:
+                pass
+            if not bot_username and board_id in BOARD_CONFIG and BOARD_CONFIG[board_id].get("username"):
+                bot_username = BOARD_CONFIG[board_id]["username"].lstrip("@")
+            pm_kb = (
+                InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🚀 Открыть бота в ЛС", url=f"https://t.me/{bot_username}?start=start")
+                ]])
+                if bot_username else None
+            )
+            hint = await message.answer(
+                "👋 Открой личку с ботом (ЛС) и нажми <b>Start</b>, чтобы получить меню и постить анонимно.",
+                reply_markup=pm_kb,
+                parse_mode="HTML",
+            )
+            spawn_task(delete_message_after_delay(hint, 20))
+        except Exception:
+            pass
+
     # 3. Активируем пользователя (создает запись в БД для нового юзера)
     if user_id not in b_data['users']['active']:
         await add_or_activate_user(user_id, board_id)
         b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
         print(f"✅ [{board_id}] Новый пользователь: {user_id}")
-        await send_welcome_sequence(message.bot, user_id, board_id, stream=stream)
+        welcome_sent = await send_welcome_sequence(message.bot, user_id, board_id, stream=stream)
+        if not welcome_sent:
+            await _send_group_dm_fallback()
         spawn_task(send_active_pin_to_new_user(message.bot, user_id, board_id))
     else:
         lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -19122,14 +19178,23 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
             )
 
         from banner_manager import send_banner_message
-        await send_banner_message(
-            bot=message.bot,
-            chat_id=user_id,
-            caption=start_text,
-            reply_markup=get_quick_menu_keyboard(board_id, stream=stream),
-            category="start",
-            parse_mode="HTML"
-        )
+        sent_banner = None
+        try:
+            sent_banner = await send_banner_message(
+                bot=message.bot,
+                chat_id=user_id,
+                caption=start_text,
+                reply_markup=get_quick_menu_keyboard(board_id, stream=stream),
+                category="start",
+                parse_mode="HTML"
+            )
+        except TelegramForbiddenError:
+            sent_banner = None
+        except Exception as e:
+            runtime_logger.warning("cmd_start send_banner_message failed for user %s: %s", user_id, e)
+
+        if sent_banner is None:
+            await _send_group_dm_fallback()
         try: await message.delete()
         except Exception: pass
 @dp.callback_query(F.data.startswith("set_stream_"))
@@ -19664,7 +19729,13 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
 
     processing_msg = await message.reply("🔥 Готовим прожарку..." if lang == 'ru' else "🔥 Roasting...")
     try:
+        if getattr(message, "bot", None) and getattr(message, "chat", None) and hasattr(message.bot, "send_chat_action"):
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    except Exception:
+        pass
+    try:
         summary = await summarize_text_with_hf(prompt, chunk)
+        summary = clean_ai_thinking(summary)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[roast] Error: {e}")
@@ -19677,8 +19748,13 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
 
     roast_text = f"🔥 <b>ПРОЖАРКА ЧАТА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>CHAT ROAST</b> 🔥\n\n{summary}"
     if lang == 'jp': roast_text = f"🔥 <b>煽り</b> 🔥\n\n{summary}"
+    roast_text = _tg_safe_truncate(roast_text, max_utf16=4000)
 
-    await processing_msg.edit_text(roast_text, parse_mode='HTML')
+    try:
+        await processing_msg.edit_text(roast_text, parse_mode='HTML')
+    except TelegramBadRequest:
+        plain_roast = re.sub(r'<[^>]+>', '', roast_text)[:4000]
+        await processing_msg.edit_text(plain_roast, parse_mode=None)
 
 def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
     import re
@@ -20191,9 +20267,15 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     status_text = _get_summarize_status_text(lang, length_choice, paragraph_count)
     await message.answer(status_text)
+    try:
+        if getattr(message, "bot", None) and getattr(message, "chat", None) and hasattr(message.bot, "send_chat_action"):
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    except Exception:
+        pass
 
     try:
         summary = await summarize_text_with_hf(prompt, chunk, model_preference=model_preference)
+        summary = clean_ai_thinking(summary)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[summarize] Error during HF summarize: {e}")
@@ -20599,7 +20681,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         )
         user_s = b_data['user_state'].setdefault(callback.from_user.id, {})
         user_s['sorted_threads_cache'] = [tid for tid, _ in sorted_threads]
-        text, keyboard = await generate_threads_page(b_data, callback.from_user.id, page=0, stream=stream)
+        text, keyboard = await generate_threads_page(board_id, callback.from_user.id, page=0, stream=stream)
         await callback.answer()
         if callback.message:
             await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -20613,7 +20695,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         pass
     except Exception as e:
         print(f"⛔ Непредвиденная ошибка в cq_show_active_threads: {e}")
-@dp.message(Command("tags", "tagcloud", "теги", "тег", "облако_тегов"))
+@dp.message(Command("tags", "tag", "tagcloud", "теги", "тег", "облако_тегов"))
 async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
     Выводит облако тегов медиафайлов из FileRegistry с кнопками просмотра.
@@ -22462,39 +22544,20 @@ async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: s
                     separators=(",", ":"),
                 ),
             )
-        url_results = await _run_bounded_anime_url_fetches(fetcher_tasks, board_id, user_id, "quick_menu")
-        successful_urls = [res for res in url_results if isinstance(res, str) and res.startswith('http')]
-        if not successful_urls:
-             fail_txt = "Nothing found :(" if lang == 'en' else "Ничего не нашел :("
-             await search_msg.edit_text(fail_txt)
-             return
-        download_results = await _run_bounded_anime_downloads(successful_urls, board_id, user_id, "quick_menu")
-        successful_downloads = []
-        loop = asyncio.get_running_loop()
-        for orig_url, res in download_results:
-            if isinstance(res, tuple) and res[0]:
-                ctype = 'animation' if orig_url.lower().endswith('.gif') else 'photo'
-                processed = await loop.run_in_executor(None, _resize_image_if_needed, res[0])
-                successful_downloads.append((processed, ctype))
+        successful_downloads = await _collect_stacked_anime_downloads(
+            fetcher_tasks,
+            board_id,
+            user_id,
+            "quick_menu",
+        )
         if not successful_downloads:
-            await search_msg.edit_text("Download error." if lang == 'en' else "Ошибка скачивания.")
+            await search_msg.edit_text("Ничего не нашел или хосты не ответили :(" if lang != 'en' else "Nothing found or hosts timed out :(")
             return
-        content = {}
         if lang == 'en': success_phrases = ANIME_CMD_SUCCESS_PHRASES_EN
         elif lang == 'jp': success_phrases = ANIME_CMD_SUCCESS_PHRASES_JP
         else: success_phrases = ANIME_CMD_SUCCESS_PHRASES
         caption = f"<i>{random.choice(success_phrases)}</i>"
-        if len(successful_downloads) == 1:
-            ibytes, ctype = successful_downloads[0]
-            content = {'type': ctype, 'image_bytes': ibytes, 'caption': caption}
-        else:
-            media_items = []
-            from aiogram.types import BufferedInputFile
-            for ibytes, ctype in successful_downloads:
-                mtype = 'video' if ctype == 'animation' else 'photo'
-                f = BufferedInputFile(ibytes, filename=f"img.{'mp4' if mtype=='video' else 'jpg'}")
-                media_items.append({'type': mtype, 'media': f})
-            content = {'type': 'media_group', 'media': media_items, 'caption': caption}
+        content = _prepare_anime_content(successful_downloads, caption)
         b_data = board_data[board_id]
         is_shadow = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
         await process_new_post(NewPostParams(
@@ -23243,6 +23306,11 @@ async def cb_create_thread_cancel(callback: types.CallbackQuery, state: FSMConte
         try:
             await callback.message.delete()
         except Exception: pass
+
+
+@dp.callback_query(F.data.in_(["create_thread_confirm", "create_thread_edit", "create_thread_cancel"]))
+async def cb_create_thread_expired(callback: types.CallbackQuery):
+    await safe_callback_answer(callback, "⏳ Сессия создания треда устарела. Используй /create заново.", show_alert=True)
 THREADS_PER_PAGE = 10
 @dp.message(Command("threads"))
 async def cmd_threads(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -26592,9 +26660,10 @@ async def _run_bounded_anime_downloads(
         async with sem:
             started = time.time()
             try:
+                per_item_timeout = min(ANIME_DOWNLOAD_TIMEOUT_SEC, 8.0)
                 result = await asyncio.wait_for(
-                    _download_image_with_proxy(url, timeout=int(ANIME_DOWNLOAD_TIMEOUT_SEC)),
-                    timeout=ANIME_DOWNLOAD_TIMEOUT_SEC + 5,
+                    _download_image_with_proxy(url, timeout=max(1, int(per_item_timeout))),
+                    timeout=per_item_timeout + 1.5,
                 )
                 return index, url, result
             except asyncio.TimeoutError:
@@ -26607,7 +26676,7 @@ async def _run_bounded_anime_downloads(
                             "user_id": user_id,
                             "source": source,
                             "index": index,
-                            "timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
+                            "timeout_sec": min(ANIME_DOWNLOAD_TIMEOUT_SEC, 8.0),
                             "elapsed_sec": round(time.time() - started, 3),
                         },
                         ensure_ascii=False,
@@ -26679,12 +26748,23 @@ async def _collect_stacked_anime_downloads(
     batch_seen_hashes: set[str] = set()
     from japanese_translator import record_served_image
     import hashlib
+    import math
 
-    # Гарантированный добор полного пула картинок без брака и дубликатов
-    max_refill_rounds = max(6, ANIME_REFILL_ROUNDS * 3)
+    target_count = len(fetcher_tasks)
+    if target_count <= 0:
+        return []
+
+    # Разумный бюджет времени: не держим пользователя 35-45+ секунд ради 1-2 битых хостов.
+    # Если >= 70% (например, 7-9 из 10) уже готовы и были таймауты/ошибки или вышла половина бюджета — отдаём сразу.
+    early_accept_min = max(1, math.ceil(target_count * 0.7))
+    total_budget_sec = min(18.0, ANIME_URL_FETCH_TOTAL_SEC + ANIME_DOWNLOAD_TOTAL_SEC)
+    batch_started = time.monotonic()
+    max_refill_rounds = min(2, max(1, ANIME_REFILL_ROUNDS))
 
     for round_index in range(max_refill_rounds + 1):
         if not retry_slots:
+            break
+        if round_index > 0 and (time.monotonic() - batch_started) >= total_budget_sec:
             break
         round_source = source if round_index == 0 else f"{source}:refill{round_index}"
         round_fetchers = [fetcher_tasks[slot] for slot in retry_slots]
@@ -26693,6 +26773,7 @@ async def _collect_stacked_anime_downloads(
         urls: list[str] = []
         url_slots: list[int] = []
         next_slots: list[int] = []
+        had_fetch_failure = False
         for local_index, result in url_results:
             if local_index >= len(retry_slots):
                 continue
@@ -26705,8 +26786,11 @@ async def _collect_stacked_anime_downloads(
                 urls.append(result)
                 url_slots.append(slot)
             else:
+                had_fetch_failure = True
                 next_slots.append(slot)
 
+        had_download_failure = False
+        new_in_round = 0
         if urls:
             download_results = await _run_bounded_anime_downloads(urls, board_id, user_id, round_source)
             for local_index, orig_url, res in download_results:
@@ -26732,18 +26816,52 @@ async def _collect_stacked_anime_downloads(
                     processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, image_bytes)
                     real_type = detect_media_type(processed_bytes, orig_url)
                     successful_by_slot[slot] = (processed_bytes, real_type, ext)
+                    new_in_round += 1
                     batch_seen_urls.add(orig_url)
                     batch_seen_hashes.add(img_sha)
                     batch_seen_hashes.add(img_md5)
                     record_served_image(url=orig_url, content_hash=img_sha)
                     record_served_image(url=orig_url, content_hash=img_md5)
                 else:
+                    had_download_failure = True
                     if isinstance(res, Exception):
                         print(f"⚠️ Ошибка при скачивании изображения: {res}")
                     next_slots.append(slot)
 
         retry_slots = [slot for slot in dict.fromkeys(next_slots) if slot not in successful_by_slot]
-        if retry_slots and round_index < max_refill_rounds:
+        elapsed = time.monotonic() - batch_started
+
+        if not retry_slots:
+            break
+
+        # Ранняя отдача при хорошем частичном результате (>=70%) после таймаутов/сбоев или в refill-раунде
+        if len(successful_by_slot) >= early_accept_min and (
+            had_download_failure or had_fetch_failure or round_index >= 1 or elapsed >= (total_budget_sec * 0.5)
+        ):
+            runtime_logger.info(
+                "anime_media_early_return %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "source": source,
+                        "ready": len(successful_by_slot),
+                        "target": target_count,
+                        "skipped": len(retry_slots),
+                        "elapsed_sec": round(elapsed, 3),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            break
+
+        # Если раунд вообще не дал ни одной новой картинки и что-то уже готово — не крутим дальше
+        if new_in_round == 0 and successful_by_slot and (had_download_failure or had_fetch_failure):
+            break
+
+        if retry_slots and round_index < max_refill_rounds and elapsed < total_budget_sec:
             runtime_logger.info(
                 "anime_media_refill %s",
                 json.dumps(
@@ -26802,7 +26920,7 @@ def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
 
 
 
-async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int):
+async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int, requested_count: int | None = None):
     b_data = board_data[board_id]
     is_shadow_muted = (user_id in b_data['shadow_mutes'] and
                        b_data['shadow_mutes'][user_id] > datetime.now(UTC))
@@ -26830,9 +26948,13 @@ async def _publish_anime_post(message: types.Message, board_id: str, user_id: in
 
     if post_num is not None:
         success_phrase = random.choice(ANIME_CMD_SUCCESS_PHRASES)
+        if requested_count and num_downloads < requested_count:
+            status_note = f"{success_phrase} (+{num_downloads}/{requested_count}, медленные хосты пропущены)"
+        else:
+            status_note = f"{success_phrase} (+{num_downloads})"
         sent_notification = await message.bot.send_message(
             chat_id=message.chat.id,
-            text=f"{success_phrase} (+{num_downloads})"
+            text=status_note
         )
         spawn_task(delete_message_after_delay(sent_notification, 15))
 
@@ -27440,7 +27562,15 @@ async def _process_stacked_anime_command(
 
         content = _prepare_anime_content(successful_downloads, caption)
 
-        await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
+        await _publish_anime_post(
+            message,
+            board_id,
+            user_id,
+            content,
+            stream,
+            len(successful_downloads),
+            requested_count=len(fetcher_tasks),
+        )
 
         # --- LOLI HOURLY RISK-REWARD EVENT ---
         if is_loli:
@@ -28229,7 +28359,6 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
         await message.answer(f"Shadow-Troll ON for Anon {target_anon}")
 
     # Also log global event
-    from common.database import log_global_event
     await log_global_event('bot', f"🤡 TROLL: Admin {message.from_user.id} toggled troll for {target_id} on {board_id}")
 
 @dp.message(Command("admin"))
@@ -28328,6 +28457,289 @@ async def cmd_bot_lockdown(message: Message, board_id: str | None):
     status_text = "ВКЛЮЧИЛ" if enabled else "ВЫКЛЮЧИЛ"
     await log_global_event('bot', f"🚨 LOCKDOWN: Админ {message.from_user.id} {status_text} режим бункера")
     await message.answer(f"✅ Режим бункера {'активирован' if enabled else 'деактивирован'} везде.")
+
+
+@dp.message(Command("isolation", "incognito", "изоляция", "самоизоляция", "отшельник", ignore_case=True, ignore_mention=True))
+async def cmd_isolation(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """Переключение режима самоизоляции (/isolation on / off)."""
+    if not board_id:
+        return
+    args = (message.text or message.caption or "").split()
+    user_id = message.from_user.id
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    b_data = board_data[board_id]
+    if user_id not in b_data.get('user_settings', {}):
+        b_data.setdefault('user_settings', {})[user_id] = {
+            'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'is_isolated': False
+        }
+    current_status = bool(b_data['user_settings'][user_id].get('is_isolated'))
+    if len(args) < 2:
+        status_str = "ON" if current_status else "OFF"
+        if lang == 'en':
+            msg = f"Current Self-Isolation status: <b>{status_str}</b>.\nUsage: <code>/isolation on</code> or <code>/isolation off</code>"
+        elif lang == 'jp':
+            msg = f"現在の自己隔離モード: <b>{status_str}</b>\n使い方: <code>/isolation on</code> または <code>/isolation off</code>"
+        else:
+            msg = f"Текущий статус режима самоизоляции: <b>{status_str}</b>.\nИспользование: <code>/isolation on</code> или <code>/isolation off</code>"
+        await message.answer(msg, parse_mode="HTML")
+        return
+
+    action = args[1].lower()
+    new_status = None
+    if action in ['on', 'enable', '1', 'вкл']:
+        new_status = True
+    elif action in ['off', 'disable', '0', 'выкл']:
+        new_status = False
+
+    if new_status is None:
+        await message.answer("Error: Use 'on' or 'off'." if lang != 'ru' else "Ошибка: Используйте 'on' или 'off'.")
+        return
+    if new_status == current_status:
+        if lang == 'en':
+            already_msg = f"🧘 Self-isolation is already {'enabled' if current_status else 'disabled'}."
+        elif lang == 'jp':
+            already_msg = f"🧘 自己隔離モードは既に{'有効' if current_status else '無効'}です。"
+        else:
+            already_msg = f"🧘 Режим самоизоляции уже {'включен' if current_status else 'выключен'}."
+        await message.answer(already_msg)
+        return
+
+    now = time.time()
+    last_toggle = float(b_data['user_settings'][user_id].get('isolation_last_toggle') or 0.0)
+    cooldown = 86400.0
+    elapsed = now - last_toggle
+    if last_toggle > 0 and elapsed < cooldown:
+        remaining = int(cooldown - elapsed)
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+        if lang == 'en':
+            cd_msg = f"⏳ Self-isolation can only be toggled once every 24 hours. Available in {hours}h {minutes}m."
+        elif lang == 'jp':
+            cd_msg = f"⏳ 自己隔離モードの切り替えは24時間に1回のみ可能です。残り時間: {hours}時間{minutes}分。"
+        else:
+            cd_msg = f"⏳ Переключать режим самоизоляции можно не чаще одного раза в 24 часа. Доступно через {hours}ч {minutes}м."
+        await message.answer(cd_msg)
+        return
+
+    b_data['user_settings'][user_id]['is_isolated'] = new_status
+    b_data['user_settings'][user_id]['isolation_last_toggle'] = now
+    spawn_task(update_user_settings_db(user_id, board_id, is_isolated=1 if new_status else 0, isolation_last_toggle=now))
+    if lang == 'en':
+        reply = "🧘 Self-isolation enabled. Complete incognito, balance frozen, protected from attacks." if new_status else "🧘 Self-isolation disabled."
+    elif lang == 'jp':
+        reply = "🧘 自己隔離モードが有効化されました。" if new_status else "🧘 自己隔離モードが無効化されました。"
+    else:
+        reply = "🧘 Режим самоизоляции включен. Вы скрыты из экономики, опыт и баланс заморожены, атаки и досье заблокированы." if new_status else "🧘 Режим самоизоляции выключен. Экономика и взаимодействие доступны."
+    await message.answer(reply)
+
+
+@dp.callback_query(F.data == "save_all")
+async def admin_save_all(callback: types.CallbackQuery):
+    if not any(is_admin(callback.from_user.id, b_id) for b_id in BOARDS):
+        await safe_callback_answer(callback, "⛔ Нет прав доступа.", show_alert=True)
+        return
+    user_lang = callback.from_user.language_code or 'en'
+    is_ru = 'ru' in user_lang or 'uk' in user_lang or 'be' in user_lang
+    await safe_callback_answer(callback, "Запуск внепланового бэкапа БД..." if is_ru else "Starting manual DB backup...")
+    try:
+        db = await get_pool()
+        await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+    except Exception as e:
+        runtime_logger.warning("admin_save_all checkpoint error: %s", e)
+    success = await git_commit_and_push_db()
+    response_text = (
+        ("✅ База данных успешно сохранена в GitHub." if success else "❌ Ошибка при создании бэкапа. См. логи.")
+        if is_ru else
+        ("✅ Database successfully pushed to GitHub." if success else "❌ Backup failed. Check logs.")
+    )
+    if isinstance(callback.message, types.Message):
+        try:
+            await callback.message.edit_text(response_text)
+        except TelegramBadRequest:
+            await callback.message.answer(response_text)
+
+
+@dp.callback_query(F.data.startswith("stats_"))
+async def admin_stats_board(callback: types.CallbackQuery):
+    try:
+        board_id = callback.data.split("_", 1)[1]
+    except IndexError:
+        await safe_callback_answer(callback, "⚠️ Неверная доска", show_alert=True)
+        return
+    if not is_admin(callback.from_user.id, board_id) or board_id not in board_data:
+        await safe_callback_answer(callback, "⛔ Нет прав доступа.", show_alert=True)
+        return
+    if not isinstance(callback.message, types.Message):
+        await safe_callback_answer(callback)
+        return
+    b_data = board_data[board_id]
+    lang = 'en' if board_id == 'int' else 'ru'
+    qsize = message_queues[board_id].qsize() if board_id in message_queues else 0
+    if lang == 'en':
+        stats_text = (
+            f"Stats for {BOARD_CONFIG[board_id]['name']}:\n\n"
+            f"Active users: {len(b_data['users']['active'])}\n"
+            f"Banned: {len(b_data['users']['banned'])}\n"
+            f"Queue size: {qsize}"
+        )
+        back_txt = "⬅️ Back"
+    else:
+        stats_text = (
+            f"Статистика доски {BOARD_CONFIG[board_id]['name']}:\n\n"
+            f"Активных: {len(b_data['users']['active'])}\n"
+            f"Забаненных: {len(b_data['users']['banned'])}\n"
+            f"В очереди: {qsize}"
+        )
+        back_txt = "⬅️ Назад"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=back_txt, callback_data=f"admin_main_{board_id}")]
+    ])
+    try:
+        await callback.message.edit_text(stats_text, reply_markup=keyboard)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
+    await safe_callback_answer(callback)
+
+
+@dp.callback_query(F.data.startswith("restrictions_"))
+async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str | None = None, stream: str = 'ru'):
+    parts = callback.data.split("_", 1)
+    if len(parts) > 1 and parts[1] in BOARD_CONFIG:
+        board_id = parts[1]
+    if not board_id or board_id not in board_data:
+        await safe_callback_answer(callback, "⚠️ Неверная доска", show_alert=True)
+        return
+    if not is_admin(callback.from_user.id, board_id):
+        await safe_callback_answer(callback, "⛔ Отказано в доступе", show_alert=True)
+        return
+    if not isinstance(callback.message, types.Message):
+        await safe_callback_answer(callback)
+        return
+    b_data = board_data[board_id]
+    now = datetime.now(UTC)
+    text_parts = [f"<b>Список ограничений на доске {BOARD_CONFIG[board_id]['name']}:</b>"]
+    banned_users = b_data['users']['banned']
+    if banned_users:
+        banned_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>)" for uid in sorted(list(banned_users))])
+        text_parts.append(f"\n<u>🚫 Забанены навсегда:</u>\n{banned_list}")
+    active_mutes = {uid: expiry for uid, expiry in b_data['mutes'].items() if expiry > now}
+    if active_mutes:
+        mute_lines = []
+        for uid, expiry in sorted(active_mutes.items(), key=lambda item: item[1]):
+            hours, remainder = divmod((expiry - now).total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            mute_lines.append(f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>, {int(hours)}ч {int(minutes)}м)")
+        text_parts.append("\n<u>🔇 В муте:</u>\n" + "\n".join(mute_lines))
+    active_shadow = {uid: expiry for uid, expiry in b_data['shadow_mutes'].items() if expiry > now}
+    if active_shadow:
+        sh_lines = []
+        for uid, expiry in sorted(active_shadow.items(), key=lambda item: item[1]):
+            hours, remainder = divmod((expiry - now).total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            sh_lines.append(f"  • Анон <code>[{get_anon_id(uid)}]</code> (<code>{uid}</code>, {int(hours)}ч {int(minutes)}м)")
+        text_parts.append("\n<u>👻 Теневой мут:</u>\n" + "\n".join(sh_lines))
+    final_text = f"На доске {BOARD_CONFIG[board_id]['name']} нет активных ограничений." if len(text_parts) == 1 else "\n".join(text_parts)
+    if len(final_text) > 4000:
+        final_text = _tg_safe_truncate(final_text, max_utf16=4000)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=f"admin_main_{board_id}")]
+    ])
+    try:
+        await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
+    except TelegramBadRequest:
+        pass
+    await safe_callback_answer(callback)
+
+
+@dp.callback_query(F.data.startswith("filter_list_"))
+async def admin_filter_list(callback: types.CallbackQuery):
+    board_id = callback.data.split("_")[-1]
+    if not is_admin(callback.from_user.id, board_id) or board_id not in board_data:
+        await safe_callback_answer(callback, "⛔ Нет прав доступа.", show_alert=True)
+        return
+    spam_words = board_data[board_id].get('spam_filter_words', set())
+    if not spam_words:
+        list_text = "\n\n<i>Список пуст. Фильтр отключен.</i>"
+    else:
+        words_display = ", ".join([f"<code>{escape_html(w)}</code>" for w in sorted(list(spam_words))])
+        list_text = f"\n\n{words_display}"
+    final_text = (
+        f"<b>🤬 Фильтр стоп-слов ({len(spam_words)} шт):</b>{list_text}"
+        "\n\n<b>📝 Как управлять:</b>\n• Добавить: <code>/filter add слово</code>\n• Удалить: <code>/filter remove слово</code>"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=f"admin_main_{board_id}")]
+    ])
+    try:
+        await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
+    await safe_callback_answer(callback)
+
+
+@dp.callback_query(F.data.startswith("reaction_bans_"))
+async def admin_reaction_bans(callback: types.CallbackQuery):
+    board_id = callback.data.split("_")[-1]
+    if not is_admin(callback.from_user.id, board_id) or board_id not in board_data:
+        await safe_callback_answer(callback, "⛔ Нет прав доступа.", show_alert=True)
+        return
+    banned_users = board_data[board_id].get('reaction_banned_users', set())
+    board_name = BOARD_CONFIG[board_id]['name']
+    if not banned_users:
+        response_text = f"На доске {board_name} нет пользователей с запретом на реакции."
+    else:
+        user_list = "\n".join([f"  • Анон <code>[{get_anon_id(uid)}]</code>" for uid in sorted(list(banned_users))])
+        response_text = f"<b>🚫 Пользователи с запретом на реакции на доске {board_name}:</b>\n\n{user_list}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=f"admin_main_{board_id}")]
+    ])
+    try:
+        await callback.message.edit_text(response_text, parse_mode="HTML", reply_markup=keyboard)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
+    await safe_callback_answer(callback)
+
+
+@dp.callback_query(F.data.startswith("admin_main_"))
+async def admin_back_to_main(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        await safe_callback_answer(callback, "⚠️ Неверная доска", show_alert=True)
+        return
+    board_id = parts[2]
+    if not is_admin(callback.from_user.id, board_id) or board_id not in board_data:
+        await safe_callback_answer(callback, "⛔ Нет прав доступа.", show_alert=True)
+        return
+    b_data = board_data[board_id]
+    user_settings = b_data.get('user_settings', {})
+    gif_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_gif'))
+    sticker_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_sticker'))
+    lie_media_count = sum(1 for s in user_settings.values() if s.get('lie_media'))
+    header_text = f"Админка доски {BOARD_CONFIG[board_id]['name']}:"
+    memo_text = (
+        "<code>/ban</code>, <code>/unban</code> — Бан/Разбан\n"
+        "<code>/mute [время]</code>, <code>/unmute</code> — Мут\n"
+        "<code>/shadowmute [время]</code> — Теневой мут\n"
+        "<code>/gban</code>, <code>/gunban</code> — ГЛОБАЛЬНО\n\n"
+        "<code>/del</code>, <code>/sdel</code> — Удаление\n"
+        "<code>/pin</code>, <code>/unpin</code> — Закреп\n\n"
+        "<code>/whois [id]</code> — Досье\n"
+        f"<code>/togglegif</code> — Бан GIF ({gif_ban_count})\n"
+        f"<code>/togglestickers</code> — Бан стикеров ({sticker_ban_count})\n"
+        f"<code>/lie</code> — Подмена медиа архивом ({lie_media_count})"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats_{board_id}"),
+         InlineKeyboardButton(text="🤬 Стоп-слова", callback_data=f"filter_list_{board_id}")],
+        [InlineKeyboardButton(text="🚫 Ограничения (Баны/Муты)", callback_data=f"restrictions_{board_id}")],
+        [InlineKeyboardButton(text="🔒 Локдаун (ВКЛ/ВЫКЛ)", callback_data="admin_menu:lockdown")],
+        [InlineKeyboardButton(text="💾 Сохранить Бэкап", callback_data="save_all")],
+    ])
+    try:
+        await callback.message.edit_text(f"{header_text}\n\n{memo_text}", reply_markup=keyboard, parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await safe_callback_answer(callback)
 @dp.message(Command("togglereactions"))
 async def cmd_togglereactions(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -29795,6 +30207,13 @@ async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContex
         is_shadow_muted=False,
         stream=stream
     ))
+
+
+@dp.callback_query(F.data.in_(["poll_cancel_create", "poll_confirm_create"]))
+async def cq_poll_create_expired(callback: types.CallbackQuery):
+    await safe_callback_answer(callback, "⏳ Сессия создания опроса устарела. Используй /poll заново.", show_alert=True)
+
+
 @dp.callback_query(F.data.startswith("poll_vote_"))
 async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     """
@@ -30860,7 +31279,9 @@ async def periodic_shop_broadcast():
                 if not recipients:
                     continue
                 from banner_manager import get_banner_file, is_video_banner
-                fname, photo_payload = get_banner_file(category="shop")
+                b_bot = b_data.get('bot')
+                b_bot_id = getattr(b_bot, 'id', None) if b_bot else None
+                fname, photo_payload = get_banner_file(category="shop", bot_id=b_bot_id)
                 fid = photo_payload if isinstance(photo_payload, str) else None
                 img_bytes = None
                 if not fid and hasattr(photo_payload, 'path') and os.path.exists(photo_payload.path):
@@ -31972,7 +32393,7 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="avatar", description="🎭 RPG-персонаж и аватар"),
         BotCommand(command="ach", description="🏆 Зал достижений и ачивок"),
         BotCommand(command="whois", description="ℹ️ Информация об аноне"),
-        BotCommand(command="getid", description="🆔 Узнать свой Telegram ID"),
+        BotCommand(command="getid", description="🆔 Узнать Анон-ID / file_id медиа"),
         BotCommand(command="color", description="🎨 Палитра цвета ника и ауры"),
         BotCommand(command="inv", description="🎒 Инвентарь и баффы"),
         BotCommand(command="wardrobe", description="👗 Бутик одежды и гардероб"),

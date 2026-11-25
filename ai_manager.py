@@ -526,6 +526,14 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
             return
         _ROAST_IN_FLIGHT.add(file_id)
 
+        # UX: пока идёт транскрипция и генерация роаста, показываем индикацию набора
+        try:
+            chat_id_for_action = getattr(getattr(message, 'chat', None), 'id', None)
+            if chat_id_for_action and hasattr(bot, 'send_chat_action'):
+                await bot.send_chat_action(chat_id=chat_id_for_action, action="typing")
+        except Exception:
+            pass
+
         transcript = None
         audio_bytes = None
 
@@ -3250,6 +3258,42 @@ def parse_cyberchad_response(raw_text: str) -> dict:
         }
 
     clean_raw = str(raw_text).strip()
+    # Предварительно вырезаем <think>/<reasoning>/<thought>/<reflection> (в т.ч. незакрытые/экранированные),
+    # чтобы CoT с фигурными скобками или черновиками "text": не отравлял JSON-парсинг и не утек в TTS.
+    clean_raw = re.sub(
+        r'<(?:think|reasoning|thought|reflection)\b[^>]*>.*?</(?:think|reasoning|thought|reflection)>',
+        '',
+        clean_raw,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    clean_raw = re.sub(
+        r'&lt;(?:think|reasoning|thought|reflection)\b[^&]*&gt;.*?&lt;/(?:think|reasoning|thought|reflection)&gt;',
+        '',
+        clean_raw,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    clean_raw = re.sub(
+        r'<(?:think|reasoning|thought|reflection)\b[^>]*>.*$',
+        '',
+        clean_raw,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    clean_raw = re.sub(
+        r'</?(?:think|reasoning|thought|reflection)\b[^>]*>',
+        '',
+        clean_raw,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    if not clean_raw:
+        return {
+            "reply": False,
+            "thought": "",
+            "text": "",
+            "reason_if_skipped": "Пустой ответ модели после удаления think-тегов",
+            "generate_image": False,
+            "image_prompt": ""
+        }
 
     # 1. Попытка стандартного извлечения JSON блока (```json ... ``` или {...})
     json_candidate = None
@@ -5271,6 +5315,12 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                     f"{rich_context}\n\n"
                     f"ТВОЙ ВЕРДИКТ И РАЗНОС (верни строго валидный JSON согласно инструкции):"
                 )
+
+            if is_dialogue and target_author_id and target_author_id > 0 and hasattr(bot, "send_chat_action"):
+                try:
+                    await bot.send_chat_action(chat_id=target_author_id, action="record_voice")
+                except Exception:
+                    pass
 
             raw_reply = await summarize_text_with_hf(
                 prompt=persona_prompt,

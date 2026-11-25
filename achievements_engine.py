@@ -434,12 +434,13 @@ def build_achievements_content(user_id: int, active_items: Optional[Dict[str, An
     """
     Renders achievements view text and keyboard within Telegram photo caption limits.
     """
+    import html
     all_ach = get_user_achievements(active_items)
     unlocked = [a for a in all_ach if a["is_unlocked"]]
     locked = [a for a in all_ach if not a["is_unlocked"]]
     unlocked_count = len(unlocked)
     total_count = len(all_ach)
-    pct = int((unlocked_count / total_count) * 100)
+    pct = int((unlocked_count / total_count) * 100) if total_count else 0
     total_reward = sum(a["reward_cash"] for a in unlocked)
 
     lines = [
@@ -449,27 +450,38 @@ def build_achievements_content(user_id: int, active_items: Optional[Dict[str, An
 
     if unlocked:
         lines.append("🎖️ <b>Полученные трофеи:</b>")
-        for a in unlocked[:6]:
-            lines.append(f"  ✅ <b>{a['name']}</b>")
-        if len(unlocked) > 6:
-            lines.append(f"  <i>...и еще {len(unlocked) - 6} ачивок</i>")
+        for a in unlocked[:5]:
+            lines.append(f"  ✅ <b>{html.escape(str(a['name']))}</b>")
+        if len(unlocked) > 5:
+            lines.append(f"  <i>...и еще {len(unlocked) - 5} ачивок</i>")
         lines.append("")
 
     if locked:
         lines.append("🎯 <b>Ближайшие цели для выполнения:</b>")
-        for a in locked[:6]:
-            lines.append(f"  🔒 <b>{a['name']}</b> <i>(+{a['reward_cash']} ₪)</i>\n     └ {a['desc']}")
-        if len(locked) > 6:
+        for a in locked[:5]:
+            lines.append(
+                f"  🔒 <b>{html.escape(str(a['name']))}</b> <i>(+{a['reward_cash']} ₪)</i>\n"
+                f"     └ {html.escape(str(a['desc']))}"
+            )
+        if len(locked) > 5:
             lines.append(f"\n<i>Всего закрыто {unlocked_count} из {total_count} ачивок.</i>")
 
     lines.append("\n💡 <i>Выполняй задания на борде для получения наград!</i>")
+
+    text = "\n".join(lines)
+    if len(text) > 1000:
+        from common.text_utils import safe_tg_caption
+        text = safe_tg_caption(text, max_len=1000)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
             InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room")
         ],
-        [InlineKeyboardButton(text="⬅️ В Торговый Хаб", callback_data="shop_main_hub")]
+        [
+            InlineKeyboardButton(text="⬅️ В Торговый Хаб", callback_data="shop_main_hub"),
+            InlineKeyboardButton(text="⚡ Главное меню", callback_data="menu_main")
+        ]
     ])
 
-    return "\n".join(lines), kb
+    return text, kb
