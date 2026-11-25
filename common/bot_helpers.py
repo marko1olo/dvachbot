@@ -1127,13 +1127,38 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
 
     if not post_num:
         try:
-            from common.text_utils import decode_post_num_zw
-            reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
-            zw_num = decode_post_num_zw(reply_text)
-            if zw_num:
-                post_num = zw_num
+            fwd_chat = getattr(msg.reply_to_message, 'forward_from_chat', None)
+            fwd_mid = getattr(msg.reply_to_message, 'forward_from_message_id', None)
+            if not (fwd_chat and fwd_mid):
+                fwd_origin = getattr(msg.reply_to_message, 'forward_origin', None)
+                if fwd_origin:
+                    fwd_chat = getattr(fwd_origin, 'chat', None)
+                    fwd_mid = getattr(fwd_origin, 'message_id', None)
+            if fwd_chat and fwd_mid:
+                from common.database import get_post_info_by_copy
+                info = await get_post_info_by_copy(fwd_chat.id, fwd_mid)
+                if info:
+                    post_num = info[0]
+                    if info[1] is not None:
+                        return info[1]
         except Exception:
             pass
+
+    if not post_num:
+        try:
+            from post_helpers import extract_post_num_from_message
+            extracted_num = extract_post_num_from_message(msg.reply_to_message)
+            if extracted_num:
+                post_num = extracted_num
+        except Exception:
+            try:
+                from common.text_utils import decode_post_num_zw
+                reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+                zw_num = decode_post_num_zw(reply_text)
+                if zw_num:
+                    post_num = zw_num
+            except Exception:
+                pass
 
     if post_num:
         try:
@@ -1172,29 +1197,116 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
 
 
 async def get_post_num_by_reply(msg: types.Message) -> int | None:
-    """Resolves true post_num from a replied message."""
-    if not msg or not msg.reply_to_message:
+    """
+    Resolves true post_num from a replied message using 5 resilient tiers:
+    1. RAM message_to_post
+    2. SQLite PostCopies / ChannelCopies
+    3. Forwarded channel origin (forward_from_chat / forward_origin)
+    4. Invisible zero-width metadata / tgach.top URLs / header regex
+    5. Media file_id / file_unique_id lookup
+    """
+    if not msg or not getattr(msg, 'reply_to_message', None):
         return None
-    target_chat_id = msg.reply_to_message.chat.id
-    reply_mid = msg.reply_to_message.message_id
-    lookup_key = (target_chat_id, reply_mid)
+    reply_msg = msg.reply_to_message
+    target_chat_id = getattr(getattr(reply_msg, 'chat', None), 'id', None)
+    reply_mid = getattr(reply_msg, 'message_id', None)
+    from_uid = getattr(getattr(reply_msg, 'from_user', None), 'id', None)
+
+    post_num = None
+    # Tier 1: RAM message_to_post
     try:
         from shared_state import storage_lock, message_to_post
         async with storage_lock:
-            post_num = message_to_post.get(lookup_key)
+            if target_chat_id and reply_mid:
+                post_num = message_to_post.get((target_chat_id, reply_mid))
+            if not post_num and from_uid and reply_mid:
+                post_num = message_to_post.get((from_uid, reply_mid))
             if post_num:
                 return post_num
     except Exception:
         pass
 
+    # Tier 2: SQLite PostCopies / ChannelCopies
     try:
         from common.database import get_post_info_by_copy
-        info = await get_post_info_by_copy(target_chat_id, reply_mid)
-        if info and info[0]:
-            return info[0]
+        if target_chat_id and reply_mid:
+            info = await get_post_info_by_copy(target_chat_id, reply_mid)
+            if info and info[0]:
+                post_num = info[0]
+        if not post_num and from_uid and reply_mid:
+            info = await get_post_info_by_copy(from_uid, reply_mid)
+            if info and info[0]:
+                post_num = info[0]
     except Exception:
         pass
-    return None
+
+    # Tier 3: Forwarded channel origin
+    if not post_num:
+        try:
+            fwd_chat = getattr(reply_msg, 'forward_from_chat', None)
+            fwd_mid = getattr(reply_msg, 'forward_from_message_id', None)
+            if not (fwd_chat and fwd_mid):
+                fwd_origin = getattr(reply_msg, 'forward_origin', None)
+                if fwd_origin:
+                    fwd_chat = getattr(fwd_origin, 'chat', None)
+                    fwd_mid = getattr(fwd_origin, 'message_id', None)
+            if fwd_chat and fwd_mid:
+                from common.database import get_post_info_by_copy
+                info = await get_post_info_by_copy(fwd_chat.id, fwd_mid)
+                if info and info[0]:
+                    post_num = info[0]
+        except Exception:
+            pass
+
+    # Tier 4: Zero-width metadata / URLs / header regex
+    if not post_num:
+        try:
+            from post_helpers import extract_post_num_from_message
+            from common.database import get_post_by_num
+            extracted_num = extract_post_num_from_message(reply_msg)
+            if extracted_num:
+                if await get_post_by_num(extracted_num):
+                    post_num = extracted_num
+        except Exception:
+            pass
+
+    # Tier 5: Media file_id / file_unique_id lookup
+    if not post_num:
+        try:
+            from common.database import find_post_by_file_id
+            candidate_fids = []
+            for attr in ('video_note', 'sticker', 'photo', 'video', 'animation', 'document', 'voice', 'audio'):
+                val = getattr(reply_msg, attr, None)
+                if not val or type(val).__name__ == 'MagicMock':
+                    continue
+                if isinstance(val, (list, tuple)):
+                    for item in val:
+                        for key in ('file_id', 'file_unique_id'):
+                            fv = getattr(item, key, None)
+                            if isinstance(fv, str) and fv:
+                                candidate_fids.append(fv)
+                else:
+                    for key in ('file_id', 'file_unique_id'):
+                        fv = getattr(val, key, None)
+                        if isinstance(fv, str) and fv:
+                            candidate_fids.append(fv)
+            for cfid in candidate_fids:
+                p_data = await find_post_by_file_id(cfid)
+                if p_data and p_data.get('id'):
+                    post_num = p_data['id']
+                    break
+        except Exception:
+            pass
+
+    if post_num and target_chat_id and reply_mid:
+        try:
+            from shared_state import storage_lock, message_to_post
+            async with storage_lock:
+                message_to_post[(target_chat_id, reply_mid)] = post_num
+        except Exception:
+            pass
+
+    return post_num
 
 def is_media_message(msg: Any) -> bool:
     """
@@ -1246,11 +1358,11 @@ def get_telegram_utf16_len(text: str) -> int:
 
 def smart_split_html(text: str, max_chunk_size: int = 4000) -> List[str]:
     """
-    Splits text (plain or HTML formatted) into chunks of at most `max_chunk_size` characters,
+    Splits text (plain or HTML formatted) into chunks of at most `max_chunk_size` UTF-16 code units,
     preserving HTML tag hierarchy across chunk boundaries so that every chunk is valid HTML.
 
     Guarantees:
-    - len(chunk) <= max_chunk_size for every chunk.
+    - get_telegram_utf16_len(chunk) <= max_chunk_size (and len(chunk) <= max_chunk_size) for every chunk.
     - All tags opened within or across chunk boundaries are properly closed before chunk ends
       and re-opened at the start of the next chunk.
     - Never breaks in the middle of an HTML tag or HTML entity.
@@ -1258,10 +1370,11 @@ def smart_split_html(text: str, max_chunk_size: int = 4000) -> List[str]:
     """
     if not text:
         return []
-    if len(text) <= max_chunk_size:
+    if get_telegram_utf16_len(text) <= max_chunk_size:
         return [text]
 
     import re
+    from common.text_chunker import utf16_to_char_index
     TAG_REGEX = re.compile(r'(<(/)?([a-zA-Z0-9_-]+)(?:\s+[^>]*)?>)')
 
     def get_open_tags(slice_text: str, initial_stack: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
@@ -1288,20 +1401,21 @@ def smart_split_html(text: str, max_chunk_size: int = 4000) -> List[str]:
 
     while current_pos < total_len:
         prefix = "".join(tag_full for _, tag_full in open_tag_stack)
+        prefix_units = get_telegram_utf16_len(prefix)
 
         est_closing_len = sum(len(tag_name) + 3 for tag_name, _ in open_tag_stack) + 50
-        available_content_len = max(50, max_chunk_size - len(prefix) - est_closing_len)
-
-        target_end = min(total_len, current_pos + available_content_len)
+        available_content_units = max(50, max_chunk_size - prefix_units - est_closing_len)
 
         # Check if rest of text fits cleanly
         rest_text = text[current_pos:]
         rest_stack = get_open_tags(rest_text, open_tag_stack)
         rest_closing = calc_closing_str(rest_stack)
-        if len(prefix) + len(rest_text) + len(rest_closing) <= max_chunk_size:
+        if get_telegram_utf16_len(prefix + rest_text + rest_closing) <= max_chunk_size:
             chunks.append(prefix + rest_text + rest_closing)
             break
 
+        sub_limit_idx = utf16_to_char_index(rest_text, available_content_units)
+        target_end = min(total_len, current_pos + max(1, sub_limit_idx))
         sub = text[current_pos:target_end]
 
         # Don't cut inside open tag
@@ -1341,12 +1455,14 @@ def smart_split_html(text: str, max_chunk_size: int = 4000) -> List[str]:
             chunk_slice = text[current_pos:current_pos + split_idx]
             candidate_stack = get_open_tags(chunk_slice, open_tag_stack)
             closing = calc_closing_str(candidate_stack)
-            if len(prefix) + len(chunk_slice) + len(closing) <= max_chunk_size:
+            candidate_full = prefix + chunk_slice + closing
+            candidate_units = get_telegram_utf16_len(candidate_full)
+            if candidate_units <= max_chunk_size:
                 open_tag_stack = candidate_stack
-                chunks.append(prefix + chunk_slice + closing)
+                chunks.append(candidate_full)
                 current_pos += split_idx
                 break
-            split_idx -= max(1, (len(prefix) + len(chunk_slice) + len(closing) - max_chunk_size))
+            split_idx -= max(1, (candidate_units - max_chunk_size))
             sub_temp = text[current_pos:current_pos + split_idx]
             last_lt = sub_temp.rfind('<')
             last_gt = sub_temp.rfind('>')
@@ -1371,7 +1487,7 @@ async def safe_send_message(
     sleep_between: float = 0.05
 ) -> Optional[Any]:
     """
-    Safely sends any message, splitting it into valid HTML chunks if len(text) > 4000 chars.
+    Safely sends any message, splitting it into valid HTML chunks if UTF-16 length > 4000 units.
     Guarantees that TelegramBadRequest: MESSAGE_TOO_LONG is never thrown.
     Handles HTML parsing fallbacks gracefully.
     """
@@ -1380,7 +1496,7 @@ async def safe_send_message(
     import inspect
     from aiogram.exceptions import TelegramBadRequest
 
-    chunks = smart_split_html(text, max_chunk_size=4000) if len(text) > 4000 else [text]
+    chunks = smart_split_html(text, max_chunk_size=4000) if get_telegram_utf16_len(text) > 4000 else [text]
     last_msg = None
 
     for i, chunk in enumerate(chunks):
@@ -1464,7 +1580,7 @@ async def safe_answer(
     elif hasattr(target_obj, "from_user") and target_obj.from_user and hasattr(target_obj.from_user, "id"):
         chat_id = target_obj.from_user.id
 
-    if len(text) <= 4000 and hasattr(target_obj, "answer"):
+    if get_telegram_utf16_len(text) <= 4000 and hasattr(target_obj, "answer"):
         import inspect
         from aiogram.exceptions import TelegramBadRequest
         try:
@@ -1529,7 +1645,7 @@ async def safe_reply(
     bot = getattr(message, "bot", None)
     chat_id = message.chat.id if (hasattr(message, "chat") and message.chat) else 0
 
-    if len(text) <= 4000 and hasattr(message, "reply"):
+    if get_telegram_utf16_len(text) <= 4000 and hasattr(message, "reply"):
         import inspect
         from aiogram.exceptions import TelegramBadRequest
         try:
@@ -1622,7 +1738,7 @@ async def _send_safe_text_message(
     if not text:
         return None
 
-    if len(text) > 4000:
+    if get_telegram_utf16_len(text) > 4000:
         if bot and chat_id:
             return await safe_send_message(bot, chat_id, text, reply_markup=reply_markup)
         if hasattr(target_obj, "answer"):
@@ -1717,7 +1833,7 @@ def install_message_safety_guard():
     async def _guarded_answer(self: Message, text: str, *args, **kwargs):
         if not text:
             return None
-        if len(text) <= 4000:
+        if get_telegram_utf16_len(text) <= 4000:
             try:
                 return await _orig_answer(self, text, *args, **kwargs)
             except TelegramBadRequest as ex:
@@ -1748,7 +1864,7 @@ def install_message_safety_guard():
     async def _guarded_reply(self: Message, text: str, *args, **kwargs):
         if not text:
             return None
-        if len(text) <= 4000:
+        if get_telegram_utf16_len(text) <= 4000:
             try:
                 return await _orig_reply(self, text, *args, **kwargs)
             except TelegramBadRequest as ex:

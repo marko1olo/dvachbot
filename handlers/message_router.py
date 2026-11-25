@@ -38,7 +38,15 @@ from common.db_pool import db_lock
 from common.forward_utils import is_forward_message, is_forwarded_from_bot, contains_board_post_header, format_forwarded_quote
 from post_helpers import _quote_info_from_content
 from shared_state import *
-from shared_state import _media_group_state_key, _active_duels, _DUEL_TIMEOUT
+from shared_state import (
+    _media_group_state_key,
+    _active_duels,
+    _DUEL_TIMEOUT,
+    _trim_messages_storage_unlocked,
+    _trim_post_copy_maps_unlocked,
+    MAX_COPY_MAP_POSTS_IN_MEMORY,
+    MAX_MESSAGES_IN_MEMORY,
+)
 
 from common.task_manager import spawn_task
 from delivery_manager import execute_delayed_edit, complete_media_group_after_delay
@@ -171,11 +179,16 @@ async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = N
         if info:
             reply_to_post = info[0]
 
-    # Tier 2.5: Forwarded message copy lookup
+    # Tier 2.5: Forwarded message copy lookup (legacy forward_from_chat + Bot API 7 forward_origin)
     if not reply_to_post:
         fwd_chat = getattr(reply_msg, 'forward_from_chat', None)
         fwd_mid = getattr(reply_msg, 'forward_from_message_id', None)
-        if fwd_chat and fwd_mid:
+        if not (fwd_chat and fwd_mid):
+            fwd_origin = getattr(reply_msg, 'forward_origin', None)
+            if fwd_origin:
+                fwd_chat = getattr(fwd_origin, 'chat', None) or getattr(fwd_origin, 'sender_chat', None)
+                fwd_mid = getattr(fwd_origin, 'message_id', None)
+        if fwd_chat and fwd_mid and getattr(fwd_chat, 'id', None):
             info = await get_post_info_by_copy(fwd_chat.id, fwd_mid)
             if info:
                 reply_to_post = info[0]
@@ -217,11 +230,20 @@ async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = N
                 reply_to_post = p_data['id']
                 break
 
-    # Tier 5: Global message_id fallback in PostCopies / ChannelCopies
-    if not reply_to_post and mid:
-        info = await get_post_info_by_copy(0, mid)
-        if info:
-            reply_to_post = info[0]
+    # Tier 5: External reply origin lookup (Bot API external_reply)
+    if not reply_to_post:
+        ext_reply = getattr(reply_msg, 'external_reply', None)
+        ext_origin = getattr(ext_reply, 'origin', None) if ext_reply else None
+        ext_chat = (
+            getattr(ext_origin, 'chat', None)
+            or getattr(ext_origin, 'sender_chat', None)
+            or getattr(ext_reply, 'chat', None)
+        ) if ext_reply else None
+        ext_mid = getattr(ext_origin, 'message_id', None) or getattr(ext_reply, 'message_id', None) if ext_reply else None
+        if ext_chat and ext_mid and getattr(ext_chat, 'id', None):
+            info = await get_post_info_by_copy(ext_chat.id, ext_mid)
+            if info:
+                reply_to_post = info[0]
 
     # Post-resolution: cache in RAM and ensure messages_storage is hydrated from SQLite
     if reply_to_post:
@@ -230,6 +252,7 @@ async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = N
                 message_to_post[(c_id, mid)] = reply_to_post
             if reply_msg.from_user:
                 message_to_post[(reply_msg.from_user.id, mid)] = reply_to_post
+            _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
             in_storage = reply_to_post in messages_storage
         if not in_storage:
             parent_post = await get_post_by_num(reply_to_post)
@@ -254,6 +277,7 @@ async def resolve_reply_from_message(reply_msg: Message, chat_id: int | None = N
                             "reply_to_post_num": parent_post.get("reply_to_post_num"),
                             "chain_depth": 0
                         }
+                        _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
 
     return reply_to_post
 
@@ -2051,6 +2075,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if mime_type:
                 media_meta['mime_type'] = mime_type
 
+        missing_targets = []
+        sent_media_in_multi = False
         for i, (post_num_to_reply, text_chunk) in enumerate(multi_reply_blocks):
             # Проверяем существование поста (сначала в RAM, потом в БД)
             post_exists = post_num_to_reply in messages_storage
@@ -2059,14 +2085,16 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     post_exists = True
 
             if not post_exists:
+                missing_targets.append(post_num_to_reply)
                 continue
 
             formatted_chunk = RE_REPLY_QUOTE_FORMAT.sub(replacer, sanitize_html(text_chunk))
 
-            # Прикрепляем медиа к первому посту в цепочке ответов, остальные — текст
-            if i == 0 and media_type:
+            # Прикрепляем медиа к первому валидному посту в цепочке ответов, остальные — текст
+            if not sent_media_in_multi and media_type:
                 content = {'type': media_type, 'file_id': media_file_id, 'caption': formatted_chunk}
                 content.update(media_meta)
+                sent_media_in_multi = True
             else:
                 content = {'type': 'text', 'text': formatted_chunk}
             quote_info = await build_quick_quote_info(post_num_to_reply)
@@ -2136,6 +2164,18 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                         spawn_task(trigger_anchor_post(message.bot, board_id, stream))
             await asyncio.sleep(0.33)
 
+        if missing_targets and not is_shadow_muted and getattr(getattr(message, 'chat', None), 'type', None) == 'private':
+            try:
+                targets_str = ", ".join(f"#{p}" for p in missing_targets)
+                warn_msg = await message.bot.send_message(
+                    user_id,
+                    f"⚠️ Не удалось найти пост(ы) {targets_str} в базе (возможно, удалены).",
+                    disable_notification=True,
+                )
+                spawn_task(delete_message_after_delay(message.bot, user_id, warn_msg.message_id, 8))
+            except Exception as _miss_err:
+                logger.debug("Could not send missing multi-reply hint to %s: %s", user_id, _miss_err)
+
         if limit_hit:
             try:
                 await message.bot.send_message(user_id, "Replies limit reached (3 max).", disable_notification=True)
@@ -2188,6 +2228,19 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     reply_to_post = None
     if message.reply_to_message:
         reply_to_post = await resolve_reply_from_message(message.reply_to_message, message.chat.id)
+        if not reply_to_post and not is_shadow_muted and getattr(getattr(message, 'chat', None), 'type', None) == 'private':
+            try:
+                from post_helpers import extract_post_num_from_message
+                stale_pnum = extract_post_num_from_message(message.reply_to_message)
+                if stale_pnum:
+                    warn_msg = await message.bot.send_message(
+                        user_id,
+                        f"ℹ️ Пост #{stale_pnum} не найден в базе (возможно, удалён) — отправлено как обычный пост.",
+                        disable_notification=True,
+                    )
+                    spawn_task(delete_message_after_delay(message.bot, user_id, warn_msg.message_id, 8))
+            except Exception as _stale_err:
+                logger.debug("Could not notify stale reply target: %s", _stale_err)
     is_fwd_bot = is_forwarded_from_bot(message, message.bot)
     is_fwd_msg = is_forward_message(message)
     is_forward = is_fwd_bot or is_fwd_msg
@@ -2245,9 +2298,21 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             reply_to_post = resolved_pnum
             text_for_corpus = cleaned_corpus_text
             if message.content_type == 'text':
-                content['text'] = sanitize_html(cleaned_corpus_text)
+                cur_html = content.get('text') or ""
+                m_html = RE_ARCHIVE_LINK.search(cur_html)
+                if m_html:
+                    rem_html = f"{cur_html[:m_html.start()].strip()} {cur_html[m_html.end():].strip()}".strip()
+                    content['text'] = sanitize_html(rem_html) if rem_html else sanitize_html(cleaned_corpus_text)
+                else:
+                    content['text'] = sanitize_html(cleaned_corpus_text)
             elif 'caption' in content:
-                content['caption'] = sanitize_html(cleaned_corpus_text)
+                cur_html = content.get('caption') or ""
+                m_html = RE_ARCHIVE_LINK.search(cur_html)
+                if m_html:
+                    rem_html = f"{cur_html[:m_html.start()].strip()} {cur_html[m_html.end():].strip()}".strip()
+                    content['caption'] = sanitize_html(rem_html) if rem_html else ""
+                else:
+                    content['caption'] = sanitize_html(cleaned_corpus_text) if cleaned_corpus_text != f">>{resolved_pnum}" else ""
             try:
                 logger.info(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
             except Exception:
@@ -2806,6 +2871,13 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
            (mutes.get(user_id) and mutes[user_id] > datetime.now(UTC)):
             return
     b_data.setdefault('last_activity', {})[user_id] = datetime.now(UTC)
+    active_users_set = b_data.setdefault('users', {}).setdefault('active', set())
+    if user_id not in active_users_set:
+        active_users_set.add(user_id)
+        try:
+            await add_or_activate_user(user_id, board_id)
+        except Exception as _act_err:
+            logger.debug("add_or_activate_user failed in handle_media_group_init: %s", _act_err)
 
     is_leader = False
     async with media_group_creation_lock:
@@ -2868,7 +2940,6 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                     await apply_shadow_mute(user_id, board_id, duration_seconds=base_sec,
                                             reason=f"Флуд медиагруппами: {flood_reason}", is_exponential=False)
                     current_media_groups.pop(media_group_key, None)
-                    await apply_penalty(message.bot, user_id, 'media_group', board_id)
                     if 'init_event' in group:
                         group['init_event'].set()
                     return
@@ -2922,6 +2993,26 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         group = current_media_groups.get(media_group_key)
         if not group or group.get('is_initializing'):
             return
+        # Если ответ/подпись пришли на втором или последующем элементе альбома (out-of-order / 2nd photo caption)
+        if group.get('reply_to_post') is None and message.reply_to_message:
+            late_reply = await resolve_reply_from_message(message.reply_to_message, message.chat.id)
+            if late_reply:
+                group['reply_to_post'] = late_reply
+                group['reply_to_message_id'] = message.reply_to_message.message_id
+        if not group.get('caption') and (getattr(message, 'caption', None) or getattr(message, 'caption_html_text', None)):
+            raw_late_html = getattr(message, 'caption_html_text', None)
+            if not isinstance(raw_late_html, str):
+                raw_late_html = message.caption or ""
+            late_safe_html = sanitize_html(raw_late_html)
+            is_fwd_late = is_forwarded_from_bot(message, message.bot) or is_forward_message(message)
+            if late_safe_html and (is_fwd_late or contains_board_post_header(late_safe_html)):
+                late_safe_html = format_forwarded_quote(late_safe_html, is_forward=is_fwd_late)
+            if group.get('reply_to_post') is None:
+                resolved_late_pnum, cleaned_late_cap = await resolve_archive_or_inline_reply(late_safe_html)
+                if resolved_late_pnum:
+                    group['reply_to_post'] = resolved_late_pnum
+                    late_safe_html = "" if cleaned_late_cap == f">>{resolved_late_pnum}" else sanitize_html(cleaned_late_cap)
+            group['caption'] = late_safe_html
 
     group.get('source_message_ids', set()).add(message.message_id)
     if message.message_id not in group.get('processed_messages', set()):

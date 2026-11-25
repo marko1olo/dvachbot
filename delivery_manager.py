@@ -49,7 +49,7 @@ from common.database import (
     mark_broadcast_posts_sent
 )
 from common.board_config import BOARD_CONFIG
-from post_helpers import format_header, safe_edit_message_text, safe_edit_message_caption, safe_delete_message
+from post_helpers import format_header, safe_edit_message_text, safe_edit_message_caption, safe_delete_message, safe_truncate_post
 from common.thread_manager import get_threads_data, get_thread_info
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post, is_ai_slop_content, is_admin
@@ -737,7 +737,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             check_text = (str(header_text or '') + " " + str(raw_content_text or '')).lower()
             if any(str(word).strip().lower() in check_text for word in user_hide if str(word).strip()):
                 should_hide = True
-        head = f"<i>{escape_html(header_text)}</i>"
+        head = f"<i>{escape_html(html.unescape(header_text or ''))}</i>"
         if user_id == reply_author_id:
             head = head.replace("Пост", "🔴 Пост").replace("Post", "🔴 Post")
         if should_hide:
@@ -780,7 +780,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     full_text = user_specific_texts.get(user_id, "")
                     content_type = content_copy.get('type')
                     if content_type == 'text':
-                        if len(full_text) > 4096: full_text = full_text[:4093] + "..."
+                        full_text = safe_truncate_post(full_text, 4096)
                         await asyncio.wait_for(
                             safe_edit_message_text(
                                 bot=bot_instance,
@@ -795,7 +795,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                             timeout=2.5
                         )
                     else:
-                        if len(full_text) > 1024: full_text = full_text[:1021] + "..."
+                        full_text = safe_truncate_post(full_text, 1024)
                         await asyncio.wait_for(
                             safe_edit_message_caption(
                                 bot=bot_instance,
@@ -1667,14 +1667,36 @@ async def board_help_worker(board_id: str, extended_interval: bool = False):
                     6: ["shop", "market", "maid", "wallet"],
                 }
                 banner_cat = cat_map.get(choice, "start")
+                import banner_manager
                 from banner_manager import get_banner_delivery_payload
-                fname, fid, img_bytes = get_banner_delivery_payload(category=banner_cat)
+                g_bots = getattr(shared_state, 'GLOBAL_BOTS', {}) or {}
+                target_bot = g_bots.get(board_id) or g_bots.get('b')
+                b_bot_id = getattr(target_bot, 'id', None)
+                fname, fid, img_bytes = get_banner_delivery_payload(category=banner_cat, bot_id=b_bot_id)
+                # Ensure fid isn't a foreign bot's cached file_id from _CACHE_BY_FILENAME
+                if fid and b_bot_id and fname:
+                    scoped_fid = (
+                        banner_manager._BANNER_CACHE.get(f"{b_bot_id}:{fname}")
+                        or banner_manager._BANNER_CACHE.get(f"{b_bot_id}_{fname}")
+                    )
+                    if scoped_fid:
+                        fid = scoped_fid
+                    else:
+                        local_p = banner_manager.BANNERS_DIR / fname
+                        if local_p.exists():
+                            try:
+                                with open(local_p, 'rb') as bf:
+                                    img_bytes = bf.read()
+                                fid = None
+                            except Exception:
+                                pass
                 is_photo = bool(fid or img_bytes)
                 media_type = ('video' if is_video_banner(fname) else 'photo') if is_photo else 'text'
                 content = {
                     'type': media_type,
                     'file_id': fid,
                     'image_bytes': img_bytes,
+                    'banner_filename': fname,
                     'caption': message_text if is_photo else None,
                     'text': None if is_photo else message_text,
                     'is_system_message': True,
@@ -1790,19 +1812,46 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
             current_media_groups.pop(media_group_key, None)
             return
         raw_messages.sort(key=lambda m: m.message_id)
+        existing_caption = group.get('caption') or ""
         found_caption = ""
+        found_caption_raw = ""
         for msg in raw_messages:
             if msg.caption:
                 raw_caption_html = getattr(msg, 'caption_html_text', None)
                 if not isinstance(raw_caption_html, str):
                     raw_caption_html = msg.caption if isinstance(msg.caption, str) else str(msg.caption or "")
+                found_caption_raw = msg.caption if isinstance(msg.caption, str) else raw_caption_html
                 sanitize_fn = getattr(main, 'sanitize_html', None)
                 if sanitize_fn:
                     found_caption = sanitize_fn(raw_caption_html)
                 else:
                     found_caption = html.escape(raw_caption_html)
                 break
-        group['caption'] = found_caption
+
+        if existing_caption:
+            # Preserve pre-processed caption from handle_media_group_init (with archive reply stripping / forward quote)
+            group['caption'] = existing_caption
+        elif found_caption:
+            # Late-arriving caption from non-leader message: run forward quote & archive/inline reply resolution
+            resolved_caption = found_caption
+            try:
+                from common.forward_utils import is_forward_message, is_forwarded_from_bot, contains_board_post_header, format_forwarded_quote
+                from handlers.message_router import resolve_archive_or_inline_reply
+                caption_msg = next((m for m in raw_messages if m.caption), None)
+                is_fwd = bool(caption_msg and (is_forwarded_from_bot(caption_msg, bot_instance) or is_forward_message(caption_msg)))
+                if not group.get('reply_to_post') and found_caption_raw:
+                    res_pnum, cleaned_cap = await resolve_archive_or_inline_reply(found_caption_raw)
+                    if res_pnum:
+                        group['reply_to_post'] = res_pnum
+                        sanitize_fn = getattr(main, 'sanitize_html', None)
+                        resolved_caption = sanitize_fn(cleaned_cap) if sanitize_fn else html.escape(cleaned_cap)
+                if resolved_caption and (is_fwd or contains_board_post_header(resolved_caption)):
+                    resolved_caption = format_forwarded_quote(resolved_caption, is_forward=is_fwd)
+            except Exception:
+                pass
+            group['caption'] = resolved_caption
+        else:
+            group['caption'] = ""
         final_media_list = []
         # Личность альбома для определения баяна. file_unique_id Telegram отдаёт
         # прямо в апдейте, поэтому ничего не качаем и не хешируем — как и для
@@ -1810,21 +1859,40 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         # альбомы исключает, поэтому они оставались без проверки.
         album_unique_ids = []
         for msg in raw_messages:
-            c_type = str(msg.content_type).split('.')[-1].lower() if msg.content_type else 'photo'
-            media_data = {'type': c_type, 'file_id': None}
+            c_type = str(msg.content_type).split('.')[-1].lower() if getattr(msg, 'content_type', None) else ''
             media_obj = None
-            if msg.photo:
-                media_obj = msg.photo[-1]
-                media_data['file_id'] = media_obj.file_id
-            elif msg.video:
-                media_obj = msg.video
-                media_data['file_id'] = media_obj.file_id
-            elif msg.document:
-                media_obj = msg.document
-                media_data['file_id'] = media_obj.file_id
-            elif msg.audio:
-                media_obj = msg.audio
-                media_data['file_id'] = media_obj.file_id
+            p_val = getattr(msg, 'photo', None)
+            v_val = getattr(msg, 'video', None)
+            d_val = getattr(msg, 'document', None)
+            a_val = getattr(msg, 'audio', None)
+            if c_type == 'photo' or (not c_type and isinstance(p_val, (list, tuple)) and p_val):
+                c_type = 'photo'
+                media_obj = p_val[-1] if isinstance(p_val, (list, tuple)) and p_val else None
+            elif c_type == 'video' or (not c_type and v_val and type(v_val).__name__ != 'MagicMock'):
+                c_type = 'video'
+                media_obj = v_val
+            elif c_type == 'document' or (not c_type and d_val and type(d_val).__name__ != 'MagicMock'):
+                c_type = 'document'
+                media_obj = d_val
+            elif c_type == 'audio' or (not c_type and a_val and type(a_val).__name__ != 'MagicMock'):
+                c_type = 'audio'
+                media_obj = a_val
+            else:
+                if isinstance(p_val, (list, tuple)) and p_val:
+                    c_type = 'photo'
+                    media_obj = p_val[-1]
+                elif v_val and type(v_val).__name__ != 'MagicMock':
+                    c_type = 'video'
+                    media_obj = v_val
+                elif d_val and type(d_val).__name__ != 'MagicMock':
+                    c_type = 'document'
+                    media_obj = d_val
+                elif a_val and type(a_val).__name__ != 'MagicMock':
+                    c_type = 'audio'
+                    media_obj = a_val
+                else:
+                    c_type = c_type or 'photo'
+            media_data = {'type': c_type, 'file_id': getattr(media_obj, 'file_id', None) if media_obj else None}
             if media_obj:
                 file_name = getattr(media_obj, 'file_name', None)
                 mime_type = getattr(media_obj, 'mime_type', None)
@@ -2099,7 +2167,7 @@ async def thread_notifier():
                             recipients = users_on_main
                         if not recipients: continue
                         lang = thread_stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-                        title = thread_info.get('title', '...')
+                        title = escape_html(str(thread_info.get('title', '...')))
                         phrases = thread_messages.get(lang, {}).get('thread_activity_notification', ["High activity."])
                         notification_text = random.choice(phrases).format(title=title, count=count)
                         bot_username = BOARD_CONFIG[board_id]['username'].lstrip('@')
@@ -2142,7 +2210,7 @@ async def thread_notifier():
                 remaining = main.MAX_POSTS_PER_THREAD - current_posts
                 if 0 < remaining <= main.THREAD_BUMP_LIMIT_WARNING_THRESHOLD:
                     thread_info['bump_limit_notified'] = True
-                    title = thread_info.get('title', '...')
+                    title = escape_html(str(thread_info.get('title', '...')))
                     notification_text = random.choice(thread_messages[lang]['thread_reaching_bump_limit']).format(title=title, remaining=remaining)
                     bot_username = BOARD_CONFIG[board_id]['username'].lstrip('@')
                     deeplink_url = f"https://t.me/{bot_username}?start=thread_{thread_id}"

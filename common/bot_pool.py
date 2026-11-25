@@ -228,12 +228,36 @@ class MultiStreamBotPool:
         cooling_bots.sort(key=lambda x: x[0])
         return ready_bots + [b for _, b in cooling_bots]
 
-    def get_download_candidates(self, primary_bot: Optional[Bot] = None) -> List[Bot]:
+    def register_external_bot(self, bot: Optional[Bot]) -> Optional[int]:
+        """
+        Регистрирует внешний объект Bot (например, из GLOBAL_BOTS для отдельных досок)
+        в _shared_bots для кросс-бот скачивания и зеркалирования file_id без создания
+        лишних aiohttp-сессий.
+        """
+        if not bot:
+            return None
+        bot_id = getattr(bot, 'id', None)
+        if not bot_id and hasattr(bot, 'token') and ':' in str(bot.token):
+            try:
+                bot_id = int(str(bot.token).split(':', 1)[0])
+            except (ValueError, TypeError):
+                bot_id = None
+        if not bot_id or bot_id in self.disabled_bot_ids:
+            return None
+        if bot_id not in self._shared_bots:
+            self._shared_bots[bot_id] = bot
+        return bot_id
+
+    def get_download_candidates(
+        self,
+        primary_bot: Optional[Bot] = None,
+        extra_bots: Optional[List[Bot]] = None,
+    ) -> List[Bot]:
         """
         Формирует оптимальный список ботов-кандидатов для скачивания медиа:
         1. Владелец файла (если жив и не в кулдауне)
         2. Главный бот (если жив и не в кулдауне)
-        3. Другие активные боты, готовые к работе (не в кулдауне)
+        3. Другие активные боты пула и досок (extra_bots), готовые к работе
         4. Владелец файла (если был в кулдауне)
         5. Остальные боты в кулдауне (в порядке скорейшего выхода из кулдауна)
         """
@@ -271,9 +295,18 @@ class MultiStreamBotPool:
                     candidates.append(main_bot)
                     seen.add(m_id)
 
-        # 3. All other active ready bots
+        # 3. All other active ready bots (pool + external board bots)
         cooling = []
-        for b_id, b in self._shared_bots.items():
+        combined_items = list(self._shared_bots.items())
+        if extra_bots:
+            for eb in extra_bots:
+                if not eb:
+                    continue
+                eb_id = _get_bid(eb)
+                if eb_id not in self._shared_bots:
+                    combined_items.append((eb_id, eb))
+
+        for b_id, b in combined_items:
             if b_id in seen or b_id in self.disabled_bot_ids:
                 continue
             cd_until = self.cooldown_bots.get(b_id, 0)
@@ -298,6 +331,75 @@ class MultiStreamBotPool:
                 seen.add(b_id)
 
         return candidates
+
+    async def download_media_bytes_with_pool(
+        self,
+        file_id: str,
+        primary_bot: Optional[Bot] = None,
+        owner_id: Optional[int] = None,
+        extra_bots: Optional[List[Bot]] = None,
+        timeout_per_bot: float = 10.0,
+        max_attempts: int = 12,
+    ) -> Optional[bytes]:
+        """
+        Скачивает байты медиа по Telegram file_id, перебирая бота-владельца,
+        основного бота, переданных extra_bots (GLOBAL_BOTS) и весь пул ботов.
+        Автоматически обрабатывает FloodWait (кулдаун) и кросс-бот отказы.
+        """
+        import io
+        from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
+
+        if not file_id or not isinstance(file_id, str) or file_id.startswith("<"):
+            return None
+
+        owner_bot = None
+        if owner_id:
+            owner_bot = self.get_bot_by_id(owner_id)
+            if not owner_bot and extra_bots:
+                for eb in extra_bots:
+                    eb_id = getattr(eb, 'id', None)
+                    if not eb_id and hasattr(eb, 'token') and ':' in str(eb.token):
+                        try:
+                            eb_id = int(str(eb.token).split(':', 1)[0])
+                        except (ValueError, TypeError):
+                            eb_id = None
+                    if eb_id == owner_id:
+                        owner_bot = eb
+                        break
+
+        candidates = self.get_download_candidates(
+            primary_bot=owner_bot or primary_bot,
+            extra_bots=extra_bots,
+        )
+        if primary_bot and primary_bot not in candidates:
+            candidates.insert(0, primary_bot)
+
+        for bot_inst in candidates[:max_attempts]:
+            try:
+                buf = io.BytesIO()
+                if hasattr(bot_inst, 'download') and callable(bot_inst.download):
+                    try:
+                        await asyncio.wait_for(bot_inst.download(file_id, destination=buf), timeout=timeout_per_bot)
+                    except TelegramRetryAfter:
+                        raise
+                    except Exception:
+                        pass
+                if buf.tell() == 0 and hasattr(bot_inst, 'get_file') and hasattr(bot_inst, 'download_file'):
+                    tg_file = await asyncio.wait_for(bot_inst.get_file(file_id), timeout=timeout_per_bot)
+                    if tg_file and getattr(tg_file, 'file_path', None):
+                        await asyncio.wait_for(bot_inst.download_file(tg_file.file_path, destination=buf), timeout=timeout_per_bot)
+                buf.seek(0)
+                data = buf.read()
+                if data:
+                    return data
+            except TelegramRetryAfter as e:
+                self.mark_bot_cooldown_by_bot(bot_inst, duration_sec=float(getattr(e, 'retry_after', 15) or 15))
+                continue
+            except (asyncio.TimeoutError, TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError):
+                continue
+            except Exception:
+                continue
+        return None
 
     def get_main_bot(self) -> Optional[Bot]:
         """Возвращает 'главного' бота (первый из RU пула)."""
@@ -373,7 +475,7 @@ class MultiStreamBotPool:
         for bot in self.all_bots:
             try:
                 await bot.session.close()
-            except:
+            except Exception:
                 pass
         # Windows Proactor loop drain delay for SSL transports
         await asyncio.sleep(0.250)

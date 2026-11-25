@@ -11,7 +11,16 @@ import inspect
 import re
 from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
-from common.database import get_post_by_num, get_post_copies, add_post_copies
+from common.database import (
+    get_post_by_num,
+    get_post_copies,
+    add_post_copies,
+    get_file_owner_id,
+    get_file_mirrors,
+    add_file_mirror,
+    register_file_owner,
+)
+from common.bot_helpers import get_telegram_utf16_len
 def is_ai_slop_content(content: dict | None = None, text: str | None = None) -> bool:
     from common.bot_helpers import is_ai_slop_content as _check_slop
     return _check_slop(content, text)
@@ -53,7 +62,7 @@ def _format_quote_block(quote_info: dict | None) -> str | None:
     if not quote_info:
         return None
     quote_text_raw = quote_info.get('text') or quote_info.get('quote_text') or ''
-    quote_text_clean = clean_html_tags(quote_text_raw) or ''
+    quote_text_clean = html.unescape(clean_html_tags(quote_text_raw) or '')
 
     quote_parts = []
     if quote_text_clean:
@@ -329,12 +338,16 @@ class MessageBroadcaster:
         self.final_keyboard = self.keyboard
         self.post_num = self.content.get('post_num')
         self.base_header_text = self.content.get('header', '')
-        self.base_head_html = f"<i>{escape_html(self.base_header_text)}</i>"
+        self.base_head_html = f"<i>{escape_html(html.unescape(self.base_header_text or ''))}</i>"
         self.raw_text = self.content.get('text') or self.content.get('caption') or ''
         # Переопределяется в _prepare_content_and_mentions, когда известен header.
         self.hide_check_text = (str(self.base_header_text or '') + " " + str(self.raw_text or '')).lower()
         self.content_for_common = self.content.copy()
         self.is_ai_content = is_ai_slop_content(self.content, self.raw_text)
+        self._media_heal_lock = asyncio.Lock()
+        self._media_probe_done = False
+        self._healed_media_cache = {}
+        self._failed_media_ids = set()
 
     async def broadcast(self) -> list:
         if not self.recipients or not self.content or 'type' not in self.content:
@@ -343,9 +356,10 @@ class MessageBroadcaster:
         if not self.b_data:
             return DeliveryResults([], remaining_recipients=set(), interrupted_reason=None)
 
+        banned_users_set = self.b_data.get('users', {}).get('banned', set())
         active_recipients = {
             uid for uid in self.recipients
-            if uid > 0 and uid not in self.b_data['users']['banned']
+            if uid > 0 and uid not in banned_users_set
         }
         if self.is_ai_content:
             users_settings = self.b_data.get('user_settings', {})
@@ -485,8 +499,8 @@ class MessageBroadcaster:
         elif "Post" in highlight_header_text:
             highlight_header_text = highlight_header_text.replace("Post", "🔴 Post", 1)
 
-        self.base_head_html = f"<i>{escape_html(self.base_header_text)}</i>"
-        self.highlight_head_html = f"<i>{escape_html(highlight_header_text)}</i>"
+        self.base_head_html = f"<i>{escape_html(html.unescape(self.base_header_text or ''))}</i>"
+        self.highlight_head_html = f"<i>{escape_html(html.unescape(highlight_header_text or ''))}</i>"
 
         has_reply_markers = ">>" in self.raw_text
         self.users_settings = self.b_data.get('user_settings', {}) if self.b_data else {}
@@ -515,6 +529,236 @@ class MessageBroadcaster:
                         db_post = await get_post_by_num(m_num)
                         if db_post:
                             self.mentioned_authors[m_num] = db_post.get("author_id")
+
+        await self._prewarm_cross_bot_media()
+
+    def _invalidate_broken_banner_cache(self, failed_fid: str | None = None, banner_filename: str | None = None) -> bytes | None:
+        """Удаляет битый banner file_id из banner_manager._BANNER_CACHE и при наличии читает оригинал с диска."""
+        disk_bytes = None
+        recovered_fname = banner_filename
+        try:
+            import banner_manager
+            cache = getattr(banner_manager, "_BANNER_CACHE", None)
+            by_fname = getattr(banner_manager, "_CACHE_BY_FILENAME", None)
+            banners_dir = getattr(banner_manager, "BANNERS_DIR", None)
+            dirty = False
+
+            if isinstance(cache, dict) and failed_fid:
+                for ck in list(cache.keys()):
+                    val = cache.get(ck)
+                    if val == failed_fid:
+                        if not recovered_fname and isinstance(ck, str):
+                            if "::" in ck:
+                                recovered_fname = ck.rsplit("::", 1)[-1]
+                            elif ":" in ck and not ck.startswith("pool:"):
+                                recovered_fname = ck.split(":", 1)[-1]
+                        cache.pop(ck, None)
+                        dirty = True
+            if isinstance(cache, dict) and recovered_fname:
+                b_id = getattr(self.bot_instance, "id", None)
+                for ck in list(cache.keys()):
+                    if isinstance(ck, str) and (ck.endswith(f":{recovered_fname}") or ck.endswith(f"::{recovered_fname}")):
+                        if not b_id or ck.startswith(f"{b_id}:") or ck.startswith(f"pool:{b_id}:") or cache.get(ck) == failed_fid:
+                            cache.pop(ck, None)
+                            dirty = True
+            if isinstance(by_fname, dict):
+                if failed_fid:
+                    for fname_k in list(by_fname.keys()):
+                        if by_fname.get(fname_k) == failed_fid:
+                            if not recovered_fname:
+                                recovered_fname = fname_k
+                            by_fname.pop(fname_k, None)
+                            dirty = True
+                if recovered_fname and recovered_fname in by_fname and by_fname.get(recovered_fname) == failed_fid:
+                    by_fname.pop(recovered_fname, None)
+                    dirty = True
+
+            if dirty:
+                save_fn = getattr(banner_manager, "save_cache", None)
+                if callable(save_fn):
+                    try:
+                        save_fn(force=True)
+                    except TypeError:
+                        save_fn()
+
+            if recovered_fname and banners_dir:
+                candidate = os.path.join(str(banners_dir), recovered_fname)
+                if os.path.isfile(candidate):
+                    with open(candidate, "rb") as f:
+                        disk_bytes = f.read()
+        except Exception as e:
+            runtime_logger.debug(f"_invalidate_broken_banner_cache skipped/failed: {e}")
+        return disk_bytes
+
+    def _update_banner_cache_after_heal(self, new_fid: str, banner_filename: str | None) -> None:
+        if not new_fid or not banner_filename:
+            return
+        try:
+            import banner_manager
+            b_id = getattr(self.bot_instance, "id", None)
+            cache = getattr(banner_manager, "_BANNER_CACHE", None)
+            if isinstance(cache, dict) and b_id:
+                cache[f"{b_id}:{banner_filename}"] = new_fid
+                save_fn = getattr(banner_manager, "save_cache", None)
+                if callable(save_fn):
+                    save_fn()
+        except Exception:
+            pass
+
+    async def _download_media_bytes_resilient(self, fid: str, banner_filename: str | None = None) -> tuple[bytes | None, str | None]:
+        """Скачивает байты медиа: локальный баннер -> FileMirrors -> archive_manager -> multi-bot pool."""
+        target_bot_id = getattr(self.bot_instance, "id", None)
+
+        # 1. Если это баннер и оригинал лежит на диске — читаем локально без сетевых запросов
+        if banner_filename:
+            disk_bytes = self._invalidate_broken_banner_cache(fid, banner_filename)
+            if disk_bytes:
+                ext = os.path.splitext(banner_filename)[1].lstrip('.') or "jpg"
+                return disk_bytes, f"banner.{ext}"
+        else:
+            disk_bytes = self._invalidate_broken_banner_cache(fid, None)
+            if disk_bytes:
+                return disk_bytes, "banner.jpg"
+
+        # 2. Проверяем FileMirrors (bot-mirror или HTTP mirror)
+        try:
+            mirrors = await get_file_mirrors(fid)
+            if isinstance(mirrors, dict):
+                if target_bot_id:
+                    bot_mirror_fid = mirrors.get(f"tg_bot_{target_bot_id}")
+                    if bot_mirror_fid and bot_mirror_fid != fid:
+                        # Возвращаем специальный маркер mirror_fid нельзя как bytes, проверяется отдельно в _lookup_bot_mirror
+                        pass
+                for m_type, m_url in mirrors.items():
+                    if isinstance(m_url, str) and m_url.startswith("http"):
+                        try:
+                            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), connector_owner=True) as sess:
+                                async with sess.get(m_url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                                    if resp.status == 200:
+                                        data = await resp.read()
+                                        if data:
+                                            return data, os.path.basename(m_url.split("?")[0]) or "media.dat"
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # 3. archive_manager._download_media_bytes (поддерживает URL, GLOBAL_BOTS и т.д.)
+        try:
+            from archive_manager import _download_media_bytes
+            fb, fname = await _download_media_bytes(fid)
+            if fb:
+                return fb, fname
+        except Exception:
+            pass
+
+        # 4. Multi-bot fallback через global_bot_pool (включая UPLOAD_BOT_POOL и известного owner_id)
+        if fid and isinstance(fid, str) and not fid.startswith("http"):
+            try:
+                from common.bot_pool import global_bot_pool
+                owner_id = await get_file_owner_id(fid)
+                extra_bots = list(shared_state.GLOBAL_BOTS.values()) if hasattr(shared_state, "GLOBAL_BOTS") and isinstance(shared_state.GLOBAL_BOTS, dict) else []
+                fb = await global_bot_pool.download_media_bytes_with_pool(
+                    fid,
+                    primary_bot=self.bot_instance,
+                    owner_id=owner_id,
+                    extra_bots=extra_bots,
+                )
+                if fb:
+                    return fb, "media.dat"
+            except Exception as pool_err:
+                runtime_logger.debug(f"global_bot_pool download fallback failed for {fid[:16]}: {pool_err}")
+
+        return None, None
+
+    async def _lookup_bot_mirror(self, fid: str) -> str | None:
+        target_bot_id = getattr(self.bot_instance, "id", None)
+        if not fid or not target_bot_id or not isinstance(fid, str) or fid.startswith("http"):
+            return None
+        try:
+            mirrors = await get_file_mirrors(fid)
+            if isinstance(mirrors, dict):
+                mirrored = mirrors.get(f"tg_bot_{target_bot_id}")
+                if isinstance(mirrored, str) and mirrored and mirrored != fid:
+                    return mirrored
+        except Exception:
+            pass
+        return None
+
+    async def _record_healed_file_id(self, old_fid: str | None, new_fid: str, banner_filename: str | None = None) -> None:
+        if not new_fid or not isinstance(new_fid, str):
+            return
+        target_bot_id = getattr(self.bot_instance, "id", None)
+        if old_fid and isinstance(old_fid, str) and old_fid != new_fid:
+            self._healed_media_cache[old_fid] = new_fid
+        try:
+            from common.task_manager import spawn_task
+            if target_bot_id:
+                spawn_task(register_file_owner(new_fid, target_bot_id))
+                if old_fid and old_fid != new_fid and not old_fid.startswith("http"):
+                    spawn_task(add_file_mirror(old_fid, f"tg_bot_{target_bot_id}", new_fid))
+        except Exception:
+            pass
+        self._update_banner_cache_after_heal(new_fid, banner_filename)
+
+    async def _prewarm_cross_bot_media(self) -> None:
+        """Проактивно проверяет cross-bot file_id до fan-out рассылки и подменяет зеркало или буфер."""
+        target_bot_id = getattr(self.bot_instance, "id", None)
+        if not target_bot_id:
+            return
+        ct = str(self.content.get("type") or "").split('.')[-1].lower()
+        banner_fname = self.content.get("banner_filename")
+
+        if ct in {"photo", "video", "animation", "document", "audio", "voice", "sticker", "video_note"}:
+            fid = self.content.get("file_id")
+            if isinstance(fid, str) and fid and not fid.startswith("http") and not fid.strip().startswith("<"):
+                mirrored = await self._lookup_bot_mirror(fid)
+                if mirrored:
+                    self.content["original_file_id"] = fid
+                    self.content["file_id"] = mirrored
+                    self.content_for_common["original_file_id"] = fid
+                    self.content_for_common["file_id"] = mirrored
+                    return
+                try:
+                    owner_id = await get_file_owner_id(fid)
+                except Exception:
+                    owner_id = None
+                if owner_id and int(owner_id) != int(target_bot_id) and not self.content.get("image_bytes") and not self.content.get("voice_bytes"):
+                    fb, _ = await self._download_media_bytes_resilient(fid, banner_filename=banner_fname)
+                    if fb:
+                        self.content["original_file_id"] = fid
+                        self.content_for_common["original_file_id"] = fid
+                        buf_key = "voice_bytes" if ct == "voice" else "image_bytes"
+                        self.content[buf_key] = fb
+                        self.content_for_common[buf_key] = fb
+                        self.content["file_id"] = None
+                        self.content_for_common["file_id"] = None
+        elif ct == "media_group" and isinstance(self.content.get("media"), list):
+            for item in self.content["media"]:
+                if not isinstance(item, dict):
+                    continue
+                fid = item.get("file_id") or item.get("media")
+                if not isinstance(fid, str) or not fid or fid.startswith("http") or fid.strip().startswith("<"):
+                    continue
+                mirrored = await self._lookup_bot_mirror(fid)
+                if mirrored:
+                    item["original_file_id"] = fid
+                    item["file_id"] = mirrored
+                    item["media"] = mirrored
+                    continue
+                try:
+                    owner_id = await get_file_owner_id(fid)
+                except Exception:
+                    owner_id = None
+                if owner_id and int(owner_id) != int(target_bot_id):
+                    fb, fname = await self._download_media_bytes_resilient(fid)
+                    if fb:
+                        m_type = str(item.get("type") or "").split('.')[-1].lower() or "photo"
+                        ext = "jpg" if m_type == "photo" else ("mp4" if m_type == "video" else ("mp3" if m_type == "audio" else "dat"))
+                        buf = BufferedInputFile(fb, filename=fname or f"media.{ext}")
+                        item["original_file_id"] = fid
+                        item["media"] = buf
+                        item["file_id"] = buf
 
 
     async def _process_delivery_queue(self, ordered_recipients, start_time):
@@ -574,7 +818,8 @@ class MessageBroadcaster:
                     interrupted_reason = "phase_budget_guard"
                     break
 
-            is_album = (self.content.get("type") == "media_group")
+            ct_queue = str(self.content.get("type") or "").split('.')[-1].lower()
+            is_album = (ct_queue == "media_group")
             has_raw_media = (
                 bool(self.content.get("image_bytes") or self.content.get("voice_bytes")) or
                 (is_album and any(
@@ -582,9 +827,24 @@ class MessageBroadcaster:
                     for item in (self.content.get("media") or [])
                 ))
             )
+            is_media_post = is_album or has_raw_media or ct_queue in {
+                "photo", "video", "animation", "document", "audio", "voice", "sticker", "video_note"
+            }
+            if (
+                self.stats['success'] > 0
+                or getattr(self, "_broadcast_media_download_failed", False)
+                or getattr(self, "media_group_fallback_to_text", False)
+                or getattr(self, "media_url_text_fallback", False)
+            ):
+                self._media_probe_done = True
             is_heavy_delivery = is_album or has_raw_media
             send_timeout_sec = max(DELIVERY_PER_RECIPIENT_TIMEOUT_SEC, 120.0) if is_heavy_delivery else DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
-            current_chunk_limit = 1 if (has_raw_media and self.stats['success'] == 0) else CHUNK_SIZE
+            should_probe_single = (
+                not self._media_probe_done
+                and len(queue) > 1
+                and (has_raw_media or is_media_post)
+            )
+            current_chunk_limit = 1 if should_probe_single else CHUNK_SIZE
             chunk = []
             for _ in range(min(len(queue), current_chunk_limit)):
                 chunk.append(queue.popleft())
@@ -1475,16 +1735,17 @@ class MessageBroadcaster:
                 if ct == 'video':
                     common_plain_kwargs['supports_streaming'] = True
                 send_method = getattr(self.bot_instance, f"send_{ct}")
-                if len(plain_text) > 1024:
+                if get_telegram_utf16_len(plain_text) > 1024:
                     common_plain_kwargs[ct] = file_source
                     media_msg = await send_method(**common_plain_kwargs)
-                    await _send_plain_text_parts(
+                    fb_res = await _send_plain_text_parts(
                         reason,
                         plain_text,
                         reply_to_id=media_msg.message_id,
                         include_keyboard=False,
                     )
-                    return media_msg
+                    fb_list = fb_res if isinstance(fb_res, list) else ([fb_res] if fb_res else [])
+                    return [media_msg] + fb_list
                 common_plain_kwargs['caption'] = plain_text
                 common_plain_kwargs[ct] = file_source
                 res = await send_method(**common_plain_kwargs)
@@ -1495,7 +1756,7 @@ class MessageBroadcaster:
                 if getattr(self, 'media_group_invalid_dimensions', False) or getattr(self, 'media_group_fallback_to_text', False):
                     return await _send_media_group_text_link_fallback(reason)
                 media_group_build = []
-                can_fit_caption = len(plain_text) <= 1024
+                can_fit_caption = get_telegram_utf16_len(plain_text) <= 1024
                 caption_for_group = plain_text if can_fit_caption else None
                 for idx, item in enumerate(current_content.get('media') or []):
                     if not isinstance(item, dict):
@@ -1544,20 +1805,21 @@ class MessageBroadcaster:
                     if single_type == 'video':
                         common_single_kwargs['supports_streaming'] = True
                     try:
-                        if len(plain_text) <= 1024:
+                        if get_telegram_utf16_len(plain_text) <= 1024:
                             common_single_kwargs['caption'] = plain_text
                             common_single_kwargs[single_type] = single_src
                             res = await send_method(**common_single_kwargs)
                         else:
                             common_single_kwargs[single_type] = single_src
                             media_msg = await send_method(**common_single_kwargs)
-                            await _send_plain_text_parts(
+                            fb_res = await _send_plain_text_parts(
                                 reason,
                                 plain_text,
                                 reply_to_id=media_msg.message_id,
                                 include_keyboard=False,
                             )
-                            res = media_msg
+                            fb_list = fb_res if isinstance(fb_res, list) else ([fb_res] if fb_res else [])
+                            res = [media_msg] + fb_list
                         self.stats['success'] += 1
                         return res
                     except TelegramBadRequest as s_err:
@@ -1610,8 +1872,10 @@ class MessageBroadcaster:
                 if not can_fit_caption:
                     anchor_msg = res[0] if isinstance(res, list) else res
                     anchor_id = getattr(anchor_msg, "message_id", None)
-                    await _send_plain_text_parts(reason, plain_text, reply_to_id=anchor_id, include_keyboard=True)
-                    return res
+                    fb_res = await _send_plain_text_parts(reason, plain_text, reply_to_id=anchor_id, include_keyboard=True)
+                    res_list = list(res) if isinstance(res, list) else [res]
+                    fb_list = fb_res if isinstance(fb_res, list) else ([fb_res] if fb_res else [])
+                    return res_list + fb_list
                 self.stats['success'] += 1
                 return res
             if ct in ['sticker', 'video_note', 'dice']:
@@ -1669,6 +1933,18 @@ class MessageBroadcaster:
                     self.stats['success'] += 1
                     return sent_msgs
                 elif ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+                    # Синхронизируемся с возможным уже вылеченным file_id/bytes от параллельной задачи
+                    raw_fid_cur = current_content.get("file_id")
+                    if isinstance(raw_fid_cur, str) and raw_fid_cur in getattr(self, "_healed_media_cache", {}):
+                        current_content["original_file_id"] = raw_fid_cur
+                        current_content["file_id"] = self._healed_media_cache[raw_fid_cur]
+                        current_content.pop("image_bytes", None)
+                        current_content.pop("voice_bytes", None)
+                    elif self.content.get("file_id") and isinstance(self.content.get("file_id"), str) and not current_content.get("file_id"):
+                        current_content["file_id"] = self.content["file_id"]
+                    elif not current_content.get("image_bytes") and isinstance(self.content.get("image_bytes"), (bytes, bytearray)) and not current_content.get("file_id"):
+                        current_content["image_bytes"] = self.content["image_bytes"]
+
                     file_source = None
                     if current_content.get("voice_bytes") and isinstance(current_content.get("voice_bytes"), (bytes, bytearray)):
                         file_source = BufferedInputFile(current_content["voice_bytes"], filename="roast.ogg")
@@ -1717,7 +1993,8 @@ class MessageBroadcaster:
                         common_kwargs['supports_streaming'] = True
                     if ct == 'document':
                         common_kwargs.pop('has_spoiler', None)
-                    if len(full_text) > 1024:
+                    force_split_caption = bool(current_content.pop("_force_split_caption", False))
+                    if force_split_caption or get_telegram_utf16_len(full_text) > 1024:
                         common_kwargs[ct] = file_source
                         send_method = getattr(self.bot_instance, f"send_{ct}")
                         media_msg = await send_method(**common_kwargs)
@@ -1725,23 +2002,41 @@ class MessageBroadcaster:
                             fid = None
                             if getattr(media_msg, 'photo', None): fid = media_msg.photo[-1].file_id
                             elif getattr(media_msg, 'video', None): fid = media_msg.video.file_id
+                            elif getattr(media_msg, 'animation', None): fid = media_msg.animation.file_id
                             elif getattr(media_msg, 'voice', None): fid = media_msg.voice.file_id
                             elif getattr(media_msg, 'audio', None): fid = media_msg.audio.file_id
                             elif getattr(media_msg, 'document', None): fid = media_msg.document.file_id
-                            if fid:
+                            if fid and isinstance(fid, str):
+                                old_fid_val = current_content.get("original_file_id") or current_content.get("file_id")
                                 self.content['file_id'] = fid
                                 self.content_for_common['file_id'] = fid
+                                current_content['file_id'] = fid
+                                await self._record_healed_file_id(old_fid_val, fid, current_content.get("banner_filename"))
                         text_parts = split_text(full_text, 4096)
                         sent_text_msgs = []
+                        reply_anchor = getattr(media_msg, "message_id", None)
                         try:
-                            for part in text_parts:
-                                txt_m = await self.bot_instance.send_message(
-                                    chat_id=uid, text=part, parse_mode="HTML",
-                                    reply_to_message_id=media_msg.message_id,
-                                    disable_notification=is_sage,
-                                    link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
-                                    request_timeout=request_timeout,
-                                )
+                            for idx_part, part in enumerate(text_parts):
+                                try:
+                                    txt_m = await self.bot_instance.send_message(
+                                        chat_id=uid, text=part, parse_mode="HTML",
+                                        reply_to_message_id=reply_anchor,
+                                        disable_notification=is_sage,
+                                        link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
+                                        request_timeout=request_timeout,
+                                    )
+                                except TelegramBadRequest as part_err:
+                                    if "message to be replied not found" in part_err.message.lower() and reply_anchor:
+                                        reply_anchor = None
+                                        txt_m = await self.bot_instance.send_message(
+                                            chat_id=uid, text=part, parse_mode="HTML",
+                                            reply_to_message_id=None,
+                                            disable_notification=is_sage,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
+                                            request_timeout=request_timeout,
+                                        )
+                                    else:
+                                        raise
                                 if txt_m:
                                     sent_text_msgs.append(txt_m)
                         except TelegramBadRequest as e:
@@ -1749,7 +2044,7 @@ class MessageBroadcaster:
                                 fb_res = await _send_plain_text_parts(
                                     "telegram_rejected_html_after_media",
                                     _plain_delivery_text(),
-                                    reply_to_id=media_msg.message_id,
+                                    reply_to_id=reply_anchor,
                                     include_keyboard=False,
                                 )
                                 fb_list = fb_res if isinstance(fb_res, list) else ([fb_res] if fb_res else [])
@@ -1769,21 +2064,16 @@ class MessageBroadcaster:
                             fid = None
                             if getattr(res, 'photo', None): fid = res.photo[-1].file_id
                             elif getattr(res, 'video', None): fid = res.video.file_id
+                            elif getattr(res, 'animation', None): fid = res.animation.file_id
                             elif getattr(res, 'voice', None): fid = res.voice.file_id
                             elif getattr(res, 'audio', None): fid = res.audio.file_id
                             elif getattr(res, 'document', None): fid = res.document.file_id
-                            if fid:
+                            if fid and isinstance(fid, str):
+                                old_fid_val = current_content.get("original_file_id") or current_content.get("file_id")
                                 self.content['file_id'] = fid
                                 self.content_for_common['file_id'] = fid
                                 current_content['file_id'] = fid
-                                try:
-                                    from common.task_manager import spawn_task
-                                    from common.database import register_file_owner
-                                    b_inst_id = getattr(self.bot_instance, "id", None)
-                                    if b_inst_id:
-                                        spawn_task(register_file_owner(fid, b_inst_id))
-                                except Exception:
-                                    pass
+                                await self._record_healed_file_id(old_fid_val, fid, current_content.get("banner_filename"))
                         self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
@@ -1795,7 +2085,7 @@ class MessageBroadcaster:
                     if not current_content.get('media'):
                         return await _send_text_fallback("empty_media_group")
 
-                    can_fit_caption = len(full_text) <= 1024
+                    can_fit_caption = get_telegram_utf16_len(full_text) <= 1024
                     caption_for_group = full_text if can_fit_caption else None
 
                     media_group_build = []
@@ -1880,7 +2170,7 @@ class MessageBroadcaster:
                             if single_type == 'video':
                                 common_single_kwargs['supports_streaming'] = True
                             try:
-                                if len(full_text) <= 1024:
+                                if get_telegram_utf16_len(full_text) <= 1024:
                                     common_single_kwargs['caption'] = full_text
                                     common_single_kwargs['parse_mode'] = "HTML"
                                     common_single_kwargs[single_type] = single_src
@@ -1889,15 +2179,19 @@ class MessageBroadcaster:
                                     common_single_kwargs[single_type] = single_src
                                     media_msg = await send_method(**common_single_kwargs)
                                     text_parts = split_text(full_text, 4096)
-                                    for part in text_parts:
-                                        await self.bot_instance.send_message(
+                                    sent_followups = []
+                                    for p_idx, part in enumerate(text_parts):
+                                        txt_m = await self.bot_instance.send_message(
                                             chat_id=uid, text=part, parse_mode="HTML",
                                             reply_to_message_id=media_msg.message_id,
+                                            reply_markup=self.final_keyboard if p_idx == len(text_parts) - 1 else None,
                                             disable_notification=is_sage,
                                             link_preview_options=LinkPreviewOptions(is_disabled=True),
                                             request_timeout=request_timeout,
                                         )
-                                    res = media_msg
+                                        if txt_m:
+                                            sent_followups.append(txt_m)
+                                    res = [media_msg] + sent_followups if sent_followups else media_msg
                                 break
                             except TelegramBadRequest as single_err:
                                 err_single = single_err.message.lower()
@@ -1911,22 +2205,26 @@ class MessageBroadcaster:
                                         doc_kwargs.pop('photo', None)
                                         doc_kwargs.pop('has_spoiler', None)
                                         doc_kwargs['document'] = single_src
-                                        if len(full_text) <= 1024:
+                                        if get_telegram_utf16_len(full_text) <= 1024:
                                             doc_kwargs['caption'] = full_text
                                             doc_kwargs['parse_mode'] = "HTML"
                                             res = await self.bot_instance.send_document(**doc_kwargs)
                                         else:
                                             media_msg = await self.bot_instance.send_document(**doc_kwargs)
                                             text_parts = split_text(full_text, 4096)
-                                            for part in text_parts:
-                                                await self.bot_instance.send_message(
+                                            sent_followups = []
+                                            for p_idx, part in enumerate(text_parts):
+                                                txt_m = await self.bot_instance.send_message(
                                                     chat_id=uid, text=part, parse_mode="HTML",
                                                     reply_to_message_id=media_msg.message_id,
+                                                    reply_markup=self.final_keyboard if p_idx == len(text_parts) - 1 else None,
                                                     disable_notification=is_sage,
                                                     link_preview_options=LinkPreviewOptions(is_disabled=True),
                                                     request_timeout=request_timeout,
                                                 )
-                                            res = media_msg
+                                                if txt_m:
+                                                    sent_followups.append(txt_m)
+                                            res = [media_msg] + sent_followups if sent_followups else media_msg
                                         break
                                     except Exception as doc_err:
                                         runtime_logger.debug(f"Document fallback in single_media_fallback failed: {doc_err}")
@@ -1962,6 +2260,66 @@ class MessageBroadcaster:
                                         item.caption = html.unescape(clean_html_tags(item.caption or ""))
                                         item.parse_mode = None
                                 continue
+                            # Healing cross-bot wrong file_id in media_group (singleflight lock)
+                            is_mg_wrong_fid = any(k in err_low for k in (
+                                "wrong remote file identifier", "wrong file identifier",
+                                "invalid file_id", "file_id_invalid", "wrong padding", "unserialize"
+                            ))
+                            m_bad_heal = re.search(r'failed to send message #(\d+)', mg_err.message, re.IGNORECASE)
+                            if is_mg_wrong_fid:
+                                healed_any = False
+                                async with self._media_heal_lock:
+                                    indices_to_check = (
+                                        [int(m_bad_heal.group(1)) - 1]
+                                        if m_bad_heal and 0 <= (int(m_bad_heal.group(1)) - 1) < len(media_group_build)
+                                        else list(range(len(media_group_build)))
+                                    )
+                                    for h_idx in indices_to_check:
+                                        cur_item = media_group_build[h_idx]
+                                        cur_src = getattr(cur_item, "media", None)
+                                        if not isinstance(cur_src, str) or cur_src.startswith("http"):
+                                            continue
+                                        if cur_src in self._healed_media_cache:
+                                            cur_item.media = self._healed_media_cache[cur_src]
+                                            healed_any = True
+                                            continue
+                                        mirrored = await self._lookup_bot_mirror(cur_src)
+                                        if mirrored:
+                                            self._healed_media_cache[cur_src] = mirrored
+                                            cur_item.media = mirrored
+                                            healed_any = True
+                                            continue
+                                        if cur_src not in self._failed_media_ids:
+                                            fb_mg, fn_mg = await self._download_media_bytes_resilient(cur_src)
+                                            if fb_mg:
+                                                buf_mg = BufferedInputFile(fb_mg, filename=fn_mg or f"album_{h_idx}.dat")
+                                                cur_item.media = buf_mg
+                                                if self.content.get("media") and h_idx < len(self.content["media"]) and isinstance(self.content["media"][h_idx], dict):
+                                                    self.content["media"][h_idx].setdefault("original_file_id", cur_src)
+                                                healed_any = True
+                                            else:
+                                                self._failed_media_ids.add(cur_src)
+                                if healed_any:
+                                    continue
+                            # Extract failed message index if reported by Telegram: "failed to send message #N"
+                            m_bad = m_bad_heal
+                            if m_bad and "media_invalid" not in err_low and len(media_group_build) > 1:
+                                bad_idx = int(m_bad.group(1)) - 1
+                                if 0 <= bad_idx < len(media_group_build):
+                                    runtime_logger.warning(
+                                        f"⚠️ [MEDIA_GROUP_PRUNE] Post #{self.post_num}: Pruning rejected media item #{bad_idx + 1} ({mg_err.message})"
+                                    )
+                                    had_caption = bool(getattr(media_group_build[bad_idx], 'caption', None))
+                                    media_group_build.pop(bad_idx)
+                                    if self.content.get('media') and bad_idx < len(self.content['media']):
+                                        self.content['media'].pop(bad_idx)
+                                    if self.content_for_common.get('media') is not self.content.get('media'):
+                                        if self.content_for_common.get('media') and bad_idx < len(self.content_for_common['media']):
+                                            self.content_for_common['media'].pop(bad_idx)
+                                    if had_caption and media_group_build and can_fit_caption:
+                                        media_group_build[0].caption = full_text
+                                        media_group_build[0].parse_mode = "HTML"
+                                    continue
                             # Handle MEDIA_INVALID / WEBPAGE failures: when media rejected, fallback directly to text link
                             if any(k in err_low for k in ("media_invalid", "webpage_media_empty", "webpage_curl_failed", "image_process_failed")):
                                 runtime_logger.warning(
@@ -1970,8 +2328,6 @@ class MessageBroadcaster:
                                 )
                                 self.media_group_fallback_to_text = True
                                 return await _send_media_group_text_link_fallback("media_group_rejected_fallback")
-                            # Extract failed message index if reported by Telegram: "failed to send message #N"
-                            m_bad = re.search(r'failed to send message #(\d+)', mg_err.message, re.IGNORECASE)
                             if m_bad:
                                 bad_idx = int(m_bad.group(1)) - 1
                                 if 0 <= bad_idx < len(media_group_build):
@@ -2049,19 +2405,22 @@ class MessageBroadcaster:
                                 pass
 
                         if sent_individual_msgs:
-                            res = sent_individual_msgs
+                            res = list(sent_individual_msgs)
                             if not caption_delivered and full_text:
                                 anchor_id = sent_individual_msgs[0].message_id
                                 text_parts = split_text(full_text, 4096)
-                                for part in text_parts:
+                                for p_idx, part in enumerate(text_parts):
                                     try:
-                                        await self.bot_instance.send_message(
+                                        txt_m = await self.bot_instance.send_message(
                                             chat_id=uid, text=part, parse_mode="HTML",
                                             reply_to_message_id=anchor_id,
+                                            reply_markup=self.final_keyboard if p_idx == len(text_parts) - 1 else None,
                                             disable_notification=is_sage,
                                             link_preview_options=LinkPreviewOptions(is_disabled=True),
                                             request_timeout=request_timeout,
                                         )
+                                        if txt_m:
+                                            res.append(txt_m)
                                     except Exception:
                                         pass
                         else:
@@ -2085,21 +2444,26 @@ class MessageBroadcaster:
                                 elif getattr(sent_m, 'document', None): fid = sent_m.document.file_id
                                 elif getattr(sent_m, 'audio', None): fid = sent_m.audio.file_id
                                 if fid and isinstance(fid, str):
+                                    old_item_fid = item.get('original_file_id') or (item.get('file_id') if isinstance(item.get('file_id'), str) else None)
                                     item['media'] = fid
                                     item['file_id'] = fid
+                                    await self._record_healed_file_id(old_item_fid, fid)
                         if self.content_for_common.get('media'):
                             self.content_for_common['media'] = self.content['media']
 
+                    sent_text_msgs = []
                     if not can_fit_caption:
                         anchor_msg = res[0] if isinstance(res, list) else res
                         anchor_id = getattr(anchor_msg, "message_id", None)
                         text_parts = split_text(full_text, 4096)
                         try:
-                            for part in text_parts:
+                            for p_idx, part in enumerate(text_parts):
+                                kb_part = self.final_keyboard if p_idx == len(text_parts) - 1 else None
                                 try:
-                                    await self.bot_instance.send_message(
+                                    txt_m = await self.bot_instance.send_message(
                                         chat_id=uid, text=part, parse_mode="HTML",
                                         reply_to_message_id=anchor_id,
+                                        reply_markup=kb_part,
                                         disable_notification=is_sage,
                                         link_preview_options=LinkPreviewOptions(is_disabled=True),
                                         request_timeout=request_timeout,
@@ -2107,38 +2471,48 @@ class MessageBroadcaster:
                                 except TelegramBadRequest as part_err:
                                     if "message to be replied not found" in part_err.message.lower() and anchor_id:
                                         anchor_id = None
-                                        await self.bot_instance.send_message(
+                                        txt_m = await self.bot_instance.send_message(
                                             chat_id=uid, text=part, parse_mode="HTML",
                                             reply_to_message_id=None,
+                                            reply_markup=kb_part,
                                             disable_notification=is_sage,
                                             link_preview_options=LinkPreviewOptions(is_disabled=True),
                                             request_timeout=request_timeout,
                                         )
                                     else:
                                         raise
+                                if txt_m:
+                                    sent_text_msgs.append(txt_m)
                         except TelegramBadRequest as e:
                             if _telegram_parse_error(e.message.lower()):
-                                await _send_plain_text_parts(
+                                fb_res = await _send_plain_text_parts(
                                     "telegram_rejected_html_after_media_group",
                                     _plain_delivery_text(),
                                     reply_to_id=anchor_id,
                                     include_keyboard=True,
                                 )
-                                return res
+                                fb_list = fb_res if isinstance(fb_res, list) else ([fb_res] if fb_res else [])
+                                res_list = list(res) if isinstance(res, list) else [res]
+                                return res_list + fb_list
                             raise
 
                     self.stats['success'] += 1
+                    if sent_text_msgs:
+                        res_list = list(res) if isinstance(res, list) else [res]
+                        return res_list + sent_text_msgs
                     return res
                 elif ct in ['sticker', 'video_note', 'dice']:
                     if ct == 'dice':
-                        await self.bot_instance.send_message(
-                            uid,
-                            full_text,
-                            parse_mode="HTML",
-                            reply_to_message_id=reply_to_mid,
-                            disable_notification=is_sage,
-                            request_timeout=request_timeout,
-                        )
+                        parts = split_text(full_text, 4096) if full_text else []
+                        for p_idx, part in enumerate(parts):
+                            await self.bot_instance.send_message(
+                                uid,
+                                part,
+                                parse_mode="HTML",
+                                reply_to_message_id=reply_to_mid if p_idx == 0 else None,
+                                disable_notification=is_sage,
+                                request_timeout=request_timeout,
+                            )
                         res = await self.bot_instance.send_dice(
                             chat_id=uid,
                             emoji=current_content.get('dice_emoji', '🎲'),
@@ -2172,6 +2546,11 @@ class MessageBroadcaster:
                     self.media_group_fallback_to_text = True
                     self.media_group_invalid_dimensions = True
                     return await _send_media_group_text_link_fallback("outer_photo_invalid_dimensions_or_webpage_empty")
+                if any(k in err_low for k in ("media_caption_too_long", "caption is too long", "caption_too_long")):
+                    if not getattr(self, f'_caption_split_tried_{uid}', False):
+                        setattr(self, f'_caption_split_tried_{uid}', True)
+                        current_content["_force_split_caption"] = True
+                        continue
                 if _telegram_parse_error(err_low):
                     return await _send_plain_media_fallback("telegram_rejected_html")
                 if (
@@ -2269,175 +2648,177 @@ class MessageBroadcaster:
                     "failed to get http url content", "can't use file of type",
                     "webpage_media_empty", "webpage_curl_failed", "image_process_failed"
                 ]):
-                    runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID/MEDIA_INVALID] Auto-downloading media buffer for user {uid}: {e}")
                     try:
-                        from archive_manager import _download_media_bytes
+                        def _extract_uploaded_fid(msg_obj):
+                            if not msg_obj:
+                                return None
+                            for attr, is_list in (
+                                ("photo", True), ("video", False), ("animation", False),
+                                ("document", False), ("audio", False), ("voice", False),
+                            ):
+                                val = getattr(msg_obj, attr, None)
+                                if not val:
+                                    continue
+                                if is_list and isinstance(val, (list, tuple)) and val:
+                                    fid_cand = getattr(val[-1], "file_id", None)
+                                    if isinstance(fid_cand, str) and fid_cand:
+                                        return fid_cand
+                                elif not is_list:
+                                    fid_cand = getattr(val, "file_id", None)
+                                    if isinstance(fid_cand, str) and fid_cand:
+                                        return fid_cand
+                            return None
+
                         fid = current_content.get("file_id") or current_content.get("image_url")
+                        banner_fname = current_content.get("banner_filename")
                         if isinstance(fid, str) and fid.strip().startswith("<"):
                             runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Rejecting pseudo-string object in file_id: '{fid[:40]}'")
                             fid = None
                             current_content["file_id"] = None
                             if isinstance(send_content, dict):
                                 send_content["file_id"] = None
-                        fb = getattr(self, '_broadcast_downloaded_fb', None)
-                        if not fb and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
-                            fb = current_content["image_bytes"]
-                        if not fb and current_content.get("file_path") and isinstance(current_content.get("file_path"), str) and os.path.isfile(current_content["file_path"]):
-                            try:
-                                with open(current_content["file_path"], "rb") as f:
-                                    fb = f.read()
-                                if fb:
-                                    self._broadcast_downloaded_fb = fb
-                            except Exception as fpe:
-                                runtime_logger.warning("Error reading file_path in fallback: %s", fpe)
-                        if fid and not fb and not getattr(self, '_broadcast_media_download_failed', False):
-                            fb, _ = await _download_media_bytes(fid)
-                            if fb:
-                                self._broadcast_downloaded_fb = fb
-                                current_content["image_bytes"] = fb
-                                if isinstance(send_content, dict):
-                                    send_content["image_bytes"] = fb
-                                if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
-                                    self.content_for_common["image_bytes"] = fb
-                                if hasattr(self, 'content') and isinstance(self.content, dict):
-                                    self.content["image_bytes"] = fb
-                            else:
-                                self._broadcast_media_download_failed = True
-                                current_content["file_id"] = None
-                                if isinstance(send_content, dict):
-                                    send_content["file_id"] = None
-                                if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
-                                    self.content_for_common["file_id"] = None
-                                if hasattr(self, 'content') and isinstance(self.content, dict):
-                                    self.content["file_id"] = None
-                        if not fb:
-                            fb = getattr(self, '_broadcast_downloaded_fb', None)
-                            if not fb and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
-                                fb = current_content["image_bytes"]
-                            if not fb and current_content.get("file_path") and isinstance(current_content.get("file_path"), str) and os.path.isfile(current_content["file_path"]):
-                                try:
-                                    with open(current_content["file_path"], "rb") as f:
-                                        fb = f.read()
+
+                        fb = None
+                        need_retry_with_cached = False
+                        async with self._media_heal_lock:
+                            # 1) Если другой таск в волне уже вылечил file_id или сохранил mirror — просто берём его
+                            if isinstance(fid, str) and fid in self._healed_media_cache:
+                                healed_fid = self._healed_media_cache[fid]
+                                current_content["original_file_id"] = fid
+                                current_content["file_id"] = healed_fid
+                                current_content.pop("image_bytes", None)
+                                need_retry_with_cached = True
+                            elif (
+                                isinstance(self.content.get("file_id"), str)
+                                and self.content.get("file_id")
+                                and self.content.get("file_id") != fid
+                                and self.content.get("file_id") not in self._failed_media_ids
+                            ):
+                                current_content["original_file_id"] = fid
+                                current_content["file_id"] = self.content["file_id"]
+                                current_content.pop("image_bytes", None)
+                                need_retry_with_cached = True
+                            elif isinstance(fid, str):
+                                mirrored_fid = await self._lookup_bot_mirror(fid)
+                                if mirrored_fid:
+                                    self._healed_media_cache[fid] = mirrored_fid
+                                    current_content["original_file_id"] = fid
+                                    current_content["file_id"] = mirrored_fid
+                                    self.content["file_id"] = mirrored_fid
+                                    self.content_for_common["file_id"] = mirrored_fid
+                                    need_retry_with_cached = True
+
+                            if not need_retry_with_cached:
+                                fb = getattr(self, '_broadcast_downloaded_fb', None)
+                                if not fb and isinstance(current_content.get("image_bytes"), (bytes, bytearray)):
+                                    fb = current_content["image_bytes"]
+                                if not fb and current_content.get("file_path") and isinstance(current_content.get("file_path"), str) and os.path.isfile(current_content["file_path"]):
+                                    try:
+                                        with open(current_content["file_path"], "rb") as f:
+                                            fb = f.read()
+                                        if fb:
+                                            self._broadcast_downloaded_fb = fb
+                                    except Exception as fpe:
+                                        runtime_logger.warning("Error reading file_path in fallback: %s", fpe)
+
+                                if fid and not fb and not getattr(self, '_broadcast_media_download_failed', False) and fid not in self._failed_media_ids:
+                                    runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID/MEDIA_INVALID] Auto-downloading media buffer for user {uid}: {e}")
+                                    fb, _ = await self._download_media_bytes_resilient(fid, banner_filename=banner_fname)
                                     if fb:
                                         self._broadcast_downloaded_fb = fb
-                                except Exception:
-                                    pass
+                                        current_content["image_bytes"] = fb
+                                        if isinstance(send_content, dict):
+                                            send_content["image_bytes"] = fb
+                                        if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                            self.content_for_common["image_bytes"] = fb
+                                        if hasattr(self, 'content') and isinstance(self.content, dict):
+                                            self.content["image_bytes"] = fb
+                                    else:
+                                        self._broadcast_media_download_failed = True
+                                        self._failed_media_ids.add(fid)
+                                        current_content["file_id"] = None
+                                        if isinstance(send_content, dict):
+                                            send_content["file_id"] = None
+                                        if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                            self.content_for_common["file_id"] = None
+                                        if hasattr(self, 'content') and isinstance(self.content, dict):
+                                            self.content["file_id"] = None
+
+                        if need_retry_with_cached:
+                            continue
+
                         if fb:
                             ct = str(current_content.get("type") or "").split('.')[-1].lower()
-                            ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else "dat")
+                            ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else ("ogg" if ct == "voice" else "dat"))
                             file_source = BufferedInputFile(fb, filename=f"media.{ext}")
                             send_method = getattr(self.bot_instance, f"send_{ct}")
-                            if len(full_text) <= 1024:
+                            old_fid_for_mirror = current_content.get("original_file_id") or fid
+
+                            async def _commit_new_fid(new_fid_val: str | None) -> None:
+                                if not new_fid_val:
+                                    return
+                                async with self._media_heal_lock:
+                                    self._broadcast_downloaded_fb = None
+                                    current_content['file_id'] = new_fid_val
+                                    current_content.pop('image_bytes', None)
+                                    if isinstance(send_content, dict):
+                                        send_content['file_id'] = new_fid_val
+                                        send_content.pop('image_bytes', None)
+                                    if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
+                                        self.content_for_common['file_id'] = new_fid_val
+                                        self.content_for_common.pop('image_bytes', None)
+                                    if hasattr(self, 'content') and isinstance(self.content, dict):
+                                        self.content['file_id'] = new_fid_val
+                                        self.content.pop('image_bytes', None)
+                                await self._record_healed_file_id(old_fid_for_mirror, new_fid_val, banner_fname)
+                                if self.post_num:
+                                    try:
+                                        async with storage_lock:
+                                            if self.post_num in messages_storage and isinstance(messages_storage[self.post_num], dict):
+                                                messages_storage[self.post_num]['file_id'] = new_fid_val
+                                                pcontent = messages_storage[self.post_num].get('content')
+                                                if isinstance(pcontent, dict):
+                                                    pcontent['file_id'] = new_fid_val
+                                                    pcontent.pop('image_bytes', None)
+                                    except Exception:
+                                        pass
+
+                            if get_telegram_utf16_len(full_text) <= 1024:
                                 common_kwargs['caption'] = full_text
                                 common_kwargs['parse_mode'] = "HTML"
                                 common_kwargs[ct] = file_source
                                 res = await send_method(**common_kwargs)
                                 self.stats['success'] += 1
-                                # Кэшируем новый валидный file_id для оставшихся получателей в рассылке и последующих слайсов
-                                try:
-                                    new_fid = None
-                                    if getattr(res, 'photo', None):
-                                        new_fid = res.photo[-1].file_id
-                                    elif getattr(res, 'video', None):
-                                        new_fid = res.video.file_id
-                                    elif getattr(res, 'animation', None):
-                                        new_fid = res.animation.file_id
-                                    elif getattr(res, 'document', None):
-                                        new_fid = res.document.file_id
-                                    elif getattr(res, 'audio', None):
-                                        new_fid = res.audio.file_id
-                                    elif getattr(res, 'voice', None):
-                                        new_fid = res.voice.file_id
-
-                                    if new_fid:
-                                        self._broadcast_downloaded_fb = None
-                                        current_content['file_id'] = new_fid
-                                        current_content.pop('image_bytes', None)
-                                        if isinstance(send_content, dict):
-                                            send_content['file_id'] = new_fid
-                                            send_content.pop('image_bytes', None)
-                                        if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
-                                            self.content_for_common['file_id'] = new_fid
-                                            self.content_for_common.pop('image_bytes', None)
-                                        if hasattr(self, 'content') and isinstance(self.content, dict):
-                                            self.content['file_id'] = new_fid
-                                            self.content.pop('image_bytes', None)
-                                        try:
-                                            from common.task_manager import spawn_task
-                                            from common.database import register_file_owner
-                                            b_inst_id = getattr(self.bot_instance, "id", None)
-                                            if b_inst_id:
-                                                spawn_task(register_file_owner(new_fid, b_inst_id))
-                                        except Exception:
-                                            pass
-                                        if self.post_num:
-                                            try:
-                                                async with storage_lock:
-                                                    if self.post_num in messages_storage and isinstance(messages_storage[self.post_num], dict):
-                                                        messages_storage[self.post_num]['file_id'] = new_fid
-                                                        pcontent = messages_storage[self.post_num].get('content')
-                                                        if isinstance(pcontent, dict):
-                                                            pcontent['file_id'] = new_fid
-                                                            pcontent.pop('image_bytes', None)
-                                            except Exception:
-                                                pass
-                                except Exception:
-                                    pass
+                                await _commit_new_fid(_extract_uploaded_fid(res))
                                 return res
                             else:
                                 common_kwargs[ct] = file_source
                                 media_msg = await send_method(**common_kwargs)
-                                try:
-                                    new_fid = None
-                                    if getattr(media_msg, 'photo', None):
-                                        new_fid = media_msg.photo[-1].file_id
-                                    elif getattr(media_msg, 'video', None):
-                                        new_fid = media_msg.video.file_id
-                                    elif getattr(media_msg, 'animation', None):
-                                        new_fid = media_msg.animation.file_id
-                                    elif getattr(media_msg, 'document', None):
-                                        new_fid = media_msg.document.file_id
-                                    elif getattr(media_msg, 'audio', None):
-                                        new_fid = media_msg.audio.file_id
-                                    elif getattr(media_msg, 'voice', None):
-                                        new_fid = media_msg.voice.file_id
-
-                                    if new_fid:
-                                        self._broadcast_downloaded_fb = None
-                                        current_content['file_id'] = new_fid
-                                        current_content.pop('image_bytes', None)
-                                        if isinstance(send_content, dict):
-                                            send_content['file_id'] = new_fid
-                                            send_content.pop('image_bytes', None)
-                                        if hasattr(self, 'content_for_common') and isinstance(self.content_for_common, dict):
-                                            self.content_for_common['file_id'] = new_fid
-                                            self.content_for_common.pop('image_bytes', None)
-                                        if hasattr(self, 'content') and isinstance(self.content, dict):
-                                            self.content['file_id'] = new_fid
-                                            self.content.pop('image_bytes', None)
-                                        if self.post_num:
-                                            try:
-                                                async with storage_lock:
-                                                    if self.post_num in messages_storage and isinstance(messages_storage[self.post_num], dict):
-                                                        messages_storage[self.post_num]['file_id'] = new_fid
-                                                        pcontent = messages_storage[self.post_num].get('content')
-                                                        if isinstance(pcontent, dict):
-                                                            pcontent['file_id'] = new_fid
-                                                            pcontent.pop('image_bytes', None)
-                                            except Exception:
-                                                pass
-                                except Exception:
-                                    pass
+                                await _commit_new_fid(_extract_uploaded_fid(media_msg))
                                 text_parts = split_text(full_text, 4096)
                                 sent_text_msgs = []
+                                reply_anchor = getattr(media_msg, "message_id", None)
                                 for part in text_parts:
-                                    txt_m = await self.bot_instance.send_message(
-                                        chat_id=uid, text=part, parse_mode="HTML",
-                                        reply_to_message_id=media_msg.message_id,
-                                        disable_notification=is_sage,
-                                        link_preview_options=LinkPreviewOptions(is_disabled=True),
-                                        request_timeout=request_timeout,
-                                    )
+                                    try:
+                                        txt_m = await self.bot_instance.send_message(
+                                            chat_id=uid, text=part, parse_mode="HTML",
+                                            reply_to_message_id=reply_anchor,
+                                            disable_notification=is_sage,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                            request_timeout=request_timeout,
+                                        )
+                                    except TelegramBadRequest as part_err:
+                                        if "message to be replied not found" in part_err.message.lower() and reply_anchor:
+                                            reply_anchor = None
+                                            txt_m = await self.bot_instance.send_message(
+                                                chat_id=uid, text=part, parse_mode="HTML",
+                                                reply_to_message_id=None,
+                                                disable_notification=is_sage,
+                                                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                                request_timeout=request_timeout,
+                                            )
+                                        else:
+                                            raise
                                     if txt_m:
                                         sent_text_msgs.append(txt_m)
                                 self.stats['success'] += 1

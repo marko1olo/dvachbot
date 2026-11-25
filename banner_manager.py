@@ -644,14 +644,12 @@ def get_banner_file(
     if not chosen_file:
         return "", ""
 
-    # Check if we have a cached file_id from Telegram CDN (scoped to bot_id, or unscoped if no bot_id)
+    # Check if we have a cached file_id from Telegram CDN (strictly scoped to bot_id when provided)
     cached_fid = None
     if bot_id:
         cached_fid = (
             _BANNER_CACHE.get(f"{bot_id}:{chosen_file}")
             or _BANNER_CACHE.get(f"{bot_id}_{chosen_file}")
-            or _BANNER_CACHE.get(chosen_file)
-            or _CACHE_BY_FILENAME.get(chosen_file)
         )
     else:
         cached_fid = _BANNER_CACHE.get(chosen_file) or _CACHE_BY_FILENAME.get(chosen_file)

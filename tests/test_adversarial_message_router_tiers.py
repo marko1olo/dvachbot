@@ -366,7 +366,8 @@ async def test_message_router_external_link_negative_preservation(isolated_test_
         )
 
         with mock.patch("handlers.message_router.process_new_post", new_callable=mock.AsyncMock) as mock_pnp, \
-             mock.patch("handlers.message_router.check_spam", new_callable=mock.AsyncMock, return_value=True):
+             mock.patch("handlers.message_router.check_spam", new_callable=mock.AsyncMock, return_value=True), \
+             mock.patch("handlers.message_router.is_spam_filtered", return_value=False):
 
             shared_state.board_data.setdefault("b", {
                 "users": {"active": set(), "banned": set()},

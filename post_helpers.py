@@ -19,7 +19,7 @@ try:
     from moderation_config import *
 except ImportError:
     import traceback; traceback.print_exc()
-from common.text_chunker import safe_html_truncate, count_tg_utf16_units
+from common.text_chunker import safe_html_truncate, count_tg_utf16_units, utf16_to_char_index
 from common.text_utils import balance_html_tags
 
 def safe_truncate_post(text: str, max_chars: int = 4096) -> str:
@@ -36,7 +36,20 @@ def safe_truncate_post(text: str, max_chars: int = 4096) -> str:
     headroom = count_tg_utf16_units(balanced) - max_chars + 30
     safe_limit = max(10, max_chars - headroom)
     re_truncated = safe_html_truncate(text, max_units=safe_limit)
-    return balance_html_tags(re_truncated)
+    re_balanced = balance_html_tags(re_truncated)
+    if count_tg_utf16_units(re_balanced) <= max_chars:
+        return re_balanced
+    plain = re.sub(r"<[^>]+>", "", text)
+    idx = utf16_to_char_index(plain, max_chars)
+    return plain[:idx]
+
+
+def _plain_utf16_clamp(text: str, max_units: int) -> str:
+    import html as _html
+    plain = _html.unescape(re.sub(r"<[^>]+>", "", text or ""))
+    if count_tg_utf16_units(plain) <= max_units:
+        return plain
+    return plain[:utf16_to_char_index(plain, max_units)]
 
 
 def _is_harmless_edit_error(err_msg: str) -> bool:
@@ -144,10 +157,10 @@ async def safe_edit_message_text(
                 if "message is not modified" in cap_err_msg or "exactly the same" in cap_err_msg:
                     return True
                 if _is_telegram_parse_error(cap_err_msg):
-                    plain_cap = re.sub(r"<[^>]+>", "", caption_text)
+                    plain_cap = _plain_utf16_clamp(caption_text, 1024)
                     try:
                         return await bot.edit_message_caption(
-                            caption=plain_cap[:1024],
+                            caption=plain_cap,
                             chat_id=chat_id,
                             message_id=message_id,
                             parse_mode=None,
@@ -163,10 +176,10 @@ async def safe_edit_message_text(
             except Exception:
                 return None
         if _is_telegram_parse_error(err_msg):
-            plain_text = re.sub(r"<[^>]+>", "", truncated_text)
+            plain_text = _plain_utf16_clamp(truncated_text, 4096)
             try:
                 return await bot.edit_message_text(
-                    text=plain_text[:4096],
+                    text=plain_text,
                     chat_id=chat_id,
                     message_id=message_id,
                     parse_mode=None,
@@ -253,10 +266,10 @@ async def safe_edit_message_caption(
                 if "message is not modified" in txt_err_msg or "exactly the same" in txt_err_msg:
                     return True
                 if _is_telegram_parse_error(txt_err_msg):
-                    plain_txt = re.sub(r"<[^>]+>", "", text_val)
+                    plain_txt = _plain_utf16_clamp(text_val, 4096)
                     try:
                         return await bot.edit_message_text(
-                            text=plain_txt[:4096],
+                            text=plain_txt,
                             chat_id=chat_id,
                             message_id=message_id,
                             parse_mode=None,
@@ -272,10 +285,10 @@ async def safe_edit_message_caption(
             except Exception:
                 return None
         if _is_telegram_parse_error(err_msg):
-            plain_cap = re.sub(r"<[^>]+>", "", truncated_caption)
+            plain_cap = _plain_utf16_clamp(truncated_caption, 1024)
             try:
                 return await bot.edit_message_caption(
-                    caption=plain_cap[:1024],
+                    caption=plain_cap,
                     chat_id=chat_id,
                     message_id=message_id,
                     parse_mode=None,
@@ -808,6 +821,13 @@ def extract_post_num_from_message(message: Any) -> int | None:
         url = getattr(ent, 'url', None) or ""
         if 'tgach.top/p/' in url or 'tg://post/' in url:
             m = re.search(r'(?:tgach\.top/p/|tg://post/)(\d+)', url)
+            if m:
+                try:
+                    return int(m.group(1))
+                except ValueError:
+                    pass
+        elif 'tgach.top/' in url and '/res/' in url and '#' in url:
+            m = re.search(r'tgach\.top/[a-z0-9]+/res/[a-f0-9]+(?:\.html)?#(?:post-)?(\d+)', url, re.IGNORECASE)
             if m:
                 try:
                     return int(m.group(1))
