@@ -951,11 +951,11 @@ DURABLE_DELIVERY_QUEUE_ENABLED = BOT_DURABLE_DELIVERY_QUEUE
 durable_delivery_stats: dict = shared_state.durable_delivery_stats
 B_MAX_STACKED_ANIME_IMAGES = max(1, BOT_B_MAX_STACKED_ANIME_IMAGES)
 ANIME_MEDIA_CONCURRENCY = max(1, BOT_ANIME_MEDIA_CONCURRENCY)
-ANIME_URL_FETCH_TIMEOUT_SEC = min(6.0, max(3.0, float(BOT_ANIME_URL_FETCH_TIMEOUT_SEC)))
-ANIME_URL_FETCH_TOTAL_SEC = min(10.0, max(ANIME_URL_FETCH_TIMEOUT_SEC + 2.0, float(BOT_ANIME_URL_FETCH_TOTAL_SEC)))
+ANIME_URL_FETCH_TIMEOUT_SEC = max(3.0, float(BOT_ANIME_URL_FETCH_TIMEOUT_SEC))
+ANIME_URL_FETCH_TOTAL_SEC = max(ANIME_URL_FETCH_TIMEOUT_SEC, float(BOT_ANIME_URL_FETCH_TOTAL_SEC))
 ANIME_URL_FETCH_PARALLEL = max(5, int(BOT_ANIME_URL_FETCH_PARALLEL))
-ANIME_DOWNLOAD_TIMEOUT_SEC = min(8.0, max(5.0, float(BOT_ANIME_DOWNLOAD_TIMEOUT_SEC)))
-ANIME_DOWNLOAD_TOTAL_SEC = min(14.0, max(ANIME_DOWNLOAD_TIMEOUT_SEC + 2.0, float(BOT_ANIME_DOWNLOAD_TOTAL_SEC)))
+ANIME_DOWNLOAD_TIMEOUT_SEC = max(5.0, float(BOT_ANIME_DOWNLOAD_TIMEOUT_SEC))
+ANIME_DOWNLOAD_TOTAL_SEC = max(ANIME_DOWNLOAD_TIMEOUT_SEC, float(BOT_ANIME_DOWNLOAD_TOTAL_SEC))
 ANIME_DOWNLOAD_PARALLEL = max(5, int(BOT_ANIME_DOWNLOAD_PARALLEL))
 # anime_media_gate, POSITIVE_REACTIONS, etc. are canonical in shared_state.py
 MODE_PUNCHUP_ENABLED = BOT_MODE_PUNCHUP_ENABLED
@@ -26660,10 +26660,10 @@ async def _run_bounded_anime_downloads(
         async with sem:
             started = time.time()
             try:
-                per_item_timeout = min(ANIME_DOWNLOAD_TIMEOUT_SEC, 8.0)
+                per_item_timeout = ANIME_DOWNLOAD_TIMEOUT_SEC
                 result = await asyncio.wait_for(
                     _download_image_with_proxy(url, timeout=max(1, int(per_item_timeout))),
-                    timeout=per_item_timeout + 1.5,
+                    timeout=per_item_timeout + 2.0,
                 )
                 return index, url, result
             except asyncio.TimeoutError:
@@ -26676,7 +26676,7 @@ async def _run_bounded_anime_downloads(
                             "user_id": user_id,
                             "source": source,
                             "index": index,
-                            "timeout_sec": min(ANIME_DOWNLOAD_TIMEOUT_SEC, 8.0),
+                            "timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
                             "elapsed_sec": round(time.time() - started, 3),
                         },
                         ensure_ascii=False,
@@ -26754,10 +26754,10 @@ async def _collect_stacked_anime_downloads(
     if target_count <= 0:
         return []
 
-    # Разумный бюджет времени: не держим пользователя 35-45+ секунд ради 1-2 битых хостов.
+    # Разумный бюджет времени: не держим пользователя бесконечно ради 1-2 битых хостов.
     # Если >= 70% (например, 7-9 из 10) уже готовы и были таймауты/ошибки или вышла половина бюджета — отдаём сразу.
     early_accept_min = max(1, math.ceil(target_count * 0.7))
-    total_budget_sec = min(18.0, ANIME_URL_FETCH_TOTAL_SEC + ANIME_DOWNLOAD_TOTAL_SEC)
+    total_budget_sec = max(30.0, ANIME_URL_FETCH_TOTAL_SEC + ANIME_DOWNLOAD_TOTAL_SEC)
     batch_started = time.monotonic()
     max_refill_rounds = min(2, max(1, ANIME_REFILL_ROUNDS))
 

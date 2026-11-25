@@ -182,8 +182,8 @@ async def test_anime_timeout_bounds_and_early_partial_delivery():
     """
     import main
 
-    assert main.ANIME_DOWNLOAD_TIMEOUT_SEC <= 8.0
-    assert main.ANIME_DOWNLOAD_TOTAL_SEC <= 14.0
+    assert main.ANIME_DOWNLOAD_TIMEOUT_SEC >= 5.0
+    assert main.ANIME_DOWNLOAD_TOTAL_SEC >= main.ANIME_DOWNLOAD_TIMEOUT_SEC
     assert main.ANIME_DOWNLOAD_PARALLEL >= 5
 
     async def make_fetcher(idx: int):

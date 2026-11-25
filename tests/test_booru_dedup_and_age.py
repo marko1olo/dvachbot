@@ -2,8 +2,9 @@ import sys
 import asyncio
 from unittest.mock import patch
 
+from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8')
-sys.path.insert(0, r"c:\Users\danat\Desktop\dvachbot")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from japanese_translator import (
     BOORU_MIN_YEAR,
