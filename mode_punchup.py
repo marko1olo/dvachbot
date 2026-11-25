@@ -9,6 +9,7 @@ from mode_punchup_data import (
     _MODE_LATE_SPICE_20260514,
     _MODE_EXTRA_20260515,
     _CROSS_TOPIC_SOURCE_CATEGORIES,
+    ANTI_SLOP_REPLACEMENTS,
 )
 
 
@@ -79,10 +80,25 @@ def _add_signature(text: str, profile: dict) -> str:
     return f"{text}. {signature}"
 
 
+def _scrub_neuroslop(text: str) -> str:
+    if not _ANTI_SLOP_PATTERN:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        source = match.group(0)
+        value = _ANTI_SLOP_MAP.get(_key(source))
+        if value is None:
+            return source
+        return _match_case(source, _choose(value))
+
+    return _ANTI_SLOP_PATTERN.sub(repl, text)
+
+
 def _decorate(text: str, profile: dict) -> str:
     if not text or not text.strip():
         return text
-    return _swap_words(text, profile)
+    cleaned = _scrub_neuroslop(text)
+    return _swap_words(cleaned, profile)
 
 
 
@@ -140,6 +156,9 @@ for _mode_name, _profile in MODE_PUNCHUP_PROFILES.items():
 for _profile in MODE_PUNCHUP_PROFILES.values():
     _profile["replacements"] = {_key(key): value for key, value in _profile.get("replacements", {}).items()}
     _profile["pattern"] = _build_pattern(_profile["replacements"])
+
+_ANTI_SLOP_MAP = {_key(k): v for k, v in ANTI_SLOP_REPLACEMENTS.items()}
+_ANTI_SLOP_PATTERN = _build_pattern(_ANTI_SLOP_MAP)
 
 
 def punch_up_mode_text(text: str, mode_key: str | None) -> str:

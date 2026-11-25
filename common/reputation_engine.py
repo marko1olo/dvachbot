@@ -30,9 +30,9 @@ REPUTATION_TIERS: dict[str, dict[str, Any]] = {
         "min_rep": 0,
         "max_rep": 4,
         "badge": "🌱",
-        "desc": "Только что открыл для себя ТГАЧ. Вкатывайся в общение и делай первые смены!",
-        "desc_en": "Fresh on TGACH. Join conversations and complete your first shifts!",
-        "desc_jp": "TGACHへようこそ。会話に参加して最初のシフトをこなそう！",
+        "desc": "Свежее мясо с порога. На параше не задерживайся — дуй в /work таскать бутылки и набивай REP.",
+        "desc_en": "Fresh meat off the boat. Stop lurking and hit /work to earn your keep.",
+        "desc_jp": "新参の養分。さっさとレスして /work で底辺労働を始めろ。",
     },
     "anon": {
         "title": "Анон",
@@ -41,9 +41,9 @@ REPUTATION_TIERS: dict[str, dict[str, Any]] = {
         "min_rep": 5,
         "max_rep": 19,
         "badge": "🎭",
-        "desc": "Полноправный житель борды. Доступны базовые работы и все типы реакций.",
-        "desc_en": "Full-fledged board citizen. Basic jobs and all reactions unlocked.",
-        "desc_jp": "一人前の掲示板住人。基本ジョブと全リアクションが解放済み。",
+        "desc": "Уже не бесправный ньюфаг, но до олдфага как до Луны раком. Базовые смены и реакции открыты.",
+        "desc_en": "Barely promoted from lurker scum. Basic shifts and reactions unlocked.",
+        "desc_jp": "ようやく一人前の名無し。基本の底辺労働とリアクションが解放済み。",
     },
     "veteran": {
         "title": "Бывалый сыч",
@@ -52,9 +52,9 @@ REPUTATION_TIERS: dict[str, dict[str, Any]] = {
         "min_rep": 20,
         "max_rep": 49,
         "badge": "🦉",
-        "desc": "Опытный обитатель тредов. Доступны продвинутые вакансии и финансовые инструменты.",
-        "desc_en": "Experienced thread dweller. Advanced vacancies and bank tools available.",
-        "desc_jp": "スレッドの熟練者。上級職と銀行ツールが利用可能。",
+        "desc": "Просидел не одну пару треников в тредах. Открыты жирные вакансии и банковские схемы Абу.",
+        "desc_en": "Survived enough shitstorms to know the ropes. Juicier jobs and Abu's bank unlocked.",
+        "desc_jp": "数々のスレを生き延びた古株。上級職とアブ銀行の裏ワザが使える。",
     },
     "oldfag": {
         "title": "Олдфаг",
@@ -63,9 +63,9 @@ REPUTATION_TIERS: dict[str, dict[str, Any]] = {
         "min_rep": 50,
         "max_rep": 99,
         "badge": "👑",
-        "desc": "Уважаемый ветеран борды. Повышенные лимиты и доверие сообщества.",
-        "desc_en": "Respected board oldfag. Elevated rate limits and community trust.",
-        "desc_jp": "尊敬される古参住人。高いレートリミットと信頼。",
+        "desc": "Прожжённый ветеран подвалов /b/. Повышенные лимиты, иммунитет к нытью ньюфагов и карт-бланш на стёб.",
+        "desc_en": "Hardened /b/ basement dweller. Elevated limits and full license to roast newbies.",
+        "desc_jp": "掲示板の重鎮。高いレートリミットと新参を煽る特権を持つ。",
     },
     "ancient": {
         "title": "Патриарх Двача",
@@ -74,9 +74,9 @@ REPUTATION_TIERS: dict[str, dict[str, Any]] = {
         "min_rep": 100,
         "max_rep": 999999,
         "badge": "🌌",
-        "desc": "Живая легенда борды. Максимальные привилегии и авторитет.",
-        "desc_en": "Living legend of the board. Maximum privileges and authority.",
-        "desc_jp": "掲示板の生ける伝説。最大の権限と威厳。",
+        "desc": "Ископаемый динозавр Тиреча. Максимальные привилегии, запах старого ЭЛТ-монитора и право ссать с колокольни.",
+        "desc_en": "Fossilized imageboard relic. Maximum privileges and authority to dunk from orbit.",
+        "desc_jp": "掲示板の生ける化石。最大の権限と絶対的な威厳。",
     },
 }
 
@@ -196,126 +196,125 @@ def format_newcomer_onboarding_alert(
     stream: str = "ru",
 ) -> str:
     """
-    Формирует дружелюбное, культурно адаптированное онбординг-сообщение
-    вместо грубой блокировки 'У вас недостаточно репутации!'.
+    Формирует жёсткое, но понятное онбординг-сообщение с лором ТГАЧа
+    вместо сухой заглушки 'У вас недостаточно репутации!'.
     """
     badge = format_reputation_badge(user_rep, stream=stream)
 
     if stream == "en":
         return (
-            f"🌱 <b>Welcome to TGACH, Anon!</b>\n"
-            f"Your current status: <b>{badge}</b>.\n\n"
-            f"💡 <b>Why is this gated?</b>\n"
-            f"To protect the collective feed from automated spam and raid bots, advanced actions require "
-            f"a little reputation (needed: <b>{req_rep} REP</b>).\n\n"
-            f"✨ <b>No pay-to-win, no captchas:</b>\n"
-            f"Reputation is earned immediately and completely free through regular board life! "
-            f"Pick an option below to get started:"
+            f"🌱 <b>HOLD UP, NEWFAG!</b>\n"
+            f"Your current rank: <b>{badge}</b>.\n\n"
+            f"🚧 <b>Why the gate?</b>\n"
+            f"To keep raid bots and braindead spammers from drowning the board in slop, this action needs "
+            f"<b>{req_rep} REP</b> (you have <b>{user_rep} REP</b>).\n\n"
+            f"💊 <b>Zero paywalls, zero captchas:</b>\n"
+            f"Farm REP free in minutes by grinding a shift (<code>/work</code>) or posting in live threads. "
+            f"Hit the buttons below:"
         )
     elif stream == "jp":
         return (
-            f"🌱 <b>TGACHへようこそ、名無しさん！</b>\n"
-            f"現在のステータス: <b>{badge}</b>\n\n"
-            f"💡 <b>制限の理由</b>\n"
-            f"スパムボットや荒らしから掲示板を守るため、高度な機能には評判（必要: <b>{req_rep} REP</b>）が必要です。\n\n"
-            f"✨ <b>課金なし・完全無料</b>\n"
-            f"評判は掲示板での活動を通じて誰でもすぐに無料で獲得できます！以下のボタンから始めましょう:"
+            f"🌱 <b>待てや新参！</b>\n"
+            f"現在の階級: <b>{badge}</b>\n\n"
+            f"🚧 <b>なぜ制限されてる？</b>\n"
+            f"荒らしボットやスパム業者を弾くため、この操作には <b>{req_rep} REP</b> が必要だ（お前は <b>{user_rep} REP</b>）。\n\n"
+            f"💊 <b>課金不要・完全無料:</b>\n"
+            f"<code>/work</code> で労働するかスレに書き込めばすぐ貯まる。下のボタンから動け:"
         )
 
     return (
-        f"🌱 <b>Добро пожаловать в ТГАЧ, Анон!</b>\n"
-        f"Твой текущий статус: <b>{badge}</b>.\n\n"
-        f"💡 <b>Почему стоит ограничение?</b>\n"
-        f"Чтобы рейдеры и спам-боты не засирали общий поток доски, для этого действия требуется немного "
-        f"авторитета (нужно: <b>{req_rep} REP</b>, у тебя: <b>{user_rep} REP</b>).\n\n"
-        f"✨ <b>Никакого доната и платных смс:</b>\n"
-        f"Репутация зарабатывается мгновенно, честно и абсолютно бесплатно прямо во время обычной жизни на борде! "
-        f"Начни с простой смены или почитай гайд:"
+        f"🌱 <b>ТОРМОЗНИ, НЬЮФАГ!</b>\n"
+        f"Твоя масть сейчас: <b>{badge}</b>.\n\n"
+        f"🚧 <b>Чё за шлагбаум?</b>\n"
+        f"Чтобы спам-боты, вайперы и залётная школота не превратили доску в филиал Одноклассников, сюда пускают с репой от "
+        f"<b>{req_rep} REP</b> (у тебя пока <b>{user_rep} REP</b>).\n\n"
+        f"💊 <b>Без доната, смс и паспорта:</b>\n"
+        f"Репа фармится бесплатно за пару минут: сдай бутылки на смене (<code>/work</code>) или навали годноты в тредах. "
+        f"Хватай кнопки ниже:"
     )
 
 
 def format_how_to_earn_reputation(stream: str = "ru") -> str:
-    """Подробный, понятный мануал о способах заработка репутации."""
+    """Понятный, недушный мануал по фарму репутации без софтлока."""
     if stream == "en":
         return (
-            "💼 <b>How to Earn Reputation on TGACH (100% Free):</b>\n\n"
+            "💼 <b>How to Farm Reputation on TGACH (Zero Paywalls):</b>\n\n"
             "1. 🏭 <b>Labor Exchange (/work):</b>\n"
-            "• Each shift completed awards <b>+1 REP</b> directly.\n"
-            "• Start with 🍾 <i>Bottle Collection</i> (0 shifts required, zero cost) — work your way up to Courier and Factory!\n\n"
-            "2. 💬 <b>Board Posting & Replies:</b>\n"
+            "• Every shift completed pays out <b>+1 REP</b> directly.\n"
+            "• Start with 🍾 <i>Bottle Collection</i> (0 shifts needed, zero cost) and climb to Courier & Factory.\n\n"
+            "2. 💬 <b>Board Shitposting & Replies:</b>\n"
             "• Every 2 posts or replies grant <b>+1 REP</b>.\n"
-            "• Jump into existing threads or start a fresh topic.\n\n"
-            "3. 👍 <b>Reactions from Anons:</b>\n"
-            "• Quality posts receive 👍 reactions which award shekels to your wallet.\n\n"
-            "4. 📨 <b>Invite Friends (/ref):</b>\n"
-            "• Share your personal link to earn starting funds and reputation.\n\n"
-            "<i>No barrier can stop a motivated Anon. Pick a shift and begin!</i>"
+            "• Stop lurking — jump into threads and argue.\n\n"
+            "3. 👍 <b>Anon Approval (Reactions):</b>\n"
+            "• Good posts farm 👍 reactions and drop real shekels into your wallet.\n\n"
+            "4. 📨 <b>Drag Friends In (/ref):</b>\n"
+            "• Share your invite link to pocket referral shekels and clout.\n\n"
+            "<i>No dead ends here — grab a shift and crawl out of the gutter!</i>"
         )
     elif stream == "jp":
         return (
-            "💼 <b>TGACHで評判（REP）を獲得する方法（完全無料）:</b>\n\n"
+            "💼 <b>TGACHで評判（REP）を稼ぐ方法（完全無料）:</b>\n\n"
             "1. 🏭 <b>労働取引所 (/work):</b>\n"
             "• 1シフト完了ごとに <b>+1 REP</b> 獲得。\n"
-            "• 🍾 <i>空き瓶拾い</i>（必要シフト0、費用0）から始めて、工場やフリーランスへステップアップ！\n\n"
-            "2. 💬 <b>掲示板への投稿と返信:</b>\n"
+            "• 🍾 <i>空き瓶拾い</i>（必要シフト0、費用0）から始めて、工場や闇バイトへ這い上がれ！\n\n"
+            "2. 💬 <b>掲示板への書き込み＆レス:</b>\n"
             "• 2件の投稿または返信で <b>+1 REP</b> 獲得。\n\n"
-            "3. 👍 <b>アノンからのリアクション:</b>\n"
-            "• 良い投稿には 👍 がつき、シェケルが手に入ります。\n\n"
-            "4. 📨 <b>招待プログラム (/ref):</b>\n"
-            "• 招待リンクを共有して資金と評判をゲット！"
+            "3. 👍 <b>アノンからの評価:</b>\n"
+            "• 良レスに 👍 がつけば財布にシェケルが転がり込む。\n\n"
+            "4. 📨 <b>新参の勧誘 (/ref):</b>\n"
+            "• 招待リンクを撒いて養分を連れてくればボーナス獲得！"
         )
 
     return (
-        "💼 <b>Как заработать репутацию на ТГАЧЕ (быстро и бесплатно):</b>\n\n"
-        "1. 🏭 <b>Смены на Бирже Труда (/work):</b>\n"
-        "• Каждая отработанная смена даёт <b>+1 REP</b> к стажу.\n"
-        "• Вакансия 🍾 <i>«Сбор стеклотары»</i> доступна абсолютно с нуля (0 смен стажа, 0 затрат) "
-        "и работает даже при нулевой энергии! За ней откроются Дворник, Курьер и Завод.\n\n"
+        "💼 <b>Как заработать репутацию на ТГАЧЕ (без доната и унижений):</b>\n\n"
+        "1. 🏭 <b>Пахота на Бирже Труда (/work):</b>\n"
+        "• Каждая отработанная смена капает <b>+1 REP</b> в трудовую книжку.\n"
+        "• Вакансия 🍾 <i>«Сбор стеклотары»</i> открыта даже полному бомжу (0 смен, 0 затрат, пашет и при нулевой энергии). "
+        "Дальше откроются Дворник, Курьер и Завод.\n\n"
         "2. 💬 <b>Постинг и реплаи на борде:</b>\n"
-        "• Каждые 2 отправленных сообщения на доску дают <b>+1 REP</b>.\n"
-        "• Отвечай через Reply на посты других анонов, развивай живые треды.\n\n"
-        "3. 👍 <b>Одобрение анонов (Реакции):</b>\n"
-        "• За годный контент аноны ставят 👍, приносящие звонкие шекели в твой кошелёк.\n\n"
-        "4. 📨 <b>Реферальная программа (/ref):</b>\n"
-        "• Приглашай знакомых сычей по личной ссылке и получай стартовые бонусы.\n\n"
-        "<i>Никаких тупиков — делай первую смену и вкатывайся!</i>"
+        "• Каждые 2 поста или реплая на доске дают <b>+1 REP</b>.\n"
+        "• Врывайся в треды через Reply, набрасывай годноту — хватит молчать в углу.\n\n"
+        "3. 👍 <b>База от анонов (Реакции):</b>\n"
+        "• За годный высер сычи ставят 👍 — с каждого плюса в кошелёк летят шекели.\n\n"
+        "4. 📨 <b>Вербовка мяса (/ref):</b>\n"
+        "• Затащи знакомых битардов по своей ссылке и сруби жирный бонус на старт.\n\n"
+        "<i>Софтлока тут нет — жми на смену и вылезай со дна!</i>"
     )
 
 
 def format_newcomer_guide(stream: str = "ru") -> str:
     """
-    Компактный, разгруженный гайд для новичков (ответ на жалобу 'интерфейс перегруженный').
-    Без лишней воды, строго по делу.
+    Компактный, разгруженный гайд для новичков без корпоративной воды.
     """
     if stream == "en":
         return (
             "ℹ️ <b>Quick Newcomer Guide to TGACH:</b>\n\n"
-            "• <b>Anonymous Posting:</b> Send any text, image, or video directly to the bot. It publishes anonymously to the board under a post number.\n"
-            "• <b>Replying:</b> Swipe / reply to any chat message to link your thoughts into a thread.\n"
-            "• <b>Earning Shekels:</b> Write <code>/work</code> to open the Labor Exchange. 🍾 <i>Bottle Collection</i> is always free.\n"
-            "• <b>Resting:</b> Run <code>/rest</code> if your energy hits 0⚡ to recharge for free.\n"
-            "• <b>Passport:</b> Check <code>/passport</code> or <code>/me</code> to view your inventory, reputation, and balance."
+            "• <b>Posting:</b> Send any text, pic, or video directly to the bot — it drops anonymously onto the board.\n"
+            "• <b>Replying:</b> Swipe / reply to any post to jump into the thread brawl.\n"
+            "• <b>Earning Shekels:</b> Run <code>/work</code> for the Labor Exchange. 🍾 <i>Bottle Collection</i> is free from shift #0.\n"
+            "• <b>Resting:</b> Hit <code>/rest</code> when energy hits 0⚡ to rot on the couch and recharge free.\n"
+            "• <b>Passport:</b> Check <code>/passport</code> or <code>/me</code> for your stash, gear, and REP.\n\n"
+            "<i>No logins, no tracking, no janny tears — sink or swim, Anon!</i>"
         )
     elif stream == "jp":
         return (
             "ℹ️ <b>TGACH 初心者クイックガイド:</b>\n\n"
-            "• <b>匿名投稿:</b> ボットにテキストや画像を送るだけで、匿名番号で即座に板に流れます。\n"
-            "• <b>返信（Reply）:</b> メッセージに返信するとスレッドが繋がります。\n"
-            "• <b>シェケルを稼ぐ:</b> <code>/work</code> で労働所を開きます。🍾 <i>空き瓶拾い</i> はいつでも無料。\n"
-            "• <b>休息:</b> エネルギーが切れたら <code>/rest</code> で無料回復。\n"
-            "• <b>パスポート:</b> <code>/passport</code> または <code>/me</code> でステータス確認。"
+            "• <b>匿名投稿:</b> ボットに文字や画像を送るだけで即座に板へ匿名投下される。\n"
+            "• <b>返信（Reply）:</b> レスに返信すればスレッドのレスバに参加可能。\n"
+            "• <b>稼ぎ方:</b> <code>/work</code> で労働所を開け。🍾 <i>空き瓶拾い</i> はゼロから無料。\n"
+            "• <b>休息:</b> エネルギーが0⚡になったら <code>/rest</code> で無料回復しろ。\n"
+            "• <b>ステータス:</b> <code>/passport</code> または <code>/me</code> で所持金とREPを確認。"
         )
 
     return (
         "ℹ️ <b>Быстрый гайд новичка по ТГАЧУ:</b>\n\n"
-        "• <b>Как постить:</b> Просто отправь любой текст, картинку или видео боту — сообщение анонимно "
-        "улетит в общий поток под порядковым номером.\n"
-        "• <b>Как отвечать:</b> Сделай <b>Reply (Ответить)</b> на сообщение анона, чтобы привязать реплай к треду.\n"
-        "• <b>Как заработать:</b> Напиши <code>/work</code> — откроется Биржа труда. Первая работа 🍾 <i>Сбор стеклотары</i> "
-        "всегда бесплатна и открыта сразу.\n"
-        "• <b>Если устал:</b> Напиши <code>/rest</code> — бесплатный отдых восстановит энергию и здоровье без шекелей.\n"
-        "• <b>Твой профиль:</b> Напиши <code>/passport</code> или <code>/me</code>, чтобы глянуть баланс, шмот и репутацию.\n\n"
-        "<i>Никаких профилей, VPN и регистраций — ты дома, Анон!</i>"
+        "• <b>Как постить:</b> Кидай любой текст, пикчу или видео прямо боту — высер анонимно улетит в тред под номером.\n"
+        "• <b>Как отвечать:</b> Жми <b>Reply (Ответить)</b> на пост анона, чтобы ввязаться в срач в треде.\n"
+        "• <b>Как заработать:</b> Пиши <code>/work</code> — откроется биржа рабского труда. Бомж-работа 🍾 <i>Сбор стеклотары</i> "
+        "открыта сразу.\n"
+        "• <b>Если устал:</b> Пиши <code>/rest</code> — бесплатное сычевание на диване поднимет энергию и ХП с нуля.\n"
+        "• <b>Твой профиль:</b> Пиши <code>/passport</code> или <code>/me</code>, чтобы чекнуть шекели, шмот и репу.\n\n"
+        "<i>Никаких паспортов, майоров и регистраций — либо вливайся, либо откисай!</i>"
     )
 
 
@@ -419,10 +418,10 @@ def execute_free_rest(
         time_str = f"{mins}м {secs}с" if mins > 0 else f"{secs}с"
 
         if stream == "en":
-            return False, f"⏳ You recently rested! Take a breather, next rest in <b>{time_str}</b>.", remaining
+            return False, f"⏳ You just rested! Get your ass off the couch later — next free nap in <b>{time_str}</b>.", remaining
         elif stream == "jp":
-            return False, f"⏳ 最近休憩したばかりです。次の休憩まであと <b>{time_str}</b>。", remaining
-        return False, f"⏳ Ты недавно отдыхал! Сделай вдох, следующий бесплатный отдых через <b>{time_str}</b>.", remaining
+            return False, f"⏳ さっき休んだばかりだろ！次の無料休憩まであと <b>{time_str}</b>。", remaining
+        return False, f"⏳ Ты недавно отдыхал! Хорош проперживать диван — следующий бесплатный перекур через <b>{time_str}</b>.", remaining
 
     new_energy = min(100.0, max(0.0, cur_energy) + 35.0)
     new_health = min(100.0, max(0.0, cur_health) + 15.0)
@@ -433,20 +432,20 @@ def execute_free_rest(
 
     if stream == "en":
         msg = (
-            f"🛌 <b>Resting on the soft couch:</b>\n"
-            f"You took a deep nap and drank warm water.\n"
+            f"🛌 <b>Couch rotting complete:</b>\n"
+            f"You passed out to background brainrot and chugged lukewarm energy drink residue.\n"
             f"Restored: <b>+35⚡ Energy</b> (now {int(new_energy)}⚡), <b>+15❤️ Health</b> (now {int(new_health)}❤️)!"
         )
     elif stream == "jp":
         msg = (
-            f"🛌 <b>ソファーで一休み:</b>\n"
-            f"ぐっすり眠って温かい水を飲みました。\n"
+            f"🛌 <b>ソファーでの引きこもり完了:</b>\n"
+            f"ゴミ配信をBGMに気絶して、ぬるいエナドリを飲み干した。\n"
             f"回復: <b>+35⚡ エネルギー</b> (現在 {int(new_energy)}⚡), <b>+15❤️ 体力</b> (現在 {int(new_health)}❤️)!"
         )
     else:
         msg = (
             f"🛌 <b>Сычевание на диване завершено:</b>\n"
-            f"Ты хорошенько вздремнул под бубнёж стрима и заварил свежего чая.\n"
+            f"Ты отрубился под бубнёж шизо-стрима и хлебнул вчерашнего чифиря из треснувшей кружки.\n"
             f"Восстановлено: <b>+35⚡ Энергии</b> (стало {int(new_energy)}⚡), <b>+15❤️ Здоровья</b> (стало {int(new_health)}❤️)!"
         )
 
@@ -469,7 +468,7 @@ def check_reputation_gate(
     """
     Проверяет, проходит ли пользователь репутационный гейт для действия.
     Если REP < required_rep:
-    - Возвращает (False, дружелюбный онбординг-алерт, клавиатуру с кнопками).
+    - Возвращает (False, понятный онбординг-алерт в стиле ТГАЧа, клавиатуру с кнопками).
     Если проходит:
     - Возвращает (True, None, None).
     """

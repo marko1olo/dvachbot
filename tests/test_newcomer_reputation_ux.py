@@ -108,10 +108,11 @@ def test_onboarding_alert_and_markup():
     assert "onboard_first_shift" in callbacks
     assert "onboard_guide" in callbacks
 
-    # Check alert text: must NOT be dry, must explain with care
+    # Check alert text: must NOT be dry or corporate-soy, must explain clearly
     alert_ru = format_newcomer_onboarding_alert(reason="post", user_rep=0, req_rep=5, stream="ru")
     assert "У вас недостаточно репутации!" not in alert_ru
-    assert "Добро пожаловать в ТГАЧ, Анон!" in alert_ru
+    assert "Добро пожаловать" not in alert_ru
+    assert "ТОРМОЗНИ, НЬЮФАГ!" in alert_ru
     assert "5 REP" in alert_ru
     assert "бесплатно" in alert_ru
 

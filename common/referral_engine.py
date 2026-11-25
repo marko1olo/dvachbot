@@ -39,9 +39,9 @@ TELEGRAM_SERVICE_BOT_IDS = {777000, 1087968824, 136817688}
 
 # Localized promo snippets for share/copy
 VIRAL_SNIPPETS = {
-    "ru": "Заходи в анонимный Тгач без цензуры и регистрации! Забирай стартовый бонус по ссылке:",
-    "en": "Join anonymous Tgach with zero censorship! Grab your starting bonus via link:",
-    "jp": "完全匿名のТГАЧへようこそ！こちらのリンクからスタートボーナスをゲット:"
+    "ru": "Залетай в анонимный ТГАЧ без цензуры, регистрации и мамкиных вахтёров! Забирай 7,500 ₪ подгон на старт по ссылке:",
+    "en": "Crawl into anonymous TGACH — zero censorship, zero jannies, pure chaos. Claim your 7,500 ₪ starter stash here:",
+    "jp": "検閲なし・登録なしの匿名掲示板ТГАЧへ来い！リンク踏んで初期資金ボーナスを回収しろ:"
 }
 
 
@@ -192,16 +192,16 @@ def format_referral_dashboard_message(
     if stream in ("en", "int"):
         text = (
             "🤝 <b>TGACH REFERRAL SYSTEM</b>\n\n"
-            f"Invite fellow anons and get <b>+{int(REFERRAL_REWARD_REFERRER):,} ₪</b> for each newcomer!\n"
-            f"Your friend also gets a <b>+{int(REFERRAL_REWARD_REFEREE):,} ₪</b> welcome bonus.\n\n"
+            f"Drag fellow degenerates in here and pocket <b>+{int(REFERRAL_REWARD_REFERRER):,} ₪</b> per fresh meat!\n"
+            f"Your recruit also gets a <b>+{int(REFERRAL_REWARD_REFEREE):,} ₪</b> starter stash so they don't starve.\n\n"
             "🔗 <b>Your Invite Link (tap to copy):</b>\n"
             f"<code>{ref_link}</code>\n\n"
             "🏷 <b>Your Referral Code (tap to copy):</b>\n"
             f"<code>ref_{ref_code}</code>\n\n"
-            "📊 <b>Your Statistics:</b>\n"
-            f"• Friends invited: <b>{referrals_count}</b>\n"
-            f"• Shekels earned: <b>{int(earned):,} ₪</b>\n\n"
-            "💬 <b>Ready-to-send promo message (tap to copy):</b>\n"
+            "📊 <b>Your Catch:</b>\n"
+            f"• Anons recruited: <b>{referrals_count}</b>\n"
+            f"• Shekels farmed: <b>{int(earned):,} ₪</b>\n\n"
+            "💬 <b>Ready-to-paste bait for chats (tap to copy):</b>\n"
             f"<code>{escape_html(snippet)}\n{ref_link}</code>"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -214,8 +214,8 @@ def format_referral_dashboard_message(
     elif stream == "jp":
         text = (
             "🤝 <b>ТГАЧ 紹介（リファラル）システム</b>\n\n"
-            f"友達を招待すると、1人につき <b>+{int(REFERRAL_REWARD_REFERRER):,} ₪</b> を獲得！\n"
-            f"お友達にもスタートボーナス <b>+{int(REFERRAL_REWARD_REFEREE):,} ₪</b> が付与されます。\n\n"
+            f"知り合いの陰キャを引きずり込んで1人あたり <b>+{int(REFERRAL_REWARD_REFERRER):,} ₪</b> を回収しろ！\n"
+            f"釣られた新参にも初期資金 <b>+{int(REFERRAL_REWARD_REFEREE):,} ₪</b> が支給される。\n\n"
             "🔗 <b>あなたの招待リンク（タップでコピー）:</b>\n"
             f"<code>{ref_link}</code>\n\n"
             "🏷 <b>招待コード（タップでコピー）:</b>\n"
@@ -236,16 +236,16 @@ def format_referral_dashboard_message(
     else:
         text = (
             "🤝 <b>РЕФЕРАЛЬНАЯ СИСТЕМА ТГАЧА</b>\n\n"
-            f"Приглашай друзей и получай <b>+{int(REFERRAL_REWARD_REFERRER):,} ₪</b> за каждого нового анона!\n"
-            f"Твой друг также получит <b>+{int(REFERRAL_REWARD_REFEREE):,} ₪</b> на стартовый баланс.\n\n"
-            "🔗 <b>Твоя реферальная ссылка (нажми для копирования):</b>\n"
+            f"Тащи сюда знакомых сычей и лутай <b>+{int(REFERRAL_REWARD_REFERRER):,} ₪</b> за каждого свежего ньюфага!\n"
+            f"Приведённый битард тоже не с голой жопой останется — получит <b>+{int(REFERRAL_REWARD_REFEREE):,} ₪</b> на доширак и ставки.\n\n"
+            "🔗 <b>Твоя ссылка-приманка (тапни, чтобы скопировать):</b>\n"
             f"<code>{ref_link}</code>\n\n"
-            "🏷 <b>Твой реф-код (нажми для копирования):</b>\n"
+            "🏷 <b>Твой реф-код (тапни, чтобы скопировать):</b>\n"
             f"<code>ref_{ref_code}</code>\n\n"
-            "📊 <b>Твоя статистика:</b>\n"
-            f"• Приглашено анонов: <b>{referrals_count}</b>\n"
-            f"• Заработано шекелей: <b>{int(earned):,} ₪</b>\n\n"
-            "💬 <b>Готовое сообщение для чатов (нажми для копирования):</b>\n"
+            "📊 <b>Улов по рефералке:</b>\n"
+            f"• Завербовано анонов: <b>{referrals_count}</b>\n"
+            f"• Срублено шекелей: <b>{int(earned):,} ₪</b>\n\n"
+            "💬 <b>Готовый зазыв для конф (тапни, чтобы скопировать):</b>\n"
             f"<code>{escape_html(snippet)}\n{ref_link}</code>"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -354,25 +354,25 @@ async def process_referral_activation(
             if stream in ("en", "int"):
                 notif_msg = (
                     "🤝 <b>NEW REFERRAL IN TGACH!</b>\n\n"
-                    f"A new user <b>{escape_html(masked_referee_name)}</b> just joined using your link!\n"
-                    f"💰 You received: <b>+{REFERRAL_REWARD_REFERRER:,.2f} ₪</b>\n"
-                    f"💳 Your new balance: <code>{new_ref_balance:,.2f} ₪</code>\n\n"
-                    "<i>Invite more anons via /ref to earn shekels!</i>"
+                    f"Fresh meat <b>{escape_html(masked_referee_name)}</b> just crawled in using your link!\n"
+                    f"💰 Recruitment cut: <b>+{REFERRAL_REWARD_REFERRER:,.2f} ₪</b>\n"
+                    f"💳 Your balance: <code>{new_ref_balance:,.2f} ₪</code>\n\n"
+                    "<i>Drag more lurkers in via /ref — Abu pays for fresh bodies!</i>"
                 )
             elif stream == "jp":
                 notif_msg = (
                     "🤝 <b>新しい紹介（リファラル）！</b>\n\n"
-                    f"<b>{escape_html(masked_referee_name)}</b> があなたのリンクから参加しました！\n"
+                    f"お前のリンクから新参 <b>{escape_html(masked_referee_name)}</b> が釣れたぞ！\n"
                     f"💰 獲得ボーナス: <b>+{REFERRAL_REWARD_REFERRER:,.2f} ₪</b>\n"
                     f"💳 現在の残高: <code>{new_ref_balance:,.2f} ₪</code>"
                 )
             else:
                 notif_msg = (
                     "🤝 <b>НОВЫЙ РЕФЕРАЛ В ТГАЧ!</b>\n\n"
-                    f"По твоей ссылке присоединился <b>{escape_html(masked_referee_name)}</b>!\n"
-                    f"💰 Тебе начислено: <b>+{REFERRAL_REWARD_REFERRER:,.2f} ₪</b>\n"
+                    f"По твоей наводке на доску вкатился <b>{escape_html(masked_referee_name)}</b>!\n"
+                    f"💰 Капнуло за вербовку: <b>+{REFERRAL_REWARD_REFERRER:,.2f} ₪</b>\n"
                     f"💳 Твой баланс: <code>{new_ref_balance:,.2f} ₪</code>\n\n"
-                    "<i>Зови больше сычей командой /ref!</i>"
+                    "<i>Тащи ещё сычей через /ref — Абу щедро платит за свежее мясо!</i>"
                 )
             await bot.send_message(referrer_id, notif_msg, parse_mode="HTML")
             logger.info(f"Referral notification sent to {referrer_id} for new referee {referred_id}")
