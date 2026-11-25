@@ -1180,6 +1180,7 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_crosslinks_source_post ON CrossLinks(source_post);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bottles_recipient ON Bottles(recipient_id, is_read);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_mirror_queue_run ON MirrorQueue(next_run_at);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_mirror_queue_attempts ON MirrorQueue(attempts);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_time ON PendingHF(created_at);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_fileregistry_pending_tags ON FileRegistry(created_at DESC) WHERE tags IS NULL OR tags = '';")
 
@@ -1344,19 +1345,19 @@ async def initialize_database():
     try:
         async with aiosqlite.connect(DB_NAME, timeout=30.0, isolation_level=None) as db:
             try: await db.execute('PRAGMA journal_mode=WAL')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: await db.execute('PRAGMA synchronous=NORMAL')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: await db.execute('PRAGMA busy_timeout=15000')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: await db.execute('PRAGMA wal_autocheckpoint=500')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             # Настройки соединения
             await db.execute("PRAGMA busy_timeout = 30000;")
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA synchronous = NORMAL;")
-            await db.execute("PRAGMA mmap_size = 268435456;")
-            await db.execute("PRAGMA cache_size = -60000;")
+            await db.execute("PRAGMA mmap_size = 67108864;")
+            await db.execute("PRAGMA cache_size = -16384;")
             await db.execute("PRAGMA foreign_keys = ON;")
 
             # Начало транзакции для изменения схемы
@@ -1371,6 +1372,10 @@ async def initialize_database():
                 await db.execute("DELETE FROM NotificationQueue")
 
             await db.execute("COMMIT")
+            try:
+                await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            except Exception:
+                pass
             await sync_daily_limits_from_db(db)
             await sync_user_immunity_from_db(db)
         print("✅ База данных успешно инициализирована.")
@@ -1442,7 +1447,7 @@ async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -1451,7 +1456,7 @@ async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
                 raise e
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в get_or_create_api_token: {e}")
                 raise e
     return ""
@@ -1462,20 +1467,20 @@ async def is_database_migrated() -> bool:
     """
     async with aiosqlite.connect(DB_NAME, timeout=DB_TIMEOUT) as db:
         try: await db.execute('PRAGMA journal_mode=WAL')
-        except: pass
+        except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
         try: await db.execute('PRAGMA synchronous=NORMAL')
-        except: pass
+        except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
         try: await db.execute('PRAGMA busy_timeout=15000')
-        except: pass
+        except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
         try: await db.execute('PRAGMA wal_autocheckpoint=500')
-        except: pass
+        except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
         await db.execute("PRAGMA journal_mode=WAL;")
-        await db.execute("PRAGMA mmap_size = 268435456;")
-        await db.execute("PRAGMA cache_size = -60000;")
+        await db.execute("PRAGMA mmap_size = 0;")
+        await db.execute("PRAGMA cache_size = -2000;")
         await db.execute("PRAGMA query_only = 1;")
-        async with db.execute("SELECT COUNT(*) FROM Users") as cursor:
+        async with db.execute("SELECT 1 FROM Users LIMIT 1") as cursor:
             result = await cursor.fetchone()
-            return result[0] > 0
+            return result is not None
 async def get_post_info_by_copy(recipient_id: int, message_id: int) -> tuple[int, int] | None:
     """
     Находит (post_num, author_id) оригинального поста по ID копии сообщения (PostCopies или ChannelCopies).
@@ -1582,14 +1587,21 @@ async def get_post_info_by_copy(recipient_id: int, message_id: int) -> tuple[int
         return None
 async def load_state_from_db(thread_boards: set) -> dict:
     """
-    Загружает полное состояние бота из базы данных SQLite.
-    Защищена db_lock для предотвращения конкуренции при старте.
+    Загружает актуальное окно состояния бота из базы данных SQLite.
+    Защищена db_lock и строгими LRU/Bounded лимитами для предотвращения раздувания RAM при старте.
     """
     from collections import defaultdict
     from datetime import datetime, UTC
     import json
+    import os
     from common.config import DB_POST_LIMIT, BOT_POST_CACHE_LIMIT
     from common.db_pool import get_pool, db_lock
+    from shared_state import BoundedDict
+
+    post_cache_limit = max(1, int(os.getenv("BOT_POST_CACHE_LIMIT", str(BOT_POST_CACHE_LIMIT or DB_POST_LIMIT))))
+    copy_cache_limit = max(0, int(os.getenv("BOT_COPY_CACHE_POST_LIMIT", "300")))
+    msg_to_post_limit = max(1, int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "15000")))
+    max_startup_copy_entries = max(1, int(os.getenv("BOT_STARTUP_MAX_COPY_ENTRIES", "250000")))
 
     print("🔄 Начало загрузки состояния из базы данных SQLite...")
     state_data = {
@@ -1599,7 +1611,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
             'shadow_mutes': {},
             'mutes': {},
             'threads_data': {},
-            'user_state': {},
+            'user_state': BoundedDict(max_size=15000),
             'board_post_count': 0,
             'active_pin': None,
             'anime_mode': False,
@@ -1617,9 +1629,9 @@ async def load_state_from_db(thread_boards: set) -> dict:
             'oldweb_mode': False,
             'jewish_mode': False,
         }),
-        'messages_storage': {},
-        'post_to_messages': {},
-        'message_to_post': {},
+        'messages_storage': BoundedDict(max_size=post_cache_limit),
+        'post_to_messages': BoundedDict(max_size=max(1, copy_cache_limit)),
+        'message_to_post': BoundedDict(max_size=msg_to_post_limit),
         'post_counter': 0,
     }
 
@@ -1701,8 +1713,15 @@ async def load_state_from_db(thread_boards: set) -> dict:
                             elif mute_type == 'mute':
                                 state_data['board_data'][tb]['mutes'][user_id] = expires_at_dt
 
-            print("  > Загрузка тредов...")
-            async with db.execute("SELECT thread_id, board_id, op_id, title, created_at, is_archived, stream FROM Threads") as cursor:
+            print("  > Загрузка тредов (активные + недавний архив)...")
+            max_threads_load = max(100, int(os.getenv("BOT_STARTUP_MAX_THREADS", "2000")))
+            query_threads = """
+                SELECT thread_id, board_id, op_id, title, created_at, is_archived, stream
+                FROM Threads
+                ORDER BY is_archived ASC, COALESCE(last_updated_at, created_at) DESC
+                LIMIT ?
+            """
+            async with db.execute(query_threads, (max_threads_load,)) as cursor:
                 async for row in cursor:
                     thread_id, board_id, op_id, title, created_at_ts, is_archived, stream = row
                     state_data['board_data'][board_id]['threads_data'][thread_id] = {
@@ -1719,42 +1738,40 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         if u_state.get('location') == thread_id:
                             state_data['board_data'][board_id]['threads_data'][thread_id]['subscribers'].add(uid)
 
-            post_cache_limit = max(0, int(BOT_POST_CACHE_LIMIT or 0))
-            if post_cache_limit <= 0:
-                post_cache_limit = DB_POST_LIMIT
-
             print(f"  > Загрузка последних {post_cache_limit} постов в RAM-кэш (DB_POST_LIMIT={DB_POST_LIMIT})...")
             max_post_num_loaded = 0
-            query_posts = f"""
-                SELECT post_num, board_id, thread_id, author_id, content, timestamp, reply_to_post_num 
-                FROM Posts 
-                ORDER BY post_num DESC 
-                LIMIT {post_cache_limit}
+            query_posts = """
+                SELECT post_num, board_id, thread_id, author_id, content, timestamp, reply_to_post_num
+                FROM Posts
+                ORDER BY post_num DESC
+                LIMIT ?
             """
-            loaded_post_nums = set()
-            async with db.execute(query_posts) as cursor:
-                async for row in cursor:
-                    post_num, board_id, thread_id, author_id, content_str, timestamp_ts, reply_to_post_num = row
-                    loaded_post_nums.add(post_num)
-                    try:
-                        content_data = json.loads(content_str)
-                    except: content_data = {}
+            loaded_post_nums = []
+            async with db.execute(query_posts, (post_cache_limit,)) as cursor:
+                raw_post_rows = await cursor.fetchall()
+            # Вставляем в порядке возрастания post_num, чтобы BoundedDict хранил самые новые в хвосте.
+            for row in reversed(raw_post_rows):
+                post_num, board_id, thread_id, author_id, content_str, timestamp_ts, reply_to_post_num = row
+                loaded_post_nums.append(post_num)
+                try:
+                    content_data = json.loads(content_str)
+                except Exception:
+                    content_data = {}
 
-                    if reply_to_post_num:
-                        content_data['reply_to_post'] = reply_to_post_num
+                if reply_to_post_num:
+                    content_data['reply_to_post'] = reply_to_post_num
 
-                    state_data['messages_storage'][post_num] = {
-                        "author_id": author_id,
-                        "timestamp": safe_fromtimestamp(timestamp_ts, tz=UTC),
-                        "content": content_data,
-                        "board_id": board_id,
-                        "thread_id": thread_id,
-                        "reply_to_post_num": reply_to_post_num,
-                    }
+                state_data['messages_storage'][post_num] = {
+                    "author_id": author_id,
+                    "timestamp": safe_fromtimestamp(timestamp_ts, tz=UTC),
+                    "content": content_data,
+                    "board_id": board_id,
+                    "thread_id": thread_id,
+                    "reply_to_post_num": reply_to_post_num,
+                }
 
-                    if post_num > max_post_num_loaded:
-                        max_post_num_loaded = post_num
-
+                if post_num > max_post_num_loaded:
+                    max_post_num_loaded = post_num
 
             async with db.execute("SELECT MAX(post_num) FROM Posts") as cursor:
                 result = await cursor.fetchone()
@@ -1769,49 +1786,76 @@ async def load_state_from_db(thread_boards: set) -> dict:
             if thread_boards:
                 thread_board_list = list(thread_boards)
                 placeholders = ','.join('?' for _ in thread_board_list)
+                active_thread_ids = set()
                 for thread_board in thread_board_list:
-                    for thread_info in state_data['board_data'][thread_board]['threads_data'].values():
+                    for tid, thread_info in state_data['board_data'][thread_board]['threads_data'].items():
                         thread_info['posts'] = []
-                print(f"  > Загрузка легких списков постов тредов для досок: {', '.join(thread_board_list)}")
-                query_thread_posts = f"""
-                    SELECT post_num, board_id, thread_id
-                    FROM Posts
-                    WHERE thread_id IS NOT NULL
-                      AND board_id IN ({placeholders})
-                    ORDER BY post_num ASC
-                """
-                async with db.execute(query_thread_posts, thread_board_list) as cursor:
-                    async for row in cursor:
-                        post_num, board_id, thread_id = row
-                        threads_data = state_data['board_data'][board_id]['threads_data']
-                        if thread_id in threads_data:
-                            threads_data[thread_id]['posts'].append(post_num)
+                        if not thread_info.get('is_archived'):
+                            active_thread_ids.add(tid)
+                if active_thread_ids:
+                    print(f"  > Загрузка легких списков постов активных тредов для досок: {', '.join(thread_board_list)}")
+                    query_thread_posts = f"""
+                        SELECT post_num, board_id, thread_id
+                        FROM Posts
+                        WHERE thread_id IS NOT NULL
+                          AND board_id IN ({placeholders})
+                        ORDER BY post_num DESC
+                        LIMIT 10000
+                    """
+                    async with db.execute(query_thread_posts, thread_board_list) as cursor:
+                        t_rows = await cursor.fetchall()
+                    for post_num, board_id, thread_id in reversed(t_rows):
+                        if thread_id in active_thread_ids:
+                            threads_data = state_data['board_data'][board_id]['threads_data']
+                            if thread_id in threads_data and len(threads_data[thread_id]['posts']) < 2000:
+                                threads_data[thread_id]['posts'].append(post_num)
 
-            copy_cache_limit = max(0, int(BOT_COPY_CACHE_POST_LIMIT or 0))
-            copy_cache_post_nums = set()
+            copy_cache_post_nums = []
             if loaded_post_nums and copy_cache_limit:
-                copy_cache_post_nums = set(sorted(loaded_post_nums, reverse=True)[:copy_cache_limit])
+                copy_cache_post_nums = sorted(loaded_post_nums, reverse=True)[:copy_cache_limit]
 
-            print(f"  > Загрузка кэша копий сообщений ({len(copy_cache_post_nums)} из {len(loaded_post_nums)} постов)...")
+            print(f"  > Загрузка кэша копий сообщений (до {len(copy_cache_post_nums)} из {len(loaded_post_nums)} постов, cap={max_startup_copy_entries} записей)...")
             if copy_cache_post_nums:
-                loaded_post_nums_list = list(copy_cache_post_nums)
-                CHUNK_SIZE = 900
-                for i in range(0, len(loaded_post_nums_list), CHUNK_SIZE):
-                    chunk = loaded_post_nums_list[i:i + CHUNK_SIZE]
+                CHUNK_SIZE = 300
+                total_p2m_entries = 0
+                collected_p2m_rows = []
+                collected_m2p_rows = []
+                stop_p2m = False
+                for i in range(0, len(copy_cache_post_nums), CHUNK_SIZE):
+                    if stop_p2m and len(collected_m2p_rows) >= msg_to_post_limit:
+                        break
+                    chunk = copy_cache_post_nums[i:i + CHUNK_SIZE]
                     placeholders = ','.join('?' for _ in chunk)
-                    query_copies = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+                    query_copies = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders}) ORDER BY post_num DESC"
+                    last_pnum_in_p2m = None
                     async with db.execute(query_copies, chunk) as cursor:
-                        async for row in cursor:
-                            p_num, rec_id, msg_id = row
-                            recipients_for_post = state_data['post_to_messages'].setdefault(p_num, {})
-                            existing = recipients_for_post.get(rec_id)
-                            if existing is None:
-                                recipients_for_post[rec_id] = msg_id
-                            elif isinstance(existing, int):
-                                recipients_for_post[rec_id] = [existing, msg_id]
-                            elif isinstance(existing, list):
-                                existing.append(msg_id)
-                            state_data['message_to_post'][(rec_id, msg_id)] = p_num
+                        async for p_num, rec_id, msg_id in cursor:
+                            if len(collected_m2p_rows) < msg_to_post_limit:
+                                collected_m2p_rows.append((rec_id, msg_id, p_num))
+                            if not stop_p2m:
+                                if total_p2m_entries < max_startup_copy_entries or p_num == last_pnum_in_p2m:
+                                    collected_p2m_rows.append((p_num, rec_id, msg_id))
+                                    total_p2m_entries += 1
+                                    last_pnum_in_p2m = p_num
+                                else:
+                                    stop_p2m = True
+                            if stop_p2m and len(collected_m2p_rows) >= msg_to_post_limit:
+                                break
+                # Вставляем от старых постов к новым, чтобы в BoundedDict оставались самые свежие.
+                p2m_grouped = {}
+                for p_num, rec_id, msg_id in reversed(collected_p2m_rows):
+                    recipients_for_post = p2m_grouped.setdefault(p_num, {})
+                    existing = recipients_for_post.get(rec_id)
+                    if existing is None:
+                        recipients_for_post[rec_id] = msg_id
+                    elif isinstance(existing, int):
+                        recipients_for_post[rec_id] = [existing, msg_id]
+                    elif isinstance(existing, list):
+                        existing.append(msg_id)
+                for p_num, rec_map in p2m_grouped.items():
+                    state_data['post_to_messages'][p_num] = rec_map
+                for rec_id, msg_id, p_num in reversed(collected_m2p_rows):
+                    state_data['message_to_post'][(rec_id, msg_id)] = p_num
 
         except Exception as e:
             print(f"⛔ ОШИБКА при загрузке состояния: {e}")
@@ -1868,7 +1912,7 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -1877,7 +1921,7 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Ошибка обновления настроек пользователя {user_id}: {e}")
                 break
 async def update_board_settings(board_id: str, updates: dict):
@@ -1916,7 +1960,7 @@ async def update_board_settings(board_id: str, updates: dict):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -1924,7 +1968,7 @@ async def update_board_settings(board_id: str, updates: dict):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Ошибка обновления настроек доски {board_id}: {e}")
                 break
 
@@ -1964,7 +2008,7 @@ async def add_or_activate_user(user_id: int, board_id: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -1972,7 +2016,7 @@ async def add_or_activate_user(user_id: int, board_id: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def update_user_status(user_id: int, board_id: str, status: str):
     """
@@ -2002,7 +2046,7 @@ async def update_user_status(user_id: int, board_id: str, status: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -2010,7 +2054,7 @@ async def update_user_status(user_id: int, board_id: str, status: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def remove_user_from_board(user_id: int, board_id: str):
     """Обертка для удаления одного пользователя."""
@@ -2146,7 +2190,7 @@ async def create_thread(thread_id: str, board_id: str, op_id: int, title: str, c
             return True
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при создании треда в БД: {e}")
             return False
 async def update_user_location(user_id: int, board_id: str, location: str):
@@ -2174,7 +2218,7 @@ async def update_user_location(user_id: int, board_id: str, location: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -2183,7 +2227,7 @@ async def update_user_location(user_id: int, board_id: str, location: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"Error updating location for user {user_id}: {e}")
                 break
 async def _get_thread_id_for_post(db: aiosqlite.Connection, parent_post_num: int) -> Optional[int]:
@@ -3408,7 +3452,7 @@ async def archive_thread_in_db(thread_op_num: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -3417,7 +3461,7 @@ async def archive_thread_in_db(thread_op_num: int):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Error archiving thread {thread_op_num}: {e}")
                 break
 async def create_thread_entry(
@@ -3461,7 +3505,7 @@ async def create_thread_entry(
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -3470,7 +3514,7 @@ async def create_thread_entry(
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"Критическая ошибка при создании записи для треда #{thread_op_num}: {e}")
                 break
 
@@ -3568,7 +3612,7 @@ async def process_mentions_and_notify(
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -3577,7 +3621,7 @@ async def process_mentions_and_notify(
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Error processing mentions: {e}")
                 break
 async def get_user_posts_from_list(user_id: int, post_nums: List[int]) -> List[int]:
@@ -3700,7 +3744,7 @@ async def delete_post_by_num(post_num: int) -> bool:
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -3709,7 +3753,7 @@ async def delete_post_by_num(post_num: int) -> bool:
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 logger.error(f"[DB] Критическая ошибка при удалении #{post_num}: {e}")
                 break
 
@@ -4191,7 +4235,7 @@ async def cleanup_broadcast_queue(retention_hours: int = 6):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
@@ -4200,7 +4244,7 @@ async def cleanup_broadcast_queue(retention_hours: int = 6):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА в cleanup_broadcast_queue: {e}.")
                 break
 async def get_and_clear_broadcast_queue() -> list[dict]:
@@ -4418,14 +4462,14 @@ def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
 
         except sqlite3.OperationalError as e:
             try: con.execute("ROLLBACK")
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             if "locked" in str(e).lower() or "busy" in str(e).lower():
                 time.sleep(1)
                 continue
             raise e
         except Exception:
             try: con.execute("ROLLBACK")
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             break
 
     return total_deleted
@@ -4474,7 +4518,7 @@ def _cleanup_logs_and_alerts(con, logs_lifetime, alerts_lifetime):
         con.execute("COMMIT")
     except:
         try: con.execute("ROLLBACK")
-        except: pass
+        except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
 def _cleanup_shadow_posts(con, shadow_lifetime):
     shadow_cutoff = time.time() - shadow_lifetime
@@ -4547,7 +4591,7 @@ def _cleanup_archived_threads(con, archive_lifetime):
                 time.sleep(0.05)
             except:
                 try: con.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
         print(f"  > Archive: deleted {len(tids)} old threads.")
 
 def _cleanup_import_map(con):
@@ -4561,7 +4605,7 @@ def _cleanup_import_map(con):
             print(f"  > Import Cleanup: Cleared {deleted_maps} outdated reference maps.")
     except:
         try: con.execute("ROLLBACK")
-        except: pass
+        except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
 def cleanup_old_posts_from_db(limit: int = 50000):
     SHADOW_LIFETIME = 24 * 3600
@@ -4578,15 +4622,15 @@ def cleanup_old_posts_from_db(limit: int = 50000):
     try:
         with con:
             try: con.execute('PRAGMA journal_mode=WAL')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: con.execute('PRAGMA synchronous=NORMAL')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: con.execute('PRAGMA busy_timeout=60000')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: con.execute('PRAGMA wal_autocheckpoint=500')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             try: con.execute('PRAGMA foreign_keys=ON')
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
             # 1. Telegram copy retention. PostCopies (3 days) & ChannelCopies (7 days).
             _cleanup_telegram_copies(con, POST_COPY_RETENTION_SECONDS, POST_COPY_RETENTION_LIMIT, CHANNEL_COPY_RETENTION_SECONDS)
@@ -4638,7 +4682,7 @@ async def add_spam_word(board_id: str, word: str) -> bool:
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -4646,7 +4690,7 @@ async def add_spam_word(board_id: str, word: str) -> bool:
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА при добавлении стоп-слова в БД: {e}")
                 break
     return False
@@ -4677,7 +4721,7 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
                 return count > 0
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -4685,7 +4729,7 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА при удалении стоп-слова из БД: {e}")
                 break
     return False
@@ -4708,7 +4752,7 @@ async def add_reaction_ban(user_id: int, board_id: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -4717,7 +4761,7 @@ async def add_reaction_ban(user_id: int, board_id: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА при добавлении бана на реакции в БД: {e}")
                 break
 
@@ -4740,7 +4784,7 @@ async def remove_reaction_ban(user_id: int, board_id: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -4749,7 +4793,7 @@ async def remove_reaction_ban(user_id: int, board_id: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА при удалении бана на реакции из БД: {e}")
                 break
 async def load_all_reaction_bans() -> Dict[str, set]:
@@ -4790,7 +4834,7 @@ async def update_post_thread_id(post_num: int, thread_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -4798,7 +4842,7 @@ async def update_post_thread_id(post_num: int, thread_id: int):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def add_reaction_to_queue(user_id: int, post_num: int, emoji: str):
     """
@@ -4821,7 +4865,7 @@ async def add_reaction_to_queue(user_id: int, post_num: int, emoji: str):
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -4830,7 +4874,7 @@ async def add_reaction_to_queue(user_id: int, post_num: int, emoji: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА при добавлении реакции в очередь: {e}")
                 break
     return False
@@ -4869,9 +4913,16 @@ async def get_and_clear_reaction_queue() -> list[dict]:
     except Exception as e:
         print(f"⛔ ОШИБКА в get_and_clear_reaction_queue: {e}.")
         return []
+MAX_RANDOM_CACHE_PER_BOARD = 1500
 _VIDEO_CACHE: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
 _IMAGE_CACHE: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
 _THREAD_CACHE: Dict[str, List[str]] = defaultdict(list)
+
+
+def _trim_random_cache_dict(cache_dict: Dict[str, list], max_per_board: int = MAX_RANDOM_CACHE_PER_BOARD) -> None:
+    for b_key, items in cache_dict.items():
+        if len(items) > max_per_board:
+            cache_dict[b_key] = items[-max_per_board:]
 
 _LAST_MAX_POST_NUM = 0
 _CACHED_MAX_POST_NUM = None
@@ -5034,41 +5085,51 @@ async def refresh_random_indexes():
                     async for row in cursor:
                         _THREAD_CACHE[row[0]].append(str(row[1]))
 
+                _trim_random_cache_dict(_VIDEO_CACHE)
+                _trim_random_cache_dict(_IMAGE_CACHE)
+                _trim_random_cache_dict(_THREAD_CACHE)
                 _LAST_MAX_POST_NUM = current_max
                 _LAST_CACHE_UPDATE = time.time()
                 print(f"Random Cache Incremental Updated: +{added_media} media, max={current_max}")
                 return
 
             query = """
-                SELECT board_id, post_num, content 
-                FROM Posts 
+                SELECT board_id, post_num, content
+                FROM Posts
                 WHERE IFNULL(is_shadow, 0) = 0
                   AND (
                     json_extract(content, '$.files') IS NOT NULL
                     OR json_extract(content, '$.media') IS NOT NULL
                     OR json_extract(content, '$.file_id') IS NOT NULL
                   )
+                ORDER BY post_num DESC
+                LIMIT 30000
             """
 
             async with db.execute(query) as cursor:
-                async for row in cursor:
-                    bid, pid, content_str = row
-                    try:
-                        _append_random_media_to_caches(new_video_cache, new_image_cache, bid, pid, content_str)
-
-                    except: continue
+                raw_media_rows = await cursor.fetchall()
+            for bid, pid, content_str in reversed(raw_media_rows):
+                try:
+                    _append_random_media_to_caches(new_video_cache, new_image_cache, bid, pid, content_str)
+                except Exception:
+                    continue
 
             query_threads = """
-                SELECT p.board_id, p.thread_id 
+                SELECT p.board_id, p.thread_id
                 FROM Posts p
                 JOIN Threads t ON p.post_num = t.thread_num
                 WHERE t.is_archived = 0
                 AND IFNULL(p.is_shadow, 0) = 0
+                ORDER BY p.post_num DESC
+                LIMIT 2000
             """
             async with db.execute(query_threads) as cursor:
                 async for row in cursor:
                     new_thread_cache[row[0]].append(str(row[1]))
 
+            _trim_random_cache_dict(new_video_cache)
+            _trim_random_cache_dict(new_image_cache)
+            _trim_random_cache_dict(new_thread_cache)
             _VIDEO_CACHE = new_video_cache
             _IMAGE_CACHE = new_image_cache
             _THREAD_CACHE = new_thread_cache
@@ -5170,7 +5231,7 @@ async def update_thread_last_updated(thread_op_num: int, timestamp: float):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
@@ -5178,7 +5239,7 @@ async def update_thread_last_updated(thread_op_num: int, timestamp: float):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ ОШИБКА при обновлении времени треда #{thread_op_num}: {e}")
                 break
 async def get_thread_ids_for_posts(post_nums: List[int]) -> Dict[int, int]:
@@ -5300,7 +5361,7 @@ async def create_bottle(sender_id: int, recipient_id: int, message: str) -> bool
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -5308,7 +5369,7 @@ async def create_bottle(sender_id: int, recipient_id: int, message: str) -> bool
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"DB Error creating bottle: {e}")
                 break
     return False
@@ -5338,7 +5399,7 @@ async def read_and_delete_bottle(user_id: int) -> dict | None:
                 return {"message": message_text}
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -5346,7 +5407,7 @@ async def read_and_delete_bottle(user_id: int) -> dict | None:
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
     return None
 async def get_unread_bottle_count(user_id: int) -> int:
@@ -5425,7 +5486,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
                     continue
@@ -5433,7 +5494,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Auto-Censure DB Error: {e}")
                 break
 
@@ -5703,7 +5764,7 @@ async def set_user_role(user_id: int, role: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -5711,7 +5772,7 @@ async def set_user_role(user_id: int, role: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_user_role(user_id: int) -> str:
     """Получает роль пользователя (берем максимальную, если есть коллизии)."""
@@ -5736,7 +5797,7 @@ async def create_alert(user_id: int, content: str, image_url: str = None, btn_te
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             print(f"Error creating alert: {e}")
 async def get_pending_alerts(user_id: int, current_board: str) -> list[dict]:
     """Получает непрочитанные алерты для пользователя."""
@@ -5772,7 +5833,7 @@ async def mark_alert_read(alert_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -5780,7 +5841,7 @@ async def mark_alert_read(alert_id: int):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 
 async def get_all_alerts_for_admin(limit: int = 50) -> list[dict]:
@@ -5821,7 +5882,7 @@ async def register_file_owner(file_id: str, bot_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
@@ -5829,7 +5890,7 @@ async def register_file_owner(file_id: str, bot_id: int):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 
 async def register_new_file(sha256: str, phash: str, file_id: str, thumb_id: str, ftype: str, blurhash: str = None):
@@ -5853,7 +5914,7 @@ async def register_new_file(sha256: str, phash: str, file_id: str, thumb_id: str
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
@@ -5861,7 +5922,7 @@ async def register_new_file(sha256: str, phash: str, file_id: str, thumb_id: str
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_file_owner_id(file_id: str) -> int | None:
     """Возвращает ID бота, который загрузил этот файл."""
@@ -5909,7 +5970,7 @@ async def delete_posts_in_thread_after(thread_id: str, post_num_start: int):
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -5918,7 +5979,7 @@ async def delete_posts_in_thread_after(thread_id: str, post_num_start: int):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Error deleting posts after {post_num_start}: {e}")
                 break
     return False
@@ -6027,7 +6088,7 @@ async def set_user_stream(user_id: int, board_id: str, stream: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6035,7 +6096,7 @@ async def set_user_stream(user_id: int, board_id: str, stream: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_user_stream(user_id: int, board_id: str) -> str:
     """
@@ -6201,7 +6262,7 @@ async def restore_thread_from_archive(thread_id: str):
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6209,7 +6270,7 @@ async def restore_thread_from_archive(thread_id: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
     return False
 async def create_report(post_num: int, category: str, reason: str, sender_ip_hash: str) -> bool:
@@ -6251,7 +6312,7 @@ async def create_report(post_num: int, category: str, reason: str, sender_ip_has
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6260,7 +6321,7 @@ async def create_report(post_num: int, category: str, reason: str, sender_ip_has
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Error creating report: {e}")
                 break
 
@@ -6315,7 +6376,7 @@ async def resolve_report(report_id: int, resolution: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6324,7 +6385,7 @@ async def resolve_report(report_id: int, resolution: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Ошибка при разрешении репорта: {e}")
                 break
 async def toggle_thread_pin(thread_id: str, pinned: bool):
@@ -6345,7 +6406,7 @@ async def toggle_thread_pin(thread_id: str, pinned: bool):
             return True
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
             print(f"Error toggling pin for {thread_id}: {e}")
             return False
 async def load_all_spam_words() -> Dict[str, set]:
@@ -6387,7 +6448,7 @@ async def set_system_setting(key: str, value: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6395,7 +6456,7 @@ async def set_system_setting(key: str, value: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_system_setting(key: str) -> str:
     db = await get_pool()
@@ -6423,7 +6484,7 @@ async def create_board(board_id: str, name: str, description: str, owner_id: int
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6431,7 +6492,7 @@ async def create_board(board_id: str, name: str, description: str, owner_id: int
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Board creation error: {e}")
                 break
     return False
@@ -6451,7 +6512,7 @@ async def approve_board(board_id: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6459,7 +6520,7 @@ async def approve_board(board_id: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 
 async def delete_board(board_id: str):
@@ -6478,7 +6539,7 @@ async def delete_board(board_id: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6486,7 +6547,7 @@ async def delete_board(board_id: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def toggle_op_hidden(post_num: int, hide: bool) -> bool:
     from common.db_pool import get_pool, db_lock
@@ -6506,7 +6567,7 @@ async def toggle_op_hidden(post_num: int, hide: bool) -> bool:
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6515,7 +6576,7 @@ async def toggle_op_hidden(post_num: int, hide: bool) -> bool:
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"Error toggling OP hide for {post_num}: {e}")
                 break
     return False
@@ -6555,7 +6616,7 @@ async def create_import_request(user_id: int, url: str, board_id: str, comment: 
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6563,7 +6624,7 @@ async def create_import_request(user_id: int, url: str, board_id: str, comment: 
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
     return False
 
@@ -6582,7 +6643,7 @@ async def update_import_request_status(request_id: int, status: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6590,7 +6651,7 @@ async def update_import_request_status(request_id: int, status: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_pending_import_requests() -> list[dict]:
     db = await get_pool()
@@ -6659,7 +6720,7 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6667,7 +6728,7 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Error creating feedback: {e}")
                 break
     if fb_key:
@@ -6714,7 +6775,7 @@ async def mark_feedback_read(item_id: int):
             await db.execute("COMMIT")
         except Exception:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 async def get_post_details_for_admin(post_num: int) -> dict | None:
     db = await get_pool()
     try:
@@ -6792,7 +6853,7 @@ async def shadow_wipe_user(user_id: int, board_id: str = None) -> int:
                 return row_count
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6800,7 +6861,7 @@ async def shadow_wipe_user(user_id: int, board_id: str = None) -> int:
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
     return 0
 async def add_channel_copy(post_num: int, channel_id: int, message_id: int):
@@ -6821,7 +6882,7 @@ async def add_channel_copy(post_num: int, channel_id: int, message_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6829,7 +6890,7 @@ async def add_channel_copy(post_num: int, channel_id: int, message_id: int):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 
 async def set_channel_message_id(post_num: int, message_id: int):
@@ -6850,7 +6911,7 @@ async def set_channel_message_id(post_num: int, message_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -6859,7 +6920,7 @@ async def set_channel_message_id(post_num: int, message_id: int):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Ошибка сохранения channel_message_id для #{post_num}: {e}")
                 break
 
@@ -7281,7 +7342,7 @@ async def ban_hash(value: str, type: str, reason: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -7290,7 +7351,7 @@ async def ban_hash(value: str, type: str, reason: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Ошибка при бане хеша {value}: {e}")
                 break
 
@@ -7309,7 +7370,7 @@ async def unban_hash(hash_value: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -7317,7 +7378,7 @@ async def unban_hash(hash_value: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_all_channel_copies(post_num: int) -> list[tuple[int, int]]:
     """
@@ -7395,7 +7456,7 @@ async def cleanup_shadow_posts_db(hours: int = 24):
 
                 except sqlite3.OperationalError as e:
                     try: await db.execute("ROLLBACK")
-                    except: pass
+                    except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                     if "locked" in str(e).lower() or "busy" in str(e).lower():
                         await db_sleep(0.2 * (attempt + 1))
@@ -7404,7 +7465,7 @@ async def cleanup_shadow_posts_db(hours: int = 24):
                     return # Критическая ошибка, выходим
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
-                    except: pass
+                    except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                     print(f"⚠️ Shadow cleanup critical error: {e}")
                     return
 
@@ -7535,14 +7596,14 @@ async def process_cross_links(source_board: str, source_post: int, text: str, st
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optional[int] = None):
     refs = set(RE_POST_REF.findall(text))
@@ -7591,7 +7652,7 @@ async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optio
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -7600,7 +7661,7 @@ async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optio
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Backlink Insert Error for #{source_post_num}: {e}")
                 break
 async def get_cross_links_for_thread(board_id: str, post_nums: list) -> dict:
@@ -7930,7 +7991,7 @@ async def add_file_mirror(file_id: str, mirror_type: str, url: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -7938,7 +7999,7 @@ async def add_file_mirror(file_id: str, mirror_type: str, url: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def register_file_owners_batch(conn: aiosqlite.Connection, owner_pairs: list[tuple[str, int]]):
     """
@@ -7991,10 +8052,10 @@ async def cleanup_notification_queue(retention_hours: int = 48):
 
                 if deleted_count > 0:
                     print(f"🧹 Очистка БД: Удалено {deleted_count} устаревших уведомлений.")
-                return
+                break
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
@@ -8002,8 +8063,12 @@ async def cleanup_notification_queue(retention_hours: int = 48):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
+    try:
+        await run_incremental_db_housekeeping(max_batches_per_table=25)
+    except Exception:
+        pass
 async def log_global_event(source: str, text: str):
     """
     Записывает событие в единую базу логов.
@@ -8021,6 +8086,7 @@ async def log_global_event(source: str, text: str):
 
     async with db_lock:
         for attempt in range(10):
+            db = None
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
@@ -8033,8 +8099,9 @@ async def log_global_event(source: str, text: str):
                 await db.execute("COMMIT")
                 return
             except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
+                if db is not None:
+                    try: await db.execute("ROLLBACK")
+                    except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8042,8 +8109,9 @@ async def log_global_event(source: str, text: str):
                 print(f"⛔ Ошибка записи лога: {e}")
                 break
             except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
+                if db is not None:
+                    try: await db.execute("ROLLBACK")
+                    except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Ошибка записи лога: {e}")
                 break
 async def add_to_mod_queue(post_num: int, file_id: str, reason: str, score: float):
@@ -8073,7 +8141,7 @@ async def add_to_mod_queue(post_num: int, file_id: str, reason: str, score: floa
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8082,7 +8150,7 @@ async def add_to_mod_queue(post_num: int, file_id: str, reason: str, score: floa
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ ModQueue add error: {e}")
                 break
 
@@ -8258,7 +8326,7 @@ async def resolve_mod_queue(item_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8266,7 +8334,7 @@ async def resolve_mod_queue(item_id: int):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_file_mirrors(file_id: str) -> dict:
     from common.db_pool import get_pool, db_lock
@@ -8360,7 +8428,7 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8369,7 +8437,7 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Error moving thread {thread_id}: {e}")
                 break
 
@@ -8410,7 +8478,7 @@ async def get_and_clear_admin_actions() -> list[dict]:
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8418,7 +8486,7 @@ async def get_and_clear_admin_actions() -> list[dict]:
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
     return []
 async def get_channel_message_id(post_num: int) -> int | None:
@@ -8455,7 +8523,7 @@ async def add_to_hf_queue(file_id: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8463,7 +8531,7 @@ async def add_to_hf_queue(file_id: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 
 async def remove_from_hf_queue(file_ids: list[str]):
@@ -8487,7 +8555,7 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
@@ -8495,7 +8563,7 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 logging.error("❌ HF Queue critical delete error.")
                 break
 async def add_to_mirror_queue(file_id: str, mirror_type: str):
@@ -8522,7 +8590,7 @@ async def add_to_mirror_queue(file_id: str, mirror_type: str):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8530,7 +8598,7 @@ async def add_to_mirror_queue(file_id: str, mirror_type: str):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def add_post_to_random_cache(post_data: dict):
     global _LAST_MAX_POST_NUM
@@ -8560,6 +8628,9 @@ async def add_post_to_random_cache(post_data: dict):
     # Если это ОП-пост, добавляем в кэш тредов
     if is_op:
         _THREAD_CACHE[bid].append(str(pid))
+    _trim_random_cache_dict(_VIDEO_CACHE)
+    _trim_random_cache_dict(_IMAGE_CACHE)
+    _trim_random_cache_dict(_THREAD_CACHE)
 async def get_pending_mirror_tasks(limit: int = 10, allowed_types: list[str] = None) -> list[dict]:
     """Берет задачи, время которых пришло."""
     db = await get_pool()
@@ -8609,7 +8680,7 @@ async def reschedule_mirror_task(task_id: int, attempt: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (try_idx + 1))
@@ -8618,7 +8689,7 @@ async def reschedule_mirror_task(task_id: int, attempt: int):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ DB Error rescheduling mirror task: {e}")
                 break
 async def get_system_queue_counts() -> dict:
@@ -8723,7 +8794,7 @@ async def toggle_thread_endless(thread_id: str, endless: bool):
                 return True
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8731,7 +8802,7 @@ async def toggle_thread_endless(thread_id: str, endless: bool):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"Error toggling endless for {thread_id}: {e}")
                 break
     return False
@@ -8772,7 +8843,7 @@ async def trim_thread_posts(thread_id: str, max_posts: int = 1000):
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8781,7 +8852,7 @@ async def trim_thread_posts(thread_id: str, max_posts: int = 1000):
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"Error trimming thread {thread_id}: {e}")
                 break
 async def remove_mirror_task(task_id: int):
@@ -8802,7 +8873,7 @@ async def remove_mirror_task(task_id: int):
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.2 * (attempt + 1))
@@ -8810,7 +8881,7 @@ async def remove_mirror_task(task_id: int):
                 break
             except Exception:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 break
 async def get_hf_queue_batch(limit: int = 50) -> list[str]:
     """
@@ -8896,7 +8967,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8905,7 +8976,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⚠️ Ошибка добавления уведомления: {e}")
                 break
 
@@ -8952,7 +9023,7 @@ async def get_and_clear_notification_queue() -> list[dict]:
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8961,7 +9032,7 @@ async def get_and_clear_notification_queue() -> list[dict]:
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"⛔ Ошибка в get_and_clear_notification_queue: {e}")
                 break
 
@@ -8988,13 +9059,13 @@ async def save_poll_vote_db(post_num: int, user_id: int, option_index: int) -> b
 
             except sqlite3.IntegrityError:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 # Пользователь уже голосовал — это нормальное поведение, не ошибка.
                 return False
 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -9004,7 +9075,7 @@ async def save_poll_vote_db(post_num: int, user_id: int, option_index: int) -> b
 
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except (sqlite3.OperationalError, sqlite3.DatabaseError): pass
                 print(f"Poll Vote Error: {e}")
                 break
 
@@ -9421,53 +9492,95 @@ def get_db_connection():
 
     return SafeConnection()
 
-async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
+async def _resolve_post_num_threshold(db, cutoff_ts: float) -> Optional[int]:
+    """Returns exclusive upper bound post_num for posts older than cutoff_ts."""
+    async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
+        row = await cursor.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+    async with db.execute("SELECT MAX(post_num) FROM Posts WHERE timestamp < ?", (cutoff_ts,)) as cursor:
+        row = await cursor.fetchone()
+        if row and row[0] is not None:
+            return int(row[0]) + 1
+    return None
+
+
+async def _passive_wal_checkpoint(db) -> None:
+    from common.db_pool import db_lock
+    try:
+        async def _ckpt():
+            async with db_lock:
+                await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+        await asyncio.wait_for(_ckpt(), timeout=2.0)
+    except Exception:
+        pass
+
+
+async def _chunked_delete_by_rowid(
+    db,
+    table: str,
+    where_sql: str,
+    params: tuple,
+    batch_size: int = 2000,
+    max_batches: Optional[int] = None,
+) -> int:
     """
-    Аккуратная ежедневная чистка PostCopies: храним данные ровно retention_days дней (по умолчанию 3).
-    Удаление происходит небольшими чанками по 500 строк с микро-паузами asyncio.sleep и уступкой
-    высокоприоритетным операциям (create_post).
+    Incrementally deletes rows in small indexed batches using db_transaction,
+    yielding to high-priority DB writers (create_post) between chunks.
     """
-    from common.db_pool import get_pool, db_lock, db_transaction, has_pending_high_priority
+    from common.db_pool import db_transaction, has_pending_high_priority
+    total_deleted = 0
+    batches = 0
+    query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_sql} LIMIT ?)"
+    while True:
+        if max_batches is not None and batches >= max_batches:
+            break
+        while has_pending_high_priority():
+            await asyncio.sleep(0.05)
+        deleted = 0
+        async with db_transaction(db, immediate=True, priority=False):
+            async with db.execute(query, (*params, batch_size)) as cursor:
+                deleted = cursor.rowcount or 0
+        batches += 1
+        total_deleted += deleted
+        if deleted < batch_size:
+            break
+        await asyncio.sleep(0.01)
+    return total_deleted
+
+
+async def clean_old_postcopies_daily(
+    retention_days: int = 3,
+    batch_size: int = 2000,
+    max_batches: Optional[int] = None,
+) -> int:
+    """
+    Аккуратная инкрементальная чистка PostCopies: храним данные retention_days дней (по умолчанию 3).
+    Удаляет батчами с уступкой высокоприоритетным операциям (create_post) и последующим PASSIVE WAL checkpoint.
+    """
+    from common.db_pool import get_pool
     cutoff_ts = time.time() - (retention_days * 86400)
     try:
         db = await get_pool()
         if not db:
             return 0
-        async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
-            row = await cursor.fetchone()
-            threshold_post_num = row[0] if row else None
-
+        threshold_post_num = await _resolve_post_num_threshold(db, cutoff_ts)
         if not threshold_post_num:
             return 0
 
-        total_deleted = 0
-        batch_size = 500
-        while True:
-            # Уступаем высокоприоритетным операциям (созданию постов)
-            while has_pending_high_priority():
-                await asyncio.sleep(0.05)
-
-            deleted = 0
-            async with db_transaction(db, immediate=True, priority=False):
-                async with db.execute("""
-                    DELETE FROM PostCopies
-                    WHERE rowid IN (
-                        SELECT rowid FROM PostCopies
-                        WHERE post_num < ?
-                        LIMIT ?
-                    )
-                """, (threshold_post_num, batch_size)) as cursor:
-                    deleted = cursor.rowcount or 0
-
-            total_deleted += deleted
-            if deleted == 0:
-                break
-
-            # Микро-пауза между чанками для передачи управления event loop
-            await asyncio.sleep(0.05)
-
+        total_deleted = await _chunked_delete_by_rowid(
+            db,
+            "PostCopies",
+            "post_num < ?",
+            (threshold_post_num,),
+            batch_size=max(100, int(batch_size)),
+            max_batches=max_batches,
+        )
         if total_deleted > 0:
-            logging.getLogger("database").info(f"[POSTCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
+            await _passive_wal_checkpoint(db)
+            logging.getLogger("database").info(
+                f"[POSTCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days."
+            )
         return total_deleted
     except Exception as e:
         import traceback
@@ -9475,53 +9588,38 @@ async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
         logging.getLogger("database").error(f"[POSTCOPIES_CLEANUP] Cleanup error: {e}")
         return 0
 
-async def clean_old_channelcopies_daily(retention_days: int = 7) -> int:
+
+async def clean_old_channelcopies_daily(
+    retention_days: int = 7,
+    batch_size: int = 2000,
+    max_batches: Optional[int] = None,
+) -> int:
     """
-    Аккуратная ежедневная чистка ChannelCopies: храним данные ровно retention_days дней (по умолчанию 7).
-    Удаление происходит небольшими чанками по 500 строк с микро-паузами asyncio.sleep и уступкой
-    высокоприоритетным операциям (create_post).
+    Аккуратная инкрементальная чистка ChannelCopies: храним данные retention_days дней (по умолчанию 7).
     """
-    from common.db_pool import get_pool, db_lock, db_transaction, has_pending_high_priority
+    from common.db_pool import get_pool
     cutoff_ts = time.time() - (retention_days * 86400)
     try:
         db = await get_pool()
         if not db:
             return 0
-        async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
-            row = await cursor.fetchone()
-            threshold_post_num = row[0] if row else None
-
+        threshold_post_num = await _resolve_post_num_threshold(db, cutoff_ts)
         if not threshold_post_num:
             return 0
 
-        total_deleted = 0
-        batch_size = 500
-        while True:
-            # Уступаем высокоприоритетным операциям (созданию постов)
-            while has_pending_high_priority():
-                await asyncio.sleep(0.05)
-
-            deleted = 0
-            async with db_transaction(db, immediate=True, priority=False):
-                async with db.execute("""
-                    DELETE FROM ChannelCopies
-                    WHERE rowid IN (
-                        SELECT rowid FROM ChannelCopies
-                        WHERE post_num < ?
-                        LIMIT ?
-                    )
-                """, (threshold_post_num, batch_size)) as cursor:
-                    deleted = cursor.rowcount or 0
-
-            total_deleted += deleted
-            if deleted == 0:
-                break
-
-            # Микро-пауза между чанками
-            await asyncio.sleep(0.05)
-
+        total_deleted = await _chunked_delete_by_rowid(
+            db,
+            "ChannelCopies",
+            "post_num < ?",
+            (threshold_post_num,),
+            batch_size=max(100, int(batch_size)),
+            max_batches=max_batches,
+        )
         if total_deleted > 0:
-            logging.getLogger("database").info(f"[CHANNELCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
+            await _passive_wal_checkpoint(db)
+            logging.getLogger("database").info(
+                f"[CHANNELCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days."
+            )
         return total_deleted
     except Exception as e:
         import traceback
@@ -9529,58 +9627,33 @@ async def clean_old_channelcopies_daily(retention_days: int = 7) -> int:
         logging.getLogger("database").error(f"[CHANNELCOPIES_CLEANUP] Cleanup error: {e}")
         return 0
 
+
 # Сколько держим запись о медиа, которое видели РОВНО ОДИН раз.
-# Такие строки — подавляющая часть таблицы и нужны лишь затем, чтобы опознать
-# будущий баян. Строки с times > 1 (собственно баяны) не удаляются: их на
-# порядки меньше, и именно они несут смысл.
 MEDIA_REPOSTS_RETENTION_DAYS = 180
 
 
-async def clean_old_media_reposts_daily() -> int:
+async def clean_old_media_reposts_daily(
+    batch_size: int = 2000,
+    max_batches: Optional[int] = None,
+) -> int:
     """
-    Ограничивает рост MediaReposts.
-
-    Таблица заводится по строке на каждый УНИКАЛЬНЫЙ файл на доске и без этой
-    чистки росла бы бесконечно: детектор баянов был добавлен без удержания.
-    Плата за удержание — репост картинки старше 180 дней баяном уже не
-    считается. Это осознанный размен: смысл у баяна есть, пока помнят
-    оригинал.
+    Ограничивает рост MediaReposts (singleton entries older than 180 days).
     """
-    from common.db_pool import get_pool, db_lock, db_transaction, has_pending_high_priority
+    from common.db_pool import get_pool
 
     cutoff = time.time() - (MEDIA_REPOSTS_RETENTION_DAYS * 86400)
-    total_deleted = 0
-    batch_size = 500
     try:
         db = await get_pool()
         if not db:
             return 0
-        while True:
-            # Уступаем высокоприоритетным операциям (созданию постов)
-            while has_pending_high_priority():
-                await asyncio.sleep(0.05)
-
-            deleted = 0
-            async with db_transaction(db, immediate=True, priority=False):
-                async with db.execute(
-                    """
-                    DELETE FROM MediaReposts
-                    WHERE rowid IN (
-                        SELECT rowid FROM MediaReposts
-                        WHERE times = 1 AND first_seen IS NOT NULL AND first_seen < ?
-                        LIMIT ?
-                    )
-                    """,
-                    (cutoff, batch_size),
-                ) as cursor:
-                    deleted = cursor.rowcount or 0
-
-            total_deleted += deleted
-            if deleted == 0:
-                break
-            # Уступаем цикл событий между пачками.
-            await asyncio.sleep(0.05)
-
+        total_deleted = await _chunked_delete_by_rowid(
+            db,
+            "MediaReposts",
+            "times = 1 AND first_seen IS NOT NULL AND first_seen < ?",
+            (cutoff,),
+            batch_size=max(100, int(batch_size)),
+            max_batches=max_batches,
+        )
         if total_deleted > 0:
             logging.getLogger("database").info(
                 f"🧹 [REPOSTS_CLEANUP] Удалено {total_deleted:,} записей о медиа "
@@ -9592,9 +9665,134 @@ async def clean_old_media_reposts_daily() -> int:
         return 0
 
 
+async def clean_stale_mirror_queue(
+    retention_days: int = 7,
+    max_attempts: int = 10,
+    batch_size: int = 2000,
+    max_batches: Optional[int] = None,
+) -> int:
+    """
+    Удаляет из MirrorQueue: (1) уже отзеркаленные в FileMirrors,
+    (2) устаревшие задачи (next_run_at старше retention_days),
+    (3) исчерпавшие попытки (attempts >= max_attempts).
+    """
+    from common.db_pool import get_pool
+    cutoff = time.time() - (retention_days * 86400)
+    total_deleted = 0
+    try:
+        db = await get_pool()
+        if not db:
+            return 0
+        bsize = max(100, int(batch_size))
+        # 1. Already mirrored in FileMirrors (uses PK on FileMirrors)
+        total_deleted += await _chunked_delete_by_rowid(
+            db,
+            "MirrorQueue",
+            "EXISTS (SELECT 1 FROM FileMirrors fm WHERE fm.file_id = MirrorQueue.file_id AND fm.mirror_type = MirrorQueue.mirror_type)",
+            (),
+            batch_size=bsize,
+            max_batches=max_batches,
+        )
+        # 2. Stale next_run_at (uses idx_mirror_queue_run)
+        total_deleted += await _chunked_delete_by_rowid(
+            db,
+            "MirrorQueue",
+            "next_run_at < ?",
+            (cutoff,),
+            batch_size=bsize,
+            max_batches=max_batches,
+        )
+        # 3. Exhausted retries (uses idx_mirror_queue_attempts)
+        total_deleted += await _chunked_delete_by_rowid(
+            db,
+            "MirrorQueue",
+            "attempts >= ?",
+            (max_attempts,),
+            batch_size=bsize,
+            max_batches=max_batches,
+        )
+        if total_deleted > 0:
+            await _passive_wal_checkpoint(db)
+            logging.getLogger("database").info(f"[MIRRORQUEUE_CLEANUP] Deleted {total_deleted:,} stale/already-mirrored entries.")
+        return total_deleted
+    except Exception as e:
+        logging.getLogger("database").error(f"⚠️ [MIRRORQUEUE_CLEANUP] Cleanup error: {e}")
+        return 0
+
+
+async def clean_old_moneydrop_messages(
+    retention_hours: int = 24,
+    batch_size: int = 2000,
+    max_batches: Optional[int] = None,
+) -> int:
+    """
+    Удаляет записи MoneyDropMessages для завершённых/осиротевших дропов (status != active).
+    """
+    from common.db_pool import get_pool, db_transaction, has_pending_high_priority
+    cutoff = time.time() - (retention_hours * 3600)
+    total_deleted = 0
+    batches = 0
+    bsize = max(100, int(batch_size))
+    try:
+        db = await get_pool()
+        if not db:
+            return 0
+        query = """
+            DELETE FROM MoneyDropMessages
+            WHERE rowid IN (
+                SELECT mdm.rowid
+                FROM MoneyDropMessages mdm
+                LEFT JOIN MoneyDrops md ON mdm.drop_id = md.drop_id
+                WHERE md.drop_id IS NULL
+                   OR (md.status != 'active' AND COALESCE(md.claimed_at, md.refunded_at, md.created_at, 0) < ?)
+                LIMIT ?
+            )
+        """
+        while True:
+            if max_batches is not None and batches >= max_batches:
+                break
+            while has_pending_high_priority():
+                await asyncio.sleep(0.05)
+            deleted = 0
+            async with db_transaction(db, immediate=True, priority=False):
+                async with db.execute(query, (cutoff, bsize)) as cursor:
+                    deleted = cursor.rowcount or 0
+            batches += 1
+            total_deleted += deleted
+            if deleted < bsize:
+                break
+            await asyncio.sleep(0.01)
+        if total_deleted > 0:
+            await _passive_wal_checkpoint(db)
+            logging.getLogger("database").info(f"[MONEYDROP_CLEANUP] Deleted {total_deleted:,} stale MoneyDropMessages rows.")
+        return total_deleted
+    except Exception as e:
+        logging.getLogger("database").error(f"⚠️ [MONEYDROP_CLEANUP] Cleanup error: {e}")
+        return 0
+
+
+async def run_incremental_db_housekeeping(max_batches_per_table: Optional[int] = 25) -> dict[str, int]:
+    """
+    Запускает безопасную инкрементальную батч-очистку всех склонных к раздуванию таблиц.
+    """
+    results: dict[str, int] = {}
+    for name, fn in (
+        ("PostCopies", lambda: clean_old_postcopies_daily(retention_days=3, max_batches=max_batches_per_table)),
+        ("ChannelCopies", lambda: clean_old_channelcopies_daily(retention_days=7, max_batches=max_batches_per_table)),
+        ("MirrorQueue", lambda: clean_stale_mirror_queue(retention_days=7, max_batches=max_batches_per_table)),
+        ("MoneyDropMessages", lambda: clean_old_moneydrop_messages(retention_hours=24, max_batches=max_batches_per_table)),
+        ("MediaReposts", lambda: clean_old_media_reposts_daily(max_batches=max_batches_per_table)),
+    ):
+        try:
+            results[name] = await fn()
+        except Exception:
+            results[name] = 0
+    return results
+
+
 async def postcopies_daily_cleanup_loop():
     """
-    Запускает ежедневную очистку PostCopies ровно в 00:00 MSK (UTC+3).
+    Запускает ежедневную очистку PostCopies, ChannelCopies, MirrorQueue, MoneyDropMessages и MediaReposts в 00:00 MSK (UTC+3).
     """
     from datetime import datetime, timezone, timedelta
     MSK = timezone(timedelta(hours=3))
@@ -9604,10 +9802,7 @@ async def postcopies_daily_cleanup_loop():
             next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             sleep_sec = (next_run - now_msk).total_seconds()
             await asyncio.sleep(max(10, sleep_sec))
-            await clean_old_postcopies_daily(retention_days=3)
-            await clean_old_channelcopies_daily(retention_days=7)
-            # Третий уборщик в том же суточном цикле:
-            await clean_old_media_reposts_daily()
+            await run_incremental_db_housekeeping(max_batches_per_table=None)
 
             # Регулярное удаление просроченных записей мутов:
             try:

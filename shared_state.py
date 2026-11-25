@@ -81,21 +81,94 @@ MAX_MESSAGES_IN_MEMORY = BOT_POST_CACHE_LIMIT
 PRIORITY_PHASE_BUDGET_SEC = BOT_PRIORITY_PHASE_BUDGET_SEC
 PASSIVE_PHASE_BUDGET_SEC = BOT_PASSIVE_PHASE_BUDGET_SEC
 
+class BoundedDict(OrderedDict):
+    """
+    Ordered dictionary with a strict maximum capacity.
+    Operates as an LRU / FIFO bounded cache:
+    - __setitem__: sets key, moves to end (most recent). If len > max_size, evicts oldest in O(1).
+    - update(): updates keys, trims excess.
+    - setdefault(): sets default if key missing, moves to end, trims excess.
+    """
+    def __init__(self, *args, max_size: int = 20000, maxsize: int | None = None, **kwargs):
+        if maxsize is not None:
+            max_size = maxsize
+        elif args and isinstance(args[0], int) and len(args) == 1 and not kwargs:
+            max_size = args[0]
+            args = ()
+        self.max_size = max(1, int(max_size))
+        self.maxsize = self.max_size
+        super().__init__(*args, **kwargs)
+        self._enforce_limit()
+
+    def __setitem__(self, key: Any, value: Any):
+        super().__setitem__(key, value)
+        super().move_to_end(key)
+        while len(self) > self.max_size:
+            self.popitem(last=False)
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        self._enforce_limit()
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        val = super().setdefault(key, default)
+        super().move_to_end(key)
+        while len(self) > self.max_size:
+            self.popitem(last=False)
+        return val
+
+    def _enforce_limit(self):
+        while len(self) > self.max_size:
+            self.popitem(last=False)
+
+    def copy(self):
+        return BoundedDict(self, max_size=self.max_size)
+
+    def __repr__(self):
+        return f"BoundedDict(max_size={self.max_size}, {super().__repr__()})"
+
+
+class BoundedDefaultDict(BoundedDict):
+    """
+    Ordered defaultdict with strict maximum capacity.
+    Behaves like collections.defaultdict (auto-creates missing keys on __getitem__)
+    while evicting the oldest entries in O(1) once max_size is exceeded.
+    """
+    def __init__(self, default_factory=None, *args, max_size: int = 10000, maxsize: int | None = None, **kwargs):
+        if default_factory is not None and not callable(default_factory):
+            raise TypeError("first argument must be callable or None")
+        self.default_factory = default_factory
+        super().__init__(*args, max_size=max_size, maxsize=maxsize, **kwargs)
+
+    def __missing__(self, key: Any) -> Any:
+        if self.default_factory is None:
+            raise KeyError(key)
+        val = self.default_factory()
+        self[key] = val
+        return val
+
+    def copy(self):
+        return BoundedDefaultDict(self.default_factory, self, max_size=self.max_size)
+
+    def __repr__(self):
+        return f"BoundedDefaultDict({self.default_factory!r}, max_size={self.max_size}, {OrderedDict.__repr__(self)})"
+
+
 author_reaction_notify_lock = LazyLock()
-author_reaction_notify_tracker = defaultdict(list)
+author_reaction_notify_tracker = BoundedDefaultDict(list, max_size=10000)
 pending_edit_lock = LazyLock()
 pending_edit_tasks = {}
 current_media_groups = {}
 media_group_creation_lock = LazyLock()
 media_group_timers = {}
 sent_media_groups = deque(maxlen=10000)  # deque supports .append() and auto-evicts old entries
-_last_persona_dialogue_user_ts = {}
-_last_persona_board_ts = {}
+_last_persona_dialogue_user_ts = BoundedDict(max_size=10000)
+_last_persona_board_ts = BoundedDict(max_size=200)
 _persona_processed_posts: set[int] = set()
 last_persona_dialogue_user_ts = _last_persona_dialogue_user_ts
 last_persona_board_ts = _last_persona_board_ts
 _active_duels = {}
-_cancelled_duels_by_creator: dict[str, float] = {}
+_cancelled_duels_by_creator: dict[str, float] = BoundedDict(max_size=2000)
 
 
 def record_duel_cancelled_by_creator(challenger_id: int):
@@ -141,16 +214,18 @@ def resolve_duel_token(token: str) -> "int | None":
     return None
 
 last_messages = deque(maxlen=200)
-reaction_ratelimit = defaultdict(float)
+reaction_ratelimit = BoundedDefaultDict(float, max_size=20000)
 current_deliveries = {}
 posts_pending_deletion = set()
 
 # Трекинг активных атак для ограничения спама (макс. 2 активных эффекта каждого типа на автора)
-_ACTIVE_AUTHOR_ATTACKS: dict[str, dict[int, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
-_GLOBAL_COMBAT_COOLDOWNS: dict[int, float] = {}
-_TARGET_LAST_ATTACKED_TS: dict[int, float] = {}
-_ATTACKER_SERIES_HISTORY: dict[int, list[float]] = defaultdict(list)
-_VICTIM_ROB_COOLDOWNS: dict[int, float] = {}
+_ACTIVE_AUTHOR_ATTACKS: dict[str, dict[int, dict[int, float]]] = BoundedDefaultDict(
+    lambda: BoundedDefaultDict(dict, max_size=5000), max_size=50
+)
+_GLOBAL_COMBAT_COOLDOWNS: dict[int, float] = BoundedDict(max_size=10000)
+_TARGET_LAST_ATTACKED_TS: dict[int, float] = BoundedDict(max_size=10000)
+_ATTACKER_SERIES_HISTORY: dict[int, list[float]] = BoundedDefaultDict(list, max_size=10000)
+_VICTIM_ROB_COOLDOWNS: dict[int, float] = BoundedDict(max_size=10000)
 
 def get_target_grief_protection_remaining(target_id: int) -> int:
     """
@@ -233,7 +308,7 @@ def clear_combat_cooldown(user_id: int):
     """
     _GLOBAL_COMBAT_COOLDOWNS.pop(user_id, None)
 
-_GLOBAL_WORK_COOLDOWNS: Dict[int, Dict[str, int]] = defaultdict(dict)
+_GLOBAL_WORK_COOLDOWNS: Dict[int, Dict[str, int]] = BoundedDefaultDict(dict, max_size=20000)
 
 def get_user_work_cooldowns(user_id: int) -> dict:
     return dict(_GLOBAL_WORK_COOLDOWNS[user_id])
@@ -264,9 +339,9 @@ def sync_user_work_cooldowns(user_id: int, cooldowns: dict):
             else:
                 _GLOBAL_WORK_COOLDOWNS[user_id][j] = max(_GLOBAL_WORK_COOLDOWNS[user_id].get(j, 0), val)
 
-_USER_PARTYVAN_COOLDOWNS: Dict[int, float] = {}
-_BOARD_PARTYVAN_COOLDOWNS: Dict[str, float] = {}
-_VICTIM_PARTYVAN_IMMUNITY: Dict[int, float] = {}  # user_id -> expires_at timestamp
+_USER_PARTYVAN_COOLDOWNS: Dict[int, float] = BoundedDict(max_size=10000)
+_BOARD_PARTYVAN_COOLDOWNS: Dict[str, float] = BoundedDict(max_size=200)
+_VICTIM_PARTYVAN_IMMUNITY: Dict[int, float] = BoundedDict(max_size=10000)  # user_id -> expires_at timestamp
 
 # --- Алиасы с «абсолютным» интерфейсом (принимают expires_at timestamp) ---
 # main.py вызывает set_partyvan_user_cooldown(user_id, current_time + 600)
@@ -298,7 +373,8 @@ def set_partyvan_victim_immunity(user_id: int, expires_at: float):
         loop = asyncio.get_running_loop()
         if loop and loop.is_running():
             from common.database import record_user_immunity
-            loop.create_task(record_user_immunity(None, user_id, "partyvan", float(expires_at)))
+            from common.task_manager import spawn_task
+            spawn_task(record_user_immunity(None, user_id, "partyvan", float(expires_at)), name="record_user_immunity")
     except (RuntimeError, Exception):
         pass
 
@@ -344,7 +420,7 @@ def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, d
     now = time.time()
     _ACTIVE_AUTHOR_ATTACKS[item_type][attacker_id][target_id] = now + duration_seconds
 
-_DAILY_SHOP_PURCHASES: dict[tuple[int, str, str], int] = defaultdict(int)
+_DAILY_SHOP_PURCHASES: dict[tuple[int, str, str], int] = BoundedDefaultDict(int, max_size=30000)
 
 CANONICAL_SHOP_ITEM_ALIASES = {
     "trash": "lootbox_trash",
@@ -405,7 +481,8 @@ def record_shop_purchase(user_id: int, item: str):
         loop = asyncio.get_running_loop()
         if loop and loop.is_running():
             from common.database import record_user_daily_limit
-            loop.create_task(record_user_daily_limit(None, user_id, canonical_item, today_str, increment=1))
+            from common.task_manager import spawn_task
+            spawn_task(record_user_daily_limit(None, user_id, canonical_item, today_str, increment=1), name="record_user_daily_limit")
     except (RuntimeError, Exception):
         pass
 
@@ -452,8 +529,8 @@ async def check_shop_purchase_limit_async(db, user_id: int, item: str) -> tuple[
 
 _ATTACK_WINDOW_SEC = 3600 # 1 hour
 _MAX_TARGETS_PER_WINDOW = 5
-_ATTACKER_TARGET_HISTORY: dict[int, list[tuple[float, int]]] = {}
-_ATTACKER_ABUSE_WARNINGS: dict[int, int] = {}
+_ATTACKER_TARGET_HISTORY: dict[int, list[tuple[float, int]]] = BoundedDict(max_size=10000)
+_ATTACKER_ABUSE_WARNINGS: dict[int, int] = BoundedDict(max_size=10000)
 
 def check_attack_abuse_limit(attacker_id: int, target_id: int) -> tuple[bool, str, int]:
     """
@@ -580,7 +657,7 @@ def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
         stale_posts = [k for k, _ in zip(post_to_messages, range(excess))]
     removed_reverse = 0
     for post_num in stale_posts:
-        removed_reverse += _drop_post_copy_maps_unlocked(post_num)
+        removed_reverse += _drop_post_copy_maps_unlocked(post_num, drop_reverse=False)
     return len(stale_posts), removed_reverse
 
 def _trim_messages_storage_unlocked(max_posts: int) -> int:
@@ -687,37 +764,37 @@ board_data = defaultdict(lambda: {
     'active_mode_task': None, # Хранит задачу на отключение текущего режима
     'last_deanon_time': 0, # Время последнего успешного вызова /deanon
     'last_summarize_time': 0, # Время последнего успешного вызова /summarize
-    'last_roll_time': defaultdict(float), # Время последнего ролла для кулдауна рулетки
-    'last_info_command_time': defaultdict(float), # Кулдаун для /stats, /active
-    'last_texts': defaultdict(lambda: deque(maxlen=5)),
-    'last_stickers': defaultdict(lambda: deque(maxlen=5)),
-    'last_animations': defaultdict(lambda: deque(maxlen=5)),
-    'last_audios': defaultdict(lambda: deque(maxlen=5)),
-    'spam_violations': defaultdict(dict),
-    'spam_tracker': defaultdict(list),
+    'last_roll_time': BoundedDefaultDict(float, max_size=10000), # Время последнего ролла для кулдауна рулетки
+    'last_info_command_time': BoundedDefaultDict(float, max_size=10000), # Кулдаун для /stats, /active
+    'last_texts': BoundedDefaultDict(lambda: deque(maxlen=5), max_size=10000),
+    'last_stickers': BoundedDefaultDict(lambda: deque(maxlen=5), max_size=10000),
+    'last_animations': BoundedDefaultDict(lambda: deque(maxlen=5), max_size=10000),
+    'last_audios': BoundedDefaultDict(lambda: deque(maxlen=5), max_size=10000),
+    'spam_violations': BoundedDefaultDict(dict, max_size=5000),
+    'spam_tracker': BoundedDefaultDict(list, max_size=10000),
     'spam_filter_words': set(),
     'mutes': {},
     'shadow_mutes': {},
-    'reaction_rate_tracker': defaultdict(lambda: deque(maxlen=5)), # Для глобального лимита скорости реакций
+    'reaction_rate_tracker': BoundedDefaultDict(lambda: deque(maxlen=5), max_size=10000), # Для глобального лимита скорости реакций
     'reaction_banned_users': set(), # Пользователи, которым запрещено ставить реакции
-    'reaction_queue': defaultdict(deque), # Очередь post_num для отложенной обработки реакций
-    'last_reaction_process_time': defaultdict(float), # Время последней обработки из очереди
+    'reaction_queue': BoundedDefaultDict(deque, max_size=5000), # Очередь post_num для отложенной обработки реакций
+    'last_reaction_process_time': BoundedDefaultDict(float, max_size=10000), # Время последней обработки из очереди
     'users': {
         'active': set(),
         'banned': set()
     },
-    'single_photo_counter': defaultdict(int), # Трекер для одиночных фото
-    'last_photo_group_id': defaultdict(str),  # Чтобы отличать разные группы
+    'single_photo_counter': BoundedDefaultDict(int, max_size=10000), # Трекер для одиночных фото
+    'last_photo_group_id': BoundedDefaultDict(str, max_size=10000),  # Чтобы отличать разные группы
     'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'lie_media': False, 'is_isolated': False}),
     'active_pin': None,
-    'message_counter': defaultdict(int),
-    'last_user_msgs': {},
-    'last_activity': {},
+    'message_counter': BoundedDefaultDict(int, max_size=10000),
+    'last_user_msgs': BoundedDict(max_size=10000),
+    'last_activity': BoundedDict(max_size=15000),
     'threads_data': {},  # {thread_id: {'op_id', 'title', ...}}
-    'user_state': {},    # {user_id: {'location', 'last_seen_main', ...}}
-    'thread_locks': defaultdict(asyncio.Lock), #  Словарь для блокировок тредов
+    'user_state': BoundedDict(max_size=15000),    # {user_id: {'location', 'last_seen_main', ...}}
+    'thread_locks': BoundedDefaultDict(asyncio.Lock, max_size=2000), #  Словарь для блокировок тредов
     'anime_strict_limits': {5920818088}, # Список ID с жестким ограничением (ID спамера добавлен сразу)
-    'anime_daily_tracker': defaultdict(lambda: {'count': 0, 'reset_at': 0.0}), # Суточный счетчик
+    'anime_daily_tracker': BoundedDefaultDict(lambda: {'count': 0, 'reset_at': 0.0}, max_size=10000), # Суточный счетчик
 })
 
 state = {
@@ -725,59 +802,14 @@ state = {
 }
 
 MODE_FLAGS = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode', 'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode', 'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode', 'rus_mode', 'abu_mode']
-shadow_fake_post_counters = {}
-
-
-class BoundedDict(OrderedDict):
-    """
-    Ordered dictionary with a strict maximum capacity.
-    Operates as an LRU / FIFO bounded cache:
-    - __setitem__: sets key, moves to end (most recent). If len > max_size, evicts oldest in O(1).
-    - update(): updates keys, trims excess.
-    - setdefault(): sets default if key missing, moves to end, trims excess.
-    """
-    def __init__(self, *args, max_size: int = 20000, maxsize: int | None = None, **kwargs):
-        if maxsize is not None:
-            max_size = maxsize
-        elif args and isinstance(args[0], int) and len(args) == 1 and not kwargs:
-            max_size = args[0]
-            args = ()
-        self.max_size = max(1, int(max_size))
-        self.maxsize = self.max_size
-        super().__init__(*args, **kwargs)
-        self._enforce_limit()
-
-    def __setitem__(self, key: Any, value: Any):
-        super().__setitem__(key, value)
-        super().move_to_end(key)
-        while len(self) > self.max_size:
-            self.popitem(last=False)
-
-    def update(self, *args, **kwargs):
-        super().update(*args, **kwargs)
-        self._enforce_limit()
-
-    def setdefault(self, key: Any, default: Any = None) -> Any:
-        val = super().setdefault(key, default)
-        super().move_to_end(key)
-        while len(self) > self.max_size:
-            self.popitem(last=False)
-        return val
-
-    def _enforce_limit(self):
-        while len(self) > self.max_size:
-            self.popitem(last=False)
-
-    def copy(self):
-        return BoundedDict(self, max_size=self.max_size)
-
-    def __repr__(self):
-        return f"BoundedDict(max_size={self.max_size}, {super().__repr__()})"
+shadow_fake_post_counters = BoundedDict(max_size=5000)
 
 
 BOT_MESSAGES_STORAGE_LIMIT = int(os.getenv("BOT_MESSAGES_STORAGE_LIMIT", "12000"))
-BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "5000"))
-BOT_COPY_CACHE_POST_LIMIT = int(os.getenv("BOT_COPY_CACHE_POST_LIMIT", "2000"))
+BOT_MESSAGE_TO_POST_LIMIT = int(os.getenv("BOT_MESSAGE_TO_POST_LIMIT", "50000"))
+BOT_COPY_CACHE_POST_LIMIT = int(os.getenv("BOT_COPY_CACHE_POST_LIMIT", "300"))
+MAX_COPY_MAP_POSTS_IN_MEMORY = BOT_COPY_CACHE_POST_LIMIT
+MAX_MESSAGES_IN_MEMORY = BOT_MESSAGES_STORAGE_LIMIT
 messages_storage = BoundedDict(max_size=BOT_MESSAGES_STORAGE_LIMIT)
 post_to_messages = BoundedDict(max_size=BOT_COPY_CACHE_POST_LIMIT)
 message_to_post = BoundedDict(max_size=BOT_MESSAGE_TO_POST_LIMIT)
@@ -888,10 +920,10 @@ def _safe_len(value) -> int:
         return -1
 
 # Globals Extracted
-_stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
-_stats_cooldown_tracker = {}
+_stats_cache: dict = BoundedDict(max_size=100)   # board_id -> {ts: float, photos: list[bytes]}
+_stats_cooldown_tracker = BoundedDict(max_size=10000)
 # _active_duels defined at top of file
-_duel_cooldowns: dict = {} # user_id -> timestamp
+_duel_cooldowns: dict = BoundedDict(max_size=10000) # user_id -> timestamp
 _PASSPORT_DATA = {
     'ru': {
         'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Ньюфаг с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
@@ -988,6 +1020,93 @@ STOP_WORDS = set([
 # --- Extracted from main.py Phase 9 (Helpers) ---
 # reaction_ratelimit, author_reaction_notify_tracker, author_reaction_notify_lock initialized at top of file
 _DUEL_TIMEOUT = 600       # 10 минут на принятие (адаптировано под темп борды)
+
+
+def prune_shared_state(now: float | None = None) -> dict[str, int]:
+    """
+    Reclaims expired / orphaned entries across shared_state containers.
+    Safe to call synchronously on the event loop or from tests.
+    """
+    ts_now = time.time() if now is None else float(now)
+    removed: dict[str, int] = {}
+
+    def _note(key: str, count: int) -> None:
+        if count > 0:
+            removed[key] = count
+
+    # 1. Done edit tasks & media group timers
+    done_edits = [k for k, t in list(pending_edit_tasks.items()) if hasattr(t, "done") and t.done()]
+    for k in done_edits:
+        pending_edit_tasks.pop(k, None)
+    _note("pending_edit_tasks", len(done_edits))
+
+    done_timers = [k for k, t in list(media_group_timers.items()) if hasattr(t, "done") and t.done()]
+    for k in done_timers:
+        media_group_timers.pop(k, None)
+    _note("media_group_timers", len(done_timers))
+
+    # 2. Stale _stats_cache entries (older than 1h)
+    stale_stats = [
+        k for k, v in list(_stats_cache.items())
+        if isinstance(v, dict) and (ts_now - float(v.get("ts", 0.0) or 0.0)) > 3600
+    ]
+    for k in stale_stats:
+        _stats_cache.pop(k, None)
+    _note("_stats_cache", len(stale_stats))
+
+    # 3. Cancelled duels older than 10 min
+    stale_cancelled = [k for k, ts in list(_cancelled_duels_by_creator.items()) if ts_now - float(ts) > 600]
+    for k in stale_cancelled:
+        _cancelled_duels_by_creator.pop(k, None)
+    _note("_cancelled_duels_by_creator", len(stale_cancelled))
+
+    # 4. Bounded set trims
+    if len(_persona_processed_posts) > 3000:
+        excess = len(_persona_processed_posts) - 1500
+        for p in sorted(_persona_processed_posts)[:excess]:
+            _persona_processed_posts.discard(p)
+        _note("_persona_processed_posts", excess)
+
+    if len(posts_pending_deletion) > 1000:
+        excess = len(posts_pending_deletion) - 500
+        for p in sorted(posts_pending_deletion)[:excess]:
+            posts_pending_deletion.discard(p)
+        _note("posts_pending_deletion", excess)
+
+    # 5. Combat/duel/work/shop TTL sweeps
+    for name, mapping in (
+        ("_GLOBAL_COMBAT_COOLDOWNS", _GLOBAL_COMBAT_COOLDOWNS),
+        ("_TARGET_LAST_ATTACKED_TS", _TARGET_LAST_ATTACKED_TS),
+        ("_VICTIM_ROB_COOLDOWNS", _VICTIM_ROB_COOLDOWNS),
+        ("_USER_PARTYVAN_COOLDOWNS", _USER_PARTYVAN_COOLDOWNS),
+        ("_VICTIM_PARTYVAN_IMMUNITY", _VICTIM_PARTYVAN_IMMUNITY),
+    ):
+        expired = [k for k, exp in list(mapping.items()) if float(exp) <= ts_now]
+        for k in expired:
+            mapping.pop(k, None)
+        _note(name, len(expired))
+
+    for name, mapping, ttl in (
+        ("_duel_cooldowns", _duel_cooldowns, 3600.0),
+        ("_stats_cooldown_tracker", _stats_cooldown_tracker, 3600.0),
+        ("_last_persona_dialogue_user_ts", _last_persona_dialogue_user_ts, 86400.0),
+        ("reaction_ratelimit", reaction_ratelimit, 86400.0),
+    ):
+        expired = [k for k, ts in list(mapping.items()) if (ts_now - float(ts)) > ttl]
+        for k in expired:
+            mapping.pop(k, None)
+        _note(name, len(expired))
+
+    today_str = datetime.fromtimestamp(ts_now, tz=timezone.utc).strftime("%Y-%m-%d")
+    stale_shop = [
+        k for k in list(_DAILY_SHOP_PURCHASES.keys())
+        if isinstance(k, tuple) and len(k) >= 3 and k[2] != today_str
+    ]
+    for k in stale_shop:
+        _DAILY_SHOP_PURCHASES.pop(k, None)
+    _note("_DAILY_SHOP_PURCHASES", len(stale_shop))
+
+    return removed
 
 # Explicitly export helpers so 'from shared_state import *' picks them up.
 __all__ = [
@@ -1097,6 +1216,8 @@ __all__ = [
     'MODE_FLAGS',
     'shadow_fake_post_counters',
     'BoundedDict',
+    'BoundedDefaultDict',
+    'prune_shared_state',
     'messages_storage',
     'post_to_messages',
     'message_to_post',
@@ -1152,6 +1273,8 @@ __all__ = [
     'set_partyvan_board_cooldown',
     'get_partyvan_board_cooldown',
     'BOT_MESSAGE_TO_POST_LIMIT',
+    'BOT_COPY_CACHE_POST_LIMIT',
+    'BOT_MESSAGES_STORAGE_LIMIT',
     'check_shop_purchase_limit',
 ]
 

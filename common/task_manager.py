@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import sys
+import weakref
 from typing import Set, Any, Optional
 
 _background_tasks: Set[asyncio.Task] = set()
-_tracked_http_clients: Set[Any] = set()
+_tracked_http_clients: weakref.WeakSet[Any] = weakref.WeakSet()
 
 logger = logging.getLogger("task_manager")
 
@@ -138,13 +139,53 @@ async def _wrap_awaitable(awaitable: Any) -> Any:
     return await awaitable
 
 
+def _is_http_client_closed(client: Any) -> bool:
+    try:
+        if getattr(client, "closed", False) is True:
+            return True
+        if getattr(client, "is_closed", False) is True:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def prune_done_tasks() -> int:
+    """
+    Defensive sweep for any completed tasks still present in _background_tasks
+    and any already-closed clients in _tracked_http_clients.
+    """
+    done = [t for t in list(_background_tasks) if t.done()]
+    for t in done:
+        _background_tasks.discard(t)
+    closed_clients = [c for c in list(_tracked_http_clients) if _is_http_client_closed(c)]
+    for c in closed_clients:
+        _tracked_http_clients.discard(c)
+    return len(done)
+
+
+def get_task_manager_stats() -> dict:
+    done_cnt = sum(1 for t in list(_background_tasks) if t.done())
+    return {
+        "background_tasks": len(_background_tasks),
+        "done_background_tasks": done_cnt,
+        "tracked_http_clients": len(_tracked_http_clients),
+    }
+
+
 def register_http_client(client: Any) -> None:
     """
     Register an httpx.AsyncClient or aiohttp.ClientSession to be closed
     gracefully when close_all_tasks() is called during shutdown.
     """
     if client is not None:
-        _tracked_http_clients.add(client)
+        closed_clients = [c for c in list(_tracked_http_clients) if _is_http_client_closed(c)]
+        for c in closed_clients:
+            _tracked_http_clients.discard(c)
+        try:
+            _tracked_http_clients.add(client)
+        except TypeError:
+            pass
 
 
 def unregister_http_client(client: Any) -> None:
@@ -197,6 +238,9 @@ def spawn_task(coro: Any, name: Optional[str] = None) -> asyncio.Task:
     until it completes, preventing accidental GC during heavy load.
     Supports standard coroutines and Aiogram SendMessage/TelegramMethod awaitables.
     """
+    if len(_background_tasks) > 256:
+        prune_done_tasks()
+
     if not asyncio.iscoroutine(coro):
         coro = _wrap_awaitable(coro)
 
@@ -207,9 +251,16 @@ def spawn_task(coro: Any, name: Optional[str] = None) -> asyncio.Task:
             name = None
 
     try:
-        task = asyncio.create_task(coro, name=name)
-    except TypeError:
-        task = asyncio.create_task(coro)
+        try:
+            task = asyncio.create_task(coro, name=name)
+        except TypeError:
+            task = asyncio.create_task(coro)
+    except Exception:
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise
     _background_tasks.add(task)
     task.add_done_callback(_on_task_done)
     return task

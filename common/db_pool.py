@@ -170,7 +170,11 @@ class LazyLock:
     def has_pending_high_priority(self) -> bool:
         """Проверяет, ожидают ли высокоприоритетные задачи (например, входящие посты)."""
         self._ensure_loop()
-        return any(not fut.done() for fut, _ in self._high_waiters)
+        if self._high_waiters:
+            self._high_waiters = [(f, t) for f, t in self._high_waiters if not f.done()]
+        if self._low_waiters:
+            self._low_waiters = [(f, t) for f, t in self._low_waiters if not f.done()]
+        return bool(self._high_waiters)
 
     def _check_watchdog(self):
         if self._owner is None:
@@ -334,7 +338,8 @@ class _PrioritizedLockContext:
         return self._lock
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self._lock.release()
+        if self._lock.is_owned_by_current_task():
+            self._lock.release()
 
 
 def has_pending_high_priority() -> bool:
@@ -398,8 +403,10 @@ async def get_pool():
                 await conn.execute("PRAGMA journal_mode=WAL;")
                 await conn.execute("PRAGMA synchronous = NORMAL;")
                 await conn.execute("PRAGMA temp_store = MEMORY;")
-                await conn.execute("PRAGMA mmap_size = 134217728;")
-                await conn.execute("PRAGMA cache_size = -32768;")
+                mmap_bytes = max(0, int(os.getenv("BOT_SQLITE_MMAP_BYTES", "67108864")))
+                cache_kb = max(1024, abs(int(os.getenv("BOT_SQLITE_CACHE_KB", "16384"))))
+                await conn.execute(f"PRAGMA mmap_size = {mmap_bytes};")
+                await conn.execute(f"PRAGMA cache_size = -{cache_kb};")
 
                 await conn.execute("PRAGMA foreign_keys = ON;")
                 await conn.execute("PRAGMA wal_autocheckpoint=500;")

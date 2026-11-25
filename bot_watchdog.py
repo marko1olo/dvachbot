@@ -52,8 +52,9 @@ HEARTBEAT_LOG = LOG_DIR / "bot_heartbeat.json"
 BOT_LOCK = ROOT / "bot.lock"
 STOP_REQUEST = ROOT / "bot.stop"
 BOT_RESTART_PATH = ROOT / "bot.restart"
-SOFT_RESTART_RSS_GB = float(os.environ.get("BOT_WATCHDOG_MAX_RSS_GB", "2.6"))
+SOFT_RESTART_RSS_GB = max(1.2, float(os.environ.get("BOT_WATCHDOG_MAX_RSS_GB", "2.6")))
 SOFT_RESTART_RSS_BYTES = SOFT_RESTART_RSS_GB * 1024 * 1024 * 1024
+RSS_HIGH_CONSECUTIVE_POLLS = max(1, int(os.environ.get("BOT_WATCHDOG_RSS_CONSECUTIVE_POLLS", "3")))
 SCHEDULED_RESTART_HOUR_UTC = int(os.environ.get("BOT_WATCHDOG_SCHEDULED_RESTART_HOUR_UTC", "5"))
 SOFT_RESTART_GRACE_SEC = float(os.environ.get("BOT_WATCHDOG_SOFT_RESTART_GRACE_SEC", "140"))
 HEALTH_URL = os.environ.get("BOT_HEALTH_URL", "http://127.0.0.1:8080")
@@ -71,21 +72,30 @@ TAIL_READ_BYTES = int(os.environ.get("BOT_WATCHDOG_TAIL_READ_BYTES", "262144"))
 HEARTBEAT_STALE_SEC = float(os.environ.get("BOT_WATCHDOG_HEARTBEAT_STALE_SEC", "45"))
 
 
-def _get_child_rss_bytes(child: subprocess.Popen) -> int | None:
+def _get_child_memory_metrics(child: subprocess.Popen) -> tuple[int | None, int | None]:
     try:
         import psutil
         if not psutil.pid_exists(child.pid):
-            return None
+            return None, None
         p = psutil.Process(child.pid)
-        total_rss = p.memory_info().rss
+        mi = p.memory_info()
+        total_rss = mi.rss
+        total_private = getattr(mi, "private", None) or mi.rss
         for sub in p.children(recursive=True):
             try:
-                total_rss += sub.memory_info().rss
+                smi = sub.memory_info()
+                total_rss += smi.rss
+                total_private += getattr(smi, "private", None) or smi.rss
             except Exception:
                 pass
-        return total_rss
+        return total_rss, total_private
     except Exception:
-        return None
+        return None, None
+
+
+def _get_child_rss_bytes(child: subprocess.Popen) -> int | None:
+    rss_bytes, _ = _get_child_memory_metrics(child)
+    return rss_bytes
 
 
 def _now() -> str:
@@ -581,6 +591,7 @@ def _close_child_log(process: subprocess.Popen) -> None:
 def _monitor_child(child: subprocess.Popen) -> bool:
     start_time = time.time()
     health_failures = 0
+    rss_high_streak = 0
     last_heartbeat_notice = 0.0
     last_scheduled_restart_date: str | None = None
     soft_restart_requested_at: float | None = None
@@ -695,24 +706,35 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                 continue
 
             if uptime >= WARMUP_SEC:
-                # 1. Proactive Memory Monitoring (soft drain restart if RSS >= 2.6 GB)
-                rss_bytes = _get_child_rss_bytes(child)
+                # 1. Proactive Memory Monitoring (soft drain restart after sustained RSS >= threshold)
+                rss_bytes, private_bytes = _get_child_memory_metrics(child)
                 if rss_bytes is not None and rss_bytes >= SOFT_RESTART_RSS_BYTES:
+                    rss_high_streak += 1
                     rss_gb = rss_bytes / (1024 ** 3)
-                    log(
-                        f"⚠️ Bot child RSS memory high: {rss_gb:.2f} GB >= {SOFT_RESTART_RSS_GB:.2f} GB threshold. "
-                        "Initiating soft drain restart..."
-                    )
-                    soft_restart_requested_at = time.time()
-                    try:
-                        BOT_RESTART_PATH.write_text(f"rss_limit_exceeded {rss_gb:.2f}GB", encoding="utf-8")
-                    except OSError as e:
-                        log(f"Could not write {BOT_RESTART_PATH}: {e}")
-                    try:
-                        child.wait(timeout=min(POLL_SEC, 5.0))
-                    except subprocess.TimeoutExpired:
-                        pass
-                    continue
+                    priv_gb = (private_bytes or rss_bytes) / (1024 ** 3)
+                    if rss_high_streak >= RSS_HIGH_CONSECUTIVE_POLLS:
+                        log(
+                            f"⚠️ Bot child RSS memory sustained high ({rss_high_streak}/{RSS_HIGH_CONSECUTIVE_POLLS}): "
+                            f"rss={rss_gb:.2f} GB, private={priv_gb:.2f} GB >= {SOFT_RESTART_RSS_GB:.2f} GB threshold. "
+                            "Initiating soft drain restart..."
+                        )
+                        soft_restart_requested_at = time.time()
+                        try:
+                            BOT_RESTART_PATH.write_text(f"rss_limit_exceeded {rss_gb:.2f}GB", encoding="utf-8")
+                        except OSError as e:
+                            log(f"Could not write {BOT_RESTART_PATH}: {e}")
+                        try:
+                            child.wait(timeout=min(POLL_SEC, 5.0))
+                        except subprocess.TimeoutExpired:
+                            pass
+                        continue
+                    else:
+                        log(
+                            f"⚠️ Bot child RSS memory high ({rss_high_streak}/{RSS_HIGH_CONSECUTIVE_POLLS}): "
+                            f"rss={rss_gb:.2f} GB, private={priv_gb:.2f} GB >= {SOFT_RESTART_RSS_GB:.2f} GB"
+                        )
+                else:
+                    rss_high_streak = 0
 
                 # 2. Scheduled 24h Daily Maintenance Restart (at 05:00 UTC)
                 now_utc = datetime.now(timezone.utc)

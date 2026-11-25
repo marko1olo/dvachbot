@@ -31,7 +31,7 @@ class TestReplyResolutionAndHydration(unittest.IsolatedAsyncioTestCase):
     def test_config_limits(self):
         """Verify increased RAM limits for posts and copies."""
         self.assertGreaterEqual(BOT_POST_CACHE_LIMIT, 2000)
-        self.assertGreaterEqual(BOT_COPY_CACHE_POST_LIMIT, 1000)
+        self.assertGreaterEqual(BOT_COPY_CACHE_POST_LIMIT, 300)
         self.assertGreaterEqual(BOT_MESSAGE_TO_POST_LIMIT, 50000)
         self.assertEqual(message_to_post.max_size, BOT_MESSAGE_TO_POST_LIMIT)
 
