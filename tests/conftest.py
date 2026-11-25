@@ -191,17 +191,37 @@ del _module_name
 _PRISTINE_MODULES = dict(sys.modules)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _session_logging_isolation():
+    """
+    Один раз на сессию: отключаем FileHandler'ы боевых логгеров.
+    Не создаём event loop — pytest-asyncio strict mode управляет им сам.
+    """
+    import logging
+    for logger_name in [None, "runtime", "tgach.runtime", "site_tgach"]:
+        log_obj = logging.getLogger(logger_name)
+        for h in list(log_obj.handlers):
+            if isinstance(h, logging.FileHandler):
+                log_obj.removeHandler(h)
+        if not any(isinstance(h, logging.NullHandler) for h in log_obj.handlers):
+            log_obj.addHandler(logging.NullHandler())
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _restore_pristine_modules():
     """
-    Возвращает подменённые модули на место перед каждым тестом и перепроверяет
-    установку защитных хуков.
+    Перед каждым тестом:
+    - Возвращает подменённые модули (мокирование, monkey-patching) на оригиналы.
+    - Переустанавливает защитные хуки sqlite3/aiosqlite/Telegram.
+    - Сбрасывает боевое in-memory состояние (cooldowns, effects).
     """
+    # Restore подменённых — не трогаем новые модули (они нужны тестам)
     for _name, _real in _PRISTINE_MODULES.items():
         if sys.modules.get(_name) is not _real:
             sys.modules[_name] = _real
 
-    # Гарантируем, что защитные хуки всегда активны
+    # Гарантируем активность защитных хуков
     sqlite3.connect = guarded_sqlite3_connect
     if 'aiosqlite' in sys.modules:
         import aiosqlite
@@ -215,36 +235,7 @@ def _restore_pristine_modules():
     except Exception:
         pass
 
-    import logging
-    for _l_name in [None, "runtime", "tgach.runtime", "site_tgach"]:
-        _lo = logging.getLogger(_l_name)
-        for _h in list(_lo.handlers):
-            if isinstance(_h, logging.FileHandler):
-                _lo.removeHandler(_h)
-        if not _lo.handlers:
-            _lo.addHandler(logging.NullHandler())
     yield
-
-
-@pytest.fixture(scope="session", autouse=True)
-def setup_event_loop():
-    import logging
-    # Изоляция боевых логов от тестового загрязнения (MagicMock, test exceptions)
-    for logger_name in [None, "runtime", "tgach.runtime", "site_tgach"]:
-        log_obj = logging.getLogger(logger_name)
-        for h in list(log_obj.handlers):
-            if isinstance(h, logging.FileHandler):
-                log_obj.removeHandler(h)
-        null_h = logging.NullHandler()
-        log_obj.addHandler(null_h)
-
-    import sys
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
 
 
 try:

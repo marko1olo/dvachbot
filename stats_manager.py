@@ -606,13 +606,13 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
     con = _sqlite3.connect(db_path)
     try: con.execute('PRAGMA journal_mode=WAL')
-    except: pass
+    except (_sqlite3.OperationalError, _sqlite3.DatabaseError): pass
     try: con.execute('PRAGMA synchronous=NORMAL')
-    except: pass
+    except (_sqlite3.OperationalError, _sqlite3.DatabaseError): pass
     try: con.execute('PRAGMA busy_timeout=15000')
-    except: pass
+    except (_sqlite3.OperationalError, _sqlite3.DatabaseError): pass
     try: con.execute('PRAGMA wal_autocheckpoint=500')
-    except: pass
+    except (_sqlite3.OperationalError, _sqlite3.DatabaseError): pass
     try:
         cur = con.cursor()
 

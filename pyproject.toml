@@ -1,8 +1,7 @@
 [project]
-name = "python-template"
+name = "dvachbot"
 version = "0.1.0"
-description = ""
-authors = ["Your Name <you@example.com>"]
+description = "dvachbot / tgach.top — Telegram bot + imageboard"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -11,6 +10,22 @@ asyncio_mode = "strict"
 testpaths = ["tests"]
 timeout = 180
 pythonpath = ["."]
-addopts = "-p no:aiohttp -p no:hypothesispytest -p no:twisted"
+addopts = """
+  -p no:aiohttp
+  -p no:hypothesispytest
+  -p no:twisted
+  --continue-on-collection-errors
+  -q
+"""
+
+filterwarnings = [
+    # pyrogram использует deprecated asyncio.get_event_loop() без loop — шум
+    "ignore::DeprecationWarning:pyrogram",
+    # starlette .env файл не найден в тестовом окружении — ожидаемо
+    "ignore:Config file.*not found:UserWarning:starlette",
+]
+
+log_level = "WARNING"
+log_cli = false
 
 

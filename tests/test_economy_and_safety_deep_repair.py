@@ -3,7 +3,6 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 from bank_engine import withdraw_bank_deposit
-from whale_economy_engine import execute_abu_bank_haircut
 
 # Mocking DB and other dependencies
 @pytest.mark.asyncio

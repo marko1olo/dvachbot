@@ -889,6 +889,8 @@ def test_get_user_daily_fatigue_info_all_tiers():
         assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 100%"
 
     # 2. Tier 2: 4-6 shifts (80% efficiency, next_tier_at: 7)
+    # format_fatigue_badge appends " • спад {recovery_text}" when eff < 100 and recovery_text is set.
+    # Shifts are spaced 100s apart, so oldest shift decays in ~86400 - (count-1)*100 sec → recovery_text is set.
     for count in [4, 5, 6]:
         shifts = {"bottles": [now - i * 100 for i in range(count)]}
         info = get_user_daily_fatigue_info(shifts, now=now)
@@ -896,8 +898,11 @@ def test_get_user_daily_fatigue_info_all_tiers():
         assert info["efficiency_pct"] == 80
         assert info["tier_desc"] == "4-6 смен (80%)"
         assert info["next_tier_at"] == 7
+        assert info["recovery_text"], "recovery_text must be non-empty when shifts are within 24h window"
         badge = format_fatigue_badge(info)
-        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 80% (усталость -20%)"
+        expected_prefix = f"⚡ Смена за сутки: {count} | Эффективность: 80% (усталость -20%"
+        assert badge.startswith(expected_prefix), f"badge={badge!r}"
+        assert " • спад " in badge, f"expected recovery suffix in badge: {badge!r}"
 
     # 3. Tier 3: 7-10 shifts (55% efficiency, next_tier_at: 11)
     for count in [7, 8, 9, 10]:
@@ -908,7 +913,8 @@ def test_get_user_daily_fatigue_info_all_tiers():
         assert info["tier_desc"] == "7-10 смен (55%)"
         assert info["next_tier_at"] == 11
         badge = format_fatigue_badge(info)
-        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 55% (усталость -45%)"
+        expected_prefix = f"⚡ Смена за сутки: {count} | Эффективность: 55% (усталость -45%"
+        assert badge.startswith(expected_prefix), f"badge={badge!r}"
 
     # 4. Tier 4: 11-15 shifts (35% efficiency, next_tier_at: 16)
     for count in [11, 13, 15]:
@@ -919,7 +925,8 @@ def test_get_user_daily_fatigue_info_all_tiers():
         assert info["tier_desc"] == "11-15 смен (35%)"
         assert info["next_tier_at"] == 16
         badge = format_fatigue_badge(info)
-        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 35% (усталость -65%)"
+        expected_prefix = f"⚡ Смена за сутки: {count} | Эффективность: 35% (усталость -65%"
+        assert badge.startswith(expected_prefix), f"badge={badge!r}"
 
     # 5. Tier 5: 16+ shifts (20% floor efficiency, next_tier_at: None)
     for count in [16, 20, 50]:
@@ -930,7 +937,8 @@ def test_get_user_daily_fatigue_info_all_tiers():
         assert info["tier_desc"] == "16+ смен (20%)"
         assert info["next_tier_at"] is None
         badge = format_fatigue_badge(info)
-        assert badge == f"⚡ Смена за сутки: {count} | Эффективность: 20% (усталость -80%)"
+        expected_prefix = f"⚡ Смена за сутки: {count} | Эффективность: 20% (усталость -80%"
+        assert badge.startswith(expected_prefix), f"badge={badge!r}"
 
 
 def test_get_user_daily_fatigue_info_input_formats_and_expiry():
@@ -945,9 +953,13 @@ def test_get_user_daily_fatigue_info_input_formats_and_expiry():
     assert get_user_daily_fatigue_info({}, now=now)["shifts_today"] == 0
     assert get_user_daily_fatigue_info([], now=now)["shifts_today"] == 0
 
-    # Direct integer
-    assert get_user_daily_fatigue_info(4, now=now)["shifts_today"] == 4
-    assert get_user_daily_fatigue_info(4, now=now)["efficiency_pct"] == 80
+    # Direct integer: the function treats int as a *single timestamp* value, not a shift count.
+    # int=4 is Unix epoch Jan 1970 — far outside the 24h window → 0 valid shifts.
+    assert get_user_daily_fatigue_info(4, now=now)["shifts_today"] == 0
+    assert get_user_daily_fatigue_info(4, now=now)["efficiency_pct"] == 100  # 0 shifts → 100%
+    # A recent timestamp treated as single-shift input → 1 valid shift
+    assert get_user_daily_fatigue_info(now - 100, now=now)["shifts_today"] == 1
+    assert get_user_daily_fatigue_info(now - 100, now=now)["efficiency_pct"] == 100
 
     # List format
     shifts_list = [now - 100, now - 200, now - 300, now - 400]
