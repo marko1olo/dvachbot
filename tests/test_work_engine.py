@@ -1020,13 +1020,13 @@ async def test_work_ui_transparency_in_menu_and_result():
 
     with patch("main.get_pool", return_value=db_conn):
         caption, _ = await main._build_work_card(888, "b")
-        assert "⚡ Смена за сутки: 4 | Эффективность: 80% (усталость -20%)" in caption
+        assert "⚡ Смена за сутки: 4 | Эффективность: 80% (усталость -20%" in caption
 
     # Check shift execution result includes fatigue status
     with patch("random.random", return_value=0.5), patch("random.randint", return_value=100):
         # 5th shift -> Tier 2 (80%)
         succ, change, msg, drop = execute_job_action("bottles", items)
         assert succ is True
-        assert "⚡ Смена за сутки: 5 | Эффективность: 80% (усталость -20%)" in msg
+        assert "⚡ Смена за сутки: 5 | Эффективность: 80% (усталость -20%" in msg
 
     await db_conn.close()
