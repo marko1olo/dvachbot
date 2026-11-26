@@ -192,7 +192,7 @@ async def test_anime_timeout_bounds_and_early_partial_delivery():
     fetchers = [lambda i=i: make_fetcher(i) for i in range(10)]
 
     # 8 items succeed immediately; slots 3 and 7 fail/timeout
-    async def mock_bounded_downloads(urls, board_id, user_id, source):
+    async def mock_bounded_downloads(urls, board_id, user_id, source, *args, **kwargs):
         res = []
         for idx, url in enumerate(urls):
             if "art_3" in url or "art_7" in url:
@@ -204,10 +204,10 @@ async def test_anime_timeout_bounds_and_early_partial_delivery():
     fetch_call_count = 0
     orig_fetch = main._run_bounded_anime_url_fetches
 
-    async def tracked_fetch(tasks, board_id, user_id, source):
+    async def tracked_fetch(tasks, board_id, user_id, source, *args, **kwargs):
         nonlocal fetch_call_count
         fetch_call_count += 1
-        return await orig_fetch(tasks, board_id, user_id, source)
+        return await orig_fetch(tasks, board_id, user_id, source, *args, **kwargs)
 
     t0 = time.monotonic()
     with patch("main._run_bounded_anime_url_fetches", side_effect=tracked_fetch), \
@@ -219,6 +219,36 @@ async def test_anime_timeout_bounds_and_early_partial_delivery():
     assert len(collected) == 8
     assert fetch_call_count == 1, "Should early-return 8/10 after round 0 failure instead of looping refill rounds"
     assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_real_time_quorum_early_return_prevents_stalls():
+    """
+    Ensure _run_bounded_anime_downloads with min_success_quorum returns early
+    when quorum is reached, without blocking for the full 35s on stalling tasks.
+    """
+    import main
+
+    async def mock_download_with_delays(url, timeout):
+        if "stall" in url:
+            await asyncio.sleep(20.0)
+            return (b"slow", 200)
+        await asyncio.sleep(0.05)
+        return (b"\xff\xd8\xff\xe0" + url.encode("utf-8"), 200)
+
+    urls = [f"https://example.com/img_{i}.jpg" for i in range(8)]
+    urls.extend(["https://example.com/stall_1.jpg", "https://example.com/stall_2.jpg"])
+
+    t0 = time.monotonic()
+    with patch("main._download_image_with_proxy", side_effect=mock_download_with_delays):
+        results = await main._run_bounded_anime_downloads(
+            urls, "b", 123456, "test", min_success_quorum=7, quorum_grace_sec=0.5
+        )
+    elapsed = time.monotonic() - t0
+
+    success_items = [r for r in results if r[2] is not None and not isinstance(r[2], Exception)]
+    assert len(success_items) >= 7, f"Expected at least 7 items, got {len(success_items)}"
+    assert elapsed < 3.0, f"Expected early return in <3.0s, but took {elapsed:.2f}s"
 
 
 @pytest.mark.asyncio

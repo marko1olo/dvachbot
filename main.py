@@ -26571,6 +26571,8 @@ async def _run_bounded_anime_url_fetches(
     board_id: str,
     user_id: int,
     source: str,
+    min_success_quorum: Optional[int] = None,
+    quorum_grace_sec: float = 1.5,
 ) -> list[tuple[int, Optional[str] | BaseException]]:
     sem = asyncio.Semaphore(ANIME_URL_FETCH_PARALLEL)
 
@@ -26600,52 +26602,114 @@ async def _run_bounded_anime_url_fetches(
             except Exception as exc:
                 return index, exc
 
-    tasks = [spawn_task(run_one(i, fetcher)) for i, fetcher in enumerate(fetcher_tasks)]
-    done, pending = await asyncio.wait(tasks, timeout=ANIME_URL_FETCH_TOTAL_SEC)
+    task_map = {
+        spawn_task(run_one(i, fetcher)): i
+        for i, fetcher in enumerate(fetcher_tasks)
+    }
+    results: list[tuple[int, Optional[str] | BaseException]] = [
+        (i, None) for i in range(len(fetcher_tasks))
+    ]
+    pending = set(task_map.keys())
+    success_count = 0
+    t0 = time.monotonic()
+    grace_deadline: Optional[float] = None
+
+    while pending:
+        now = time.monotonic()
+        time_left = ANIME_URL_FETCH_TOTAL_SEC - (now - t0)
+        if time_left <= 0:
+            break
+
+        if grace_deadline is not None:
+            grace_left = grace_deadline - now
+            if grace_left <= 0:
+                break
+            step_timeout = min(time_left, grace_left)
+        else:
+            step_timeout = time_left
+
+        done, pending = await asyncio.wait(
+            pending,
+            timeout=step_timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if not done:
+            if grace_deadline is not None and time.monotonic() >= grace_deadline:
+                break
+            if time.monotonic() - t0 >= ANIME_URL_FETCH_TOTAL_SEC:
+                break
+            continue
+
+        for task in done:
+            try:
+                index, result = task.result()
+                if 0 <= index < len(results):
+                    results[index] = (index, result)
+                    if isinstance(result, str) and result.startswith("http"):
+                        success_count += 1
+            except BaseException as exc:
+                idx = task_map.get(task, 0)
+                if not isinstance(exc, asyncio.CancelledError):
+                    results[idx] = (idx, exc)
+                    runtime_logger.warning(
+                        "anime_url_fetch_task_error %s",
+                        json.dumps(
+                            {
+                                "ts": round(time.time(), 3),
+                                "board_id": board_id,
+                                "user_id": user_id,
+                                "source": source,
+                                "error": type(exc).__name__,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
+
+        if min_success_quorum is not None and success_count >= min_success_quorum and grace_deadline is None:
+            grace_deadline = time.monotonic() + quorum_grace_sec
+
     if pending:
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-        runtime_logger.warning(
-            "anime_url_fetch_total_timeout %s",
-            json.dumps(
-                {
-                    "ts": round(time.time(), 3),
-                    "board_id": board_id,
-                    "user_id": user_id,
-                    "source": source,
-                    "pending": len(pending),
-                    "total": len(tasks),
-                    "timeout_sec": ANIME_URL_FETCH_TOTAL_SEC,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        )
-    results: list[tuple[int, Optional[str] | BaseException]] = [
-        (i, None) for i in range(len(fetcher_tasks))
-    ]
-    for task in done:
-        try:
-            index, result = task.result()
-            if 0 <= index < len(results):
-                results[index] = (index, result)
-        except BaseException as exc:
-            if not isinstance(exc, asyncio.CancelledError):
-                runtime_logger.warning(
-                    "anime_url_fetch_task_error %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "user_id": user_id,
-                            "source": source,
-                            "error": type(exc).__name__,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
+        if grace_deadline is not None and time.monotonic() >= grace_deadline:
+            runtime_logger.info(
+                "anime_url_fetch_quorum_early_return %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "source": source,
+                        "ready": success_count,
+                        "quorum": min_success_quorum,
+                        "total": len(fetcher_tasks),
+                        "elapsed_sec": round(time.monotonic() - t0, 3),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        else:
+            runtime_logger.warning(
+                "anime_url_fetch_total_timeout %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "source": source,
+                        "pending": len(pending),
+                        "total": len(fetcher_tasks),
+                        "timeout_sec": ANIME_URL_FETCH_TOTAL_SEC,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
     return results
 
 async def _run_bounded_anime_downloads(
@@ -26653,6 +26717,8 @@ async def _run_bounded_anime_downloads(
     board_id: str,
     user_id: int,
     source: str,
+    min_success_quorum: Optional[int] = None,
+    quorum_grace_sec: float = 2.0,
 ) -> list[tuple[int, str, tuple[bytes, int] | BaseException | None]]:
     sem = asyncio.Semaphore(ANIME_DOWNLOAD_PARALLEL)
 
@@ -26687,52 +26753,114 @@ async def _run_bounded_anime_downloads(
             except Exception as exc:
                 return index, url, exc
 
-    tasks = [spawn_task(run_one(i, url)) for i, url in enumerate(urls)]
-    done, pending = await asyncio.wait(tasks, timeout=ANIME_DOWNLOAD_TOTAL_SEC)
+    task_map = {
+        spawn_task(run_one(i, url)): i
+        for i, url in enumerate(urls)
+    }
+    results: list[tuple[int, str, tuple[bytes, int] | BaseException | None]] = [
+        (i, url, None) for i, url in enumerate(urls)
+    ]
+    pending = set(task_map.keys())
+    success_count = 0
+    t0 = time.monotonic()
+    grace_deadline: Optional[float] = None
+
+    while pending:
+        now = time.monotonic()
+        time_left = ANIME_DOWNLOAD_TOTAL_SEC - (now - t0)
+        if time_left <= 0:
+            break
+
+        if grace_deadline is not None:
+            grace_left = grace_deadline - now
+            if grace_left <= 0:
+                break
+            step_timeout = min(time_left, grace_left)
+        else:
+            step_timeout = time_left
+
+        done, pending = await asyncio.wait(
+            pending,
+            timeout=step_timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if not done:
+            if grace_deadline is not None and time.monotonic() >= grace_deadline:
+                break
+            if time.monotonic() - t0 >= ANIME_DOWNLOAD_TOTAL_SEC:
+                break
+            continue
+
+        for task in done:
+            try:
+                _index, url, result = task.result()
+                if 0 <= _index < len(results):
+                    results[_index] = (_index, url, result)
+                    if isinstance(result, tuple) and result[0]:
+                        success_count += 1
+            except BaseException as exc:
+                idx = task_map.get(task, 0)
+                if not isinstance(exc, asyncio.CancelledError):
+                    results[idx] = (idx, urls[idx], exc)
+                    runtime_logger.warning(
+                        "anime_download_task_error %s",
+                        json.dumps(
+                            {
+                                "ts": round(time.time(), 3),
+                                "board_id": board_id,
+                                "user_id": user_id,
+                                "source": source,
+                                "error": type(exc).__name__,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
+
+        if min_success_quorum is not None and success_count >= min_success_quorum and grace_deadline is None:
+            grace_deadline = time.monotonic() + quorum_grace_sec
+
     if pending:
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-        runtime_logger.warning(
-            "anime_download_total_timeout %s",
-            json.dumps(
-                {
-                    "ts": round(time.time(), 3),
-                    "board_id": board_id,
-                    "user_id": user_id,
-                    "source": source,
-                    "pending": len(pending),
-                    "total": len(tasks),
-                    "timeout_sec": ANIME_DOWNLOAD_TOTAL_SEC,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        )
-    results: list[tuple[int, str, tuple[bytes, int] | BaseException | None]] = [
-        (i, url, None) for i, url in enumerate(urls)
-    ]
-    for task in done:
-        try:
-            _index, url, result = task.result()
-            if 0 <= _index < len(results):
-                results[_index] = (_index, url, result)
-        except BaseException as exc:
-            if not isinstance(exc, asyncio.CancelledError):
-                runtime_logger.warning(
-                    "anime_download_task_error %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "user_id": user_id,
-                            "source": source,
-                            "error": type(exc).__name__,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
+        if grace_deadline is not None and time.monotonic() >= grace_deadline:
+            runtime_logger.info(
+                "anime_download_quorum_early_return %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "source": source,
+                        "ready": success_count,
+                        "quorum": min_success_quorum,
+                        "total": len(urls),
+                        "elapsed_sec": round(time.monotonic() - t0, 3),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        else:
+            runtime_logger.warning(
+                "anime_download_total_timeout %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "source": source,
+                        "pending": len(pending),
+                        "total": len(urls),
+                        "timeout_sec": ANIME_DOWNLOAD_TOTAL_SEC,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
     return results
 
 async def _collect_stacked_anime_downloads(
@@ -26768,7 +26896,10 @@ async def _collect_stacked_anime_downloads(
             break
         round_source = source if round_index == 0 else f"{source}:refill{round_index}"
         round_fetchers = [fetcher_tasks[slot] for slot in retry_slots]
-        url_results = await _run_bounded_anime_url_fetches(round_fetchers, board_id, user_id, round_source)
+        url_quorum = early_accept_min if len(retry_slots) >= 3 else None
+        url_results = await _run_bounded_anime_url_fetches(
+            round_fetchers, board_id, user_id, round_source, min_success_quorum=url_quorum
+        )
 
         urls: list[str] = []
         url_slots: list[int] = []
@@ -26792,7 +26923,10 @@ async def _collect_stacked_anime_downloads(
         had_download_failure = False
         new_in_round = 0
         if urls:
-            download_results = await _run_bounded_anime_downloads(urls, board_id, user_id, round_source)
+            dl_quorum = early_accept_min if len(urls) >= 3 else None
+            download_results = await _run_bounded_anime_downloads(
+                urls, board_id, user_id, round_source, min_success_quorum=dl_quorum
+            )
             for local_index, orig_url, res in download_results:
                 if local_index >= len(url_slots):
                     continue
