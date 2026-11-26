@@ -341,7 +341,7 @@ _CANNED_REFUSAL_MARKERS = (
 _PROVIDER_LOCKS: dict[str, asyncio.Lock] = {}
 _PROVIDER_LOCKS_LOOP: asyncio.AbstractEventLoop | None = None
 _PROVIDER_LAST_REQUEST_TS: dict[str, float] = {}
-DEFAULT_AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "gpt-6.1-sol")
+DEFAULT_AGENTROUTER_MODEL = os.getenv("AGENTROUTER_MODEL", "gpt-6.2-sol")
 MIN_PROVIDER_INTERVAL: dict[str, float] = {
     "gemini": 2.5,
     "groq": 2.5,
