@@ -260,6 +260,9 @@ async def isolated_test_db(tmp_path):
     db = await aiosqlite.connect(db_path, timeout=30.0, isolation_level=None)
     await db.execute("PRAGMA busy_timeout = 30000;")
     await db.execute("PRAGMA journal_mode=WAL;")
+    await db.execute("PRAGMA synchronous = OFF;")
+    await db.execute("PRAGMA temp_store = MEMORY;")
+    await db.execute("PRAGMA cache_size = -8000;")
     await db.execute("PRAGMA foreign_keys = ON;")
     await db.execute("BEGIN IMMEDIATE")
     with contextlib.redirect_stdout(io.StringIO()):

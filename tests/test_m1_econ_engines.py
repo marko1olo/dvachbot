@@ -51,11 +51,15 @@ class TestM1EconEngines(unittest.IsolatedAsyncioTestCase):
         self.test_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.test_dir, "test_econ_m1.db")
         self.db = await aiosqlite.connect(self.db_path, isolation_level=None)
+        await self.db.execute("PRAGMA synchronous = OFF;")
+        await self.db.execute("PRAGMA journal_mode = MEMORY;")
         await self.db.execute("PRAGMA foreign_keys = ON;")
+        await self.db.execute("BEGIN IMMEDIATE")
         await _create_tables(self.db)
         await _apply_migrations(self.db)
         await _create_indices(self.db)
         await _insert_initial_data(self.db)
+        await self.db.execute("COMMIT")
 
     async def asyncTearDown(self):
         await self.db.close()
