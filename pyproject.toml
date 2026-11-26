@@ -3,7 +3,36 @@ name = "dvachbot"
 version = "0.1.0"
 description = "dvachbot / tgach.top — Telegram bot + imageboard"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "aiogram>=3.10.0,<3.23.0",
+    "aiohttp>=3.9.1,<4.0.0",
+    "aiohttp-socks>=0.8.0",
+    "aiosqlite>=0.20.0",
+    "httpx>=0.27.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "psutil>=5.9.8",
+    "requests>=2.31.0",
+    "tenacity>=8.2.0",
+    "numpy>=1.26.0",
+    "pandas>=2.1.0",
+    "scipy>=1.12.0",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "networkx>=3.0.0",
+    "Pillow>=10.2.0",
+    "qrcode[pil]>=8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.4.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.10.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
@@ -23,9 +52,30 @@ filterwarnings = [
     "ignore::DeprecationWarning:pyrogram",
     # starlette .env файл не найден в тестовом окружении — ожидаемо
     "ignore:Config file.*not found:UserWarning:starlette",
+    # fastapi testclient / starlette testclient deprecation warning
+    "ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning",
 ]
 
 log_level = "WARNING"
 log_cli = false
 
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [
+    ".git",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "_archive",
+    "scripts/archive",
+]
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = [
+    "E501",
+    "B008",
+    "B904",
+]
