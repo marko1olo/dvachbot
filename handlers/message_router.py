@@ -872,6 +872,14 @@ async def send_author_reaction_notification(
     except Exception as e:
         logger.debug(f"[send_author_reaction_notification] could not resolve bot pool: {e}")
 
+    try:
+        import __main__ as main_mod
+        for b in getattr(main_mod, "GLOBAL_BOTS", {}).values():
+            if b and b not in bots_to_try:
+                bots_to_try.append(b)
+    except Exception as e:
+        logger.debug(f"[send_author_reaction_notification] could not resolve GLOBAL_BOTS: {e}")
+
     for current_bot in bots_to_try:
         # Step 1: try sending with reply_to_message_id
         if reply_to_message_id:
@@ -1011,6 +1019,16 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
             if author_id:
                 raw_reply = post_to_messages.get(post_num, {}).get(author_id)
                 author_message_id_for_reply = raw_reply[0] if isinstance(raw_reply, list) else raw_reply
+
+        if not author_message_id_for_reply and author_id:
+            try:
+                db_conn = await get_pool()
+                async with db_conn.execute("SELECT message_id FROM PostCopies WHERE post_num = ? AND recipient_id = ? LIMIT 1", (post_num, author_id)) as c:
+                    r = await c.fetchone()
+                    if r:
+                        author_message_id_for_reply = r[0]
+            except Exception:
+                pass
 
             if 'reactions' not in post_data or not isinstance(post_data.get('reactions'), dict) or 'users' not in post_data['reactions']:
                 if isinstance(post_data.get('content'), dict) and 'reactions' in post_data['content']:

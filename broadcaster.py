@@ -1737,7 +1737,14 @@ class MessageBroadcaster:
                 send_method = getattr(self.bot_instance, f"send_{ct}")
                 if get_telegram_utf16_len(plain_text) > 1024:
                     common_plain_kwargs[ct] = file_source
-                    media_msg = await send_method(**common_plain_kwargs)
+                    try:
+                        media_msg = await send_method(**common_plain_kwargs)
+                    except TelegramBadRequest as bad_req:
+                        if "reply" in str(bad_req).lower() and common_plain_kwargs.get('reply_to_message_id'):
+                            common_plain_kwargs['reply_to_message_id'] = None
+                            media_msg = await send_method(**common_plain_kwargs)
+                        else:
+                            raise
                     fb_res = await _send_plain_text_parts(
                         reason,
                         plain_text,
@@ -1748,7 +1755,14 @@ class MessageBroadcaster:
                     return [media_msg] + fb_list
                 common_plain_kwargs['caption'] = plain_text
                 common_plain_kwargs[ct] = file_source
-                res = await send_method(**common_plain_kwargs)
+                try:
+                    res = await send_method(**common_plain_kwargs)
+                except TelegramBadRequest as bad_req:
+                    if "reply" in str(bad_req).lower() and common_plain_kwargs.get('reply_to_message_id'):
+                        common_plain_kwargs['reply_to_message_id'] = None
+                        res = await send_method(**common_plain_kwargs)
+                    else:
+                        raise
                 _log_plain_fallback(reason)
                 self.stats['success'] += 1
                 return res
