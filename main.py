@@ -14587,24 +14587,40 @@ async def _show_slots_lobby(bot, chat_id: int, user_id: int, board_id: str, bet:
 
 
 
-async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
+async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None, callback: types.CallbackQuery | None = None):
     if casino_engine.is_casino_in_flight(user_id):
+        if callback:
+            try:
+                await callback.answer("⏳ Барабан уже крутится! Не кликай повторно.", show_alert=True)
+            except Exception:
+                pass
         return
     try:
         async with casino_engine.casino_in_flight_guard(user_id, action_name="slots"):
-            await _run_slots_spin(bot, chat_id, user_id, board_id, bet, message_to_edit)
+            await _run_slots_spin(bot, chat_id, user_id, board_id, bet, message_to_edit, callback=callback)
     except casino_engine.CasinoInFlightError:
+        if callback:
+            try:
+                await callback.answer("⏳ Барабан уже крутится! Не кликай повторно.", show_alert=True)
+            except Exception:
+                pass
         return
 
-async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None):
+async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None, callback: types.CallbackQuery | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
+        if callback:
+            try:
+                await callback.answer(f"⏳ Барабан еще остывает! Подожди {rem}с перед следующим спином.", show_alert=True)
+            except Exception:
+                pass
+            return
         cooldown_caption = f"⏳ <b>Барабан еще остывает!</b>\nПодожди <code>{rem}с</code> перед следующим спином."
+        db = await get_pool()
+        balance = await get_user_global_balance(db, user_id)
+        kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
         if message_to_edit:
-            db = await get_pool()
-            balance = await get_user_global_balance(db, user_id)
-            kb = casino_engine.get_slots_keyboard(bet, balance=int(balance))
             edited = await safe_edit_message(message_to_edit, text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
             if edited:
                 return
@@ -14613,6 +14629,7 @@ async def _run_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: i
             bot=bot,
             chat_id=chat_id,
             caption=cooldown_caption,
+            reply_markup=kb,
             category="slots",
             parse_mode="HTML"
         )
@@ -14816,24 +14833,40 @@ async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, b
 
 
 
-async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None):
+async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None, callback: types.CallbackQuery | None = None):
     if casino_engine.is_casino_in_flight(user_id):
+        if callback:
+            try:
+                await callback.answer("⏳ Монетка уже в воздухе! Не кликай повторно.", show_alert=True)
+            except Exception:
+                pass
         return
     try:
         async with casino_engine.casino_in_flight_guard(user_id, action_name="coinflip"):
-            await _run_coinflip(bot, chat_id, user_id, board_id, bet, chosen_side, message_to_edit)
+            await _run_coinflip(bot, chat_id, user_id, board_id, bet, chosen_side, message_to_edit, callback=callback)
     except casino_engine.CasinoInFlightError:
+        if callback:
+            try:
+                await callback.answer("⏳ Монетка уже в воздухе! Не кликай повторно.", show_alert=True)
+            except Exception:
+                pass
         return
 
-async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None):
+async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str, message_to_edit: types.Message | None = None, callback: types.CallbackQuery | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
+        if callback:
+            try:
+                await callback.answer(f"⏳ Монетка еще не остыла! Подожди {rem}с перед следующим броском.", show_alert=True)
+            except Exception:
+                pass
+            return
         cooldown_caption = f"⏳ <b>Монетка еще не остыла!</b>\nПодожди <code>{rem}с</code> перед следующим броском."
+        db = await get_pool()
+        balance = await get_user_global_balance(db, user_id)
+        kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
         if message_to_edit:
-            db = await get_pool()
-            balance = await get_user_global_balance(db, user_id)
-            kb = casino_engine.get_coinflip_keyboard(bet, balance=int(balance))
             edited = await safe_edit_message(message_to_edit, text=cooldown_caption, reply_markup=kb, parse_mode="HTML")
             if edited:
                 return
@@ -14842,6 +14875,7 @@ async def _run_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int
             bot=bot,
             chat_id=chat_id,
             caption=cooldown_caption,
+            reply_markup=kb,
             category="coinflip",
             parse_mode="HTML"
         )
@@ -15030,15 +15064,25 @@ async def _show_blackjack_lobby(bot, chat_id: int, user_id: int, board_id: str, 
 
 
 
-async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int):
+async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int, message_to_edit: types.Message | None = None, callback: types.CallbackQuery | None = None):
     bet = min(casino_engine.MAX_CASINO_BET, max(casino_engine.MIN_CASINO_BET, bet))
     is_ok, rem = casino_engine.check_casino_cooldown(user_id)
     if not is_ok:
+        if callback:
+            try:
+                await callback.answer(f"⏳ Колода еще тасуется! Подожди {rem}с перед следующей раздачей.", show_alert=True)
+            except Exception:
+                pass
+            return
         from banner_manager import send_banner_message
+        db = await get_pool()
+        balance = await get_user_global_balance(db, user_id)
+        kb = casino_engine.get_blackjack_replay_keyboard(bet, balance=int(balance))
         await send_banner_message(
             bot=bot,
             chat_id=chat_id,
             caption=f"⏳ <b>Колода еще тасуется!</b>\nПодожди <code>{rem}с</code> перед следующей раздачей.",
+            reply_markup=kb,
             category="blackjack",
             parse_mode="HTML"
         )
@@ -15486,12 +15530,19 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             if casino_engine.is_casino_in_flight(user_id):
                 await callback.answer("⏳ Барабан уже крутится! Не кликай повторно.", show_alert=True)
                 return
-            ok_debounce, debounce_msg = casino_engine.check_action_debounce(user_id, action="spin", min_interval=1.0)
+            is_ok, rem = casino_engine.check_casino_cooldown(user_id)
+            if not is_ok:
+                await callback.answer(f"⏳ Барабан еще остывает! Подожди {rem}с перед следующим спином.", show_alert=True)
+                return
+            ok_debounce, debounce_msg = casino_engine.check_action_debounce(user_id, action="spin", min_interval=casino_engine.CASINO_COOLDOWN_SECONDS)
             if not ok_debounce:
                 await callback.answer(debounce_msg, show_alert=True)
                 return
-            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
-            await callback.answer()
+            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message, callback=callback)
+            try:
+                await callback.answer()
+            except Exception:
+                pass
 
     elif section == "coin":
         side_or_action = parts[2] if len(parts) > 2 else "heads"
@@ -15504,8 +15555,19 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             if casino_engine.is_casino_in_flight(user_id):
                 await callback.answer("⏳ Монетка уже в воздухе! Не кликай повторно.", show_alert=True)
                 return
-            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action, message_to_edit=callback.message)
-            await callback.answer()
+            is_ok, rem = casino_engine.check_casino_cooldown(user_id)
+            if not is_ok:
+                await callback.answer(f"⏳ Монетка еще не остыла! Подожди {rem}с перед следующим броском.", show_alert=True)
+                return
+            ok_debounce, debounce_msg = casino_engine.check_action_debounce(user_id, action="coinflip", min_interval=casino_engine.CASINO_COOLDOWN_SECONDS)
+            if not ok_debounce:
+                await callback.answer(debounce_msg, show_alert=True)
+                return
+            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action, message_to_edit=callback.message, callback=callback)
+            try:
+                await callback.answer()
+            except Exception:
+                pass
         elif side_or_action == "preset":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
             db = await get_pool()
@@ -15526,8 +15588,15 @@ async def _cb_casino_handler_impl(callback: types.CallbackQuery, board_id: str |
             return
         elif action == "start":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
-            await _start_blackjack_game(callback.bot, callback.message.chat.id, user_id, board_id, bet)
-            await callback.answer()
+            is_ok, rem = casino_engine.check_casino_cooldown(user_id)
+            if not is_ok:
+                await callback.answer(f"⏳ Колода еще тасуется! Подожди {rem}с перед следующей раздачей.", show_alert=True)
+                return
+            await _start_blackjack_game(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message, callback=callback)
+            try:
+                await callback.answer()
+            except Exception:
+                pass
             return
 
         async with casino_engine.session_lock:

@@ -937,30 +937,60 @@ async def execute_delayed_edit(
     try:
         await asyncio.sleep(delay)
         if author_id and notify_text:
-            try:
-                await bot_instance.send_message(
-                    author_id,
-                    notify_text,
-                    reply_to_message_id=reply_to_message_id
-                )
-            except TelegramRetryAfter as flood:
-                runtime_logger.warning(
-                    f"⏳ [delayed_edit] FloodWait {flood.retry_after}s при отправке уведомления автору {author_id} для #{post_num}"
-                )
-                if flood.retry_after <= 15:
-                    try:
-                        await asyncio.sleep(flood.retry_after + 0.5)
-                        await bot_instance.send_message(
-                            author_id,
-                            notify_text,
-                            reply_to_message_id=reply_to_message_id
-                        )
-                    except Exception as retry_err:
-                        runtime_logger.warning(f"⚠️ [delayed_edit] Повторное уведомление автора {author_id} не удалось: {retry_err}")
-            except (TelegramForbiddenError, TelegramBadRequest):
-                pass  # юзер заблокировал бота или сообщение удалено — норм
-            except Exception as notify_err:
-                runtime_logger.warning(f"⚠️ [delayed_edit] Не удалось уведомить автора {author_id}: {notify_err}")
+            sent_ok = False
+            if reply_to_message_id:
+                try:
+                    await bot_instance.send_message(
+                        author_id,
+                        notify_text,
+                        reply_to_message_id=reply_to_message_id
+                    )
+                    sent_ok = True
+                except TelegramBadRequest:
+                    pass
+                except TelegramRetryAfter as flood:
+                    runtime_logger.warning(
+                        f"⏳ [delayed_edit] FloodWait {flood.retry_after}s при отправке уведомления автору {author_id} для #{post_num}"
+                    )
+                    if flood.retry_after <= 15:
+                        try:
+                            await asyncio.sleep(flood.retry_after + 0.5)
+                            await bot_instance.send_message(
+                                author_id,
+                                notify_text,
+                                reply_to_message_id=reply_to_message_id
+                            )
+                            sent_ok = True
+                        except Exception as retry_err:
+                            runtime_logger.warning(f"⚠️ [delayed_edit] Повторное уведомление автора {author_id} не удалось: {retry_err}")
+                except TelegramForbiddenError:
+                    sent_ok = True
+                except Exception as notify_err:
+                    runtime_logger.warning(f"⚠️ [delayed_edit] Не удалось уведомить автора {author_id}: {notify_err}")
+
+            if not sent_ok:
+                try:
+                    await bot_instance.send_message(
+                        author_id,
+                        notify_text
+                    )
+                except TelegramRetryAfter as flood:
+                    runtime_logger.warning(
+                        f"⏳ [delayed_edit] FloodWait {flood.retry_after}s при прямом уведомлении автору {author_id} для #{post_num}"
+                    )
+                    if flood.retry_after <= 15:
+                        try:
+                            await asyncio.sleep(flood.retry_after + 0.5)
+                            await bot_instance.send_message(
+                                author_id,
+                                notify_text
+                            )
+                        except Exception as retry_err:
+                            runtime_logger.warning(f"⚠️ [delayed_edit] Повторное прямое уведомление автора {author_id} не удалось: {retry_err}")
+                except (TelegramForbiddenError, TelegramBadRequest):
+                    pass
+                except Exception as notify_err:
+                    runtime_logger.warning(f"⚠️ [delayed_edit] Не удалось прямо уведомить автора {author_id}: {notify_err}")
 
         # Гарантированное редактирование поста у всех получателей независимо от статуса уведомления автора
         try:

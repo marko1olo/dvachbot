@@ -841,6 +841,102 @@ MAX_MIMIC_PAID_REACTIONS_PER_DAY = 3
 MAX_MIMIC_SHEKELS_PER_DAY = 750
 
 
+async def send_author_reaction_notification(
+    author_id: int,
+    notify_text: str,
+    reply_to_message_id: Optional[int] = None,
+    bot_instance: Optional[Bot] = None
+) -> bool:
+    """
+    Sends a reaction notification to the post author.
+    1. Tries sending with reply_to_message_id if provided.
+    2. If TelegramBadRequest occurs (e.g. message not found in user's DM chat), immediately falls back to plain message.
+    3. If the primary bot cannot message the user (bot blocked or user hasn't started this bot), iterates fallback bots from global_bot_pool.
+    """
+    if not author_id or not notify_text:
+        return False
+
+    bots_to_try: list[Bot] = []
+    if bot_instance:
+        bots_to_try.append(bot_instance)
+
+    try:
+        from common.bot_pool import global_bot_pool
+        if global_bot_pool:
+            main_bot = global_bot_pool.get_main_bot()
+            if main_bot and main_bot not in bots_to_try:
+                bots_to_try.append(main_bot)
+            for b in getattr(global_bot_pool, "all_bots", []):
+                if b not in bots_to_try:
+                    bots_to_try.append(b)
+    except Exception as e:
+        logger.debug(f"[send_author_reaction_notification] could not resolve bot pool: {e}")
+
+    for current_bot in bots_to_try:
+        # Step 1: try sending with reply_to_message_id
+        if reply_to_message_id:
+            try:
+                await current_bot.send_message(
+                    author_id,
+                    notify_text,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode="HTML"
+                )
+                return True
+            except TelegramRetryAfter as flood:
+                if flood.retry_after <= 15:
+                    await asyncio.sleep(flood.retry_after + 0.5)
+                    try:
+                        await current_bot.send_message(
+                            author_id,
+                            notify_text,
+                            reply_to_message_id=reply_to_message_id,
+                            parse_mode="HTML"
+                        )
+                        return True
+                    except Exception:
+                        pass
+            except TelegramBadRequest as bad_req:
+                logger.debug(f"[send_author_reaction_notification] reply_to failed ({bad_req}), falling back to plain send")
+            except TelegramForbiddenError:
+                continue
+            except Exception as e:
+                logger.debug(f"[send_author_reaction_notification] unexpected reply error: {e}")
+
+        # Step 2: send plain notification without reply_to_message_id
+        try:
+            await current_bot.send_message(
+                author_id,
+                notify_text,
+                parse_mode="HTML"
+            )
+            return True
+        except TelegramRetryAfter as flood:
+            if flood.retry_after <= 15:
+                await asyncio.sleep(flood.retry_after + 0.5)
+                try:
+                    await current_bot.send_message(
+                        author_id,
+                        notify_text,
+                        parse_mode="HTML"
+                    )
+                    return True
+                except Exception:
+                    pass
+        except TelegramForbiddenError:
+            continue
+        except TelegramBadRequest as e:
+            if "chat not found" in str(e).lower():
+                continue
+            logger.debug(f"[send_author_reaction_notification] plain send failed: {e}")
+            break
+        except Exception as e:
+            logger.warning(f"[send_author_reaction_notification] unexpected error: {e}")
+            break
+
+    return False
+
+
 @message_router.message_reaction()
 async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_id: str | None, bot_instance: Optional[Bot] = None):
     """
@@ -1164,7 +1260,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
             author_id_for_notify = None
             text_for_notify = None
             newly_added = set(new_emojis) - old_emojis
-            if newly_added and author_id:
+            if newly_added and author_id and author_id != user_id:
                 async with author_reaction_notify_lock:
                     now_n = time.time()
                     a_timestamps = author_reaction_notify_tracker[author_id]
@@ -1197,10 +1293,17 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                             except Exception:
                                 text_for_notify = None
             final_bot_instance = bot_instance if bot_instance else reaction.bot
+            if author_id_for_notify and text_for_notify:
+                spawn_task(send_author_reaction_notification(
+                    author_id=author_id_for_notify,
+                    notify_text=text_for_notify,
+                    reply_to_message_id=author_message_id_for_reply,
+                    bot_instance=final_bot_instance
+                ))
             if not final_bot_instance: return
             async with pending_edit_lock:
                 if post_num in pending_edit_tasks: pending_edit_tasks[post_num].cancel()
-                new_task = spawn_task(execute_delayed_edit(post_num, final_bot_instance, author_id_for_notify, text_for_notify, reply_to_message_id=author_message_id_for_reply))
+                new_task = spawn_task(execute_delayed_edit(post_num, final_bot_instance, None, None, delay=3.0))
                 pending_edit_tasks[post_num] = new_task
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_message_reaction: {e}")
