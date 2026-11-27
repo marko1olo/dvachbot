@@ -143,9 +143,9 @@ async def _upload_logic(req_type, file_source, is_file=False):
                     else:
                         logger.warning(f"⚠️ Catbox returned weird response: {link[:100]}")
 
-                elif (resp.status_code == 412 or "uploads paused" in resp.text.lower() or "storage issues" in resp.text.lower()) and not _is_invalid_uploader(resp):
+                elif resp.status_code == 412 or "uploads paused" in resp.text.lower() or "storage issues" in resp.text.lower():
                     _CATBOX_GLOBAL_DISABLED_UNTIL = time.time() + CATBOX_PAUSE_COOLDOWN
-                    logger.warning(f"❌ Catbox Service Paused: {resp.text[:120]}. Pausing Catbox uploads for {int(CATBOX_PAUSE_COOLDOWN // 60)}m.")
+                    logger.warning(f"❌ Catbox Service Paused/Blocked: {resp.text[:120]}. Pausing Catbox uploads for {int(CATBOX_PAUSE_COOLDOWN // 60)}m.")
                     return None
                 elif resp.status_code in [429, 500, 502, 503]:
                     logger.warning(f"⚠️ Catbox {mode_name} Overload ({resp.status_code}). Sleeping 5s...")

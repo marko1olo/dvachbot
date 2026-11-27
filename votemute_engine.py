@@ -1505,10 +1505,11 @@ async def callback_votemute_vote(callback: types.CallbackQuery, board_id: Option
     new_kb = get_votemute_keyboard(target_id, post_num, yes_votes, executed, no_votes, rejected, is_expired=expired)
 
     skip_pair = None
-    if callback.message:
+    from aiogram.types import Message
+    if callback.message and isinstance(callback.message, Message):
         skip_pair = (callback.message.chat.id, callback.message.message_id)
         try:
-            if callback.message.caption is not None or callback.message.photo:
+            if getattr(callback.message, "caption", None) is not None or getattr(callback.message, "photo", None):
                 await callback.message.edit_caption(caption=new_text, reply_markup=new_kb, parse_mode="HTML")
             else:
                 await callback.message.edit_text(text=new_text, reply_markup=new_kb, parse_mode="HTML")
